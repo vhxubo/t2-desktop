@@ -231,10 +231,19 @@ func withAuthRetry[T any](c *Client, ctx context.Context, fn func(string) (T, er
 	}
 	fresh, rerr := c.Auth.refresh(ctx, token)
 	if rerr != nil {
-		c.Auth.invalidate(rerr)
-		return res, err
+		// 只有授权真的失效（4xx）才清登录态；网络抖动或服务端 5xx 时保留
+		// 令牌，避免一次断网就把用户踢下线。
+		if authFailure(rerr) {
+			c.Auth.invalidate(rerr)
+		}
+		return res, rerr
 	}
-	return fn(fresh)
+	res, err = fn(fresh)
+	// 新令牌也被 401 拒绝：会话确实没了，别再让每个请求反复刷新。
+	if err != nil && errors.As(err, &ae) && ae.Status == http.StatusUnauthorized {
+		c.Auth.invalidate(errors.New("登录已失效，请重新登录"))
+	}
+	return res, err
 }
 
 // fetch loads one page.

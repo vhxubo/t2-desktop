@@ -89,6 +89,24 @@ type loginResult struct {
 	err   error
 }
 
+// tokenHTTPError is the token endpoint's non-2xx answer. Keeping the status
+// on the error lets the refresh path tell a dead grant (4xx) from a
+// temporary network or server problem (5xx, 429), which decides whether the
+// stored login may be dropped.
+type tokenHTTPError struct {
+	status int
+	msg    string
+	fatal  bool // 授权本身被拒（4xx，或 200 信封里 c != 0）
+}
+
+func (e *tokenHTTPError) Error() string {
+	return fmt.Sprintf("HTTP %d：%s", e.status, e.msg)
+}
+
+// errSessionChanged means a refresh finished after the session it belonged
+// to was replaced or cleared. Its token must not be stored.
+var errSessionChanged = errors.New("登录状态已变化，已丢弃这次刷新的结果")
+
 // pendingLogin lives in memory for the duration of one authorization. No
 // listener, no server, no port: the OS delivers the callback URL through
 // the registered URL scheme, and Complete() feeds it into result.
@@ -108,9 +126,13 @@ func (p *pendingLogin) deliver(r loginResult) {
 // and persistent storage. All state changes are reported through onChange
 // so the UI can repaint through Window.Update.
 type AuthManager struct {
-	mu         sync.Mutex
-	refreshMu  sync.Mutex
-	token      *tokenData
+	mu        sync.Mutex
+	refreshMu sync.Mutex
+	token     *tokenData
+	// epoch identifies the current session. Login and logout bump it, so a
+	// refresh that started under the previous session cannot write its
+	// result back after the user already logged out (or logged in again).
+	epoch      uint64
 	dir        string
 	apiBase    string
 	http       *http.Client
@@ -165,27 +187,39 @@ func (m *AuthManager) verifyStatus() string {
 	return m.lastVerify
 }
 
-func (m *AuthManager) storeToken(t tokenData) error {
+// storeToken installs a new session. It bumps the session epoch so any
+// in-flight refresh started under the old session drops its result instead
+// of resurrecting a token the user just logged out of.
+func (m *AuthManager) storeToken(t tokenData) error { return m.storeTokenForEpoch(t, 0) }
+
+// storeTokenForEpoch stores t only while the session it was fetched for is
+// still current (epoch 0 means "always store"). Both the in-memory state and
+// token.json change under the same lock, so a concurrent logout cannot be
+// undone by a slower refresh: whichever ran first wins.
+func (m *AuthManager) storeTokenForEpoch(t tokenData, epoch uint64) error {
 	if t.ObtainedAt == 0 {
 		t.ObtainedAt = time.Now().Unix()
 	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if epoch != 0 && epoch != m.epoch {
+		return errSessionChanged
+	}
 	if m.token != nil && t.Username == "" {
 		t.Username = m.token.Username
 	}
+	m.epoch++
 	m.token = &t
-	dir := m.dir
-	m.mu.Unlock()
-	return writeJSONFile(filepath.Join(dir, "token.json"), t)
+	return writeJSONFile(filepath.Join(m.dir, "token.json"), t)
 }
 
 func (m *AuthManager) clearToken() error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.token = nil
 	m.lastVerify = ""
-	dir := m.dir
-	m.mu.Unlock()
-	return os.Remove(filepath.Join(dir, "token.json"))
+	m.epoch++
+	return os.Remove(filepath.Join(m.dir, "token.json"))
 }
 
 func (m *AuthManager) notify(err error) {
@@ -251,13 +285,10 @@ func (m *AuthManager) authorizeURL(p *pendingLogin) string {
 // registered scheme. A goroutine waits for the callback, exchanges the
 // code and reports the outcome via onChange.
 func (m *AuthManager) Begin(ctx context.Context) (string, error) {
-	m.mu.Lock()
-	if m.pending != nil {
-		old := m.pending
-		m.pending = nil
-		old.deliver(loginResult{err: errors.New("上一次登录已取消")})
-	}
-	m.mu.Unlock()
+	// A second click on 「登录」 supersedes the previous attempt: its PKCE
+	// pair is thrown away so a late callback cannot complete a flow the
+	// user already replaced.
+	m.cancelPending("上一次登录已取消")
 
 	verifier, challenge := newPKCE()
 	p := &pendingLogin{
@@ -274,6 +305,19 @@ func (m *AuthManager) Begin(ctx context.Context) (string, error) {
 	return m.authorizeURL(p), nil
 }
 
+// cancelPending drops the in-flight authorization, if any. Its goroutine
+// receives an error and, because it is no longer the current attempt, stays
+// silent: whatever cancelled it (logout, a new attempt) reports the state.
+func (m *AuthManager) cancelPending(reason string) {
+	m.mu.Lock()
+	p := m.pending
+	m.pending = nil
+	m.mu.Unlock()
+	if p != nil {
+		p.deliver(loginResult{err: errors.New(reason)})
+	}
+}
+
 func (m *AuthManager) awaitLogin(ctx context.Context, p *pendingLogin) {
 	defer m.clearPending(p)
 	timer := time.NewTimer(5 * time.Minute)
@@ -287,7 +331,18 @@ func (m *AuthManager) awaitLogin(ctx context.Context, p *pendingLogin) {
 	case <-ctx.Done():
 		err = ctx.Err()
 	}
-	m.notify(err)
+	// Only the attempt that is still current may report. A superseded or
+	// cancelled attempt must not overwrite the message of the one that
+	// replaced it (or of the logout that cancelled it).
+	if m.isCurrent(p) {
+		m.notify(err)
+	}
+}
+
+func (m *AuthManager) isCurrent(p *pendingLogin) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pending == p
 }
 
 func (m *AuthManager) clearPending(p *pendingLogin) {
@@ -374,7 +429,16 @@ func (m *AuthManager) postForm(ctx context.Context, form url.Values) (tokenData,
 		if msg == "" {
 			msg = "令牌请求失败"
 		}
-		return empty, fmt.Errorf("HTTP %d：%s", resp.StatusCode, msg)
+		return empty, &tokenHTTPError{
+			status: resp.StatusCode,
+			msg:    msg,
+			// 4xx 与「HTTP 200 但信封 c != 0」都是授权层面的拒绝；
+			// 5xx / 429 / 网络错误则可能只是暂时的。
+			fatal: resp.StatusCode == http.StatusBadRequest ||
+				resp.StatusCode == http.StatusUnauthorized ||
+				resp.StatusCode == http.StatusForbidden ||
+				(resp.StatusCode == http.StatusOK && env.C != 0),
+		}
 	}
 	var t tokenData
 	if err := json.Unmarshal(env.D, &t); err != nil {
@@ -399,6 +463,9 @@ func (m *AuthManager) exchangeCode(ctx context.Context, p *pendingLogin, code st
 }
 
 func (m *AuthManager) Logout() {
+	// 退出登录必须压过还在等待的回调：否则用户在浏览器里同意授权后，
+	// 迟到的回调会把刚退出的会话又签回来。
+	m.cancelPending("已退出登录，未完成的授权已取消")
 	if err := m.clearToken(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		m.notify(err)
 		return
@@ -411,10 +478,17 @@ func (m *AuthManager) Logout() {
 func (m *AuthManager) refresh(ctx context.Context, stale string) (string, error) {
 	m.refreshMu.Lock()
 	defer m.refreshMu.Unlock()
+	// 复制一份快照：token 的字段会被 fetchIdentity 等协程在锁内改写，
+	// 锁外只能读副本，否则与它们构成数据竞争。
 	m.mu.Lock()
-	cur := m.token
+	var cur tokenData
+	haveToken := m.token != nil
+	if haveToken {
+		cur = *m.token
+	}
+	epoch := m.epoch
 	m.mu.Unlock()
-	if cur == nil {
+	if !haveToken {
 		return "", errors.New("未登录")
 	}
 	if cur.AccessToken != stale {
@@ -435,12 +509,26 @@ func (m *AuthManager) refresh(ctx context.Context, stale string) (string, error)
 	if t.RefreshToken == "" {
 		t.RefreshToken = cur.RefreshToken
 	}
-	if err := m.storeToken(t); err != nil {
+	// 刷新期间用户可能已经退出或重新登录：那就丢弃这次结果，绝不把旧
+	// 会话写回 token.json。
+	if err := m.storeTokenForEpoch(t, epoch); err != nil {
 		return "", err
 	}
 	return t.AccessToken, nil
 }
 
+// authFailure reports whether a failed token request means the login is
+// really gone (invalid/expired grant, revoked authorization) rather than a
+// temporary network or server problem. Only the former may clear the stored
+// session: being logged out because the Wi-Fi blinked is a login bug.
+func authFailure(err error) bool {
+	var te *tokenHTTPError
+	return errors.As(err, &te) && te.fatal
+}
+
+// invalidate drops the session and reports why, so the UI can send the user
+// back to the login page with an actionable message. A login the user is
+// already doing is left alone: it is how they get a new session.
 func (m *AuthManager) invalidate(err error) {
 	if clearErr := m.clearToken(); clearErr != nil && !errors.Is(clearErr, os.ErrNotExist) {
 		err = fmt.Errorf("%w；清理令牌失败：%v", err, clearErr)
@@ -454,14 +542,13 @@ func (m *AuthManager) fetchIdentity(ctx context.Context, access string) {
 	for _, p := range []string{"/oauth/me", "/v1/me/summary"} {
 		name, err := m.identityFrom(ctx, m.apiBase+p, access)
 		if err == nil && name != "" {
+			// 只把姓名写回它所属的那次登录：期间若已退出或换了账号，
+			// 这里写回会把别人的令牌又落盘。写盘也在锁内，与 refresh 的
+			// 令牌落盘串行，不会互相覆盖。
 			m.mu.Lock()
-			if m.token != nil {
+			if m.token != nil && m.token.AccessToken == access {
 				m.token.Username = name
-				t := *m.token
-				dir := m.dir
-				m.mu.Unlock()
-				_ = writeJSONFile(filepath.Join(dir, "token.json"), t)
-				return
+				_ = writeJSONFile(filepath.Join(m.dir, "token.json"), *m.token)
 			}
 			m.mu.Unlock()
 			return
