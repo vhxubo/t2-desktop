@@ -1,4 +1,4 @@
-module my-app
+module t2-desktop
 
 go 1.27.3
 

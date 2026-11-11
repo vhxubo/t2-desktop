@@ -255,57 +255,65 @@ func (a *app) view(c *ui.Context) {
 	c.SetTheme(homeTheme())
 	t = c.Theme()
 
-	// 左右布局：左侧（宽 150）放品牌顶栏 + 功能导航；右侧放内容区。
-	ui.Row(c).Fill().Children(func() {
-		// 左侧导航栏：顶部品牌/账号区 + 带图标的侧边栏
-		ui.Column(c).Width(150).Shrink(0).FillHeight().Background(t.Surface).Children(func() {
-			a.sidebarHeader(c)
-			ui.Divider(c)
-			sb := ui.Sidebar(c, &a.navSel, func() {
-				// 公开功能
-				ui.SidebarSection(c, "浏览", nil, func() {
-					for i, s := range tabSpecs {
-						if s.NeedsAuth {
-							continue
-						}
-						ui.SidebarItem(c, tabID(i), tabIcons[i], s.Label)
-					}
-				})
-				// 「我的」单独成组：需登录后才能查看的功能
-				ui.SidebarSection(c, "我的", nil, func() {
-					for i, s := range tabSpecs {
-						if !s.NeedsAuth {
-							continue
-						}
-						ui.SidebarItem(c, tabID(i), tabIcons[i], s.Label)
-					}
-				})
-			}).Grow(1)
-			// 侧边栏选中变化 → 同步到 a.tab（用于 body/footer/加载逻辑）
-			if sb.Changed() {
-				if i, ok := tabFromID(a.navSel); ok && i != a.tab {
-					a.tab = i
-				}
-			}
-			if a.tab != a.lastTab {
-				a.lastTab = a.tab
-				a.status = ""
-			}
-		})
+	// 顶部自绘标题栏（可拖拽、避让系统窗口按钮）+ 下方 侧边栏/内容 布局。
+	ui.Column(c).Fill().Children(func() {
+		a.titleBar(c)
 		ui.Divider(c)
-		// 右侧内容区：正文列表（无限滚动，无底部状态栏）
-		ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
-			a.body(c)
+		ui.Row(c).Fill().MinHeight(0).Children(func() {
+			// 左侧导航栏：带图标的侧边栏
+			ui.Column(c).Width(150).Shrink(0).FillHeight().Background(t.Surface).Children(func() {
+				sb := ui.Sidebar(c, &a.navSel, func() {
+					// 公开功能
+					ui.SidebarSection(c, "浏览", nil, func() {
+						for i, s := range tabSpecs {
+							if s.NeedsAuth {
+								continue
+							}
+							ui.SidebarItem(c, tabID(i), tabIcons[i], s.Label)
+						}
+					})
+					// 「我的」单独成组：需登录后才能查看的功能
+					ui.SidebarSection(c, "我的", nil, func() {
+						for i, s := range tabSpecs {
+							if !s.NeedsAuth {
+								continue
+							}
+							ui.SidebarItem(c, tabID(i), tabIcons[i], s.Label)
+						}
+					})
+				}).Grow(1)
+				// 侧边栏选中变化 → 同步到 a.tab（用于 body 加载逻辑）
+				if sb.Changed() {
+					if i, ok := tabFromID(a.navSel); ok && i != a.tab {
+						a.tab = i
+					}
+				}
+				if a.tab != a.lastTab {
+					a.lastTab = a.tab
+					a.status = ""
+				}
+			})
+			ui.Divider(c)
+			// 右侧内容区：正文列表（无限滚动，无底部状态栏）
+			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
+				a.body(c)
+			})
 		})
 	})
 	a.ensureLoaded()
 }
 
-// sidebarHeader 是左侧导航栏顶部的品牌与账号区（原顶栏收进左侧）。
-func (a *app) sidebarHeader(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Padding(12, 12).Gap(8).Children(func() {
-		ui.Text(c, "2Libra").FontSize(19).Bold()
+// titleBarHeight 是自绘标题栏的高度（比系统默认更矮）。
+const titleBarHeight = 24
+
+// titleBar 是完全自绘的顶部标题栏：可拖拽移动窗口，显示品牌与账号状态，
+// 右侧绘制自绘的最小化/最大化/关闭按钮（系统按钮已通过 HideWindowButtons 隐藏）。
+func (a *app) titleBar(c *ui.Context) {
+	lt := ui.LightTheme()
+	ui.Row(c).Height(titleBarHeight).FillWidth().Padding(0, 12, 0, 12).
+		Gap(8).AlignItems(ui.Center).Background(lt.Surface).DragWindow().Children(func() {
+		ui.Text(c, "T2 Desktop").FontSize(13).Bold().SingleLine()
+		ui.Spacer(c).Grow(1)
 		who := "未登录 · 匿名可读"
 		if a.auth.loggedIn() {
 			who = "已登录"
@@ -313,16 +321,71 @@ func (a *app) sidebarHeader(c *ui.Context) {
 				who += " · " + name
 			}
 		}
-		ui.Text(c, who).FontSize(11).TextColor(t.TextMuted).SingleLine()
+		ui.Text(c, who).FontSize(11).TextColor(lt.TextMuted).SingleLine()
 		if a.auth.loggedIn() {
-			if ui.Button(c, "退出").Clicked() {
+			a.titleTextButton(c, "退出", func() {
 				a.auth.Logout()
-			}
-		} else if ui.Button(c, "登录").Clicked() {
-			a.pageName = "login"
-			a.loginMsg = ""
+			})
+		} else {
+			a.titleTextButton(c, "登录", func() {
+				a.pageName = "login"
+				a.loginMsg = ""
+			})
 		}
+		// 自绘窗口控制按钮（最小化 / 最大化·还原 / 关闭）
+		maxGlyph := "□"
+		if a.win != nil && a.win.IsMaximized() {
+			maxGlyph = "▢"
+		}
+		a.titleButton(c, "–", false, func() {
+			if a.win != nil {
+				a.win.Minimize()
+			}
+		})
+		a.titleButton(c, maxGlyph, false, func() {
+			if a.win != nil {
+				a.win.ToggleMaximize()
+			}
+		})
+		a.titleButton(c, "✕", true, func() {
+			if a.win != nil {
+				a.win.Close()
+			}
+		})
 	})
+}
+
+// titleButton 是标题栏右侧自绘的窗口按钮；danger 为关闭按钮，悬停变红。
+func (a *app) titleButton(c *ui.Context, label string, danger bool, onClick func()) {
+	hover := ui.Hex("#0000000f")
+	if danger {
+		hover = ui.Hex("#e81123")
+	}
+	b := ui.Box(c).Size(38, titleBarHeight).Center().Background(ui.Hex("#00000000"))
+	if b.Hovered() {
+		b.Background(hover)
+	}
+	b.Children(func() {
+		tc := ui.Hex("#1f1f1f")
+		if danger && b.Hovered() {
+			tc = ui.Hex("#ffffff")
+		}
+		ui.Text(c, label).FontSize(13).TextAlign(ui.Center).TextColor(tc)
+	})
+	b.OnClick(onClick)
+}
+
+// titleTextButton 是标题栏里的紧凑文字按钮（登录/退出）：高度贴合标题栏、
+// 悬停浅灰底，避免在矮标题栏里被原生 Button 的默认高度挤出。
+func (a *app) titleTextButton(c *ui.Context, label string, onClick func()) {
+	b := ui.Box(c).Height(titleBarHeight).Padding(8, 8).Center().Background(ui.Hex("#00000000"))
+	if b.Hovered() {
+		b.Background(ui.Hex("#0000000f"))
+	}
+	b.Children(func() {
+		ui.Text(c, label).FontSize(11).TextColor(ui.Hex("#1f1f1f"))
+	})
+	b.OnClick(onClick)
 }
 
 func (a *app) body(c *ui.Context) {
@@ -417,6 +480,8 @@ func (a *app) row(c *ui.Context, it Item) {
 
 func (a *app) loginView(c *ui.Context) {
 	t := c.Theme()
+	a.titleBar(c)
+	ui.Divider(c)
 	ui.Column(c).Fill().Padding(20, 24).Gap(12).Children(func() {
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			if ui.Button(c, "← 返回").Clicked() {
@@ -506,13 +571,15 @@ func main() {
 	})
 	mygo.App.WhenReady(func() {
 		a.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:     "2Libra 阅读器",
-			Width:     1080,
-			Height:    720,
-			MinWidth:  760,
-			MinHeight: 520,
-			StateKey:  "main",
-			Content:   ui.View(a.view),
+			Title:          "T2 Desktop",
+			Width:          1080,
+			Height:         720,
+			MinWidth:       760,
+			MinHeight:      520,
+			StateKey:       "main",
+			Content:        ui.View(a.view),
+			TitleBarStyle:     mygo.TitleBarHidden, // 隐藏原生标题栏
+			HideWindowButtons: true,                // 连系统按钮也隐藏，完全自绘最小化/最大化/关闭
 		})
 		if a.auth.loggedIn() {
 			go func() {

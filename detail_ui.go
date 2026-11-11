@@ -286,6 +286,8 @@ func (a *app) ensureEmojis() {
 func (a *app) detailView(c *ui.Context) {
 	c.SetTheme(homeTheme())
 	t := c.Theme()
+	a.titleBar(c)
+	ui.Divider(c)
 	d := a.detail
 	if d == nil {
 		ui.Column(c).Fill().Center().Gap(12).Children(func() {
