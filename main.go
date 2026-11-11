@@ -422,25 +422,16 @@ func (a *app) footer(c *ui.Context) {
 	st := a.tabs[a.tab]
 	spec := tabSpecs[a.tab]
 	ui.Row(c).Padding(8, 16).Gap(10).AlignItems(ui.Center).Children(func() {
-		page := st.page
-		if page < 1 {
-			page = 1
+		ui.Text(c, spec.Label).FontSize(11).TextColor(t.TextMuted).Grow(1)
+		// 无限滚动状态提示：加载中 / 已到底，不再展示页码、总数与翻页按钮
+		if st.loading && len(st.items) > 0 {
+			ui.Spinner(c).Size(14, 14)
+			ui.Text(c, "加载中…").FontSize(11).TextColor(t.TextMuted)
+		} else if spec.Paging == pagingPages && st.loaded && st.noMore && len(st.items) > 0 {
+			ui.Text(c, "没有更多内容").FontSize(11).TextColor(t.TextMuted)
 		}
-		ui.Textf(c, "%s · 第 %d 页 · %d 条", spec.Label, page, st.total).
-			FontSize(11).TextColor(t.TextMuted).Grow(1)
 		if a.status != "" {
 			ui.Text(c, a.status).FontSize(11).TextColor(t.TextMuted).SingleLine()
-		}
-		if ui.Button(c, "上一页").Disabled(st.page <= 1 || st.loading).Clicked() {
-			a.load(a.tab, st.page-1)
-		}
-		hasMore := spec.Paging == pagingPages && st.loaded && !st.loading &&
-			len(st.items) > 0 && (st.totalPages == 0 || st.page < st.totalPages)
-		if ui.Button(c, "下一页").Disabled(!hasMore || st.loading).Clicked() {
-			a.load(a.tab, st.page+1)
-		}
-		if ui.Button(c, "刷新").Clicked() {
-			a.reloadCurrent()
 		}
 	})
 }
