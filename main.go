@@ -23,14 +23,6 @@ type tabState struct {
 	gen        uint64
 }
 
-// Only client_id and scope are configurable. The native callback is a
-// fixed constant, so there is nothing else a user could switch to.
-type settingsDraft struct {
-	clientID string
-	scopes   string
-	message  string
-}
-
 // app holds only data and widget state. Never store ui.Element or *Context:
 // background work publishes results through Window.Update.
 type app struct {
@@ -45,13 +37,13 @@ type app struct {
 	tabs    []*tabState
 	reqSeq  uint64
 
-	pageName    string // list / detail / settings / login
+	pageName    string // list / detail / login
 	status      string
 	loginMsg    string
 	callbackURL string
-	draft       settingsDraft
 
 	detail       *detailState
+	detailStack  []*detailState // 正文内联跳转的返回栈
 	emojis       map[string]emojiInfo
 	emojiLoading bool
 	emojiTried   bool
@@ -69,11 +61,6 @@ func newApp(dir string) *app {
 	}
 	for i := range a.tabs {
 		a.tabs[i] = &tabState{}
-	}
-	s := auth.settingsSnapshot()
-	a.draft = settingsDraft{
-		clientID: s.ClientID,
-		scopes:   s.Scopes,
 	}
 	a.auth.onChange = func(err error) {
 		a.publish(func() { a.onAuthChanged(err) })
@@ -215,9 +202,6 @@ func (a *app) view(c *ui.Context) {
 	}
 
 	switch a.pageName {
-	case "settings":
-		a.settingsView(c)
-		return
 	case "login":
 		a.loginView(c)
 		return
@@ -258,14 +242,6 @@ func (a *app) header(c *ui.Context) {
 		} else if ui.Button(c, "登录").Clicked() {
 			a.pageName = "login"
 			a.loginMsg = ""
-		}
-		if ui.Button(c, "设置").Clicked() {
-			s := a.auth.settingsSnapshot()
-			a.draft = settingsDraft{
-				clientID: s.ClientID,
-				scopes:   s.Scopes,
-			}
-			a.pageName = "settings"
 		}
 	})
 }
@@ -378,61 +354,8 @@ func (a *app) footer(c *ui.Context) {
 	})
 }
 
-func (a *app) settingsView(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Fill().Padding(20, 24).Gap(12).Children(func() {
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "← 返回").Clicked() {
-				a.pageName = "list"
-			}
-			ui.Text(c, "设置 · OAuth 公开客户端（PKCE S256）").FontSize(18).Bold()
-		})
-		ui.Divider(c)
-		ui.Text(c, "在 2Libra 网页 → 设置 → OAuth 应用 申请应用，客户端形态选「原生/桌面端（公开客户端）」，应用 ID 填 "+appIdentifier+"，回调地址原样注册 "+defaultRedirectURI+"。公开客户端没有 client_secret，换 token 只靠 PKCE code_verifier。").
-			TextColor(t.TextMuted).MaxLines(5)
-		ui.Text(c, "原生回调："+defaultRedirectURI).FontSize(12).TextColor(t.TextMuted)
-		ui.TextInput(c, &a.draft.clientID).Label("client_id（应用 ID）").Placeholder(appIdentifier).FillWidth()
-		ui.TextInput(c, &a.draft.scopes).Label("scope（空格分隔）").Placeholder(defaultScopes).FillWidth()
-		if ui.PrimaryButton(c, "保存").Clicked() {
-			a.saveSettings()
-		}
-		if a.draft.message != "" {
-			ui.Text(c, a.draft.message).TextColor(t.TextMuted)
-		}
-		ui.Divider(c)
-		ui.Text(c, "说明：本应用只支持这一种登录方式。启动时向系统注册 "+appIdentifier+" URL scheme，浏览器同意授权后经 "+defaultRedirectURI+" 跳回本应用；若没有自动跳回，复制地址栏的完整回调链接，到登录页的「回调链接」里粘贴即可完成同一次授权。").
-			TextColor(t.TextMuted).MaxLines(5)
-		ui.Text(c, "令牌与设置保存在用户配置目录，不写入项目仓库；client_id 可用环境变量 TWOLIBRA_CLIENT_ID 提供。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(3)
-		ui.Divider(c)
-		ui.Text(c, "本应用由第三方开发者独立开发运营，与 2Libra 无隶属或合作关系。2Libra 仅提供账号授权与接口，不对本应用的可用性、内容与数据处理负责。你可以随时在 2Libra 的「授权应用」页面撤销本应用的授权。应用内展示的内容版权归原作者所有，详情页保留作者昵称与原文链接。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(5)
-	})
-}
-
-func (a *app) saveSettings() {
-	s := Settings{
-		ClientID: strings.TrimSpace(a.draft.clientID),
-		Scopes:   strings.TrimSpace(a.draft.scopes),
-	}
-	if s.ClientID == "" {
-		a.draft.message = "client_id 不能为空，请填 2Libra 网页申请的原生/桌面端应用 ID"
-		return
-	}
-	if s.Scopes == "" {
-		s.Scopes = defaultScopes
-	}
-	if err := a.auth.updateSettings(s); err != nil {
-		a.draft.message = "保存失败：" + err.Error()
-		return
-	}
-	a.draft.message = "已保存。已有的登录态不会被覆盖。"
-	a.status = "设置已保存"
-}
-
 func (a *app) loginView(c *ui.Context) {
 	t := c.Theme()
-	s := a.auth.settingsSnapshot()
 	ui.Column(c).Fill().Padding(20, 24).Gap(12).Children(func() {
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			if ui.Button(c, "← 返回").Clicked() {
@@ -448,9 +371,9 @@ func (a *app) loginView(c *ui.Context) {
 			}
 		})
 		ui.Divider(c)
-		ui.Textf(c, "client_id：%s", maskConfig(s.ClientID)).FontSize(12).TextColor(t.TextMuted)
+		ui.Textf(c, "client_id：%s", clientID).FontSize(12).TextColor(t.TextMuted)
 		ui.Textf(c, "redirect_uri：%s", defaultRedirectURI).FontSize(12).TextColor(t.TextMuted)
-		ui.Textf(c, "scope：%s", s.Scopes).FontSize(12).TextColor(t.TextMuted)
+		ui.Textf(c, "scope：%s", defaultScopes).FontSize(12).TextColor(t.TextMuted)
 		if a.loginMsg != "" {
 			ui.Text(c, a.loginMsg).TextColor(t.TextMuted).MaxLines(4)
 		}
@@ -467,21 +390,14 @@ func (a *app) loginView(c *ui.Context) {
 				a.loginMsg = "已收到回调，正在用授权码换取令牌…"
 			}
 		}
+		ui.Divider(c)
+		ui.Text(c, "本应用由第三方开发者独立开发运营，与 2Libra 无隶属或合作关系。2Libra 仅提供账号授权与接口，不对本应用的可用性、内容与数据处理负责。你可以随时在 2Libra 的「授权应用」页面撤销本应用的授权。应用内展示的内容版权归原作者所有，详情页保留作者昵称与原文链接。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(4)
 		ui.Spacer(c).Grow(1)
 		if v := a.auth.verifyStatus(); v != "" {
 			ui.Text(c, v).FontSize(11).TextColor(t.TextMuted)
 		}
 	})
-}
-
-func maskConfig(s string) string {
-	if s == "" {
-		return "（未填写，请先到「设置」配置）"
-	}
-	if len(s) <= 8 {
-		return s
-	}
-	return s[:4] + "…" + s[len(s)-4:]
 }
 
 // handleCallbackURL receives the OS deep link. The PKCE verifier is held in

@@ -45,14 +45,28 @@ func (d *detailState) originURL() string {
 
 func newMarkdownOptions(a *app) *markdown.Options {
 	return &markdown.Options{
-		// Only http(s) links leave the app; relative 2Libra paths get the
-		// site origin. javascript: and friends are dropped.
-		OnLink: a.openExternal,
+		// Links to another 2Libra post are intercepted and shown in place;
+		// only other http(s) links leave the app. javascript: is dropped.
+		OnLink: a.handleLink,
 		LoadImage: func(u string) (ui.ImageSource, error) {
 			return a.loadImage(u)
 		},
 		WrapCode: true,
 	}
+}
+
+// handleLink is the Markdown OnLink. A link to another post replaces the
+// current detail view (inline), like following a link in a reader; the
+// previous post stays on a small back stack. Self-links are ignored.
+func (a *app) handleLink(raw string) {
+	if it, ok := parseInAppTopicLink(raw); ok {
+		if a.pageName == "detail" && a.detail != nil && it.ShortID == a.detail.shortID {
+			return
+		}
+		a.openDetail(it)
+		return
+	}
+	a.openExternal(raw)
 }
 
 func (a *app) openExternal(raw string) {
@@ -107,6 +121,16 @@ func (a *app) openDetail(it Item) {
 	if it.ShortID == "" {
 		return
 	}
+	if a.pageName == "detail" && a.detail != nil {
+		// Inline navigation: keep the post we came from so "← 返回" walks
+		// back through the chain before dropping to the list.
+		if len(a.detailStack) >= 20 {
+			a.detailStack = a.detailStack[1:]
+		}
+		a.detailStack = append(a.detailStack, a.detail)
+	} else {
+		a.detailStack = nil
+	}
 	a.detail = &detailState{
 		shortID:     it.ShortID,
 		focusID:     it.CommentID,
@@ -124,9 +148,14 @@ func (a *app) openDetail(it Item) {
 }
 
 func (a *app) closeDetail() {
+	a.status = ""
+	if n := len(a.detailStack); n > 0 {
+		a.detail = a.detailStack[n-1]
+		a.detailStack = a.detailStack[:n-1]
+		return
+	}
 	a.detail = nil
 	a.pageName = "list"
-	a.status = ""
 }
 
 func (a *app) reloadDetail() {
@@ -271,6 +300,9 @@ func (a *app) detailView(c *ui.Context) {
 			ui.Text(c, truncate(label, 42)).FontSize(15).Bold().SingleLine().Grow(1)
 			if d.focusID != "" {
 				ui.Text(c, "来自评论定位").FontSize(11).TextColor(t.TextMuted)
+			}
+			if n := len(a.detailStack); n > 0 {
+				ui.Textf(c, "内联浏览 %d 层", n).FontSize(11).TextColor(t.TextMuted)
 			}
 			if ui.Button(c, "浏览器打开").Clicked() {
 				a.openExternal(d.originURL())
@@ -499,5 +531,19 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 			content = "（无内容）"
 		}
 		ui.Text(c, replaceEmoji(content, a.emojis, false)).FontSize(13)
+		// Comments are plain text, so give any post link in them an
+		// explicit in-app action instead of leaving it unclickable.
+		if !r.Deleted {
+			if links := inAppTopicLinks(r.Content); len(links) > 0 {
+				ui.Row(c).Gap(6).Wrap().Children(func() {
+					for _, link := range links {
+						target := link
+						if ui.Button(c, "在应用内打开 "+target.ShortID).Clicked() {
+							a.handleLink(target.URL)
+						}
+					}
+				})
+			}
+		}
 	})
 }

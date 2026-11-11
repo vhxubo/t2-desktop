@@ -20,12 +20,15 @@ import (
 
 // There is exactly one login flow: a native/desktop public client using a
 // private-use URI scheme (RFC 8252 §7.1). The OS hands the callback URL to
-// the app registered for appIdentifier; the app id doubles as client_id.
-// redirect_uri is a fixed constant, not a user setting, so it can never
-// drift from the value registered on the 2Libra website.
+// the app registered for appIdentifier. client_id is the value 2Libra issued
+// for this application; it is a compile-time constant, not a user setting.
+// redirect_uri is fixed too, so it can never drift from the value registered
+// on the 2Libra website. A desktop public client has no client_secret:
+// PKCE code_verifier alone authenticates the token call.
 const (
 	appIdentifier      = "com.vhxubo.t2-desktop"
 	defaultRedirectURI = appIdentifier + ":/callback"
+	clientID           = "e471281af4d84ecfae77c39f94bcf372"
 	defaultScopes      = "read profile read:me"
 
 	// Some platforms normalise :/callback into ://callback before handing
@@ -33,14 +36,6 @@ const (
 	// login method, so it is accepted as a spelling variant only.
 	alternateCallbackURI = appIdentifier + "://callback"
 )
-
-// Settings holds the public-client OAuth configuration. A desktop app has
-// no client_secret: PKCE code_verifier alone authenticates the token call.
-// redirect_uri and a loopback port deliberately do not exist here.
-type Settings struct {
-	ClientID string `json:"client_id"`
-	Scopes   string `json:"scopes"`
-}
 
 type tokenData struct {
 	AccessToken  string `json:"access_token"`
@@ -52,22 +47,8 @@ type tokenData struct {
 	Username     string `json:"username,omitempty"`
 }
 
-func defaultSettings() Settings {
-	return Settings{
-		ClientID: envOr("TWOLIBRA_CLIENT_ID", appIdentifier),
-		Scopes:   envOr("TWOLIBRA_SCOPES", defaultScopes),
-	}
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-// configDir is where tokens and settings live. It stays outside the repo
-// and can be redirected in tests with TWOLIBRA_CONFIG_DIR.
+// configDir is where the token lives. It stays outside the repo and can be
+// redirected in tests with TWOLIBRA_CONFIG_DIR.
 func configDir() string {
 	if d := os.Getenv("TWOLIBRA_CONFIG_DIR"); d != "" {
 		return d
@@ -115,7 +96,6 @@ type pendingLogin struct {
 	state     string
 	verifier  string
 	challenge string
-	clientID  string
 	result    chan loginResult
 	once      sync.Once
 }
@@ -130,7 +110,6 @@ func (p *pendingLogin) deliver(r loginResult) {
 type AuthManager struct {
 	mu         sync.Mutex
 	refreshMu  sync.Mutex
-	settings   Settings
 	token      *tokenData
 	dir        string
 	apiBase    string
@@ -145,30 +124,12 @@ func newAuthManager(dir string) *AuthManager {
 		dir = configDir()
 	}
 	m := &AuthManager{
-		settings: defaultSettings(),
-		dir:      dir,
-		apiBase:  apiBaseURL,
-		http:     &http.Client{Timeout: 20 * time.Second},
+		dir:     dir,
+		apiBase: apiBaseURL,
+		http:    &http.Client{Timeout: 20 * time.Second},
 	}
-	// Legacy settings.json files may still contain "redirect_uri" and "port".
-	// Those JSON keys are simply ignored now: there is no alternative flow to
-	// migrate to, the callback is always defaultRedirectURI.
-	var saved Settings
-	if err := readJSONFile(filepath.Join(dir, "settings.json"), &saved); err == nil {
-		if saved.ClientID != "" {
-			m.settings.ClientID = saved.ClientID
-		}
-		if saved.Scopes != "" {
-			m.settings.Scopes = saved.Scopes
-		}
-	}
-	// Explicit environment values always win over the saved file.
-	if v := os.Getenv("TWOLIBRA_CLIENT_ID"); v != "" {
-		m.settings.ClientID = v
-	}
-	if v := os.Getenv("TWOLIBRA_SCOPES"); v != "" {
-		m.settings.Scopes = v
-	}
+	// client_id and scope are compile-time constants now. A settings.json
+	// left behind by an older build is ignored entirely.
 	var t tokenData
 	if err := readJSONFile(filepath.Join(dir, "token.json"), &t); err == nil && t.AccessToken != "" {
 		m.token = &t
@@ -198,32 +159,10 @@ func (m *AuthManager) username() string {
 	return m.token.Username
 }
 
-func (m *AuthManager) settingsSnapshot() Settings {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.settings
-}
-
 func (m *AuthManager) verifyStatus() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.lastVerify
-}
-
-func (m *AuthManager) updateSettings(s Settings) error {
-	s.ClientID = strings.TrimSpace(s.ClientID)
-	s.Scopes = strings.TrimSpace(s.Scopes)
-	if s.ClientID == "" {
-		return errors.New("client_id 不能为空")
-	}
-	if s.Scopes == "" {
-		s.Scopes = defaultScopes
-	}
-	m.mu.Lock()
-	m.settings = s
-	dir := m.dir
-	m.mu.Unlock()
-	return writeJSONFile(filepath.Join(dir, "settings.json"), s)
 }
 
 func (m *AuthManager) storeToken(t tokenData) error {
@@ -295,12 +234,12 @@ func isCallbackLink(raw string) bool {
 	return base == defaultRedirectURI || base == alternateCallbackURI
 }
 
-func (m *AuthManager) authorizeURL(p *pendingLogin, s Settings) string {
+func (m *AuthManager) authorizeURL(p *pendingLogin) string {
 	v := url.Values{}
-	v.Set("client_id", s.ClientID)
+	v.Set("client_id", clientID)
 	v.Set("redirect_uri", defaultRedirectURI)
 	v.Set("response_type", "code")
-	v.Set("scope", s.Scopes)
+	v.Set("scope", defaultScopes)
 	v.Set("state", p.state)
 	v.Set("code_challenge", p.challenge)
 	v.Set("code_challenge_method", "S256")
@@ -318,18 +257,13 @@ func (m *AuthManager) Begin(ctx context.Context) (string, error) {
 		m.pending = nil
 		old.deliver(loginResult{err: errors.New("上一次登录已取消")})
 	}
-	s := m.settings
 	m.mu.Unlock()
 
-	if s.ClientID == "" {
-		return "", errors.New("请先在「设置」里填写 client_id（2Libra 网页申请的原生/桌面端应用 ID）")
-	}
 	verifier, challenge := newPKCE()
 	p := &pendingLogin{
 		state:     randomURLSafe(16),
 		verifier:  verifier,
 		challenge: challenge,
-		clientID:  s.ClientID,
 		result:    make(chan loginResult, 1),
 	}
 
@@ -337,7 +271,7 @@ func (m *AuthManager) Begin(ctx context.Context) (string, error) {
 	m.pending = p
 	m.mu.Unlock()
 	go m.awaitLogin(ctx, p)
-	return m.authorizeURL(p, s), nil
+	return m.authorizeURL(p), nil
 }
 
 func (m *AuthManager) awaitLogin(ctx context.Context, p *pendingLogin) {
@@ -453,13 +387,13 @@ func (m *AuthManager) postForm(ctx context.Context, form url.Values) (tokenData,
 }
 
 func (m *AuthManager) exchangeCode(ctx context.Context, p *pendingLogin, code string) (tokenData, error) {
-	// Use the exact client_id snapshot from the authorize step; redirect_uri
-	// is the same fixed constant used to build that URL.
+	// Both client_id and redirect_uri are the same fixed constants used to
+	// build the authorize URL.
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", code)
 	form.Set("redirect_uri", defaultRedirectURI)
-	form.Set("client_id", p.clientID)
+	form.Set("client_id", clientID)
 	form.Set("code_verifier", p.verifier) // 公开客户端：不带 client_secret
 	return m.postForm(ctx, form)
 }
@@ -479,7 +413,6 @@ func (m *AuthManager) refresh(ctx context.Context, stale string) (string, error)
 	defer m.refreshMu.Unlock()
 	m.mu.Lock()
 	cur := m.token
-	clientID := m.settings.ClientID
 	m.mu.Unlock()
 	if cur == nil {
 		return "", errors.New("未登录")

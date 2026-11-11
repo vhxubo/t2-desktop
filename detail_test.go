@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -396,7 +397,7 @@ func TestClickCommentOpensParentTopic(t *testing.T) {
 
 // Optional live check: TWOLIBRA_LIVE=1 go test -run TestLiveDetail -v
 func TestLiveDetail(t *testing.T) {
-	if envOr("TWOLIBRA_LIVE", "") == "" {
+	if os.Getenv("TWOLIBRA_LIVE") == "" {
 		t.Skip("设置 TWOLIBRA_LIVE=1 才会访问真实 API")
 	}
 	c := &Client{}

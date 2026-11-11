@@ -24,8 +24,6 @@ import (
 func testApp(t *testing.T) *app {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("TWOLIBRA_CLIENT_ID", "")
-	t.Setenv("TWOLIBRA_SCOPES", "")
 	a := newApp(dir)
 	a.autoLoad = false // 测试中不发真实网络请求
 	return a
@@ -322,7 +320,8 @@ func TestLivePublicTabs(t *testing.T) {
 }
 
 // The native view runs headless: tab switching, the login gate on private
-// tabs, the settings page and the list rows are all exercised here.
+// tabs and the list rows are all exercised here. The settings page is gone,
+// so the header must no longer offer a way to reach it.
 func TestNativeView(t *testing.T) {
 	a := testApp(t)
 	a.tabs[0].items = []Item{
@@ -347,20 +346,11 @@ func TestNativeView(t *testing.T) {
 	if !tt.HasText("「收藏」需要登录") {
 		t.Errorf("私人 tab 未显示登录引导：%q", tt.Texts())
 	}
-	if err := tt.Click("设置"); err != nil {
-		t.Fatal(err)
+	if tt.HasText("设置") {
+		t.Errorf("设置入口应已移除：%q", tt.Texts())
 	}
-	if !tt.HasText("设置 · OAuth 公开客户端（PKCE S256）") {
-		t.Errorf("设置页没有渲染：%q", tt.Texts())
-	}
-	if !tt.HasText("原生回调：" + defaultRedirectURI) {
-		t.Errorf("设置页没有显示原生回调地址：%q", tt.Texts())
-	}
-	if err := tt.Click("← 返回"); err != nil {
-		t.Fatal(err)
-	}
-	if a.pageName != "list" {
-		t.Errorf("返回后仍在 %s 页", a.pageName)
+	if err := tt.Click("设置"); err == nil {
+		t.Error("仍能点击「设置」按钮")
 	}
 }
 
@@ -390,21 +380,27 @@ func TestAppConfigDeclaresNativeScheme(t *testing.T) {
 }
 
 // There must be no second login path hiding in the data model: no
-// configurable redirect/port, no local server, no manual-token entry point.
+// configurable client_id/scope, no redirect/port, no local server, no
+// manual-token entry point.
 func TestSingleLoginFlowStructure(t *testing.T) {
-	st := reflect.TypeOf(Settings{})
-	want := map[string]bool{"ClientID": true, "Scopes": true}
-	if st.NumField() != len(want) {
-		t.Errorf("Settings 字段数 = %d，期望只有 client_id / scope", st.NumField())
+	if clientID != "e471281af4d84ecfae77c39f94bcf372" {
+		t.Fatalf("client_id 未固定为项目内的常量：%q", clientID)
 	}
-	for i := 0; i < st.NumField(); i++ {
-		if !want[st.Field(i).Name] {
-			t.Errorf("Settings 仍暴露可切换登录方式的字段 %s", st.Field(i).Name)
-		}
+	if _, ok := reflect.TypeOf(AuthManager{}).FieldByName("settings"); ok {
+		t.Error("AuthManager 仍保存可变设置")
 	}
-	for _, banned := range []string{"server", "redirectURI"} {
+	if _, ok := reflect.TypeOf(&AuthManager{}).MethodByName("updateSettings"); ok {
+		t.Error("仍能通过 updateSettings 改写 client_id / scope")
+	}
+	if _, ok := reflect.TypeOf(app{}).FieldByName("draft"); ok {
+		t.Error("UI 状态里仍有设置页草稿")
+	}
+	if _, ok := reflect.TypeOf(&app{}).MethodByName("settingsView"); ok {
+		t.Error("设置页 settingsView 仍在")
+	}
+	for _, banned := range []string{"server", "redirectURI", "clientID"} {
 		if _, ok := reflect.TypeOf(pendingLogin{}).FieldByName(banned); ok {
-			t.Errorf("pendingLogin 仍有 %s，说明回环监听/可变回调回来了", banned)
+			t.Errorf("pendingLogin 仍有 %s，说明配置/回环监听回来了", banned)
 		}
 	}
 	if _, ok := reflect.TypeOf(&AuthManager{}).MethodByName("LoginWithToken"); ok {
@@ -415,30 +411,21 @@ func TestSingleLoginFlowStructure(t *testing.T) {
 	}
 }
 
-func TestNativeSchemeIsFixedAndIgnoresLegacySettings(t *testing.T) {
-	t.Setenv("TWOLIBRA_CLIENT_ID", "")
-	t.Setenv("TWOLIBRA_SCOPES", "")
-	// These two environment variables belonged to the removed loopback
-	// flow. Even if a stale shell still sets them, nothing may change.
+// client_id / scope / redirect_uri are compile-time constants. Old builds
+// wrote settings.json and honoured env overrides; none of that may change
+// the authorize URL any more.
+func TestHardcodedClientIDIgnoresLegacyConfig(t *testing.T) {
+	t.Setenv("TWOLIBRA_CLIENT_ID", "env-client")
+	t.Setenv("TWOLIBRA_SCOPES", "read")
 	t.Setenv("TWOLIBRA_REDIRECT_URI", "http://127.0.0.1:9999/cb")
 	t.Setenv("TWOLIBRA_OAUTH_PORT", "9999")
-	s := defaultSettings()
-	if s.ClientID != appIdentifier || s.Scopes != defaultScopes {
-		t.Fatalf("默认设置不是单一原生 scheme：%+v", s)
-	}
 
 	dir := t.TempDir()
-	// A settings.json written by the old build: the extra keys are ignored,
-	// not migrated into a second login mode.
 	legacy := `{"client_id":"cid","scopes":"read","redirect_uri":"http://127.0.0.1:8765/cb","port":8765}`
 	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	m := newAuthManager(dir)
-	got := m.settingsSnapshot()
-	if got.ClientID != "cid" || got.Scopes != "read" {
-		t.Fatalf("旧配置的有效字段没有保留：%+v", got)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	authorize, err := m.Begin(ctx)
@@ -449,8 +436,19 @@ func TestNativeSchemeIsFixedAndIgnoresLegacySettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if q := u.Query().Get("redirect_uri"); q != defaultRedirectURI {
-		t.Errorf("redirect_uri 被旧配置或环境变量改写：%s", q)
+	q := u.Query()
+	if q.Get("client_id") != clientID || q.Get("scope") != defaultScopes ||
+		q.Get("redirect_uri") != defaultRedirectURI {
+		t.Errorf("授权参数被旧配置或环境变量改写：%v", q)
+	}
+	if defaultScopes != "read profile read:me" {
+		t.Errorf("scope 常量被改动：%s", defaultScopes)
+	}
+
+	fresh := t.TempDir()
+	_ = newAuthManager(fresh)
+	if _, err := os.Stat(filepath.Join(fresh, "settings.json")); !os.IsNotExist(err) {
+		t.Error("仍在写 settings.json，说明配置层没有移除干净")
 	}
 }
 
@@ -522,9 +520,6 @@ func TestOAuthNativeSchemeFlow(t *testing.T) {
 	m := newAuthManager(dir)
 	m.apiBase = api.URL + "/api"
 	m.http = api.Client()
-	if err := m.updateSettings(Settings{ClientID: appIdentifier, Scopes: defaultScopes}); err != nil {
-		t.Fatal(err)
-	}
 	done := make(chan error, 1)
 	m.onChange = func(err error) {
 		select {
@@ -544,8 +539,8 @@ func TestOAuthNativeSchemeFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := u.Query()
-	if q.Get("redirect_uri") != defaultRedirectURI || q.Get("client_id") != appIdentifier ||
-		q.Get("code_challenge_method") != "S256" || q.Get("state") == "" {
+	if q.Get("redirect_uri") != defaultRedirectURI || q.Get("client_id") != clientID ||
+		q.Get("scope") != defaultScopes || q.Get("code_challenge_method") != "S256" || q.Get("state") == "" {
 		t.Fatalf("授权参数不对：%v", q)
 	}
 	if strings.Contains(defaultRedirectURI, "127.0.0.1") || strings.Contains(defaultRedirectURI, "http") {
@@ -576,13 +571,13 @@ func TestOAuthNativeSchemeFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if vals.Get("grant_type") != "authorization_code" || vals.Get("code") != "native-code" ||
-		vals.Get("redirect_uri") != defaultRedirectURI || vals.Get("code_verifier") == "" ||
-		vals.Get("client_secret") != "" {
+		vals.Get("redirect_uri") != defaultRedirectURI || vals.Get("client_id") != clientID ||
+		vals.Get("code_verifier") == "" || vals.Get("client_secret") != "" {
 		t.Errorf("换 token 的表单不对：%s", form)
 	}
 }
 
-func TestDeepLinkColdStartAndSettingsGuard(t *testing.T) {
+func TestDeepLinkColdStart(t *testing.T) {
 	a := testApp(t)
 	// A callback that launched a fresh process has no PKCE verifier here.
 	a.handleCallbackURL(defaultRedirectURI + "?code=x&state=y")
@@ -599,21 +594,6 @@ func TestDeepLinkColdStartAndSettingsGuard(t *testing.T) {
 	if a.pageName != "list" {
 		t.Error("回环回调不该被当成系统回调处理")
 	}
-
-	// Empty client_id is rejected; an empty scope falls back to defaults.
-	a.draft = settingsDraft{clientID: "", scopes: "read"}
-	a.saveSettings()
-	if !strings.Contains(a.draft.message, "client_id") {
-		t.Errorf("设置页应拒绝空的 client_id：%q", a.draft.message)
-	}
-	a.draft = settingsDraft{clientID: appIdentifier, scopes: ""}
-	a.saveSettings()
-	if !strings.Contains(a.draft.message, "已保存") {
-		t.Errorf("合法设置未保存：%q", a.draft.message)
-	}
-	if got := a.auth.settingsSnapshot().Scopes; got != defaultScopes {
-		t.Errorf("空 scope 没有回填默认值：%s", got)
-	}
 }
 
 // Both UI pages must offer only the native-scheme PKCE flow. The paste box
@@ -624,7 +604,7 @@ func TestOnlyNativeSchemeLoginIsOffered(t *testing.T) {
 		"access_token", "用令牌登录", "粘贴令牌",
 		"本地监听端口", "端口", "127.0.0.1", "8765", "回环",
 	}
-	for _, page := range []string{"settings", "login"} {
+	for _, page := range []string{"list", "login"} {
 		a.pageName = page
 		tt := ui.NewTester(a.view, 1100, 760)
 		texts := tt.Texts()
@@ -635,22 +615,26 @@ func TestOnlyNativeSchemeLoginIsOffered(t *testing.T) {
 				}
 			}
 		}
-		if page == "settings" {
-			if !tt.HasText("原生回调：" + defaultRedirectURI) {
-				t.Errorf("设置页缺少固定回调说明：%q", texts)
-			}
-			for _, text := range texts {
-				if strings.Contains(text, "redirect_uri") {
-					t.Errorf("设置页仍有可编辑的 redirect_uri：%q", text)
-				}
-			}
-		} else {
+		if tt.HasText("设置") {
+			t.Errorf("%s 页仍有设置入口：%q", page, texts)
+		}
+		if page == "login" {
 			if !tt.HasText("打开浏览器授权") || !tt.HasText("用回调链接完成登录") {
 				t.Errorf("登录页缺少唯一流程的操作入口：%q", texts)
 			}
-			if !tt.HasText("redirect_uri：" + defaultRedirectURI) {
-				t.Errorf("登录页没有显示固定回调：%q", texts)
+			if !tt.HasText("redirect_uri："+defaultRedirectURI) ||
+				!tt.HasText("client_id："+clientID) || !tt.HasText("scope："+defaultScopes) {
+				t.Errorf("登录页没有显示固定的 OAuth 参数：%q", texts)
+			}
+			if !tt.HasText("本应用由第三方开发者独立开发运营，与 2Libra 无隶属或合作关系。") {
+				t.Errorf("登录页缺少第三方声明：%q", texts)
 			}
 		}
+	}
+	// A stale pageName must not resurrect the removed settings page.
+	a.pageName = "settings"
+	tt := ui.NewTester(a.view, 1100, 760)
+	if tt.HasText("设置 · OAuth 公开客户端（PKCE S256）") || tt.HasText("保存") {
+		t.Errorf("设置页仍在渲染：%q", tt.Texts())
 	}
 }
