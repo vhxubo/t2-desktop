@@ -129,7 +129,7 @@ func (a *app) openDetail(it Item) {
 		return
 	}
 	if a.pageName == "detail" && a.detail != nil {
-		// Inline navigation: keep the post we came from so "← 返回" walks
+		// Inline navigation: keep the post we came from so "✕ 关闭" walks
 		// back through the chain before dropping to the list.
 		if len(a.detailStack) >= 20 {
 			a.detailStack = a.detailStack[1:]
@@ -297,9 +297,6 @@ func (a *app) detailView(c *ui.Context) {
 	}
 	ui.Column(c).Fill().Children(func() {
 		ui.Row(c).Padding(10, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "← 返回").Clicked() {
-				a.closeDetail()
-			}
 			label := "帖子 " + d.shortID
 			if d.topic != nil && d.topic.Title != "" {
 				label = d.topic.Title
@@ -316,6 +313,10 @@ func (a *app) detailView(c *ui.Context) {
 			}
 			if ui.Button(c, "刷新").Clicked() {
 				a.reloadDetail()
+			}
+			// 关闭挪到右上角（原左上角的返回），内联浏览时仍先退一层再回列表。
+			if ui.Button(c, "✕ 关闭").Clicked() {
+				a.closeDetail()
 			}
 		})
 		ui.Divider(c)
@@ -361,7 +362,6 @@ func (a *app) topicPane(c *ui.Context, d *detailState) {
 		ui.Text(c, "暂无正文").TextColor(t.TextMuted)
 		return
 	}
-	ui.Text(c, p.Title).FontSize(20).Bold()
 	meta := []string{p.Author}
 	if p.AuthorLevel > 0 {
 		meta = append(meta, fmt.Sprintf("Lv.%d", p.AuthorLevel))
@@ -417,11 +417,6 @@ func (a *app) topicPane(c *ui.Context, d *detailState) {
 		})
 	}
 	ui.Divider(c)
-	if ui.Button(c, "在浏览器打开原文").Clicked() {
-		a.openExternal(d.originURL())
-	}
-	ui.Text(c, "本应用由第三方开发者独立开发运营，与 2Libra 无隶属或合作关系。").
-		FontSize(10).TextColor(t.TextMuted)
 }
 
 func (a *app) replyPane(c *ui.Context, d *detailState) {

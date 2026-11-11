@@ -230,42 +230,46 @@ func (a *app) view(c *ui.Context) {
 		return
 	}
 
-	// 左右布局：左侧功能导航（宽 150），右侧内容区。
+	// 左右布局：左侧（宽 150）放品牌顶栏 + 功能导航；右侧放内容区。
 	ui.Row(c).Fill().Children(func() {
-		sb := ui.Sidebar(c, &a.navSel, func() {
-			// 公开功能
-			ui.SidebarSection(c, "浏览", nil, func() {
-				for i, s := range tabSpecs {
-					if s.NeedsAuth {
-						continue
-					}
-					ui.SidebarItem(c, tabID(i), nil, s.Label)
-				}
-			})
-			// 「我的」单独成组：需登录后才能查看的功能
-			ui.SidebarSection(c, "我的", nil, func() {
-				for i, s := range tabSpecs {
-					if !s.NeedsAuth {
-						continue
-					}
-					ui.SidebarItem(c, tabID(i), nil, s.Label)
-				}
-			})
-		}).Width(150)
-		// 侧边栏选中变化 → 同步到 a.tab（用于 body/footer/加载逻辑）
-		if sb.Changed() {
-			if i, ok := tabFromID(a.navSel); ok && i != a.tab {
-				a.tab = i
-			}
-		}
-		if a.tab != a.lastTab {
-			a.lastTab = a.tab
-			a.status = ""
-		}
-		ui.Divider(c)
-		ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
-			a.header(c)
+		// 左侧导航栏：顶部品牌/账号区 + 带图标的侧边栏
+		ui.Column(c).Width(150).Shrink(0).FillHeight().Background(t.Surface).Children(func() {
+			a.sidebarHeader(c)
 			ui.Divider(c)
+			sb := ui.Sidebar(c, &a.navSel, func() {
+				// 公开功能
+				ui.SidebarSection(c, "浏览", nil, func() {
+					for i, s := range tabSpecs {
+						if s.NeedsAuth {
+							continue
+						}
+						ui.SidebarItem(c, tabID(i), tabIcons[i], s.Label)
+					}
+				})
+				// 「我的」单独成组：需登录后才能查看的功能
+				ui.SidebarSection(c, "我的", nil, func() {
+					for i, s := range tabSpecs {
+						if !s.NeedsAuth {
+							continue
+						}
+						ui.SidebarItem(c, tabID(i), tabIcons[i], s.Label)
+					}
+				})
+			}).Grow(1)
+			// 侧边栏选中变化 → 同步到 a.tab（用于 body/footer/加载逻辑）
+			if sb.Changed() {
+				if i, ok := tabFromID(a.navSel); ok && i != a.tab {
+					a.tab = i
+				}
+			}
+			if a.tab != a.lastTab {
+				a.lastTab = a.tab
+				a.status = ""
+			}
+		})
+		ui.Divider(c)
+		// 右侧内容区：正文列表 + 底部状态栏
+		ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
 			a.body(c)
 			ui.Divider(c)
 			a.footer(c)
@@ -274,12 +278,11 @@ func (a *app) view(c *ui.Context) {
 	a.ensureLoaded()
 }
 
-func (a *app) header(c *ui.Context) {
+// sidebarHeader 是左侧导航栏顶部的品牌与账号区（原顶栏收进左侧）。
+func (a *app) sidebarHeader(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).Padding(12, 16).Gap(10).AlignItems(ui.Center).Children(func() {
+	ui.Column(c).Padding(12, 12).Gap(8).Children(func() {
 		ui.Text(c, "2Libra").FontSize(19).Bold()
-		ui.Text(c, tabSpecs[a.tab].Label).FontSize(12).TextColor(t.TextMuted)
-		ui.Spacer(c).Grow(1)
 		who := "未登录 · 匿名可读"
 		if a.auth.loggedIn() {
 			who = "已登录"
@@ -287,7 +290,7 @@ func (a *app) header(c *ui.Context) {
 				who += " · " + name
 			}
 		}
-		ui.Text(c, who).FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, who).FontSize(11).TextColor(t.TextMuted).SingleLine()
 		if a.auth.loggedIn() {
 			if ui.Button(c, "退出").Clicked() {
 				a.auth.Logout()

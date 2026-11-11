@@ -359,7 +359,7 @@ func TestClickOpensDetailView(t *testing.T) {
 	if !a.detail.flat {
 		t.Error("flat 视图未切换")
 	}
-	if err := view.Click("← 返回"); err != nil {
+	if err := view.Click("✕ 关闭"); err != nil {
 		t.Errorf("返回列表失败：%v", err)
 	}
 	if a.pageName != "list" || a.detail != nil {

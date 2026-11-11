@@ -225,7 +225,7 @@ func TestInlineBackStackNavigation(t *testing.T) {
 		t.Errorf("缺少层数提示：%q", tt.Texts())
 	}
 	for _, want := range []string{"POST0002", "POST0001"} {
-		if err := tt.Click("← 返回"); err != nil {
+		if err := tt.Click("✕ 关闭"); err != nil {
 			t.Fatalf("返回失败：%v（%q）", err, tt.Texts())
 		}
 		if a.detail == nil || a.detail.shortID != want {
@@ -236,7 +236,7 @@ func TestInlineBackStackNavigation(t *testing.T) {
 	if len(a.detailStack) != 0 {
 		t.Errorf("返回栈未清空：%+v", a.detailStack)
 	}
-	if err := tt.Click("← 返回"); err != nil {
+	if err := tt.Click("✕ 关闭"); err != nil {
 		t.Fatalf("最后一次返回失败：%v", err)
 	}
 	if a.pageName != "list" || a.detail != nil {
