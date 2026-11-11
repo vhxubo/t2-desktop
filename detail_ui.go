@@ -313,13 +313,16 @@ func (a *app) detailView(c *ui.Context) {
 		})
 		ui.Divider(c)
 		ui.Row(c).Grow(1).FillWidth().Children(func() {
-			ui.Column(c).Grow(3).FillHeight().MinHeight(0).Children(func() {
+			// 正文与评论各占一半：两栏 Grow(1) 均分剩余宽度，MinWidth(0)
+			// 防止长代码/图片把某一栏撑宽；中间用 1px 分隔线而非会吃
+			// 宽度的 Spacer（Spacer 默认 Grow(1)，会留下空白带）。
+			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
 				ui.Scroll(c).Fill().Padding(14, 18).Gap(10).Children(func() {
 					a.topicPane(c, d)
 				})
 			})
-			ui.Spacer(c).Width(1).FillHeight().Background(t.Border)
-			ui.Column(c).Grow(2).FillHeight().MinHeight(0).Children(func() {
+			ui.Divider(c)
+			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
 				a.replyPane(c, d)
 			})
 		})
