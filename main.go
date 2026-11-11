@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"log"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/markdown"
 )
 
 type tabState struct {
@@ -23,12 +23,12 @@ type tabState struct {
 	gen        uint64
 }
 
+// Only client_id and scope are configurable. The native callback is a
+// fixed constant, so there is nothing else a user could switch to.
 type settingsDraft struct {
-	clientID    string
-	redirectURI string
-	scopes      string
-	port        string
-	message     string
+	clientID string
+	scopes   string
+	message  string
 }
 
 // app holds only data and widget state. Never store ui.Element or *Context:
@@ -45,12 +45,17 @@ type app struct {
 	tabs    []*tabState
 	reqSeq  uint64
 
-	pageName    string // list / settings / login
+	pageName    string // list / detail / settings / login
 	status      string
 	loginMsg    string
 	callbackURL string
-	manualToken string
 	draft       settingsDraft
+
+	detail       *detailState
+	emojis       map[string]emojiInfo
+	emojiLoading bool
+	emojiTried   bool
+	md           *markdown.Options
 }
 
 func newApp(dir string) *app {
@@ -67,14 +72,13 @@ func newApp(dir string) *app {
 	}
 	s := auth.settingsSnapshot()
 	a.draft = settingsDraft{
-		clientID:    s.ClientID,
-		redirectURI: s.RedirectURI,
-		scopes:      s.Scopes,
-		port:        strconv.Itoa(s.Port),
+		clientID: s.ClientID,
+		scopes:   s.Scopes,
 	}
 	a.auth.onChange = func(err error) {
 		a.publish(func() { a.onAuthChanged(err) })
 	}
+	a.md = newMarkdownOptions(a)
 	return a
 }
 
@@ -217,6 +221,9 @@ func (a *app) view(c *ui.Context) {
 	case "login":
 		a.loginView(c)
 		return
+	case "detail":
+		a.detailView(c)
+		return
 	}
 	ui.Column(c).Fill().Children(func() {
 		a.header(c)
@@ -255,10 +262,8 @@ func (a *app) header(c *ui.Context) {
 		if ui.Button(c, "设置").Clicked() {
 			s := a.auth.settingsSnapshot()
 			a.draft = settingsDraft{
-				clientID:    s.ClientID,
-				redirectURI: s.RedirectURI,
-				scopes:      s.Scopes,
-				port:        strconv.Itoa(s.Port),
+				clientID: s.ClientID,
+				scopes:   s.Scopes,
 			}
 			a.pageName = "settings"
 		}
@@ -337,7 +342,10 @@ func (a *app) row(c *ui.Context, it Item) {
 				SingleLine().Width(190).TextAlign(ui.End)
 		}
 	})
-	if it.URL != "" {
+	// 有 short_id 的帖子/评论在应用内看正文和评论；其余条目保持打开原文。
+	if it.ShortID != "" {
+		row.OnClick(func() { a.openDetail(it) })
+	} else if it.URL != "" {
 		row.OnClick(func() { a.srv.OpenURL(it.URL) })
 	}
 }
@@ -380,12 +388,11 @@ func (a *app) settingsView(c *ui.Context) {
 			ui.Text(c, "设置 · OAuth 公开客户端（PKCE S256）").FontSize(18).Bold()
 		})
 		ui.Divider(c)
-		ui.Text(c, "在 2Libra 网页 → 设置 → OAuth 应用 申请应用，客户端形态选「无服务端（公开客户端）」，并把下面的回调地址原样注册进去。公开客户端没有 client_secret，换 token 只靠 PKCE code_verifier。").
-			TextColor(t.TextMuted).MaxLines(4)
-		ui.TextInput(c, &a.draft.clientID).Label("client_id").Placeholder("审核通过后得到的 client_id").FillWidth()
-		ui.TextInput(c, &a.draft.redirectURI).Label("redirect_uri").Placeholder("http://127.0.0.1:8765/cb").FillWidth()
-		ui.TextInput(c, &a.draft.scopes).Label("scope（空格分隔）").Placeholder("read profile read:me").FillWidth()
-		ui.TextInput(c, &a.draft.port).Label("本地监听端口").Placeholder("8765").Width(180)
+		ui.Text(c, "在 2Libra 网页 → 设置 → OAuth 应用 申请应用，客户端形态选「原生/桌面端（公开客户端）」，应用 ID 填 "+appIdentifier+"，回调地址原样注册 "+defaultRedirectURI+"。公开客户端没有 client_secret，换 token 只靠 PKCE code_verifier。").
+			TextColor(t.TextMuted).MaxLines(5)
+		ui.Text(c, "原生回调："+defaultRedirectURI).FontSize(12).TextColor(t.TextMuted)
+		ui.TextInput(c, &a.draft.clientID).Label("client_id（应用 ID）").Placeholder(appIdentifier).FillWidth()
+		ui.TextInput(c, &a.draft.scopes).Label("scope（空格分隔）").Placeholder(defaultScopes).FillWidth()
 		if ui.PrimaryButton(c, "保存").Clicked() {
 			a.saveSettings()
 		}
@@ -393,31 +400,27 @@ func (a *app) settingsView(c *ui.Context) {
 			ui.Text(c, a.draft.message).TextColor(t.TextMuted)
 		}
 		ui.Divider(c)
-		ui.Text(c, "说明：回环回调的端口在规范化时可能被剔除。若浏览器跳到 http://127.0.0.1/cb 而应用没自动收到，请复制地址栏完整链接，到登录页的「回调链接」里粘贴完成。没有 client_id 时也可以直接粘贴 access_token 体验需要登录的 tab。").
+		ui.Text(c, "说明：本应用只支持这一种登录方式。启动时向系统注册 "+appIdentifier+" URL scheme，浏览器同意授权后经 "+defaultRedirectURI+" 跳回本应用；若没有自动跳回，复制地址栏的完整回调链接，到登录页的「回调链接」里粘贴即可完成同一次授权。").
 			TextColor(t.TextMuted).MaxLines(5)
 		ui.Text(c, "令牌与设置保存在用户配置目录，不写入项目仓库；client_id 可用环境变量 TWOLIBRA_CLIENT_ID 提供。").
 			FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		ui.Divider(c)
+		ui.Text(c, "本应用由第三方开发者独立开发运营，与 2Libra 无隶属或合作关系。2Libra 仅提供账号授权与接口，不对本应用的可用性、内容与数据处理负责。你可以随时在 2Libra 的「授权应用」页面撤销本应用的授权。应用内展示的内容版权归原作者所有，详情页保留作者昵称与原文链接。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(5)
 	})
 }
 
 func (a *app) saveSettings() {
-	port, err := strconv.Atoi(strings.TrimSpace(a.draft.port))
-	if err != nil || port <= 0 || port >= 65536 {
-		a.draft.message = "端口必须是 1~65535 的整数，已恢复为 8765"
-		port = 8765
-		a.draft.port = "8765"
-	}
 	s := Settings{
-		ClientID:    strings.TrimSpace(a.draft.clientID),
-		RedirectURI: strings.TrimSpace(a.draft.redirectURI),
-		Scopes:      strings.TrimSpace(a.draft.scopes),
-		Port:        port,
+		ClientID: strings.TrimSpace(a.draft.clientID),
+		Scopes:   strings.TrimSpace(a.draft.scopes),
+	}
+	if s.ClientID == "" {
+		a.draft.message = "client_id 不能为空，请填 2Libra 网页申请的原生/桌面端应用 ID"
+		return
 	}
 	if s.Scopes == "" {
-		s.Scopes = "read profile read:me"
-	}
-	if s.RedirectURI == "" {
-		s.RedirectURI = "http://127.0.0.1:8765/cb"
+		s.Scopes = defaultScopes
 	}
 	if err := a.auth.updateSettings(s); err != nil {
 		a.draft.message = "保存失败：" + err.Error()
@@ -446,7 +449,7 @@ func (a *app) loginView(c *ui.Context) {
 		})
 		ui.Divider(c)
 		ui.Textf(c, "client_id：%s", maskConfig(s.ClientID)).FontSize(12).TextColor(t.TextMuted)
-		ui.Textf(c, "redirect_uri：%s", s.RedirectURI).FontSize(12).TextColor(t.TextMuted)
+		ui.Textf(c, "redirect_uri：%s", defaultRedirectURI).FontSize(12).TextColor(t.TextMuted)
 		ui.Textf(c, "scope：%s", s.Scopes).FontSize(12).TextColor(t.TextMuted)
 		if a.loginMsg != "" {
 			ui.Text(c, a.loginMsg).TextColor(t.TextMuted).MaxLines(4)
@@ -455,23 +458,14 @@ func (a *app) loginView(c *ui.Context) {
 			a.startLogin()
 		}
 		ui.Divider(c)
-		ui.Text(c, "如果浏览器没有自动跳回应用，复制地址栏完整链接粘贴到这里：").FontSize(12).TextColor(t.TextMuted)
-		ui.TextInput(c, &a.callbackURL).Label("回调链接").Placeholder("http://127.0.0.1/cb?code=...&state=...").FillWidth()
+		ui.Text(c, "浏览器同意后会通过 "+defaultRedirectURI+" 跳回应用；若系统没有自动跳回，复制地址栏完整链接粘贴到这里，完成同一次授权：").FontSize(12).TextColor(t.TextMuted)
+		ui.TextInput(c, &a.callbackURL).Label("回调链接").Placeholder(defaultRedirectURI + "?code=...&state=...").FillWidth()
 		if ui.Button(c, "用回调链接完成登录").Clicked() {
 			if err := a.auth.Complete(a.callbackURL); err != nil {
 				a.loginMsg = err.Error()
 			} else {
 				a.loginMsg = "已收到回调，正在用授权码换取令牌…"
 			}
-		}
-		ui.Divider(c)
-		ui.Text(c, "还没有申请应用？也可以直接粘贴 access_token（匿名读端点本来就不需要登录）：").FontSize(12).TextColor(t.TextMuted)
-		ui.TextInput(c, &a.manualToken).Label("access_token").Placeholder("粘贴令牌").FillWidth()
-		if ui.Button(c, "用令牌登录").Clicked() {
-			tok := a.manualToken
-			a.manualToken = ""
-			a.loginMsg = "正在校验令牌…"
-			go a.auth.LoginWithToken(context.Background(), tok)
 		}
 		ui.Spacer(c).Grow(1)
 		if v := a.auth.verifyStatus(); v != "" {
@@ -490,19 +484,49 @@ func maskConfig(s string) string {
 	return s[:4] + "…" + s[len(s)-4:]
 }
 
+// handleCallbackURL receives the OS deep link. The PKCE verifier is held in
+// memory, so a callback that cold-started the app cannot resume the login.
+func (a *app) handleCallbackURL(raw string) {
+	if !isCallbackLink(raw) {
+		return // some other deep link, not an OAuth callback
+	}
+	if err := a.auth.Complete(raw); err != nil {
+		a.loginMsg = "回调无法完成登录：" + err.Error() + "。如果应用是被浏览器链接刚启动的，PKCE 会话不在本进程，请点「打开浏览器授权」重新发起。"
+		a.status = a.loginMsg
+		a.pageName = "login"
+		return
+	}
+	a.loginMsg = "已收到系统回调，正在用授权码换取令牌…"
+}
+
 func (a *app) startLogin() {
 	authorizeURL, err := a.auth.Begin(context.Background())
 	if err != nil {
 		a.loginMsg = err.Error()
 		return
 	}
-	a.loginMsg = "已在浏览器打开授权页。同意后会自动回到应用；若浏览器跳到无端口的 127.0.0.1 地址，请复制地址栏链接粘贴到下方。"
+	a.loginMsg = "已在浏览器打开授权页。同意后浏览器会通过 " + defaultRedirectURI + " 跳回应用；若没有跳回，请复制地址栏完整链接粘贴到下方。"
 	a.srv.OpenURL(authorizeURL) // URL 服务在 UI 线程调用
 }
 
 func main() {
 	a := newApp("")
 	a.autoLoad = true
+	// On Windows/Linux the custom-scheme callback starts a second process;
+	// hand its URL to the instance that holds the PKCE verifier.
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
+	// mygo.json declares the scheme for packaged builds (macOS bundle,
+	// Linux desktop entry). Registering at run time also covers Windows
+	// and apps launched without an installer. Failure only disables the
+	// automatic jump back: pasting the callback link still works.
+	if err := mygo.App.RegisterURLScheme(appIdentifier); err != nil {
+		log.Printf("运行时注册 %s 未成功（打包版由 mygo.json 的 urlSchemes 声明；仍可手动粘贴回调链接）：%v", appIdentifier, err)
+	}
+	mygo.App.OnOpenURL(func(raw string) {
+		a.publish(func() { a.handleCallbackURL(raw) })
+	})
 	mygo.App.WhenReady(func() {
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:     "2Libra 阅读器",

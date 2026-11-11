@@ -94,11 +94,13 @@ func endpoint(base string, s tabSpec, page int) string {
 
 // Item is one row of the native list, whatever the source endpoint.
 type Item struct {
-	Key      string
-	Title    string
-	Subtitle string
-	Meta     string
-	URL      string
+	Key       string
+	Title     string
+	Subtitle  string
+	Meta      string
+	URL       string // 站外原文链接，保留作者署名与来源时使用
+	ShortID   string // 帖子对外 ID；非空才可以在应用内打开详情
+	CommentID string // 从评论列表进入时，要定位的评论 uuid
 }
 
 type pageResult struct {
@@ -213,28 +215,47 @@ func (c *Client) httpClient() *http.Client {
 	return &http.Client{Timeout: 20 * time.Second}
 }
 
-// fetch loads one page. A 401 with a token triggers one single-flight
-// refresh and exactly one retry; a failed refresh drops the session.
-func (c *Client) fetch(ctx context.Context, s tabSpec, page int) (pageResult, error) {
+// withAuthRetry runs one GET-shaped read with the current token. A 401 with
+// a token triggers one single-flight refresh and exactly one retry; a failed
+// refresh drops the session. Every read endpoint goes through here, so the
+// detail / replies / emojis paths behave exactly like the list tabs.
+func withAuthRetry[T any](c *Client, ctx context.Context, fn func(string) (T, error)) (T, error) {
 	token := c.accessToken()
-	res, err := c.get(ctx, s, page, token)
-	if err != nil {
-		var ae *apiError
-		if errors.As(err, &ae) && ae.Status == 401 && token != "" && c.Auth != nil {
-			fresh, rerr := c.Auth.refresh(ctx, token)
-			if rerr == nil {
-				res, err = c.get(ctx, s, page, fresh)
-			} else {
-				c.Auth.invalidate(rerr)
-			}
-		}
+	res, err := fn(token)
+	if err == nil {
+		return res, nil
 	}
-	return res, err
+	var ae *apiError
+	if !errors.As(err, &ae) || ae.Status != http.StatusUnauthorized || token == "" || c.Auth == nil {
+		return res, err
+	}
+	fresh, rerr := c.Auth.refresh(ctx, token)
+	if rerr != nil {
+		c.Auth.invalidate(rerr)
+		return res, err
+	}
+	return fn(fresh)
+}
+
+// fetch loads one page.
+func (c *Client) fetch(ctx context.Context, s tabSpec, page int) (pageResult, error) {
+	return withAuthRetry(c, ctx, func(token string) (pageResult, error) {
+		return c.get(ctx, s, page, token)
+	})
 }
 
 func (c *Client) get(ctx context.Context, s tabSpec, page int, token string) (pageResult, error) {
-	var empty pageResult
-	u := endpoint(c.base(), s, page)
+	d, err := c.getJSON(ctx, endpoint(c.base(), s, page), token)
+	if err != nil {
+		return pageResult{}, err
+	}
+	return decodePage(d, s, page)
+}
+
+// getJSON performs one GET and unwraps the {c,m,d,t} envelope. The caller
+// gets d verbatim; unknown fields stay untouched for the decoder to ignore.
+func (c *Client) getJSON(ctx context.Context, u, token string) (json.RawMessage, error) {
+	var empty json.RawMessage
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return empty, err
@@ -271,7 +292,7 @@ func (c *Client) get(ctx context.Context, s tabSpec, page int, token string) (pa
 			RetryAfter:    env.RetryAfter,
 		}
 	}
-	return decodePage(env.D, s, page)
+	return env.D, nil
 }
 
 func decodePage(d json.RawMessage, s tabSpec, page int) (pageResult, error) {
@@ -546,9 +567,11 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 		postTitle = cleanText(post.str("title", "name"))
 	}
 
-	it := Item{Key: id}
+	it := Item{Key: id, ShortID: shortID}
 	switch kind {
 	case kindComment:
+		// 评论行点开的是它所属的帖子，并记住这条评论以便定位/高亮。
+		it.CommentID = id
 		it.Title = content
 		if it.Title == "" {
 			it.Title = postTitle

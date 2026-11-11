@@ -9,33 +9,37 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// A native/desktop OAuth client uses a private-use URI scheme instead of a
-// loopback HTTP listener (RFC 8252 §7.1). The OS hands the callback URL to
-// the app that registered appIdentifier; the app id doubles as client_id.
+// There is exactly one login flow: a native/desktop public client using a
+// private-use URI scheme (RFC 8252 §7.1). The OS hands the callback URL to
+// the app registered for appIdentifier; the app id doubles as client_id.
+// redirect_uri is a fixed constant, not a user setting, so it can never
+// drift from the value registered on the 2Libra website.
 const (
 	appIdentifier      = "com.vhxubo.t2-desktop"
 	defaultRedirectURI = appIdentifier + ":/callback"
-	legacyRedirectURI  = "http://127.0.0.1:8765/cb"
+	defaultScopes      = "read profile read:me"
+
+	// Some platforms normalise :/callback into ://callback before handing
+	// the URL to the app. This is the same native callback, not a second
+	// login method, so it is accepted as a spelling variant only.
+	alternateCallbackURI = appIdentifier + "://callback"
 )
 
 // Settings holds the public-client OAuth configuration. A desktop app has
 // no client_secret: PKCE code_verifier alone authenticates the token call.
+// redirect_uri and a loopback port deliberately do not exist here.
 type Settings struct {
-	ClientID    string `json:"client_id"`
-	RedirectURI string `json:"redirect_uri"`
-	Scopes      string `json:"scopes"`
-	Port        int    `json:"port"`
+	ClientID string `json:"client_id"`
+	Scopes   string `json:"scopes"`
 }
 
 type tokenData struct {
@@ -49,18 +53,10 @@ type tokenData struct {
 }
 
 func defaultSettings() Settings {
-	s := Settings{
-		ClientID:    envOr("TWOLIBRA_CLIENT_ID", appIdentifier),
-		RedirectURI: envOr("TWOLIBRA_REDIRECT_URI", defaultRedirectURI),
-		Scopes:      envOr("TWOLIBRA_SCOPES", "read profile read:me"),
-		Port:        8765, // only used by the legacy loopback redirect
+	return Settings{
+		ClientID: envOr("TWOLIBRA_CLIENT_ID", appIdentifier),
+		Scopes:   envOr("TWOLIBRA_SCOPES", defaultScopes),
 	}
-	if v := os.Getenv("TWOLIBRA_OAUTH_PORT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n < 65536 {
-			s.Port = n
-		}
-	}
-	return s
 }
 
 func envOr(key, fallback string) string {
@@ -112,32 +108,23 @@ type loginResult struct {
 	err   error
 }
 
+// pendingLogin lives in memory for the duration of one authorization. No
+// listener, no server, no port: the OS delivers the callback URL through
+// the registered URL scheme, and Complete() feeds it into result.
 type pendingLogin struct {
-	state       string
-	verifier    string
-	challenge   string
-	clientID    string
-	redirectURI string
-	// server is nil for a custom-scheme callback: the OS delivers the URL
-	// through the app's deep link, so nothing listens on a local port.
-	server *http.Server
-	result chan loginResult
-	once   sync.Once
+	state     string
+	verifier  string
+	challenge string
+	clientID  string
+	result    chan loginResult
+	once      sync.Once
 }
 
 func (p *pendingLogin) deliver(r loginResult) {
 	p.once.Do(func() { p.result <- r })
 }
 
-func (p *pendingLogin) close() {
-	if p.server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_ = p.server.Shutdown(ctx)
-	}
-}
-
-// AuthManager owns the PKCE flow, the loopback callback, token rotation,
+// AuthManager owns the PKCE flow, the native-scheme callback, token rotation,
 // and persistent storage. All state changes are reported through onChange
 // so the UI can repaint through Window.Update.
 type AuthManager struct {
@@ -163,32 +150,24 @@ func newAuthManager(dir string) *AuthManager {
 		apiBase:  apiBaseURL,
 		http:     &http.Client{Timeout: 20 * time.Second},
 	}
+	// Legacy settings.json files may still contain "redirect_uri" and "port".
+	// Those JSON keys are simply ignored now: there is no alternative flow to
+	// migrate to, the callback is always defaultRedirectURI.
 	var saved Settings
 	if err := readJSONFile(filepath.Join(dir, "settings.json"), &saved); err == nil {
-		// Older builds defaulted to the loopback callback. Upgrade only
-		// that exact value; a redirect the user picked stays untouched.
-		if saved.RedirectURI == legacyRedirectURI {
-			saved.RedirectURI = defaultRedirectURI
-		}
 		if saved.ClientID != "" {
 			m.settings.ClientID = saved.ClientID
 		}
-		if saved.RedirectURI != "" {
-			m.settings.RedirectURI = saved.RedirectURI
-		}
 		if saved.Scopes != "" {
 			m.settings.Scopes = saved.Scopes
-		}
-		if saved.Port > 0 {
-			m.settings.Port = saved.Port
 		}
 	}
 	// Explicit environment values always win over the saved file.
 	if v := os.Getenv("TWOLIBRA_CLIENT_ID"); v != "" {
 		m.settings.ClientID = v
 	}
-	if v := os.Getenv("TWOLIBRA_REDIRECT_URI"); v != "" {
-		m.settings.RedirectURI = v
+	if v := os.Getenv("TWOLIBRA_SCOPES"); v != "" {
+		m.settings.Scopes = v
 	}
 	var t tokenData
 	if err := readJSONFile(filepath.Join(dir, "token.json"), &t); err == nil && t.AccessToken != "" {
@@ -232,8 +211,13 @@ func (m *AuthManager) verifyStatus() string {
 }
 
 func (m *AuthManager) updateSettings(s Settings) error {
-	if s.Port <= 0 || s.Port >= 65536 {
-		s.Port = 8765
+	s.ClientID = strings.TrimSpace(s.ClientID)
+	s.Scopes = strings.TrimSpace(s.Scopes)
+	if s.ClientID == "" {
+		return errors.New("client_id 不能为空")
+	}
+	if s.Scopes == "" {
+		s.Scopes = defaultScopes
 	}
 	m.mu.Lock()
 	m.settings = s
@@ -289,43 +273,32 @@ func newPKCE() (verifier, challenge string) {
 	return
 }
 
-// loopbackRedirect is the legacy RFC 8252 §7.3 form. It is still accepted
-// for anyone who registered an http redirect before the native scheme.
-func loopbackRedirect(u *url.URL) bool {
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return false
-	}
-	switch strings.ToLower(u.Hostname()) {
-	case "127.0.0.1", "localhost", "::1":
-		return true
-	}
-	return false
-}
-
-// isAppCallback accepts exactly the callbacks the app can receive: the
-// registered custom scheme (:/callback or ://callback) and the old loopback
-// address. Anything else, including a foreign site's URL, is rejected.
-func isAppCallback(u *url.URL) bool {
-	if !strings.EqualFold(u.Scheme, appIdentifier) {
-		return loopbackRedirect(u)
-	}
-	path := u.Path
-	if path == "" {
-		path = u.Opaque
-	}
-	return strings.Trim(path, "/") == "callback" || strings.EqualFold(u.Host, "callback")
-}
-
-// isCallbackLink is the string form used by the system deep-link handler.
+// isCallbackLink accepts only the app's registered native callback URL.
+// Loopback redirects, foreign schemes and any other path are rejected:
+// there is exactly one login flow and one callback to validate.
 func isCallbackLink(raw string) bool {
 	u, err := url.Parse(strings.TrimSpace(raw))
-	return err == nil && isAppCallback(u)
+	if err != nil || !strings.EqualFold(u.Scheme, appIdentifier) {
+		return false
+	}
+	// Rebuild the URL without query/fragment so only the registered
+	// callback target (plus the harmless :// spelling variant) matches.
+	base := u.Scheme + ":"
+	if u.Opaque != "" {
+		base += u.Opaque
+	} else {
+		if u.Host != "" {
+			base += "//" + u.Host
+		}
+		base += u.Path
+	}
+	return base == defaultRedirectURI || base == alternateCallbackURI
 }
 
 func (m *AuthManager) authorizeURL(p *pendingLogin, s Settings) string {
 	v := url.Values{}
 	v.Set("client_id", s.ClientID)
-	v.Set("redirect_uri", p.redirectURI)
+	v.Set("redirect_uri", defaultRedirectURI)
 	v.Set("response_type", "code")
 	v.Set("scope", s.Scopes)
 	v.Set("state", p.state)
@@ -334,84 +307,37 @@ func (m *AuthManager) authorizeURL(p *pendingLogin, s Settings) string {
 	return m.webBase() + "/oauth/authorize?" + v.Encode()
 }
 
-// Begin creates the PKCE pair, starts the loopback listener and returns the
-// authorize URL. The caller opens it on the UI thread; a goroutine waits for
-// the callback, exchanges the code and reports the outcome via onChange.
+// Begin creates the PKCE pair and returns the authorize URL. Nothing is
+// listened on locally: the OS delivers the callback URL through the
+// registered scheme. A goroutine waits for the callback, exchanges the
+// code and reports the outcome via onChange.
 func (m *AuthManager) Begin(ctx context.Context) (string, error) {
 	m.mu.Lock()
 	if m.pending != nil {
 		old := m.pending
 		m.pending = nil
 		old.deliver(loginResult{err: errors.New("上一次登录已取消")})
-		old.close()
 	}
 	s := m.settings
 	m.mu.Unlock()
 
 	if s.ClientID == "" {
-		return "", errors.New("请先在「设置」里填写 client_id（在 2Libra 网页申请公开客户端）")
-	}
-	redirect, err := url.Parse(s.RedirectURI)
-	if err != nil || redirect.Host == "" {
-		return "", errors.New("redirect_uri 不是合法地址")
-	}
-	path := redirect.Path
-	if path == "" {
-		path = "/"
-	}
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", s.Port))
-	if err != nil {
-		return "", fmt.Errorf("本地回环监听 127.0.0.1:%d 失败：%w", s.Port, err)
+		return "", errors.New("请先在「设置」里填写 client_id（2Libra 网页申请的原生/桌面端应用 ID）")
 	}
 	verifier, challenge := newPKCE()
 	p := &pendingLogin{
-		state:       randomURLSafe(16),
-		verifier:    verifier,
-		challenge:   challenge,
-		clientID:    s.ClientID,
-		redirectURI: s.RedirectURI,
-		listener:    listener,
-		result:      make(chan loginResult, 1),
+		state:     randomURLSafe(16),
+		verifier:  verifier,
+		challenge: challenge,
+		clientID:  s.ClientID,
+		result:    make(chan loginResult, 1),
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		switch {
-		case q.Get("error") != "":
-			p.deliver(loginResult{err: fmt.Errorf("授权被拒绝：%s", q.Get("error"))})
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = io.WriteString(w, callbackPage("授权未完成", "可以关闭此页面，回到应用重试。", true))
-		case q.Get("code") == "":
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = io.WriteString(w, callbackPage("回调缺少 code", "可以关闭此页面，回到应用重试。", true))
-		default:
-			p.deliver(loginResult{code: q.Get("code"), state: q.Get("state")})
-			_, _ = io.WriteString(w, callbackPage("授权成功", "可以关闭此页面，回到 2Libra 阅读器。", false))
-		}
-	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = io.WriteString(w, callbackPage("2Libra 登录", "如果浏览器没有自动跳回应用，请复制地址栏完整链接，粘贴到应用的「回调链接」输入框。", false))
-	})
-	p.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	go func() { _ = p.server.Serve(listener) }()
 
 	m.mu.Lock()
 	m.pending = p
 	m.mu.Unlock()
 	go m.awaitLogin(ctx, p)
 	return m.authorizeURL(p, s), nil
-}
-
-func callbackPage(title, message string, failed bool) string {
-	color := "#16a34a"
-	if failed {
-		color = "#dc2626"
-	}
-	return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>` + title + `</title>` +
-		`<body style="font:15px/1.7 system-ui,sans-serif;max-width:520px;margin:12vh auto;padding:0 24px;color:#1f2937">` +
-		`<h1 style="color:` + color + `">` + title + `</h1><p>` + message + `</p></body></html>`
 }
 
 func (m *AuthManager) awaitLogin(ctx context.Context, p *pendingLogin) {
@@ -436,12 +362,12 @@ func (m *AuthManager) clearPending(p *pendingLogin) {
 		m.pending = nil
 	}
 	m.mu.Unlock()
-	p.close()
 }
 
-// Complete accepts a pasted callback URL. This covers the RFC 8252 loopback
-// case where the redirect arrives without the registered port and no local
-// listener receives it.
+// Complete accepts a callback URL from the system deep link
+// (com.vhxubo.t2-desktop:/callback?…) or the same URL pasted by the user
+// when the browser did not jump back automatically. It is one flow: the
+// pasted link must be the native callback, not a token or a loopback URL.
 func (m *AuthManager) Complete(rawURL string) error {
 	m.mu.Lock()
 	p := m.pending
@@ -449,9 +375,10 @@ func (m *AuthManager) Complete(rawURL string) error {
 	if p == nil {
 		return errors.New("请先点击「打开浏览器授权」，再粘贴回调链接")
 	}
-	u, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil {
-		return fmt.Errorf("回调链接格式不对：%w", err)
+	raw := strings.TrimSpace(rawURL)
+	u, err := url.Parse(raw)
+	if err != nil || !isCallbackLink(raw) {
+		return fmt.Errorf("这不是本应用的回调链接，应形如 %s?code=...&state=...", defaultRedirectURI)
 	}
 	q := u.Query()
 	if e := q.Get("error"); e != "" {
@@ -526,32 +453,15 @@ func (m *AuthManager) postForm(ctx context.Context, form url.Values) (tokenData,
 }
 
 func (m *AuthManager) exchangeCode(ctx context.Context, p *pendingLogin, code string) (tokenData, error) {
-	// Use the exact client_id / redirect_uri snapshot from the authorize step.
-	clientID := p.clientID
+	// Use the exact client_id snapshot from the authorize step; redirect_uri
+	// is the same fixed constant used to build that URL.
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", code)
-	form.Set("redirect_uri", p.redirectURI)
-	form.Set("client_id", clientID)
+	form.Set("redirect_uri", defaultRedirectURI)
+	form.Set("client_id", p.clientID)
 	form.Set("code_verifier", p.verifier) // 公开客户端：不带 client_secret
 	return m.postForm(ctx, form)
-}
-
-// LoginWithToken is the fallback when no OAuth app has been approved yet:
-// the user pastes an access_token obtained elsewhere.
-func (m *AuthManager) LoginWithToken(ctx context.Context, access string) {
-	access = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(access), "Bearer "))
-	if access == "" {
-		m.notify(errors.New("请粘贴 access_token"))
-		return
-	}
-	t := tokenData{AccessToken: access, TokenType: "Bearer", Scope: "手动填写"}
-	err := m.storeToken(t)
-	if err == nil {
-		m.fetchIdentity(ctx, access)
-		_ = m.verify(ctx, access)
-	}
-	m.notify(err)
 }
 
 func (m *AuthManager) Logout() {

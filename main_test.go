@@ -6,12 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,9 +25,7 @@ func testApp(t *testing.T) *app {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("TWOLIBRA_CLIENT_ID", "")
-	t.Setenv("TWOLIBRA_REDIRECT_URI", "")
 	t.Setenv("TWOLIBRA_SCOPES", "")
-	t.Setenv("TWOLIBRA_OAUTH_PORT", "")
 	a := newApp(dir)
 	a.autoLoad = false // 测试中不发真实网络请求
 	return a
@@ -286,31 +284,14 @@ func TestRefreshRotatesTokenOnce(t *testing.T) {
 	}
 }
 
-func TestLoginWithTokenVerifiesIdentity(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/oauth/me":
-			_, _ = fmt.Fprint(w, `{"c":0,"d":{"username":"jimmy","level":4}}`)
-		case "/api/v1/me/summary":
-			if r.Header.Get("Authorization") != "Bearer tok" {
-				t.Errorf("校验请求缺少令牌")
-			}
-			_, _ = fmt.Fprint(w, `{"c":0,"d":{"username":"jimmy"}}`)
-		default:
-			t.Errorf("意外路径 %s", r.URL.Path)
-		}
-	}))
-	defer srv.Close()
+func TestLogoutClearsToken(t *testing.T) {
 	dir := t.TempDir()
 	m := newAuthManager(dir)
-	m.apiBase = srv.URL + "/api"
-	m.http = srv.Client()
-	m.LoginWithToken(context.Background(), "Bearer tok")
-	if !m.loggedIn() || m.username() != "jimmy" {
-		t.Fatalf("登录态不对：%+v", m.token)
+	if err := m.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(m.verifyStatus(), "连通正常") {
-		t.Errorf("连通性检查不对：%s", m.verifyStatus())
+	if !m.loggedIn() {
+		t.Fatal("令牌未生效")
 	}
 	m.Logout()
 	if m.loggedIn() {
@@ -318,92 +299,6 @@ func TestLoginWithTokenVerifiesIdentity(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "token.json")); !os.IsNotExist(err) {
 		t.Error("退出后令牌文件未删除")
-	}
-}
-
-// Full public-client PKCE round trip against a fake 2Libra server:
-// authorize URL -> loopback callback -> token exchange in d -> identity.
-func TestOAuthPKCELoopbackFlow(t *testing.T) {
-	var gotForm atomic.Value
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/oauth/token":
-			_ = r.ParseForm()
-			gotForm.Store(r.Form.Encode())
-			_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{"access_token":"ACCESS","refresh_token":"REFRESH","token_type":"Bearer","expires_in":3600,"scope":"read profile read:me"}}`)
-		case "/api/oauth/me":
-			_, _ = fmt.Fprint(w, `{"c":0,"d":{"username":"jimmy"}}`)
-		case "/api/v1/me/summary":
-			_, _ = fmt.Fprint(w, `{"c":0,"d":{"username":"jimmy"}}`)
-		default:
-			t.Errorf("意外路径 %s", r.URL.Path)
-		}
-	}))
-	defer api.Close()
-
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := probe.Addr().(*net.TCPAddr).Port
-	_ = probe.Close()
-
-	dir := t.TempDir()
-	m := newAuthManager(dir)
-	m.apiBase = api.URL + "/api"
-	m.http = api.Client()
-	redirect := fmt.Sprintf("http://127.0.0.1:%d/cb", port)
-	if err := m.updateSettings(Settings{ClientID: "cid", RedirectURI: redirect, Scopes: "read profile read:me", Port: port}); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	m.onChange = func(err error) {
-		select {
-		case done <- err:
-		default:
-		}
-	}
-
-	authorize, err := m.Begin(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	u, err := url.Parse(authorize)
-	if err != nil {
-		t.Fatal(err)
-	}
-	q := u.Query()
-	if u.Host != strings.TrimPrefix(api.URL, "http://") || u.Path != "/oauth/authorize" {
-		t.Errorf("授权页地址不对：%s", authorize)
-	}
-	if q.Get("client_id") != "cid" || q.Get("response_type") != "code" ||
-		q.Get("code_challenge_method") != "S256" || q.Get("scope") != "read profile read:me" ||
-		q.Get("redirect_uri") != redirect || len(q.Get("code_challenge")) != 43 || q.Get("state") == "" {
-		t.Errorf("授权参数不对：%v", q)
-	}
-	state := q.Get("state")
-	callback := fmt.Sprintf("http://127.0.0.1:%d/cb?code=the-code&state=%s", port, state)
-	resp, err := http.Get(callback)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-
-	select {
-	case loginErr := <-done:
-		if loginErr != nil {
-			t.Fatalf("登录失败：%v", loginErr)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("登录回调超时")
-	}
-	if !m.loggedIn() || m.accessToken() != "ACCESS" || m.username() != "jimmy" {
-		t.Fatalf("登录态不对：%+v", m.token)
-	}
-	form, _ := gotForm.Load().(string)
-	if !strings.Contains(form, "code=the-code") || !strings.Contains(form, "code_verifier=") ||
-		strings.Contains(form, "client_secret") || !strings.Contains(form, "grant_type=authorization_code") {
-		t.Errorf("换 token 的表单不对：%s", form)
 	}
 }
 
@@ -458,10 +353,304 @@ func TestNativeView(t *testing.T) {
 	if !tt.HasText("设置 · OAuth 公开客户端（PKCE S256）") {
 		t.Errorf("设置页没有渲染：%q", tt.Texts())
 	}
+	if !tt.HasText("原生回调：" + defaultRedirectURI) {
+		t.Errorf("设置页没有显示原生回调地址：%q", tt.Texts())
+	}
 	if err := tt.Click("← 返回"); err != nil {
 		t.Fatal(err)
 	}
 	if a.pageName != "list" {
 		t.Errorf("返回后仍在 %s 页", a.pageName)
+	}
+}
+
+// The packaged app must declare the same id as the Go code, and register
+// its custom scheme so the OS can hand the callback URL back to the app.
+func TestAppConfigDeclaresNativeScheme(t *testing.T) {
+	b, err := os.ReadFile("mygo.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Identifier string   `json:"identifier"`
+		URLSchemes []string `json:"urlSchemes"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Identifier != appIdentifier {
+		t.Errorf("mygo.json identifier = %q，期望 %q", cfg.Identifier, appIdentifier)
+	}
+	if len(cfg.URLSchemes) != 1 || cfg.URLSchemes[0] != appIdentifier {
+		t.Errorf("mygo.json urlSchemes = %v，期望 [%s]", cfg.URLSchemes, appIdentifier)
+	}
+	if defaultRedirectURI != "com.vhxubo.t2-desktop:/callback" {
+		t.Errorf("回调地址不是原生/桌面端形式：%s", defaultRedirectURI)
+	}
+}
+
+// There must be no second login path hiding in the data model: no
+// configurable redirect/port, no local server, no manual-token entry point.
+func TestSingleLoginFlowStructure(t *testing.T) {
+	st := reflect.TypeOf(Settings{})
+	want := map[string]bool{"ClientID": true, "Scopes": true}
+	if st.NumField() != len(want) {
+		t.Errorf("Settings 字段数 = %d，期望只有 client_id / scope", st.NumField())
+	}
+	for i := 0; i < st.NumField(); i++ {
+		if !want[st.Field(i).Name] {
+			t.Errorf("Settings 仍暴露可切换登录方式的字段 %s", st.Field(i).Name)
+		}
+	}
+	for _, banned := range []string{"server", "redirectURI"} {
+		if _, ok := reflect.TypeOf(pendingLogin{}).FieldByName(banned); ok {
+			t.Errorf("pendingLogin 仍有 %s，说明回环监听/可变回调回来了", banned)
+		}
+	}
+	if _, ok := reflect.TypeOf(&AuthManager{}).MethodByName("LoginWithToken"); ok {
+		t.Error("仍存在手动令牌登录入口 LoginWithToken")
+	}
+	if _, ok := reflect.TypeOf(app{}).FieldByName("manualToken"); ok {
+		t.Error("UI 状态里仍有手动令牌输入框")
+	}
+}
+
+func TestNativeSchemeIsFixedAndIgnoresLegacySettings(t *testing.T) {
+	t.Setenv("TWOLIBRA_CLIENT_ID", "")
+	t.Setenv("TWOLIBRA_SCOPES", "")
+	// These two environment variables belonged to the removed loopback
+	// flow. Even if a stale shell still sets them, nothing may change.
+	t.Setenv("TWOLIBRA_REDIRECT_URI", "http://127.0.0.1:9999/cb")
+	t.Setenv("TWOLIBRA_OAUTH_PORT", "9999")
+	s := defaultSettings()
+	if s.ClientID != appIdentifier || s.Scopes != defaultScopes {
+		t.Fatalf("默认设置不是单一原生 scheme：%+v", s)
+	}
+
+	dir := t.TempDir()
+	// A settings.json written by the old build: the extra keys are ignored,
+	// not migrated into a second login mode.
+	legacy := `{"client_id":"cid","scopes":"read","redirect_uri":"http://127.0.0.1:8765/cb","port":8765}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := newAuthManager(dir)
+	got := m.settingsSnapshot()
+	if got.ClientID != "cid" || got.Scopes != "read" {
+		t.Fatalf("旧配置的有效字段没有保留：%+v", got)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	authorize, err := m.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(authorize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := u.Query().Get("redirect_uri"); q != defaultRedirectURI {
+		t.Errorf("redirect_uri 被旧配置或环境变量改写：%s", q)
+	}
+}
+
+func TestCallbackLinkValidation(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{defaultRedirectURI + "?code=c&state=s", true},
+		{defaultRedirectURI, true},
+		{alternateCallbackURI + "?code=c&state=s", true},
+		{"http://127.0.0.1/cb?code=c&state=s", false},
+		{"http://127.0.0.1:8765/cb?code=c&state=s", false},
+		{"http://localhost:8765/cb?code=c&state=s", false},
+		{"https://evil.example/cb?code=c&state=s", false},
+		{"com.other.app:/callback?code=c&state=s", false},
+		{appIdentifier + ":/other?code=c&state=s", false},
+		{appIdentifier + "://other?code=c&state=s", false},
+		{appIdentifier + ":/callback/extra?code=c&state=s", false},
+		{"", false},
+		{"not a url", false},
+	}
+	for _, c := range cases {
+		if got := isCallbackLink(c.raw); got != c.want {
+			t.Errorf("isCallbackLink(%q) = %v，期望 %v", c.raw, got, c.want)
+		}
+	}
+}
+
+func TestCompleteRejectsForeignCallbacks(t *testing.T) {
+	m := newAuthManager(t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := m.Begin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{
+		"https://evil.example/cb?code=x&state=y",
+		"com.other.app:/callback?code=x&state=y",
+		appIdentifier + ":/other?code=x&state=y",
+		"http://127.0.0.1:8765/cb?code=x&state=y",
+		"http://127.0.0.1/cb?code=x&state=y",
+	} {
+		if err := m.Complete(raw); err == nil {
+			t.Errorf("不该接受回调链接 %s", raw)
+		}
+	}
+}
+
+// Full native-flow round trip: authorize URL -> system deep link -> token
+// exchange. No loopback listener, port or second login path is involved.
+func TestOAuthNativeSchemeFlow(t *testing.T) {
+	var gotForm atomic.Value
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/oauth/token":
+			_ = r.ParseForm()
+			gotForm.Store(r.Form.Encode())
+			_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{"access_token":"NATIVE","refresh_token":"R","token_type":"Bearer","expires_in":3600,"scope":"read profile read:me"}}`)
+		case "/api/oauth/me", "/api/v1/me/summary":
+			_, _ = fmt.Fprint(w, `{"c":0,"d":{"username":"jimmy"}}`)
+		default:
+			t.Errorf("意外路径 %s", r.URL.Path)
+		}
+	}))
+	defer api.Close()
+
+	dir := t.TempDir()
+	m := newAuthManager(dir)
+	m.apiBase = api.URL + "/api"
+	m.http = api.Client()
+	if err := m.updateSettings(Settings{ClientID: appIdentifier, Scopes: defaultScopes}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	m.onChange = func(err error) {
+		select {
+		case done <- err:
+		default:
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	authorize, err := m.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(authorize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	if q.Get("redirect_uri") != defaultRedirectURI || q.Get("client_id") != appIdentifier ||
+		q.Get("code_challenge_method") != "S256" || q.Get("state") == "" {
+		t.Fatalf("授权参数不对：%v", q)
+	}
+	if strings.Contains(defaultRedirectURI, "127.0.0.1") || strings.Contains(defaultRedirectURI, "http") {
+		t.Fatalf("回调地址里混入了回环形式：%s", defaultRedirectURI)
+	}
+
+	callback := defaultRedirectURI + "?code=native-code&state=" + q.Get("state")
+	if !isCallbackLink(callback) {
+		t.Fatal("系统回调链接未被识别")
+	}
+	if err := m.Complete(callback); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case loginErr := <-done:
+		if loginErr != nil {
+			t.Fatalf("登录失败：%v", loginErr)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("登录回调超时")
+	}
+	if !m.loggedIn() || m.accessToken() != "NATIVE" || m.username() != "jimmy" {
+		t.Fatalf("登录态不对：%+v", m.token)
+	}
+	form, _ := gotForm.Load().(string)
+	vals, err := url.ParseQuery(form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vals.Get("grant_type") != "authorization_code" || vals.Get("code") != "native-code" ||
+		vals.Get("redirect_uri") != defaultRedirectURI || vals.Get("code_verifier") == "" ||
+		vals.Get("client_secret") != "" {
+		t.Errorf("换 token 的表单不对：%s", form)
+	}
+}
+
+func TestDeepLinkColdStartAndSettingsGuard(t *testing.T) {
+	a := testApp(t)
+	// A callback that launched a fresh process has no PKCE verifier here.
+	a.handleCallbackURL(defaultRedirectURI + "?code=x&state=y")
+	if a.pageName != "login" || !strings.Contains(a.loginMsg, "重新发起") {
+		t.Errorf("冷启动回调应提示重新登录：%q / %s", a.pageName, a.loginMsg)
+	}
+	// Deep links that are not the native OAuth callback are ignored.
+	a.pageName = "list"
+	a.handleCallbackURL(appIdentifier + ":/something-else")
+	if a.pageName != "list" {
+		t.Errorf("无关 deep link 不该切页：%s", a.pageName)
+	}
+	a.handleCallbackURL("http://127.0.0.1:8765/cb?code=x&state=y")
+	if a.pageName != "list" {
+		t.Error("回环回调不该被当成系统回调处理")
+	}
+
+	// Empty client_id is rejected; an empty scope falls back to defaults.
+	a.draft = settingsDraft{clientID: "", scopes: "read"}
+	a.saveSettings()
+	if !strings.Contains(a.draft.message, "client_id") {
+		t.Errorf("设置页应拒绝空的 client_id：%q", a.draft.message)
+	}
+	a.draft = settingsDraft{clientID: appIdentifier, scopes: ""}
+	a.saveSettings()
+	if !strings.Contains(a.draft.message, "已保存") {
+		t.Errorf("合法设置未保存：%q", a.draft.message)
+	}
+	if got := a.auth.settingsSnapshot().Scopes; got != defaultScopes {
+		t.Errorf("空 scope 没有回填默认值：%s", got)
+	}
+}
+
+// Both UI pages must offer only the native-scheme PKCE flow. The paste box
+// on the login page belongs to that same flow (it takes the callback URL).
+func TestOnlyNativeSchemeLoginIsOffered(t *testing.T) {
+	a := testApp(t)
+	banned := []string{
+		"access_token", "用令牌登录", "粘贴令牌",
+		"本地监听端口", "端口", "127.0.0.1", "8765", "回环",
+	}
+	for _, page := range []string{"settings", "login"} {
+		a.pageName = page
+		tt := ui.NewTester(a.view, 1100, 760)
+		texts := tt.Texts()
+		for _, word := range banned {
+			for _, text := range texts {
+				if strings.Contains(text, word) {
+					t.Errorf("%s 页仍出现其它登录方式的文案 %q：%q", page, word, text)
+				}
+			}
+		}
+		if page == "settings" {
+			if !tt.HasText("原生回调：" + defaultRedirectURI) {
+				t.Errorf("设置页缺少固定回调说明：%q", texts)
+			}
+			for _, text := range texts {
+				if strings.Contains(text, "redirect_uri") {
+					t.Errorf("设置页仍有可编辑的 redirect_uri：%q", text)
+				}
+			}
+		} else {
+			if !tt.HasText("打开浏览器授权") || !tt.HasText("用回调链接完成登录") {
+				t.Errorf("登录页缺少唯一流程的操作入口：%q", texts)
+			}
+			if !tt.HasText("redirect_uri：" + defaultRedirectURI) {
+				t.Errorf("登录页没有显示固定回调：%q", texts)
+			}
+		}
 	}
 }
