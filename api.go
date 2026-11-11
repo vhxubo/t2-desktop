@@ -295,6 +295,64 @@ func (c *Client) getJSON(ctx context.Context, u, token string) (json.RawMessage,
 	return env.D, nil
 }
 
+// postJSON sends one POST with a JSON body and unwraps the {c,m,d,t} envelope,
+// exactly like getJSON. It is the single write path: auth and idempotency
+// headers and the same error mapping as the reads all live here, so the reply
+// creator (and any future writes) reuse the read side's contract. A 2xx status
+// is required (201 for resource creation, 200 for other writes); anything
+// else becomes an apiError carrying code/required_scope/retry_after.
+func (c *Client) postJSON(ctx context.Context, u, token, idempotencyKey string, payload any) (json.RawMessage, error) {
+	var empty json.RawMessage
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return empty, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(buf))
+	if err != nil {
+		return empty, err
+	}
+	ua := c.UA
+	if ua == "" {
+		ua = "2libra-native-reader/0.1 (+mygo)"
+	}
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	// Never send an empty Authorization header: the API answers 401.
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	// The Idempotency-Key is mandatory on create endpoints (index.md 4.1):
+	// retrying after a timeout with the same key is safe and will not post
+	// twice; a fresh action mints a new key when calling postJSON.
+	if idempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return empty, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return empty, err
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return empty, fmt.Errorf("响应不是 {c,m,d,t} 信封（HTTP %d）：%w", resp.StatusCode, err)
+	}
+	if resp.StatusCode >= 400 || env.C != 0 {
+		return empty, &apiError{
+			Status:        resp.StatusCode,
+			Code:          env.Code,
+			Message:       env.M,
+			RequiredScope: env.RequiredScope,
+			RetryAfter:    env.RetryAfter,
+		}
+	}
+	return env.D, nil
+}
+
 func decodePage(d json.RawMessage, s tabSpec, page int) (pageResult, error) {
 	raws, meta, err := extractList(d, s.ListKey)
 	if err != nil {

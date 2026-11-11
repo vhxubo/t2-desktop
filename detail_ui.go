@@ -31,6 +31,13 @@ type detailState struct {
 	replyGen              uint64
 	flat                  bool
 	list                  ui.ListState
+
+	// composer: write a comment (optionally as a nested reply to replyToID).
+	draft        string
+	replyToID    string
+	replyToFloor int
+	posting      bool
+	postErr      string
 }
 
 func (d *detailState) originURL() string {
@@ -481,6 +488,7 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 			a.loadReplies(page + 1)
 		}
 	})
+	a.replyComposer(c, d)
 }
 
 func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
@@ -547,6 +555,126 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 					}
 				})
 			}
+			// Reply nesting: point the composer at this comment. The server
+			// assigns the floor, so we only remember the id and a display
+			// floor for the "正在回复 N 楼" chip; closed comments can't reply.
+			closed := a.detail != nil && a.detail.topic != nil && a.detail.topic.CommentsClosed
+			if !closed && ui.Button(c, "回复").Clicked() {
+				a.detail.replyToID = r.ID
+				a.detail.replyToFloor = r.Floor
+				if a.detail.replyToFloor == 0 {
+					a.detail.replyToFloor = r.FlatFloor
+				}
+			}
 		}
 	})
+}
+
+// replyComposer sits at the bottom of the comment pane. It is gated the same
+// way the API gates writes: anonymous users are sent to log in, closed posts
+// show a hint, and a logged-in open post gets a text box + send button.
+func (a *app) replyComposer(c *ui.Context, d *detailState) {
+	t := c.Theme()
+	ui.Divider(c)
+	ui.Column(c).FillWidth().Padding(10, 12).Gap(8).Children(func() {
+		if d.replyToID != "" {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				who := "评论"
+				if d.replyToFloor > 0 {
+					who = fmt.Sprintf("%d 楼", d.replyToFloor)
+				}
+				ui.Text(c, "正在回复 "+who).FontSize(12).TextColor(t.Accent).Grow(1)
+				if ui.Button(c, "取消").Clicked() {
+					d.replyToID = ""
+					d.replyToFloor = 0
+				}
+			})
+		}
+		ui.TextInput(c, &d.draft).Label("写评论").
+			Placeholder("说点什么…（支持表情短码 :smile:）").FillWidth()
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			if d.posting {
+				ui.Spinner(c).Size(16, 16)
+				ui.Text(c, "发送中…").FontSize(11).TextColor(t.TextMuted)
+			}
+			ui.Spacer(c).Grow(1)
+			if d.postErr != "" {
+				ui.Text(c, d.postErr).FontSize(11).TextColor(t.Danger).MaxLines(2)
+			}
+			switch {
+			case !a.auth.loggedIn():
+				if ui.Button(c, "登录后评论").Clicked() {
+					a.loginMsg = ""
+					a.pageName = "login"
+				}
+			case d.topic != nil && d.topic.CommentsClosed:
+				ui.Text(c, "评论已关闭").FontSize(11).TextColor(t.TextMuted)
+			default:
+				sendDisabled := d.posting || strings.TrimSpace(d.draft) == ""
+				if ui.PrimaryButton(c, "发送").Disabled(sendDisabled).Clicked() {
+					a.submitReply()
+				}
+			}
+		})
+	})
+}
+
+// submitReply posts the draft through the Client. On success it clears the
+// box and optimistically prepends the created comment so the author sees it
+// immediately; a later refresh re-sorts into the server's floor order.
+func (a *app) submitReply() {
+	d := a.detail
+	if d == nil || d.posting {
+		return
+	}
+	content := strings.TrimSpace(d.draft)
+	if content == "" {
+		d.postErr = "评论内容不能为空"
+		return
+	}
+	if !a.auth.loggedIn() {
+		d.postErr = "请先登录后再评论"
+		return
+	}
+	if d.topic != nil && d.topic.CommentsClosed {
+		d.postErr = "该帖子已关闭评论"
+		return
+	}
+	parentID := d.replyToID
+	d.posting = true
+	d.postErr = ""
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	go func() {
+		defer cancel()
+		created, err := a.client.createReply(ctx, d.shortID, content, parentID)
+		a.publish(func() {
+			if a.detail != d {
+				return // navigated away; drop the stale result
+			}
+			d.posting = false
+			if err != nil {
+				d.postErr = friendlyError(err)
+				if a.onReplyPosted != nil {
+					a.onReplyPosted(replyItem{}, err)
+				}
+				return
+			}
+			if created.Author == "" || created.Author == "匿名" {
+				if u := a.auth.username(); u != "" {
+					created.Author = u
+				}
+			}
+			if created.Floor == 0 && created.FlatFloor > 0 {
+				created.Floor = created.FlatFloor
+			}
+			d.draft = ""
+			d.replyToID = ""
+			d.replyToFloor = 0
+			d.replyList = append([]replyItem{created}, d.replyList...)
+			d.replyTotal++
+			if a.onReplyPosted != nil {
+				a.onReplyPosted(created, nil)
+			}
+		})
+	}()
 }

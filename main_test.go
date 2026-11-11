@@ -441,7 +441,7 @@ func TestHardcodedClientIDIgnoresLegacyConfig(t *testing.T) {
 		q.Get("redirect_uri") != defaultRedirectURI {
 		t.Errorf("授权参数被旧配置或环境变量改写：%v", q)
 	}
-	if defaultScopes != "read profile read:me" {
+	if defaultScopes != "read profile read:me write:comment" {
 		t.Errorf("scope 常量被改动：%s", defaultScopes)
 	}
 
@@ -507,7 +507,7 @@ func TestOAuthNativeSchemeFlow(t *testing.T) {
 		case "/api/oauth/token":
 			_ = r.ParseForm()
 			gotForm.Store(r.Form.Encode())
-			_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{"access_token":"NATIVE","refresh_token":"R","token_type":"Bearer","expires_in":3600,"scope":"read profile read:me"}}`)
+			_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{"access_token":"NATIVE","refresh_token":"R","token_type":"Bearer","expires_in":3600,"scope":"read profile read:me write:comment"}}`)
 		case "/api/oauth/me", "/api/v1/me/summary":
 			_, _ = fmt.Fprint(w, `{"c":0,"d":{"username":"jimmy"}}`)
 		default:

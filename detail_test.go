@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -439,5 +441,252 @@ func TestLiveDetail(t *testing.T) {
 	}
 	if !view.HasText("内容来自 2Libra 用户") {
 		t.Error("真实详情页缺少版权与原文链接声明")
+	}
+}
+
+// POST /v1/topics/:short_id/replies: path, auth, mandatory Idempotency-Key,
+// body fields (content + optional parentId) and the 201 decoded reply.
+func TestCreateReplyPostsComment(t *testing.T) {
+	var mu sync.Mutex
+	var method, path, auth, key, body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		method = r.Method
+		path = r.URL.Path
+		auth = r.Header.Get("Authorization")
+		key = r.Header.Get("Idempotency-Key")
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"r9","content":"顶","floor":7,"author":{"username":"jimmy"},"created_at":"2026-11-01T10:00:00.000Z"}`))
+	}))
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), Base: srv.URL + "/api", bearer: func() string { return "tok" }}
+
+	reply, err := c.createReply(context.Background(), "JBYGf2A", "顶", "c1")
+	if err != nil {
+		t.Fatalf("发评论失败：%v", err)
+	}
+	mu.Lock()
+	if method != "POST" || path != "/api/v1/topics/JBYGf2A/replies" {
+		t.Errorf("请求不对：%s %s", method, path)
+	}
+	if auth != "Bearer tok" || key == "" {
+		t.Errorf("缺鉴权/幂等头：auth=%q key=%q", auth, key)
+	}
+	if !strings.Contains(body, `"content":"顶"`) || !strings.Contains(body, `"parentId":"c1"`) {
+		t.Errorf("请求体缺少 content/parentId：%s", body)
+	}
+	mu.Unlock()
+	if reply.ID != "r9" || reply.Content != "顶" || reply.Floor != 7 || reply.Author != "jimmy" {
+		t.Errorf("返回的评论解析错误：%+v", reply)
+	}
+
+	// 顶层评论不带 parentId，也不该出现该字段。
+	mu.Lock()
+	body = ""
+	mu.Unlock()
+	if _, err := c.createReply(context.Background(), "JBYGf2A", "顶", ""); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Contains(body, "parentId") {
+		t.Errorf("顶层评论不该带 parentId：%s", body)
+	}
+}
+
+// A 401 on the reply endpoint must refresh + retry exactly like the reads.
+func TestCreateReplyRefreshesOn401(t *testing.T) {
+	var success atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/oauth/token":
+			_, _ = fmt.Fprint(w, `{"c":0,"d":{"access_token":"new","refresh_token":"r2","token_type":"Bearer","expires_in":3600}}`)
+		case "/api/v1/topics/XYZ/replies":
+			if r.Header.Get("Authorization") != "Bearer new" {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = fmt.Fprint(w, `{"c":401,"code":"unauthorized","m":"令牌失效","d":null}`)
+				return
+			}
+			success.Add(1)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"r1","content":"x","floor":1,"author":{"username":"jimmy"}}`))
+		default:
+			t.Errorf("意外路径 %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	m := newAuthManager(dir)
+	m.apiBase = srv.URL + "/api"
+	m.http = srv.Client()
+	if err := m.storeToken(tokenData{AccessToken: "old", RefreshToken: "r1", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{HTTP: srv.Client(), Base: srv.URL + "/api", Auth: m}
+	if _, err := c.createReply(context.Background(), "XYZ", "x", ""); err != nil {
+		t.Fatalf("刷新后重试失败：%v", err)
+	}
+	if success.Load() != 1 || m.accessToken() != "new" {
+		t.Errorf("未按新令牌重试一次：成功 %d 次，令牌 %s", success.Load(), m.accessToken())
+	}
+}
+
+// A 403 insufficient_scope (missing write:comment) surfaces a friendly hint.
+func TestCreateReplyScopeError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprint(w, `{"c":403,"code":"insufficient_scope","m":"缺少权限范围","required_scope":["write:comment"],"d":null}`)
+	}))
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), Base: srv.URL + "/api", bearer: func() string { return "tok" }}
+	_, err := c.createReply(context.Background(), "ABC12345", "x", "")
+	if err == nil || !strings.Contains(friendlyError(err), "write:comment") {
+		t.Errorf("403 错误提示不对：%v", err)
+	}
+}
+
+// The composer shows a login prompt for anonymous users and no send button.
+func TestReplyComposerAnonymous(t *testing.T) {
+	a := testApp(t) // 无令牌 = 未登录
+	a.openDetail(Item{ShortID: "JBYGf2A", URL: "https://2libra.com/post/work/JBYGf2A"})
+	topic, _ := decodeTopic([]byte(detailTopicJSON), "JBYGf2A")
+	a.detail.topic = &topic
+	pg := decodeReplies([]byte(detailRepliesJSON))
+	a.detail.replyList = flattenReplies(pg)
+	a.detail.replyTotal = pg.Total
+	a.detail.replyLoaded = true
+
+	tt := ui.NewTester(a.view, 1100, 760) // 单一 Tester：避免同一 ListState 被两个引擎渲染
+	if !tt.HasText("写评论") {
+		t.Error("没有评论输入框")
+	}
+	if !tt.HasText("登录后评论") {
+		t.Error("未登录时应引导登录后再评论")
+	}
+	if tt.HasText("发送") {
+		t.Error("未登录不应出现发送按钮")
+	}
+	if !tt.HasText("回复") {
+		t.Error("评论没有回复入口")
+	}
+}
+
+// Logged-in users get a send button; clicking 回复 on a floor targets that
+// comment for nesting and shows the "正在回复 N 楼" chip. An empty draft is a
+// synchronous no-op that surfaces a validation message (no network goroutine).
+func TestReplyComposerLoggedIn(t *testing.T) {
+	a := testApp(t)
+	dir := t.TempDir()
+	m := newAuthManager(dir)
+	_ = m.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"})
+	a.auth = m
+	a.openDetail(Item{ShortID: "JBYGf2A", URL: "https://2libra.com/post/work/JBYGf2A"})
+	topic, _ := decodeTopic([]byte(detailTopicJSON), "JBYGf2A")
+	a.detail.topic = &topic
+	pg := decodeReplies([]byte(detailRepliesJSON))
+	a.detail.replyList = flattenReplies(pg)
+	a.detail.replyTotal = pg.Total
+	a.detail.replyLoaded = true
+
+	tt := ui.NewTester(a.view, 1100, 760) // 单一 Tester
+	if !tt.HasText("发送") {
+		t.Error("登录态下没有发送按钮")
+	}
+	if err := tt.Click("回复"); err != nil {
+		t.Fatalf("点击回复失败：%v", err)
+	}
+	if a.detail.replyToID == "" {
+		t.Error("点击回复后没有设置被回复的评论 id")
+	}
+	if !tt.HasText("正在回复") {
+		t.Error("应设置『正在回复 N 楼』提示")
+	}
+	// 空内容直接调用 submitReply 走同步校验、不发起请求（UI 上此时按钮已禁用，
+	// 点击不会触发，这里绕过按钮验证守卫逻辑本身）。
+	a.detail.draft = ""
+	a.submitReply()
+	if !strings.Contains(a.detail.postErr, "不能为空") {
+		t.Errorf("空内容应被校验拦截：%q", a.detail.postErr)
+	}
+}
+
+// A full send round trip through the composer: the draft is cleared, the new
+// comment is prepended, and the total count increments.
+func TestReplyComposerSends(t *testing.T) {
+	var mu sync.Mutex
+	var gotPath, gotAuth, gotKey, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/oauth/token" {
+			_, _ = fmt.Fprint(w, `{"c":0,"d":{"access_token":"tok","refresh_token":"r","token_type":"Bearer","expires_in":3600}}`)
+			return
+		}
+		mu.Lock()
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotKey = r.Header.Get("Idempotency-Key")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"new1","content":"测试评论","floor":99,"author":{"username":"jimmy"},"created_at":"2026-11-01T10:00:00.000Z"}`))
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	dir := t.TempDir()
+	m := newAuthManager(dir)
+	m.apiBase = srv.URL + "/api"
+	m.http = srv.Client()
+	_ = m.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"})
+	a.auth = m
+	a.client = &Client{HTTP: srv.Client(), Base: srv.URL + "/api", Auth: m}
+
+	a.openDetail(Item{ShortID: "JBYGf2A", URL: "https://2libra.com/post/work/JBYGf2A"})
+	topic, _ := decodeTopic([]byte(detailTopicJSON), "JBYGf2A")
+	a.detail.topic = &topic
+	pg := decodeReplies([]byte(detailRepliesJSON))
+	a.detail.replyList = flattenReplies(pg)
+	a.detail.replyTotal = pg.Total
+	a.detail.replyLoaded = true
+
+	// headless 无法模拟打字，直接设置草稿状态。直接调用 submitReply 走网络通道，
+	// 不通过 Click 触发渲染：否则发送 goroutine 写 detail 状态会与 Tester 渲染
+	// 读状态竞态（生产环境 publish 走单一 UI 线程，无此问题）。
+	a.detail.draft = "测试评论"
+	done := make(chan struct{})
+	a.onReplyPosted = func(replyItem, error) { close(done) }
+	tt := ui.NewTester(a.view, 1100, 760)
+	if !tt.HasText("发送") {
+		t.Fatal("登录态下没有发送按钮")
+	}
+	a.submitReply()
+	// onReplyPosted 钩子在发送 goroutine 内、状态已更新后触发，用作完成信号。
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("发送回调超时")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gotPath != "/api/v1/topics/JBYGf2A/replies" {
+		t.Errorf("发评论路径不对：%s", gotPath)
+	}
+	if gotAuth != "Bearer tok" || gotKey == "" {
+		t.Errorf("缺鉴权/幂等头：auth=%q key=%q", gotAuth, gotKey)
+	}
+	if !strings.Contains(gotBody, `"content":"测试评论"`) || strings.Contains(gotBody, "parentId") {
+		t.Errorf("请求体不对：%s", gotBody)
+	}
+	if a.detail.draft != "" {
+		t.Errorf("发送后草稿未清空：%q", a.detail.draft)
+	}
+	if a.detail.replyTotal != pg.Total+1 {
+		t.Errorf("评论数未 +1：%d", a.detail.replyTotal)
+	}
+	if len(a.detail.replyList) != len(flattenReplies(pg))+1 {
+		t.Errorf("新评论未插入列表：%d", len(a.detail.replyList))
 	}
 }

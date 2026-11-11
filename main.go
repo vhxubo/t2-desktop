@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ type app struct {
 
 	tab     int
 	lastTab int
+	navSel  string // 左侧导航栏选中项的 id（"t"+序号），与 tab 保持同步
 	tabs    []*tabState
 	reqSeq  uint64
 
@@ -48,6 +50,26 @@ type app struct {
 	emojiLoading bool
 	emojiTried   bool
 	md           *markdown.Options
+
+	// onReplyPosted is a hook invoked after a reply is posted (or fails),
+	// carrying the created reply and any error. It runs wherever publish
+	// runs (the UI thread in the app, the network goroutine under headless
+	// tests). Nil in production; used by tests to await completion.
+	onReplyPosted func(created replyItem, err error)
+}
+
+// tabID / tabFromID 把 tab 序号与侧边栏条目的 id 互相映射。
+func tabID(i int) string { return "t" + strconv.Itoa(i) }
+
+func tabFromID(id string) (int, bool) {
+	if len(id) < 2 || id[0] != 't' {
+		return 0, false
+	}
+	n, err := strconv.Atoi(id[1:])
+	if err != nil || n < 0 || n >= len(tabSpecs) {
+		return 0, false
+	}
+	return n, true
 }
 
 func newApp(dir string) *app {
@@ -57,6 +79,7 @@ func newApp(dir string) *app {
 		client:   &Client{Auth: auth},
 		tabs:     make([]*tabState, len(tabSpecs)),
 		lastTab:  -1,
+		navSel:   tabID(0),
 		pageName: "list",
 	}
 	for i := range a.tabs {
@@ -188,6 +211,7 @@ func (a *app) onAuthChanged(err error) {
 	if !a.auth.loggedIn() && tabSpecs[a.tab].NeedsAuth {
 		a.tab = 0
 		a.lastTab = 0
+		a.navSel = tabID(0)
 	}
 	a.ensureLoaded()
 }
@@ -196,10 +220,6 @@ func (a *app) view(c *ui.Context) {
 	t := c.Theme()
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
-	if a.tab != a.lastTab {
-		a.lastTab = a.tab
-		a.status = ""
-	}
 
 	switch a.pageName {
 	case "login":
@@ -209,14 +229,47 @@ func (a *app) view(c *ui.Context) {
 		a.detailView(c)
 		return
 	}
-	ui.Column(c).Fill().Children(func() {
-		a.header(c)
+
+	// 左右布局：左侧功能导航（宽 150），右侧内容区。
+	ui.Row(c).Fill().Children(func() {
+		sb := ui.Sidebar(c, &a.navSel, func() {
+			// 公开功能
+			ui.SidebarSection(c, "浏览", nil, func() {
+				for i, s := range tabSpecs {
+					if s.NeedsAuth {
+						continue
+					}
+					ui.SidebarItem(c, tabID(i), nil, s.Label)
+				}
+			})
+			// 「我的」单独成组：需登录后才能查看的功能
+			ui.SidebarSection(c, "我的", nil, func() {
+				for i, s := range tabSpecs {
+					if !s.NeedsAuth {
+						continue
+					}
+					ui.SidebarItem(c, tabID(i), nil, s.Label)
+				}
+			})
+		}).Width(150)
+		// 侧边栏选中变化 → 同步到 a.tab（用于 body/footer/加载逻辑）
+		if sb.Changed() {
+			if i, ok := tabFromID(a.navSel); ok && i != a.tab {
+				a.tab = i
+			}
+		}
+		if a.tab != a.lastTab {
+			a.lastTab = a.tab
+			a.status = ""
+		}
 		ui.Divider(c)
-		ui.Tabs(c, &a.tab, tabLabels()...)
-		ui.Divider(c)
-		a.body(c)
-		ui.Divider(c)
-		a.footer(c)
+		ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
+			a.header(c)
+			ui.Divider(c)
+			a.body(c)
+			ui.Divider(c)
+			a.footer(c)
+		})
 	})
 	a.ensureLoaded()
 }

@@ -329,6 +329,27 @@ func flattenReplies(p replyPage) []replyItem {
 	return out
 }
 
+// createReply posts a new comment, optionally nested under parentID (the id
+// of the comment being replied to), using the write:comment scope. It goes
+// through withAuthRetry so a 401 triggers one refresh + retry like every read.
+// A fresh Idempotency-Key is minted per call: retrying a timed-out request is
+// the caller's job and must reuse the same key, while each new submit gets a
+// new one (index.md: the key identifies one logical creation).
+func (c *Client) createReply(ctx context.Context, shortID, content, parentID string) (replyItem, error) {
+	return withAuthRetry(c, ctx, func(token string) (replyItem, error) {
+		payload := map[string]any{"content": content}
+		if parentID != "" {
+			payload["parentId"] = parentID
+		}
+		d, err := c.postJSON(ctx, c.apiURL(topicPath(shortID)+"/replies"),
+			token, randomURLSafe(24), payload)
+		if err != nil {
+			return replyItem{}, err
+		}
+		return decodeReply(d, 0), nil
+	})
+}
+
 func decodeEmojis(d json.RawMessage) map[string]emojiInfo {
 	out := make(map[string]emojiInfo)
 	list := rawArray(d)
