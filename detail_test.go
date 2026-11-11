@@ -585,6 +585,87 @@ func TestReplyComposerAnonymous(t *testing.T) {
 	}
 }
 
+// 回复输入框默认只占一行，把高度让给评论列表；点击（选中）后展开为多行
+// 编辑器，失焦或发送成功后折回一行，有草稿或正在回复某层楼时保持展开。
+func TestReplyComposerCollapsesUnlessSelected(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+
+	collapsed, ok := tt.Find("写评论")
+	if !ok {
+		t.Fatal("找不到回复输入框")
+	}
+	if collapsed.H > 45 {
+		t.Fatalf("回复输入框默认应只占一行：高 %.1f", collapsed.H)
+	}
+	if !tt.HasText("发送") {
+		t.Error("折叠状态也应保留发送按钮")
+	}
+
+	// 选中（点击输入框）后展开
+	tt.ClickAt(collapsed.X+collapsed.W/2, collapsed.Y+collapsed.H/2)
+	tt.Frame()
+	expanded, ok := tt.Find("写评论")
+	if !ok {
+		t.Fatal("输入框消失")
+	}
+	if expanded.H < collapsed.H+20 {
+		t.Errorf("选中后应展开：%.1f -> %.1f", collapsed.H, expanded.H)
+	}
+
+	// 发送成功后（composerIdle）即便仍在输入框里，也折回一行
+	a.detail.composerIdle = true
+	tt.Frame()
+	if r, ok := tt.Find("写评论"); !ok || r.H > 45 {
+		t.Errorf("发送后应折回一行：%+v", r)
+	}
+
+	// 失焦后保持折叠；再次选中重新展开
+	blur := func() {
+		r, ok := tt.Find("刷新")
+		if !ok {
+			t.Fatal("找不到刷新按钮，无法移开焦点")
+		}
+		tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+		tt.Frame()
+	}
+	blur()
+	if r, ok := tt.Find("写评论"); !ok || r.H > 45 {
+		t.Errorf("失焦后应保持折叠：%+v", r)
+	}
+	if r, ok := tt.Find("写评论"); ok {
+		tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+		tt.Frame()
+	}
+	if r, ok := tt.Find("写评论"); !ok || r.H < collapsed.H+20 {
+		t.Errorf("再次选中后应重新展开：%+v", r)
+	}
+
+	// 有草稿时不因失焦收起正在编辑的内容
+	a.detail.draft = "还没写完"
+	blur()
+	if r, ok := tt.Find("写评论"); !ok || r.H < collapsed.H+20 {
+		t.Errorf("有草稿时应保持展开：%+v", r)
+	}
+}
+
+// detailAppWithReplies 打开一个详情页，填好正文与评论，并置为登录态。
+func detailAppWithReplies(t *testing.T) *app {
+	t.Helper()
+	a := testApp(t)
+	m := newAuthManager(t.TempDir())
+	_ = m.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"})
+	a.auth = m
+	a.openDetail(Item{ShortID: "JBYGf2A", URL: "https://2libra.com/post/work/JBYGf2A"})
+	topic, _ := decodeTopic([]byte(detailTopicJSON), "JBYGf2A")
+	a.detail.topic = &topic
+	pg := decodeReplies([]byte(detailRepliesJSON))
+	a.detail.replyList = flattenReplies(pg)
+	a.detail.replyTotal = pg.Total
+	a.detail.replyLoaded = true
+	return a
+}
+
 // Logged-in users get a send button; clicking 回复 on a floor targets that
 // comment for nesting and shows the "正在回复 N 楼" chip. An empty draft is a
 // synchronous no-op that surfaces a validation message (no network goroutine).
@@ -621,6 +702,13 @@ func TestReplyComposerLoggedIn(t *testing.T) {
 	}
 	if !tt.HasText("正在回复") {
 		t.Error("应设置『正在回复 N 楼』提示")
+	}
+	// 点「回复」后输入框应展开并聚焦，点完就能直接写。
+	if r, ok := tt.Find("写评论"); !ok || r.H < 60 {
+		t.Errorf("点回复后输入框应展开：%+v", r)
+	}
+	if !tt.Focused("写评论") {
+		t.Error("点回复后应聚焦输入框")
 	}
 	// 空内容直接调用 submitReply 走同步校验、不发起请求（UI 上此时按钮已禁用，
 	// 点击不会触发，这里绕过按钮验证守卫逻辑本身）。

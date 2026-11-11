@@ -38,6 +38,12 @@ type detailState struct {
 	replyToFloor int
 	posting      bool
 	postErr      string
+	// composerField is the input's identity across builds: its committed
+	// focus decides whether the composer rests at one line or unfolds.
+	composerField ui.Handle
+	// composerIdle folds the composer back after a comment was sent, until
+	// the input is selected again or the next draft is typed.
+	composerIdle bool
 }
 
 func (d *detailState) originURL() string {
@@ -568,6 +574,9 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 					if a.detail.replyToFloor == 0 {
 						a.detail.replyToFloor = r.FlatFloor
 					}
+					// 回复某层楼时直接展开并聚焦输入框，点完就能写。
+					a.detail.composerIdle = false
+					a.detail.composerField.Focus(c)
 				})
 			}
 		}
@@ -592,11 +601,11 @@ func (a *app) replyAction(c *ui.Context, label string, onClick func()) {
 // replyComposer sits at the bottom of the comment pane. It is gated the same
 // way the API gates writes: anonymous users are sent to log in, closed posts
 // show a hint, and a logged-in open post gets a Markdown editor whose send
-// button is integrated into the field.
+// button is integrated into the field. 默认只占一行，把空间留给评论列表。
 func (a *app) replyComposer(c *ui.Context, d *detailState) {
 	t := c.Theme()
 	ui.Divider(c)
-	ui.Column(c).FillWidth().Padding(10, 12).Gap(8).Children(func() {
+	ui.Column(c).FillWidth().Padding(8, 12).Gap(6).Children(func() {
 		if d.replyToID != "" {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				who := "评论"
@@ -619,33 +628,57 @@ func (a *app) replyComposer(c *ui.Context, d *detailState) {
 	})
 }
 
-// replyInput is the Markdown editor for a new comment: a multiline text
-// area whose send button lives inside the same bordered, rounded field.
-// 未登录时，框内的动作改为「登录后评论」，编辑器本身仍然展示。
+// replyInput is the Markdown editor for a new comment. It rests one line
+// tall, like a quiet channel under the comments, and unfolds into the
+// multiline field as soon as it is selected (focused), carries a draft, or
+// is answering a floor. Sending folds it back so the list regains the room.
 func (a *app) replyInput(c *ui.Context, d *detailState) {
 	t := c.Theme()
+	focused := d.composerField.Focused(c)
+	if !focused {
+		d.composerIdle = false // 失焦后再选中，重新展开
+	}
+	expanded := d.replyToID != "" || strings.TrimSpace(d.draft) != "" ||
+		(focused && !d.composerIdle)
 	sendDisabled := d.posting || strings.TrimSpace(d.draft) == ""
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.End).Padding(6, 8).
-		Radius(10).Background(t.Background).Border(1, t.Border).Children(func() {
-		// 多行文本区即 Markdown 编辑器：透明背景、去边框，融入外层输入框。
-		ui.TextArea(c, &d.draft).Label("写评论").
-			Placeholder("说点什么…（支持 Markdown 与表情短码 :smile:）").
-			Grow(1).Background(ui.Transparent).Border(0, t.Border)
-		if d.posting {
-			ui.Spinner(c).Size(16, 16)
-		}
-		// 未登录时把框内动作换成「登录后评论」；否则为集成在框内的发送按钮。
-		if !a.auth.loggedIn() {
-			if ui.Button(c, "登录后评论").Clicked() {
-				a.loginMsg = ""
-				a.pageName = "login"
+	vpad := float32(4)
+	if expanded {
+		vpad = 8
+	}
+	border := t.Border
+	if focused {
+		border = t.Accent // 编辑中的输入框给一圈强调色，明确「已选中」
+	}
+	ui.Column(c).FillWidth().Padding(vpad, 8).Radius(10).
+		Background(t.Background).Border(1, border).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.End).Children(func() {
+			// 多行文本区即 Markdown 编辑器：透明背景、去边框，融入外层输入框。
+			// MinHeight(0) 覆盖 TextArea 默认的 80 高下限，折叠时才能只占一行。
+			area := ui.TextArea(c, &d.draft).Label("写评论").
+				Grow(1).MinHeight(0).Background(ui.Transparent).
+				Border(0, t.Border).Bind(&d.composerField)
+			if expanded {
+				area.Lines(4, 10).
+					Placeholder("说点什么…（支持 Markdown 与表情短码 :smile:）")
+			} else {
+				area.Lines(1, 8).Placeholder("写评论…")
 			}
-		} else {
-			send := ui.PrimaryButton(c, "发送").Disabled(sendDisabled)
-			if send.Clicked() {
-				a.submitReply()
+			if d.posting {
+				ui.Spinner(c).Size(16, 16)
 			}
-		}
+			// 未登录时把框内动作换成「登录后评论」；否则为集成在框内的发送按钮。
+			if !a.auth.loggedIn() {
+				if ui.Button(c, "登录后评论").Clicked() {
+					a.loginMsg = ""
+					a.pageName = "login"
+				}
+			} else {
+				send := ui.PrimaryButton(c, "发送").Disabled(sendDisabled)
+				if send.Clicked() {
+					a.submitReply()
+				}
+			}
+		})
 	})
 	if d.postErr != "" {
 		ui.Text(c, d.postErr).FontSize(11).TextColor(t.Danger).MaxLines(2)
@@ -703,6 +736,7 @@ func (a *app) submitReply() {
 			d.draft = ""
 			d.replyToID = ""
 			d.replyToFloor = 0
+			d.composerIdle = true // 发送后折回一行，把空间还给评论列表
 			d.replyList = append([]replyItem{created}, d.replyList...)
 			d.replyTotal++
 			if a.onReplyPosted != nil {
