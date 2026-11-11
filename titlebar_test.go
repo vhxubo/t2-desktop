@@ -1,0 +1,191 @@
+package main
+
+import (
+	"image"
+	"testing"
+
+	"github.com/egoist/mygo/ui"
+)
+
+// lum is the perceived brightness of a pixel, 0 (black) to 255 (white).
+func lum(im *image.RGBA, x, y int) float64 {
+	c := im.RGBAAt(x, y)
+	return 0.299*float64(c.R) + 0.587*float64(c.G) + 0.114*float64(c.B)
+}
+
+func darkAt(im *image.RGBA, x, y int) bool { return lum(im, x, y) < 160 }
+
+// titleRect fails the test unless the labeled element sits where the title
+// bar puts it: at the top edge, exactly titleBarHeight tall.
+func titleRect(t *testing.T, tt *ui.Tester, label string) ui.Rect {
+	t.Helper()
+	r, ok := tt.Find(label)
+	if !ok {
+		t.Fatalf("标题栏里找不到「%s」：%q", label, tt.Texts())
+	}
+	if r.Y != 0 || r.H != titleBarHeight {
+		t.Fatalf("「%s」的位置 %v，期望贴顶且高 %d", label, r, titleBarHeight)
+	}
+	return r
+}
+
+// The title bar is drawn by the view, so it must take the page's colors: the
+// whole app is the white home theme, and a bar painted with the stock light
+// theme's grey surface showed as a grey band across a pure white page.
+func TestTitleBarSharesTheWhitePageTheme(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	im := tt.Image()
+	for _, p := range [][2]int{
+		{400, 1},
+		{400, titleBarHeight / 2},
+		{400, titleBarHeight - 1},
+		{400, titleBarHeight + 4}, // 分隔线下的页面
+	} {
+		if got := lum(im, p[0], p[1]); got < 250 {
+			t.Errorf("(%d,%d) 的亮度 %.0f，标题栏与页面应同为白色", p[0], p[1], got)
+		}
+	}
+	// 底边是一条分隔线，而不是把灰带和页面隔开的白线。
+	c := im.RGBAAt(400, titleBarHeight)
+	if c.R == 0xff && c.G == 0xff && c.B == 0xff {
+		t.Errorf("标题栏底边没有分隔线：%v", c)
+	}
+}
+
+// The app keeps its own white theme whatever the system theme is: a hidden
+// native title bar used to leave the login page dark under a light bar.
+func TestTitleBarKeepsAppThemeUnderDarkSystem(t *testing.T) {
+	a := testApp(t)
+	for _, page := range []string{"list", "login"} {
+		a.pageName = page
+		tt := ui.NewTester(a.view, 1080, 720)
+		tt.SetDark(true)
+		tt.Frame()
+		im := tt.Image()
+		for _, y := range []int{titleBarHeight / 2, titleBarHeight + 10} {
+			if got := lum(im, 400, y); got < 250 {
+				t.Errorf("深色系统主题下 %s 页 y=%d 亮度 %.0f，应仍为白色主题", page, y, got)
+			}
+		}
+	}
+}
+
+// The window buttons are drawn with vector lines inside their buttons. They
+// used to be font characters, which render tiny and, for the restore glyph,
+// can be missing altogether; a coordinate mistake in Draw also painted them
+// over the brand text.
+func TestTitleBarWindowButtonsPaintTheirGlyphs(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	im := tt.Image()
+
+	minR := titleRect(t, tt, "最小化")
+	maxR := titleRect(t, tt, "最大化")
+	closeR := titleRect(t, tt, "关闭")
+
+	// 最小化：按钮内只有一条横线，宽度接近图标宽度，且竖向居中。
+	dashRow, dash := -1, 0
+	for y := 0; y < titleBarHeight; y++ {
+		n := 0
+		for x := int(minR.X); x < int(minR.X+minR.W); x++ {
+			if darkAt(im, x, y) {
+				n++
+			}
+		}
+		if n > dash {
+			dash, dashRow = n, y
+		}
+	}
+	if dash < 8 || dash > 14 {
+		t.Errorf("最小化图标宽 %d 像素（第 %d 行），期望约 10", dash, dashRow)
+	}
+	if dashRow < titleBarHeight/2-3 || dashRow > titleBarHeight/2+3 {
+		t.Errorf("最小化图标在第 %d 行，没有竖向居中", dashRow)
+	}
+
+	// 最大化：方框的四条边在按钮中心之外，中心是空的。
+	cx, cy := int(maxR.X+maxR.W/2), int(maxR.Y+maxR.H/2)
+	if !darkAt(im, cx, titleBarHeight/2-5) {
+		t.Error("最大化图标的上边没有画出来")
+	}
+	if !darkAt(im, cx-5, cy) {
+		t.Error("最大化图标的左边没有画出来")
+	}
+	if darkAt(im, cx, cy) {
+		t.Error("最大化图标中心应该是空的")
+	}
+
+	// 关闭：叉的两条对角线穿过按钮中心。
+	if !darkAt(im, int(closeR.X+closeR.W/2), cy) {
+		t.Error("关闭图标的中心没有画出叉")
+	}
+
+	// 图标必须落在各自的按钮里：标题栏中段（品牌与账号之间）不能有任何墨迹。
+	for y := 0; y < titleBarHeight; y++ {
+		for x := 200; x < 700; x++ {
+			if darkAt(im, x, y) {
+				t.Fatalf("标题栏 (%d,%d) 有多余墨迹：窗口图标画到了按钮外面", x, y)
+			}
+		}
+	}
+}
+
+// Hovering the close button paints the system's red with a white cross; the
+// other two light up with the theme's hover surface instead.
+func TestTitleBarButtonHover(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	closeR := titleRect(t, tt, "关闭")
+	tt.Move(closeR.X+closeR.W/2, closeR.Y+closeR.H/2)
+	tt.Frame()
+	im := tt.Image()
+	c := im.RGBAAt(int(closeR.X)+3, int(closeR.Y)+3)
+	if c.R != 0xe8 || c.G != 0x11 || c.B != 0x23 {
+		t.Errorf("悬停关闭按钮底色 = #%02x%02x%02x，期望 #e81123", c.R, c.G, c.B)
+	}
+	d := im.RGBAAt(int(closeR.X+closeR.W/2), int(closeR.Y+closeR.H/2))
+	if d.R < 0xf0 || d.G < 0xf0 || d.B < 0xf0 {
+		t.Errorf("悬停时叉子应为白色，实际 #%02x%02x%02x", d.R, d.G, d.B)
+	}
+
+	maxR := titleRect(t, tt, "最大化")
+	tt.Move(maxR.X+maxR.W/2, maxR.Y+maxR.H/2)
+	tt.Frame()
+	im = tt.Image()
+	c = im.RGBAAt(int(maxR.X)+3, int(maxR.Y)+3)
+	if c.R == 0xff && c.G == 0xff && c.B == 0xff {
+		t.Error("悬停最大化按钮没有底色")
+	}
+	if c.R > 0xf0 && c.G < 0x40 { // 只有关闭按钮才是红的
+		t.Errorf("最大化按钮悬停变成了红色：%v", c)
+	}
+}
+
+// The title bar's own buttons work: 登录 opens the login page, and the three
+// window buttons are reachable controls rather than plain drawings.
+func TestTitleBarButtonsClick(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+
+	for _, label := range []string{"最小化", "最大化", "关闭"} {
+		if _, ok := tt.Find(label); !ok {
+			t.Fatalf("窗口按钮「%s」不可点（没有可访问名）", label)
+		}
+	}
+	// 未登录时点「登录」进入登录页。
+	if err := tt.Click("登录"); err != nil {
+		t.Fatal(err)
+	}
+	if a.pageName != "login" {
+		t.Fatalf("点「登录」后页面 = %q，期望 login", a.pageName)
+	}
+	tt.Frame()
+	if !tt.HasText("登录 2Libra") {
+		t.Errorf("登录页没有渲染：%q", tt.Texts())
+	}
+}

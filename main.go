@@ -223,11 +223,11 @@ func (a *app) onAuthChanged(err error) {
 	a.ensureLoaded()
 }
 
-// homeTheme 是首页使用的浅色主题：纯白背景（页面与侧边栏均白）+ 指定
-// 边框色 oklab(0.21 0.00164224 -0.00577088 / 0.1)（即 oklch(0.21 0.006
-// 285.885) 的 10% 不透明版本），其余文字/强调色沿用浅色主题，保证整体
-// 可读且风格统一。视觉结构由半透明 oklch 边框与分隔线承担，呈现干净的
-// 卡片式列表。
+// homeTheme 是全应用使用的浅色主题（首页、登录页、详情页一致）：纯白背景
+// （页面、侧边栏与自绘标题栏均白）+ 指定边框色 oklab(0.21 0.00164224
+// -0.00577088 / 0.1)（即 oklch(0.21 0.006 285.885) 的 10% 不透明版本），
+// 其余文字/强调色沿用浅色主题，保证整体可读且风格统一。视觉结构由半透明
+// oklch 边框与分隔线承担，呈现干净的卡片式列表。
 func homeTheme() *ui.Theme {
 	th := ui.LightTheme()
 	th.Background = ui.Hex("#ffffff")
@@ -237,6 +237,10 @@ func homeTheme() *ui.Theme {
 }
 
 func (a *app) view(c *ui.Context) {
+	// 整个应用统一使用白色主题（首页、登录页、详情页一致）。SetTheme 只
+	// 作用于当前帧，每帧从系统主题重置，所以要在建树前先定主题、再取
+	// 根背景：否则深色系统主题下根背景会是深色，与页面白底之间露出缝。
+	c.SetTheme(homeTheme())
 	t := c.Theme()
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
@@ -249,11 +253,6 @@ func (a *app) view(c *ui.Context) {
 		a.detailView(c)
 		return
 	}
-
-	// 首页使用白色背景 + 指定 oklch 边框色的浅色主题。SetTheme 只作用于
-	// 当前帧（每帧从系统主题重置），因此详情页/登录页仍保持原主题。
-	c.SetTheme(homeTheme())
-	t = c.Theme()
 
 	// 顶部自绘标题栏（可拖拽、避让系统窗口按钮）+ 下方 侧边栏/内容 布局。
 	ui.Column(c).Fill().Children(func() {
@@ -303,51 +302,72 @@ func (a *app) view(c *ui.Context) {
 	a.ensureLoaded()
 }
 
-// titleBarHeight 是自绘标题栏的高度（比系统默认更矮）。
-const titleBarHeight = 24
+// 自绘标题栏的尺寸。32 DIP 是 Windows 标题栏的常规高度，窗口按钮 46×32
+// 也与系统按钮同宽同高，文字和图标因此不会被压扁、裁切或挤在一起。
+const (
+	titleBarHeight   = 32
+	titleButtonWidth = 46
+)
 
-// titleBar 是完全自绘的顶部标题栏：可拖拽移动窗口，显示品牌与账号状态，
-// 右侧绘制自绘的最小化/最大化/关闭按钮（系统按钮已通过 HideWindowButtons 隐藏）。
+// titleBar 是完全自绘的顶部标题栏：可拖拽移动窗口（双击最大化），左侧是
+// 品牌与账号状态，右侧是最小化 / 最大化·还原 / 关闭按钮；系统标题栏与
+// 系统按钮已由 TitleBarHidden + HideWindowButtons 隐藏。
+//
+// 配色全部取自当前主题：整个应用是白色主题，标题栏因此与页面同色，不再
+// 是一条突兀的灰带，深色系统主题下也不会出现浅色条压着深色页面。
 func (a *app) titleBar(c *ui.Context) {
-	lt := ui.LightTheme()
-	ui.Row(c).Height(titleBarHeight).FillWidth().Padding(0, 12, 0, 12).
-		Gap(8).AlignItems(ui.Center).Background(lt.Surface).DragWindow().Children(func() {
-		ui.Text(c, "T2 Desktop").FontSize(13).Bold().SingleLine()
-		ui.Spacer(c).Grow(1)
-		who := "未登录 · 匿名可读"
-		if a.auth.loggedIn() {
-			who = "已登录"
-			if name := a.auth.username(); name != "" {
-				who += " · " + name
+	t := c.Theme()
+	// bar 是系统窗口按钮占用的区域，HideWindowButtons 下为零。保留这段
+	// 计算，将来若改回系统按钮，标题栏仍然给它们让出位置。
+	bar := c.TitleBar()
+	h := float32(titleBarHeight)
+	if bar.Height > h {
+		h = bar.Height
+	}
+	ui.Row(c).Height(h).FillWidth().AlignItems(ui.Stretch).
+		Padding(0, 0, 0, bar.Left).Background(t.Surface).DragWindow().Children(func() {
+		// 左段：品牌、账号状态与登录/退出，整体可随标题栏拖动。
+		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 12).Gap(10).
+			AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "T2 Desktop").FontSize(13).Bold().SingleLine().TextColor(t.Text)
+			ui.Spacer(c).Grow(1)
+			who := "未登录 · 匿名可读"
+			if a.auth.loggedIn() {
+				who = "已登录"
+				if name := a.auth.username(); name != "" {
+					who += " · " + name
+				}
 			}
-		}
-		ui.Text(c, who).FontSize(11).TextColor(lt.TextMuted).SingleLine()
-		if a.auth.loggedIn() {
-			a.titleTextButton(c, "退出", func() {
-				a.auth.Logout()
-			})
-		} else {
-			a.titleTextButton(c, "登录", func() {
-				a.pageName = "login"
-				a.loginMsg = ""
-			})
-		}
-		// 自绘窗口控制按钮（最小化 / 最大化·还原 / 关闭）
-		maxGlyph := "□"
-		if a.win != nil && a.win.IsMaximized() {
-			maxGlyph = "▢"
-		}
-		a.titleButton(c, "–", false, func() {
+			ui.Text(c, who).FontSize(12).TextColor(t.TextMuted).SingleLine()
+			if a.auth.loggedIn() {
+				a.titleTextButton(c, "退出", func() {
+					a.auth.Logout()
+				})
+			} else {
+				a.titleTextButton(c, "登录", func() {
+					a.pageName = "login"
+					a.loginMsg = ""
+				})
+			}
+		})
+		// 右段：自绘窗口控制按钮（最小化 / 最大化·还原 / 关闭），紧贴右上角。
+		a.titleButton(c, titleMinimize, "最小化", func() {
 			if a.win != nil {
 				a.win.Minimize()
 			}
 		})
-		a.titleButton(c, maxGlyph, false, func() {
-			if a.win != nil {
+		if a.win != nil && a.win.IsMaximized() {
+			a.titleButton(c, titleRestore, "还原", func() {
 				a.win.ToggleMaximize()
-			}
-		})
-		a.titleButton(c, "✕", true, func() {
+			})
+		} else {
+			a.titleButton(c, titleMaximize, "最大化", func() {
+				if a.win != nil {
+					a.win.ToggleMaximize()
+				}
+			})
+		}
+		a.titleButton(c, titleClose, "关闭", func() {
 			if a.win != nil {
 				a.win.Close()
 			}
@@ -355,35 +375,63 @@ func (a *app) titleBar(c *ui.Context) {
 	})
 }
 
-// titleButton 是标题栏右侧自绘的窗口按钮；danger 为关闭按钮，悬停变红。
-func (a *app) titleButton(c *ui.Context, label string, danger bool, onClick func()) {
-	hover := ui.Hex("#0000000f")
-	if danger {
-		hover = ui.Hex("#e81123")
-	}
-	b := ui.Box(c).Size(38, titleBarHeight).Center().Background(ui.Hex("#00000000"))
+// titleGlyph 是窗口按钮上要画的图形。
+type titleGlyph int
+
+const (
+	titleMinimize titleGlyph = iota
+	titleMaximize
+	titleRestore // 已最大化时显示的「还原」
+	titleClose
+)
+
+// titleButton 画一个窗口按钮。图形用矢量线条绘制，不依赖字体里的字符：
+// 「– / □ / ▢ / ✕」这类符号在不同字体下大小不一，有的字体还缺字，最大化
+// 之后会显示成空白或豆腐块，正是标题栏「显示不正常」的来源。
+func (a *app) titleButton(c *ui.Context, g titleGlyph, label string, onClick func()) {
+	t := c.Theme()
+	b := ui.Box(c).Width(titleButtonWidth).Shrink(0).Background(ui.Transparent)
+	ink := t.Text
 	if b.Hovered() {
-		b.Background(hover)
-	}
-	b.Children(func() {
-		tc := ui.Hex("#1f1f1f")
-		if danger && b.Hovered() {
-			tc = ui.Hex("#ffffff")
+		if g == titleClose {
+			b.Background(ui.Hex("#e81123")) // 关闭：红底白叉，与系统一致
+			ink = ui.Hex("#ffffff")
+		} else {
+			b.Background(t.SurfaceHover)
 		}
-		ui.Text(c, label).FontSize(13).TextAlign(ui.Center).TextColor(tc)
+	}
+	b.Draw(func(p *ui.Painter, r ui.Rect) {
+		// r 是窗口坐标里的按钮矩形，图形要相对 r 偏移来画。
+		cx, cy := r.X+r.W/2, r.Y+r.H/2
+		const half = 5 // 图标约 10×10 DIP
+		switch g {
+		case titleMinimize:
+			p.Line(cx-half, cy+0.5, cx+half, cy+0.5, 1, ink)
+		case titleMaximize:
+			p.Stroke(ui.Rect{X: cx - half, Y: cy - half, W: 2 * half, H: 2 * half}, ink, 0, 1)
+		case titleRestore:
+			// 前面的方框，加上后面方框露出的上边和右边。
+			p.Stroke(ui.Rect{X: cx - half, Y: cy - half + 2, W: 8, H: 8}, ink, 0, 1)
+			p.Line(cx-half+2, cy-half, cx+half, cy-half, 1, ink)
+			p.Line(cx+half, cy-half, cx+half, cy+half-2, 1, ink)
+		case titleClose:
+			p.StrokePolyline([][2]float32{{cx - half, cy - half}, {cx + half, cy + half}}, 1, ink)
+			p.StrokePolyline([][2]float32{{cx + half, cy - half}, {cx - half, cy + half}}, 1, ink)
+		}
 	})
-	b.OnClick(onClick)
+	b.Label(label).Tooltip(label).OnClick(onClick)
 }
 
 // titleTextButton 是标题栏里的紧凑文字按钮（登录/退出）：高度贴合标题栏、
 // 悬停浅灰底，避免在矮标题栏里被原生 Button 的默认高度挤出。
 func (a *app) titleTextButton(c *ui.Context, label string, onClick func()) {
-	b := ui.Box(c).Height(titleBarHeight).Padding(8, 8).Center().Background(ui.Hex("#00000000"))
+	t := c.Theme()
+	b := ui.Box(c).Padding(5, 9).Center().Radius(6).Background(ui.Transparent)
 	if b.Hovered() {
-		b.Background(ui.Hex("#0000000f"))
+		b.Background(t.SurfaceHover)
 	}
 	b.Children(func() {
-		ui.Text(c, label).FontSize(11).TextColor(ui.Hex("#1f1f1f"))
+		ui.Text(c, label).FontSize(12).TextColor(t.Text)
 	})
 	b.OnClick(onClick)
 }
@@ -571,13 +619,13 @@ func main() {
 	})
 	mygo.App.WhenReady(func() {
 		a.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:          "T2 Desktop",
-			Width:          1080,
-			Height:         720,
-			MinWidth:       760,
-			MinHeight:      520,
-			StateKey:       "main",
-			Content:        ui.View(a.view),
+			Title:             "T2 Desktop",
+			Width:             1080,
+			Height:            720,
+			MinWidth:          760,
+			MinHeight:         520,
+			StateKey:          "main",
+			Content:           ui.View(a.view),
 			TitleBarStyle:     mygo.TitleBarHidden, // 隐藏原生标题栏
 			HideWindowButtons: true,                // 连系统按钮也隐藏，完全自绘最小化/最大化/关闭
 		})
