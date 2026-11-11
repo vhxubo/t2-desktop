@@ -23,6 +23,13 @@ type tabState struct {
 	noMore     bool // 分页已到底（空页 / 无新增），用于无限滚动停止
 	err        string
 	gen        uint64
+
+	// 通知 tab 专用：分段筛选、正在提交已读的 id、勾选批量与操作错误。
+	filter     int
+	reading    map[string]bool
+	selected   map[string]bool
+	markingAll bool
+	actionErr  string
 }
 
 // app holds only data and widget state. Never store ui.Element or *Context:
@@ -52,11 +59,33 @@ type app struct {
 	emojiTried   bool
 	md           *markdown.Options
 
+	// 通知 / 消息中心：未读数、SSE 长连接与原生通知。
+	unread        int
+	unreadLoading bool
+	unreadGen     uint64
+	streamLive    bool
+	watchCancel   context.CancelFunc
+	watchGen      uint64
+	notifSeen     map[string]bool
+	notifBaseline bool
+	notifPollGen  uint64
+	notifTimer    *time.Timer
+	// notify 是平台通知函数；在应用就绪后才装上，headless 测试保持 nil，
+	// 因此不会触碰真实的系统通知。
+	notify       func(nativeNotice) error
+	nativeNotify bool // 原生通知开关（默认开）
+	// noticeTargets 是「原生通知 id → 目标地址」的映射：系统通知的点击回调
+	// 只带 id，靠它把点击落回对应的帖子 / 评论，进程重启后再点击则回到站点。
+	noticeTargets map[string]string
+
 	// onReplyPosted is a hook invoked after a reply is posted (or fails),
 	// carrying the created reply and any error. It runs wherever publish
 	// runs (the UI thread in the app, the network goroutine under headless
 	// tests). Nil in production; used by tests to await completion.
 	onReplyPosted func(created replyItem, err error)
+	// onNotificationsRead 是「按条已读」落账后的测试钩子：headless 测试没有
+	// 窗口，publish 在请求协程里直接执行，靠它把结果同步回测试。
+	onNotificationsRead func(ids []string)
 }
 
 // tabID / tabFromID 把 tab 序号与侧边栏条目的 id 互相映射。
@@ -76,12 +105,13 @@ func tabFromID(id string) (int, bool) {
 func newApp(dir string) *app {
 	auth := newAuthManager(dir)
 	a := &app{
-		auth:     auth,
-		client:   &Client{Auth: auth},
-		tabs:     make([]*tabState, len(tabSpecs)),
-		lastTab:  -1,
-		navSel:   tabID(0),
-		pageName: "list",
+		auth:         auth,
+		client:       &Client{Auth: auth},
+		tabs:         make([]*tabState, len(tabSpecs)),
+		lastTab:      -1,
+		navSel:       tabID(0),
+		pageName:     "list",
+		nativeNotify: true,
 	}
 	for i := range a.tabs {
 		a.tabs[i] = &tabState{}
@@ -109,6 +139,10 @@ func (a *app) load(idx, page int) {
 	}
 	st := a.tabs[idx]
 	spec := tabSpecs[idx]
+	if spec.Kind == kindNotification {
+		// 分段筛选直接改接口参数，不额外请求参数名。
+		spec.Query = notificationsQuery(st.filter)
+	}
 	if st.loading {
 		return
 	}
@@ -198,16 +232,24 @@ func (a *app) reloadCurrent() {
 }
 
 func (a *app) onAuthChanged(err error) {
-	if err != nil {
+	switch {
+	case err != nil:
 		a.loginMsg = friendlyError(err)
 		a.status = a.loginMsg
-	} else {
-		a.loginMsg = "已登录 · " + a.auth.username()
+	case a.auth.loggedIn():
+		a.loginMsg = "已登录"
+		if name := a.auth.username(); name != "" {
+			a.loginMsg += " · " + name
+		}
 		a.status = a.auth.verifyStatus()
 		if a.status == "" {
 			a.status = "登录成功"
 		}
 		a.pageName = "list"
+	default:
+		// 退出登录也会走 onChange(nil)：不能把它当成一次登录成功。
+		a.loginMsg = "已退出登录"
+		a.status = ""
 	}
 	// 私人 tab 的缓存与登录态绑定，一律丢弃后按需重新拉取。
 	for i, s := range tabSpecs {
@@ -219,6 +261,18 @@ func (a *app) onAuthChanged(err error) {
 		a.tab = 0
 		a.lastTab = 0
 		a.navSel = tabID(0)
+	}
+	if a.auth.loggedIn() {
+		a.refreshUnread()
+		a.startNotificationWatch()
+	} else {
+		a.stopNotificationWatch()
+		a.unread = 0
+		a.unreadLoading = false
+		a.notifSeen = nil
+		a.notifBaseline = false
+		// 退出后系统里可能还留着通知，但目标属于上一个账号，一律不再解析。
+		a.noticeTargets = nil
 	}
 	a.ensureLoaded()
 }
@@ -273,8 +327,17 @@ func (a *app) view(c *ui.Context) {
 					})
 					// 「我的」单独成组：需登录后才能查看的功能
 					ui.SidebarSection(c, "我的", nil, func() {
+						// 通知排在最前：未读消息是最常用的入口，角标显示未读数。
+						if idx := notificationTabIndex(); idx >= 0 {
+							item := ui.SidebarItem(c, tabID(idx), tabIcons[idx], tabSpecs[idx].Label)
+							if a.unread > 0 {
+								item.Children(func() {
+									ui.Badge(c, strconv.Itoa(a.unread))
+								})
+							}
+						}
 						for i, s := range tabSpecs {
-							if !s.NeedsAuth {
+							if !s.NeedsAuth || s.Kind == kindNotification {
 								continue
 							}
 							ui.SidebarItem(c, tabID(i), tabIcons[i], s.Label)
@@ -290,6 +353,9 @@ func (a *app) view(c *ui.Context) {
 				if a.tab != a.lastTab {
 					a.lastTab = a.tab
 					a.status = ""
+					if tabSpecs[a.tab].Kind == kindNotification {
+						a.refreshUnread()
+					}
 				}
 			})
 			ui.Divider(c)
@@ -452,6 +518,11 @@ func (a *app) body(c *ui.Context) {
 		})
 		return
 	}
+	// 通知有独立的头部、分段筛选与已读操作，整块交给它自己渲染。
+	if spec.Kind == kindNotification {
+		a.notificationsBody(c, st)
+		return
+	}
 	if st.loading && len(st.items) == 0 {
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
 			ui.Spinner(c).Size(28, 28)
@@ -503,6 +574,14 @@ func (a *app) body(c *ui.Context) {
 }
 
 func (a *app) row(c *ui.Context, it Item) {
+	if it.Notif != nil {
+		a.notificationRow(c, it)
+		return
+	}
+	if it.Extra != nil {
+		a.richRow(c, it)
+		return
+	}
 	t := c.Theme()
 	row := ui.ButtonBase(c).FillWidth().Padding(14, 16).Radius(10).
 		Background(t.Background).Border(1, t.Border)
@@ -617,7 +696,22 @@ func main() {
 	mygo.App.OnOpenURL(func(raw string) {
 		a.publish(func() { a.handleCallbackURL(raw) })
 	})
+	// 原生通知的点击只带回 id，由 openNotificationNotice 查回目标：帖子和
+	// 评论在应用内打开，其余交给系统浏览器。注册在 Run 之前，因此连「点击
+	// 通知才启动本进程」的那一次也能收到。
+	mygo.App.OnNotificationClick(func(id string) {
+		a.publish(func() { a.openNotificationNotice(id) })
+	})
+	// 站内读掉消息不会产生 notification_update，窗口回到前台时校准一次。
+	mygo.App.OnDidBecomeActive(func() {
+		a.publish(func() { a.onBecameActive() })
+	})
 	mygo.App.WhenReady(func() {
+		// 原生通知要等应用就绪：Windows 走托盘气泡，macOS 首次会询问授权。
+		// 头less 测试不经过这里，a.notify 保持 nil，不会触碰系统通知。
+		if mygo.NotificationsSupported() {
+			a.notify = showNativeNotice
+		}
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:             "T2 Desktop",
 			Width:             1080,
@@ -630,6 +724,8 @@ func main() {
 			HideWindowButtons: true,                // 连系统按钮也隐藏，完全自绘最小化/最大化/关闭
 		})
 		if a.auth.loggedIn() {
+			a.refreshUnread()
+			a.startNotificationWatch()
 			go func() {
 				_ = a.auth.verify(context.Background(), a.auth.accessToken())
 				a.publish(func() { a.status = a.auth.verifyStatus() })

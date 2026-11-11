@@ -259,3 +259,21 @@ func TestSupersededLoginAttemptStaysSilent(t *testing.T) {
 	}
 }
 
+// 退出登录也会走 onChange(nil)，UI 不能把它当成一次登录成功。
+func TestAuthChangedDistinguishesLogout(t *testing.T) {
+	a := testApp(t)
+	if err := a.auth.storeToken(tokenData{AccessToken: "tok", Username: "jimmy", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	a.onAuthChanged(nil)
+	if a.loginMsg != "已登录 · jimmy" {
+		t.Errorf("登录提示不对：%q", a.loginMsg)
+	}
+	a.auth.Logout()
+	if a.loginMsg != "已退出登录" || a.status != "" {
+		t.Errorf("退出后仍显示登录成功：%q / %q", a.loginMsg, a.status)
+	}
+	if a.auth.loggedIn() {
+		t.Error("退出后仍有令牌")
+	}
+}

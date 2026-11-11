@@ -37,6 +37,8 @@ const (
 	kindTopic itemKind = iota
 	kindComment
 	kindCollection
+	kindTimeline     // 动态：同一份响应里混有帖子与评论
+	kindNotification // 通知：行渲染与交互都独立
 )
 
 // tabSpec is the exact contract from the API table: path, page-1 query,
@@ -58,11 +60,14 @@ var tabSpecs = []tabSpec{
 	{"新发表", "/v1/topics/latest", "", "posts", false, pagingPages, kindTopic},
 	{"最新评论", "/v1/comments/latest", "limit=50", "items", false, pagingIgnored, kindComment},
 	{"社区讨论", "/v1/topics", "page=1&limit=50&node_id=" + communityNodeID, "posts", false, pagingPages, kindTopic},
-	{"动态", "/v1/me/follows/timeline", "page=1&limit=50", "items", true, pagingPages, kindTopic},
+	{"动态", "/v1/me/follows/timeline", "page=1&limit=50", "items", true, pagingPages, kindTimeline},
 	{"收藏", "/v1/me/favorites", "page=1&limit=50", "posts", true, pagingPages, kindTopic},
 	{"书签", "/v1/me/bookmarks", "page=1&limit=50", "items", true, pagingPages, kindComment},
 	{"我的帖子", "/v1/me/topics", "", "auto", true, pagingOff, kindTopic},
 	{"我的合集", "/v1/me/collections", "", "", true, pagingOff, kindCollection},
+	// 通知走开放 API 的消息列表；字段名是 list（不是 items），筛选另带
+	// type / unread_only，由 notificationQuery 生成。
+	{"通知", notificationsPath, notificationsQuery(notificationFilterAll), "list", true, pagingPages, kindNotification},
 }
 
 func tabLabels() []string {
@@ -101,6 +106,10 @@ type Item struct {
 	URL       string // 站外原文链接，保留作者署名与来源时使用
 	ShortID   string // 帖子对外 ID；非空才可以在应用内打开详情
 	CommentID string // 从评论列表进入时，要定位的评论 uuid
+	// Extra 是最新评论 / 动态行的富展示字段；普通榜单行为 nil。
+	Extra *rowExtra
+	// Notif 是通知行归一后的消息；只有通知 tab 的行非 nil。
+	Notif *notification
 }
 
 type pageResult struct {
@@ -189,6 +198,16 @@ type Client struct {
 	Auth   *AuthManager
 	UA     string
 	bearer func() string // test seam
+
+	// StreamHTTP is used only by the notification SSE connection. A client
+	// with an overall Timeout would cut the stream; nil falls back to HTTP
+	// (tests) and then to a client without a timeout.
+	StreamHTTP *http.Client
+
+	// 以下三个只给测试压缩重连节奏用；生产用 stream.go 的默认值。
+	streamBackoffSeq     []time.Duration
+	streamReconnectDelay time.Duration
+	streamIdleTimeout    time.Duration
 }
 
 func (c *Client) base() string {
@@ -312,11 +331,16 @@ func (c *Client) getJSON(ctx context.Context, u, token string) (json.RawMessage,
 // else becomes an apiError carrying code/required_scope/retry_after.
 func (c *Client) postJSON(ctx context.Context, u, token, idempotencyKey string, payload any) (json.RawMessage, error) {
 	var empty json.RawMessage
-	buf, err := json.Marshal(payload)
-	if err != nil {
-		return empty, err
+	var reqBody io.Reader
+	hasBody := payload != nil
+	if hasBody {
+		buf, err := json.Marshal(payload)
+		if err != nil {
+			return empty, err
+		}
+		reqBody = bytes.NewReader(buf)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(buf))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, reqBody)
 	if err != nil {
 		return empty, err
 	}
@@ -326,7 +350,10 @@ func (c *Client) postJSON(ctx context.Context, u, token, idempotencyKey string, 
 	}
 	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
+	// 只有带 body 的写请求才声明 JSON；「全部已读」这类端点不接受多余内容。
+	if hasBody {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	// Never send an empty Authorization header: the API answers 401.
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -523,6 +550,17 @@ func (o object) sub(keys ...string) object {
 	return nil
 }
 
+// has reports whether the object carries any of the keys. Nested wrappers are
+// not consulted: kind detection must look only at the outer object.
+func (o object) has(keys ...string) bool {
+	for _, k := range keys {
+		if _, ok := o[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // overlay copies keys from nested wrappers (post / topic / reply / ...)
 // that are missing from the outer object. Timelines and bookmarks wrap
 // their payload this way.
@@ -586,7 +624,22 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 	if o == nil {
 		return Item{}
 	}
+	if kind == kindNotification {
+		return notificationItem(o)
+	}
+	if kind == kindTimeline {
+		// 动态流同一份响应里混有帖子与评论。判型必须在 overlay 之前：
+		// overlay 会把帖子正文摊平到外层，之后就分不清了。
+		if looksLikeComment(o) {
+			kind = kindComment
+		} else {
+			kind = kindTopic
+		}
+	}
 	overlay(o, "post", "topic", "reply", "comment", "collection", "item", "target")
+	if kind == kindComment {
+		return commentItemFrom(o)
+	}
 
 	author := o.sub("author", "user", "created_by", "owner")
 	node := o.sub("node", "parent_node")
@@ -629,53 +682,9 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 	if title == "" && post != nil {
 		title = cleanText(post.str("title", "name"))
 	}
-	postTitle := ""
-	if post != nil {
-		postTitle = cleanText(post.str("title", "name"))
-	}
 
 	it := Item{Key: id, ShortID: shortID}
 	switch kind {
-	case kindComment:
-		// 评论行点开的是它所属的帖子，并记住这条评论以便定位/高亮。
-		it.CommentID = id
-		it.Title = content
-		if it.Title == "" {
-			it.Title = postTitle
-		}
-		if it.Title == "" {
-			it.Title = "（无内容）"
-		}
-		parts := []string{username}
-		if postTitle != "" {
-			parts = append(parts, postTitle)
-		} else if title != "" {
-			parts = append(parts, title)
-		}
-		if when != "" {
-			parts = append(parts, when)
-		}
-		it.Subtitle = strings.Join(parts, " · ")
-		meta := []string{}
-		if floor := o.num("floor", "flat_floor", "located_floor"); floor > 0 {
-			meta = append(meta, fmt.Sprintf("%d 楼", floor))
-		}
-		if nodeName != "" {
-			meta = append(meta, nodeName)
-		}
-		if note := cleanText(o.str("note", "remark")); note != "" && note != content {
-			meta = append(meta, "备注："+note)
-		}
-		it.Meta = strings.Join(meta, " · ")
-		if u := topicURL(shortID, nodeSlug); u != "" {
-			if id != "" {
-				u += "?commentId=" + url.QueryEscape(id)
-			}
-			it.URL = u
-		}
-		if it.Key == "" {
-			it.Key = shortID
-		}
 	case kindCollection:
 		it.Title = title
 		if it.Title == "" {
@@ -732,6 +741,9 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 		}
 		it.Meta = strings.Join(meta, " · ")
 		it.URL = topicURL(shortID, nodeSlug)
+		// 动态流会带正文、表情表态与打赏；普通榜单没有这些字段，
+		// topicExtra 返回 nil，行还是原来的紧凑样式。
+		it.Extra = topicExtra(o, username, nodeName, when)
 	}
 	return it
 }

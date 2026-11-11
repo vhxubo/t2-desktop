@@ -29,7 +29,7 @@ func testApp(t *testing.T) *app {
 	return a
 }
 
-// The 11 tabs must hit exactly the documented endpoints and page-1 queries.
+// The 12 tabs must hit exactly the documented endpoints and page-1 queries.
 func TestTabEndpointsMatchContract(t *testing.T) {
 	want := []string{
 		"https://2libra.com/api/v1/topics?page=1&limit=50&parent_slug=All&sort=value",
@@ -43,8 +43,9 @@ func TestTabEndpointsMatchContract(t *testing.T) {
 		"https://2libra.com/api/v1/me/bookmarks?page=1&limit=50",
 		"https://2libra.com/api/v1/me/topics",
 		"https://2libra.com/api/v1/me/collections",
+		"https://2libra.com/api/v1/me/notifications?page=1&limit=50",
 	}
-	if len(tabSpecs) != len(want) || len(tabLabels()) != 11 {
+	if len(tabSpecs) != len(want) || len(tabLabels()) != 12 {
 		t.Fatalf("tab 数量不对：%d", len(tabSpecs))
 	}
 	for i, s := range tabSpecs {
@@ -68,6 +69,7 @@ func TestTabEndpointsMatchContract(t *testing.T) {
 		{2, "https://2libra.com/api/v1/topics/hot?page=2&period=7d"},
 		{3, "https://2libra.com/api/v1/topics/latest?page=2"},
 		{6, "https://2libra.com/api/v1/me/follows/timeline?limit=50&page=2"},
+		{11, "https://2libra.com/api/v1/me/notifications?limit=50&page=2"},
 	}
 	for _, c := range cases {
 		if got := endpoint(apiBaseURL, tabSpecs[c.i], 2); got != c.want {
@@ -82,6 +84,9 @@ func TestTabEndpointsMatchContract(t *testing.T) {
 	}
 	if tabSpecs[10].ListKey != "" || tabSpecs[10].Paging != pagingOff {
 		t.Errorf("我的合集响应是数组且不分页")
+	}
+	if tabSpecs[11].Kind != kindNotification || tabSpecs[11].ListKey != "list" {
+		t.Errorf("通知的列表字段是 list：%+v", tabSpecs[11])
 	}
 }
 
