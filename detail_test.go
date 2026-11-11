@@ -569,8 +569,19 @@ func TestReplyComposerAnonymous(t *testing.T) {
 	if tt.HasText("发送") {
 		t.Error("未登录不应出现发送按钮")
 	}
-	if !tt.HasText("回复") {
-		t.Error("评论没有回复入口")
+	// 回复入口默认隐藏，悬浮评论行后才出现（详情页交互优化）。
+	// 注意：嵌套评论的「回复 N 楼」父引用始终可见，故用 Find 精确匹配按钮文字。
+	if _, ok := tt.Find("回复"); ok {
+		t.Error("未悬浮评论行时不应展示回复入口")
+	}
+	if r, ok := tt.Find("1 楼"); !ok {
+		t.Fatal("找不到评论行用于悬浮")
+	} else {
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Frame()
+	}
+	if _, ok := tt.Find("回复"); !ok {
+		t.Error("悬浮评论行后应出现回复入口")
 	}
 }
 
@@ -594,6 +605,13 @@ func TestReplyComposerLoggedIn(t *testing.T) {
 	tt := ui.NewTester(a.view, 1100, 760) // 单一 Tester
 	if !tt.HasText("发送") {
 		t.Error("登录态下没有发送按钮")
+	}
+	// 「回复」入口仅在悬浮评论行时出现：先把指针移到第一行（"1 楼"）。
+	if r, ok := tt.Find("1 楼"); !ok {
+		t.Fatal("找不到评论行用于悬浮")
+	} else {
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Frame()
 	}
 	if err := tt.Click("回复"); err != nil {
 		t.Fatalf("点击回复失败：%v", err)

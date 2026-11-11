@@ -20,6 +20,7 @@ type tabState struct {
 	totalPages int
 	loaded     bool
 	loading    bool
+	noMore     bool // 分页已到底（空页 / 无新增），用于无限滚动停止
 	err        string
 	gen        uint64
 }
@@ -140,18 +141,23 @@ func (a *app) load(idx, page int) {
 			if page == 1 {
 				st.items = res.Items
 				st.list.ScrollTo(0, ui.Start)
+				st.noMore = len(res.Items) == 0
 			} else {
 				// 页码分页可能重复：按资源 ID 去重
 				seen := make(map[string]bool, len(st.items))
 				for _, it := range st.items {
 					seen[it.Key] = true
 				}
+				added := 0
 				for _, it := range res.Items {
 					if !seen[it.Key] {
 						st.items = append(st.items, it)
 						seen[it.Key] = true
+						added++
 					}
 				}
+				// 服务端返回空页或没有新增条目：标记到底，避免无限加载
+				st.noMore = added == 0
 			}
 			st.total = res.Total
 			st.totalPages = res.TotalPages
@@ -186,6 +192,7 @@ func (a *app) reloadCurrent() {
 	st.loaded = false
 	st.items = nil
 	st.err = ""
+	st.noMore = false
 	st.list.ScrollTo(0, ui.Start)
 	a.load(a.tab, 1)
 }
@@ -216,6 +223,19 @@ func (a *app) onAuthChanged(err error) {
 	a.ensureLoaded()
 }
 
+// homeTheme 是首页使用的浅色主题：纯白背景（页面与侧边栏均白）+ 指定
+// 边框色 oklab(0.21 0.00164224 -0.00577088 / 0.1)（即 oklch(0.21 0.006
+// 285.885) 的 10% 不透明版本），其余文字/强调色沿用浅色主题，保证整体
+// 可读且风格统一。视觉结构由半透明 oklch 边框与分隔线承担，呈现干净的
+// 卡片式列表。
+func homeTheme() *ui.Theme {
+	th := ui.LightTheme()
+	th.Background = ui.Hex("#ffffff")
+	th.Surface = ui.Hex("#ffffff")
+	th.Border = ui.Oklch(0.21, 0.006, 285.885).Alpha(0.1)
+	return th
+}
+
 func (a *app) view(c *ui.Context) {
 	t := c.Theme()
 	a.srv = c.Services()
@@ -229,6 +249,11 @@ func (a *app) view(c *ui.Context) {
 		a.detailView(c)
 		return
 	}
+
+	// 首页使用白色背景 + 指定 oklch 边框色的浅色主题。SetTheme 只作用于
+	// 当前帧（每帧从系统主题重置），因此详情页/登录页仍保持原主题。
+	c.SetTheme(homeTheme())
+	t = c.Theme()
 
 	// 左右布局：左侧（宽 150）放品牌顶栏 + 功能导航；右侧放内容区。
 	ui.Row(c).Fill().Children(func() {
@@ -342,7 +367,7 @@ func (a *app) body(c *ui.Context) {
 	}
 	if len(st.items) == 0 {
 		ui.Column(c).Grow(1).Center().Children(func() {
-			ui.Text(c, "暂无内容，点「刷新」重试").TextColor(t.TextMuted)
+			ui.Text(c, "暂无内容").TextColor(t.TextMuted)
 		})
 		return
 	}
@@ -355,13 +380,23 @@ func (a *app) body(c *ui.Context) {
 	}
 	ui.List(c, &st.list, len(items), func(i int) {
 		a.row(c, items[i])
-	}).Grow(1).Padding(4, 8)
+	}).Grow(1).Padding(8, 16).Gap(14)
+	// 无限滚动：滚动到列表底部且还有下一页时，自动加载更多，不再依赖
+	// 页码按钮。「我的帖子 / 我的合集」不分页、最新评论服务端忽略 page，
+	// 因此只对 pagingPages 的 tab 触发。
+	if spec.Paging == pagingPages && st.loaded && !st.loading && !st.noMore &&
+		len(st.items) > 0 && st.list.AtEnd() {
+		hasMore := st.totalPages == 0 || st.page < st.totalPages
+		if hasMore {
+			a.load(a.tab, st.page+1)
+		}
+	}
 }
 
 func (a *app) row(c *ui.Context, it Item) {
 	t := c.Theme()
-	row := ui.ButtonBase(c).FillWidth().Padding(10, 14).Radius(8).
-		Background(t.Surface).Border(1, t.Border)
+	row := ui.ButtonBase(c).FillWidth().Padding(14, 16).Radius(10).
+		Background(t.Background).Border(1, t.Border)
 	row.Children(func() {
 		ui.Column(c).Grow(1).Gap(4).Children(func() {
 			ui.Text(c, it.Title).FontSize(14).Bold().MaxLines(2)

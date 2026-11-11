@@ -191,6 +191,13 @@ func TestCommentPlainTextLinkButton(t *testing.T) {
 	a.detail.replyLoaded = true
 
 	tt := ui.NewTester(a.view, 1200, 800)
+	// 链接按钮仅在悬浮评论行时出现：先把指针移到第一行（"1 楼"）。
+	if r, ok := tt.Find("1 楼"); !ok {
+		t.Fatal("找不到评论行用于悬浮")
+	} else {
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Frame()
+	}
 	btn := "在应用内打开 D7UP3tD"
 	if !tt.HasText(btn) {
 		t.Fatalf("评论里缺少站内链接按钮：%q", tt.Texts())

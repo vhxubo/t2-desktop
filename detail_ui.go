@@ -284,6 +284,7 @@ func (a *app) ensureEmojis() {
 }
 
 func (a *app) detailView(c *ui.Context) {
+	c.SetTheme(homeTheme())
 	t := c.Theme()
 	d := a.detail
 	if d == nil {
@@ -464,7 +465,7 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 		}
 		ui.List(c, &d.list, len(rows), func(i int) {
 			a.replyRow(c, rows[i], d.focusID)
-		}).Grow(1).MinHeight(0).Padding(4, 8)
+		}).Grow(1).MinHeight(0).Padding(6, 12).Gap(10)
 	}
 	ui.Divider(c)
 	ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -499,8 +500,10 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 	}
 	left := float32(10)
 	left += float32(r.Depth) * 14
-	ui.Column(c).FillWidth().Padding(8, 10, 8, left).Radius(8).
-		Background(bg).Border(1, border).Gap(4).Children(func() {
+	row := ui.Column(c).FillWidth().Padding(8, 10, 8, left).Radius(8).
+		Background(bg).Border(1, border).Gap(4)
+	hovered := row.Hovered()
+	row.Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			floor := ""
 			switch {
@@ -539,14 +542,16 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 		ui.Text(c, replaceEmoji(content, a.emojis, false)).FontSize(13)
 		// Comments are plain text, so give any post link in them an
 		// explicit in-app action instead of leaving it unclickable.
-		if !r.Deleted {
+		// 评论内的操作（打开链接、回复）均为文字按钮，且只在悬浮整条
+		// 评论时才出现，保持列表默认状态的清爽。
+		if !r.Deleted && hovered {
 			if links := inAppTopicLinks(r.Content); len(links) > 0 {
 				ui.Row(c).Gap(6).Wrap().Children(func() {
 					for _, link := range links {
 						target := link
-						if ui.Button(c, "在应用内打开 "+target.ShortID).Clicked() {
+						a.replyAction(c, "在应用内打开 "+target.ShortID, func() {
 							a.handleLink(target.URL)
-						}
+						})
 					}
 				})
 			}
@@ -554,20 +559,38 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 			// assigns the floor, so we only remember the id and a display
 			// floor for the "正在回复 N 楼" chip; closed comments can't reply.
 			closed := a.detail != nil && a.detail.topic != nil && a.detail.topic.CommentsClosed
-			if !closed && ui.Button(c, "回复").Clicked() {
-				a.detail.replyToID = r.ID
-				a.detail.replyToFloor = r.Floor
-				if a.detail.replyToFloor == 0 {
-					a.detail.replyToFloor = r.FlatFloor
-				}
+			if !closed {
+				a.replyAction(c, "回复", func() {
+					a.detail.replyToID = r.ID
+					a.detail.replyToFloor = r.Floor
+					if a.detail.replyToFloor == 0 {
+						a.detail.replyToFloor = r.FlatFloor
+					}
+				})
 			}
 		}
 	})
 }
 
+// replyAction 渲染一个纯文字按钮：透明背景 + 强调色文字，无填充、无边框，
+// 用于评论行内的次级操作（在应用内打开、回复）。是否展示由调用方控制
+// （通常只在行悬浮时出现）。
+func (a *app) replyAction(c *ui.Context, label string, onClick func()) {
+	btn := ui.Button(c, label).
+		Background(ui.Transparent).
+		TextColor(c.Theme().Accent).
+		FontSize(12).
+		Padding(2, 6).
+		Radius(6)
+	if btn.Clicked() {
+		onClick()
+	}
+}
+
 // replyComposer sits at the bottom of the comment pane. It is gated the same
 // way the API gates writes: anonymous users are sent to log in, closed posts
-// show a hint, and a logged-in open post gets a text box + send button.
+// show a hint, and a logged-in open post gets a Markdown editor whose send
+// button is integrated into the field.
 func (a *app) replyComposer(c *ui.Context, d *detailState) {
 	t := c.Theme()
 	ui.Divider(c)
@@ -579,39 +602,52 @@ func (a *app) replyComposer(c *ui.Context, d *detailState) {
 					who = fmt.Sprintf("%d 楼", d.replyToFloor)
 				}
 				ui.Text(c, "正在回复 "+who).FontSize(12).TextColor(t.Accent).Grow(1)
-				if ui.Button(c, "取消").Clicked() {
+				a.replyAction(c, "取消", func() {
 					d.replyToID = ""
 					d.replyToFloor = 0
-				}
+				})
 			})
 		}
-		ui.TextInput(c, &d.draft).Label("写评论").
-			Placeholder("说点什么…（支持表情短码 :smile:）").FillWidth()
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			if d.posting {
-				ui.Spinner(c).Size(16, 16)
-				ui.Text(c, "发送中…").FontSize(11).TextColor(t.TextMuted)
-			}
-			ui.Spacer(c).Grow(1)
-			if d.postErr != "" {
-				ui.Text(c, d.postErr).FontSize(11).TextColor(t.Danger).MaxLines(2)
-			}
-			switch {
-			case !a.auth.loggedIn():
-				if ui.Button(c, "登录后评论").Clicked() {
-					a.loginMsg = ""
-					a.pageName = "login"
-				}
-			case d.topic != nil && d.topic.CommentsClosed:
-				ui.Text(c, "评论已关闭").FontSize(11).TextColor(t.TextMuted)
-			default:
-				sendDisabled := d.posting || strings.TrimSpace(d.draft) == ""
-				if ui.PrimaryButton(c, "发送").Disabled(sendDisabled).Clicked() {
-					a.submitReply()
-				}
-			}
-		})
+		// 评论已关闭时不展示编辑器，仅给提示。
+		if d.topic != nil && d.topic.CommentsClosed {
+			ui.Text(c, "评论已关闭").FontSize(11).TextColor(t.TextMuted)
+			return
+		}
+		a.replyInput(c, d)
 	})
+}
+
+// replyInput is the Markdown editor for a new comment: a multiline text
+// area whose send button lives inside the same bordered, rounded field.
+// 未登录时，框内的动作改为「登录后评论」，编辑器本身仍然展示。
+func (a *app) replyInput(c *ui.Context, d *detailState) {
+	t := c.Theme()
+	sendDisabled := d.posting || strings.TrimSpace(d.draft) == ""
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.End).Padding(6, 8).
+		Radius(10).Background(t.Background).Border(1, t.Border).Children(func() {
+		// 多行文本区即 Markdown 编辑器：透明背景、去边框，融入外层输入框。
+		ui.TextArea(c, &d.draft).Label("写评论").
+			Placeholder("说点什么…（支持 Markdown 与表情短码 :smile:）").
+			Grow(1).Background(ui.Transparent).Border(0, t.Border)
+		if d.posting {
+			ui.Spinner(c).Size(16, 16)
+		}
+		// 未登录时把框内动作换成「登录后评论」；否则为集成在框内的发送按钮。
+		if !a.auth.loggedIn() {
+			if ui.Button(c, "登录后评论").Clicked() {
+				a.loginMsg = ""
+				a.pageName = "login"
+			}
+		} else {
+			send := ui.PrimaryButton(c, "发送").Disabled(sendDisabled)
+			if send.Clicked() {
+				a.submitReply()
+			}
+		}
+	})
+	if d.postErr != "" {
+		ui.Text(c, d.postErr).FontSize(11).TextColor(t.Danger).MaxLines(2)
+	}
 }
 
 // submitReply posts the draft through the Client. On success it clears the
