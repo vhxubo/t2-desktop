@@ -1,0 +1,7 @@
+{
+  "name": "my-app",
+  "identifier": "com.vhxubo.t2-desktop",
+  "urlSchemes": ["com.vhxubo.t2-desktop"],
+  "version": "0.1.0",
+  "out": "build"
+}

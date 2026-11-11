@@ -1,0 +1,696 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// A native/desktop OAuth client uses a private-use URI scheme instead of a
+// loopback HTTP listener (RFC 8252 §7.1). The OS hands the callback URL to
+// the app that registered appIdentifier; the app id doubles as client_id.
+const (
+	appIdentifier      = "com.vhxubo.t2-desktop"
+	defaultRedirectURI = appIdentifier + ":/callback"
+	legacyRedirectURI  = "http://127.0.0.1:8765/cb"
+)
+
+// Settings holds the public-client OAuth configuration. A desktop app has
+// no client_secret: PKCE code_verifier alone authenticates the token call.
+type Settings struct {
+	ClientID    string `json:"client_id"`
+	RedirectURI string `json:"redirect_uri"`
+	Scopes      string `json:"scopes"`
+	Port        int    `json:"port"`
+}
+
+type tokenData struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	Scope        string `json:"scope"`
+	ObtainedAt   int64  `json:"obtained_at"`
+	Username     string `json:"username,omitempty"`
+}
+
+func defaultSettings() Settings {
+	s := Settings{
+		ClientID:    envOr("TWOLIBRA_CLIENT_ID", appIdentifier),
+		RedirectURI: envOr("TWOLIBRA_REDIRECT_URI", defaultRedirectURI),
+		Scopes:      envOr("TWOLIBRA_SCOPES", "read profile read:me"),
+		Port:        8765, // only used by the legacy loopback redirect
+	}
+	if v := os.Getenv("TWOLIBRA_OAUTH_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n < 65536 {
+			s.Port = n
+		}
+	}
+	return s
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// configDir is where tokens and settings live. It stays outside the repo
+// and can be redirected in tests with TWOLIBRA_CONFIG_DIR.
+func configDir() string {
+	if d := os.Getenv("TWOLIBRA_CONFIG_DIR"); d != "" {
+		return d
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "2libra-native-reader")
+}
+
+func readJSONFile(path string, dst any) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, dst)
+}
+
+func writeJSONFile(path string, v any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+type loginResult struct {
+	code  string
+	state string
+	err   error
+}
+
+type pendingLogin struct {
+	state       string
+	verifier    string
+	challenge   string
+	clientID    string
+	redirectURI string
+	// server is nil for a custom-scheme callback: the OS delivers the URL
+	// through the app's deep link, so nothing listens on a local port.
+	server *http.Server
+	result chan loginResult
+	once   sync.Once
+}
+
+func (p *pendingLogin) deliver(r loginResult) {
+	p.once.Do(func() { p.result <- r })
+}
+
+func (p *pendingLogin) close() {
+	if p.server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = p.server.Shutdown(ctx)
+	}
+}
+
+// AuthManager owns the PKCE flow, the loopback callback, token rotation,
+// and persistent storage. All state changes are reported through onChange
+// so the UI can repaint through Window.Update.
+type AuthManager struct {
+	mu         sync.Mutex
+	refreshMu  sync.Mutex
+	settings   Settings
+	token      *tokenData
+	dir        string
+	apiBase    string
+	http       *http.Client
+	onChange   func(error)
+	pending    *pendingLogin
+	lastVerify string
+}
+
+func newAuthManager(dir string) *AuthManager {
+	if dir == "" {
+		dir = configDir()
+	}
+	m := &AuthManager{
+		settings: defaultSettings(),
+		dir:      dir,
+		apiBase:  apiBaseURL,
+		http:     &http.Client{Timeout: 20 * time.Second},
+	}
+	var saved Settings
+	if err := readJSONFile(filepath.Join(dir, "settings.json"), &saved); err == nil {
+		// Older builds defaulted to the loopback callback. Upgrade only
+		// that exact value; a redirect the user picked stays untouched.
+		if saved.RedirectURI == legacyRedirectURI {
+			saved.RedirectURI = defaultRedirectURI
+		}
+		if saved.ClientID != "" {
+			m.settings.ClientID = saved.ClientID
+		}
+		if saved.RedirectURI != "" {
+			m.settings.RedirectURI = saved.RedirectURI
+		}
+		if saved.Scopes != "" {
+			m.settings.Scopes = saved.Scopes
+		}
+		if saved.Port > 0 {
+			m.settings.Port = saved.Port
+		}
+	}
+	// Explicit environment values always win over the saved file.
+	if v := os.Getenv("TWOLIBRA_CLIENT_ID"); v != "" {
+		m.settings.ClientID = v
+	}
+	if v := os.Getenv("TWOLIBRA_REDIRECT_URI"); v != "" {
+		m.settings.RedirectURI = v
+	}
+	var t tokenData
+	if err := readJSONFile(filepath.Join(dir, "token.json"), &t); err == nil && t.AccessToken != "" {
+		m.token = &t
+	}
+	return m
+}
+
+func (m *AuthManager) webBase() string { return strings.TrimSuffix(m.apiBase, "/api") }
+
+func (m *AuthManager) accessToken() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.token == nil {
+		return ""
+	}
+	return m.token.AccessToken
+}
+
+func (m *AuthManager) loggedIn() bool { return m.accessToken() != "" }
+
+func (m *AuthManager) username() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.token == nil {
+		return ""
+	}
+	return m.token.Username
+}
+
+func (m *AuthManager) settingsSnapshot() Settings {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.settings
+}
+
+func (m *AuthManager) verifyStatus() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastVerify
+}
+
+func (m *AuthManager) updateSettings(s Settings) error {
+	if s.Port <= 0 || s.Port >= 65536 {
+		s.Port = 8765
+	}
+	m.mu.Lock()
+	m.settings = s
+	dir := m.dir
+	m.mu.Unlock()
+	return writeJSONFile(filepath.Join(dir, "settings.json"), s)
+}
+
+func (m *AuthManager) storeToken(t tokenData) error {
+	if t.ObtainedAt == 0 {
+		t.ObtainedAt = time.Now().Unix()
+	}
+	m.mu.Lock()
+	if m.token != nil && t.Username == "" {
+		t.Username = m.token.Username
+	}
+	m.token = &t
+	dir := m.dir
+	m.mu.Unlock()
+	return writeJSONFile(filepath.Join(dir, "token.json"), t)
+}
+
+func (m *AuthManager) clearToken() error {
+	m.mu.Lock()
+	m.token = nil
+	m.lastVerify = ""
+	dir := m.dir
+	m.mu.Unlock()
+	return os.Remove(filepath.Join(dir, "token.json"))
+}
+
+func (m *AuthManager) notify(err error) {
+	m.mu.Lock()
+	fn := m.onChange
+	m.mu.Unlock()
+	if fn != nil {
+		fn(err)
+	}
+}
+
+func randomURLSafe(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // crypto/rand failure is not recoverable here
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func newPKCE() (verifier, challenge string) {
+	verifier = randomURLSafe(48) // 64 chars, within 43~128 of [A-Za-z0-9-._~]
+	sum := sha256.Sum256([]byte(verifier))
+	challenge = base64.RawURLEncoding.EncodeToString(sum[:]) // 43 chars, S256
+	return
+}
+
+// loopbackRedirect is the legacy RFC 8252 §7.3 form. It is still accepted
+// for anyone who registered an http redirect before the native scheme.
+func loopbackRedirect(u *url.URL) bool {
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	}
+	return false
+}
+
+// isAppCallback accepts exactly the callbacks the app can receive: the
+// registered custom scheme (:/callback or ://callback) and the old loopback
+// address. Anything else, including a foreign site's URL, is rejected.
+func isAppCallback(u *url.URL) bool {
+	if !strings.EqualFold(u.Scheme, appIdentifier) {
+		return loopbackRedirect(u)
+	}
+	path := u.Path
+	if path == "" {
+		path = u.Opaque
+	}
+	return strings.Trim(path, "/") == "callback" || strings.EqualFold(u.Host, "callback")
+}
+
+// isCallbackLink is the string form used by the system deep-link handler.
+func isCallbackLink(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && isAppCallback(u)
+}
+
+func (m *AuthManager) authorizeURL(p *pendingLogin, s Settings) string {
+	v := url.Values{}
+	v.Set("client_id", s.ClientID)
+	v.Set("redirect_uri", p.redirectURI)
+	v.Set("response_type", "code")
+	v.Set("scope", s.Scopes)
+	v.Set("state", p.state)
+	v.Set("code_challenge", p.challenge)
+	v.Set("code_challenge_method", "S256")
+	return m.webBase() + "/oauth/authorize?" + v.Encode()
+}
+
+// Begin creates the PKCE pair, starts the loopback listener and returns the
+// authorize URL. The caller opens it on the UI thread; a goroutine waits for
+// the callback, exchanges the code and reports the outcome via onChange.
+func (m *AuthManager) Begin(ctx context.Context) (string, error) {
+	m.mu.Lock()
+	if m.pending != nil {
+		old := m.pending
+		m.pending = nil
+		old.deliver(loginResult{err: errors.New("上一次登录已取消")})
+		old.close()
+	}
+	s := m.settings
+	m.mu.Unlock()
+
+	if s.ClientID == "" {
+		return "", errors.New("请先在「设置」里填写 client_id（在 2Libra 网页申请公开客户端）")
+	}
+	redirect, err := url.Parse(s.RedirectURI)
+	if err != nil || redirect.Host == "" {
+		return "", errors.New("redirect_uri 不是合法地址")
+	}
+	path := redirect.Path
+	if path == "" {
+		path = "/"
+	}
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", s.Port))
+	if err != nil {
+		return "", fmt.Errorf("本地回环监听 127.0.0.1:%d 失败：%w", s.Port, err)
+	}
+	verifier, challenge := newPKCE()
+	p := &pendingLogin{
+		state:       randomURLSafe(16),
+		verifier:    verifier,
+		challenge:   challenge,
+		clientID:    s.ClientID,
+		redirectURI: s.RedirectURI,
+		listener:    listener,
+		result:      make(chan loginResult, 1),
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		switch {
+		case q.Get("error") != "":
+			p.deliver(loginResult{err: fmt.Errorf("授权被拒绝：%s", q.Get("error"))})
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, callbackPage("授权未完成", "可以关闭此页面，回到应用重试。", true))
+		case q.Get("code") == "":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, callbackPage("回调缺少 code", "可以关闭此页面，回到应用重试。", true))
+		default:
+			p.deliver(loginResult{code: q.Get("code"), state: q.Get("state")})
+			_, _ = io.WriteString(w, callbackPage("授权成功", "可以关闭此页面，回到 2Libra 阅读器。", false))
+		}
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, callbackPage("2Libra 登录", "如果浏览器没有自动跳回应用，请复制地址栏完整链接，粘贴到应用的「回调链接」输入框。", false))
+	})
+	p.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = p.server.Serve(listener) }()
+
+	m.mu.Lock()
+	m.pending = p
+	m.mu.Unlock()
+	go m.awaitLogin(ctx, p)
+	return m.authorizeURL(p, s), nil
+}
+
+func callbackPage(title, message string, failed bool) string {
+	color := "#16a34a"
+	if failed {
+		color = "#dc2626"
+	}
+	return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>` + title + `</title>` +
+		`<body style="font:15px/1.7 system-ui,sans-serif;max-width:520px;margin:12vh auto;padding:0 24px;color:#1f2937">` +
+		`<h1 style="color:` + color + `">` + title + `</h1><p>` + message + `</p></body></html>`
+}
+
+func (m *AuthManager) awaitLogin(ctx context.Context, p *pendingLogin) {
+	defer m.clearPending(p)
+	timer := time.NewTimer(5 * time.Minute)
+	defer timer.Stop()
+	var err error
+	select {
+	case r := <-p.result:
+		err = m.finishLogin(ctx, p, r)
+	case <-timer.C:
+		err = errors.New("授权超时（5 分钟），请重新发起登录")
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	m.notify(err)
+}
+
+func (m *AuthManager) clearPending(p *pendingLogin) {
+	m.mu.Lock()
+	if m.pending == p {
+		m.pending = nil
+	}
+	m.mu.Unlock()
+	p.close()
+}
+
+// Complete accepts a pasted callback URL. This covers the RFC 8252 loopback
+// case where the redirect arrives without the registered port and no local
+// listener receives it.
+func (m *AuthManager) Complete(rawURL string) error {
+	m.mu.Lock()
+	p := m.pending
+	m.mu.Unlock()
+	if p == nil {
+		return errors.New("请先点击「打开浏览器授权」，再粘贴回调链接")
+	}
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return fmt.Errorf("回调链接格式不对：%w", err)
+	}
+	q := u.Query()
+	if e := q.Get("error"); e != "" {
+		p.deliver(loginResult{err: fmt.Errorf("授权被拒绝：%s", e)})
+		return nil
+	}
+	if q.Get("code") == "" {
+		return errors.New("回调链接里没有 code 参数")
+	}
+	p.deliver(loginResult{code: q.Get("code"), state: q.Get("state")})
+	return nil
+}
+
+func (m *AuthManager) finishLogin(ctx context.Context, p *pendingLogin, r loginResult) error {
+	if r.err != nil {
+		return r.err
+	}
+	if r.state != p.state {
+		return errors.New("state 校验失败，已拒绝该回调（防 CSRF）")
+	}
+	t, err := m.exchangeCode(ctx, p, r.code)
+	if err != nil {
+		return err
+	}
+	if err := m.storeToken(t); err != nil {
+		return fmt.Errorf("令牌已获取但保存失败：%w", err)
+	}
+	m.fetchIdentity(ctx, t.AccessToken)
+	_ = m.verify(ctx, t.AccessToken)
+	return nil
+}
+
+func (m *AuthManager) postForm(ctx context.Context, form url.Values) (tokenData, error) {
+	var empty tokenData
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		m.apiBase+"/oauth/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		return empty, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	resp, err := m.http.Do(req)
+	if err != nil {
+		return empty, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return empty, err
+	}
+	// The token endpoint uses the same envelope; tokens live in d, and it
+	// does not return a `code` field (that only exists under /api/v1/*).
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return empty, fmt.Errorf("令牌响应不是 {c,m,d,t} 信封：%w", err)
+	}
+	if resp.StatusCode >= 400 || env.C != 0 {
+		msg := env.M
+		if msg == "" {
+			msg = "令牌请求失败"
+		}
+		return empty, fmt.Errorf("HTTP %d：%s", resp.StatusCode, msg)
+	}
+	var t tokenData
+	if err := json.Unmarshal(env.D, &t); err != nil {
+		return empty, err
+	}
+	if t.AccessToken == "" {
+		return empty, errors.New("响应 d 里没有 access_token")
+	}
+	return t, nil
+}
+
+func (m *AuthManager) exchangeCode(ctx context.Context, p *pendingLogin, code string) (tokenData, error) {
+	// Use the exact client_id / redirect_uri snapshot from the authorize step.
+	clientID := p.clientID
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", p.redirectURI)
+	form.Set("client_id", clientID)
+	form.Set("code_verifier", p.verifier) // 公开客户端：不带 client_secret
+	return m.postForm(ctx, form)
+}
+
+// LoginWithToken is the fallback when no OAuth app has been approved yet:
+// the user pastes an access_token obtained elsewhere.
+func (m *AuthManager) LoginWithToken(ctx context.Context, access string) {
+	access = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(access), "Bearer "))
+	if access == "" {
+		m.notify(errors.New("请粘贴 access_token"))
+		return
+	}
+	t := tokenData{AccessToken: access, TokenType: "Bearer", Scope: "手动填写"}
+	err := m.storeToken(t)
+	if err == nil {
+		m.fetchIdentity(ctx, access)
+		_ = m.verify(ctx, access)
+	}
+	m.notify(err)
+}
+
+func (m *AuthManager) Logout() {
+	if err := m.clearToken(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		m.notify(err)
+		return
+	}
+	m.notify(nil)
+}
+
+// refresh is single-flight: concurrent 401s share one token rotation, and
+// a caller holding an already-stale token simply gets the current one.
+func (m *AuthManager) refresh(ctx context.Context, stale string) (string, error) {
+	m.refreshMu.Lock()
+	defer m.refreshMu.Unlock()
+	m.mu.Lock()
+	cur := m.token
+	clientID := m.settings.ClientID
+	m.mu.Unlock()
+	if cur == nil {
+		return "", errors.New("未登录")
+	}
+	if cur.AccessToken != stale {
+		return cur.AccessToken, nil // another request already rotated it
+	}
+	if cur.RefreshToken == "" {
+		return "", errors.New("access_token 已过期且没有 refresh_token，请重新登录")
+	}
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", cur.RefreshToken)
+	form.Set("client_id", clientID) // 公开客户端不带 client_secret
+	t, err := m.postForm(ctx, form)
+	if err != nil {
+		return "", fmt.Errorf("刷新令牌失败：%w", err)
+	}
+	// Every refresh rotates refresh_token: replace it immediately.
+	if t.RefreshToken == "" {
+		t.RefreshToken = cur.RefreshToken
+	}
+	if err := m.storeToken(t); err != nil {
+		return "", err
+	}
+	return t.AccessToken, nil
+}
+
+func (m *AuthManager) invalidate(err error) {
+	if clearErr := m.clearToken(); clearErr != nil && !errors.Is(clearErr, os.ErrNotExist) {
+		err = fmt.Errorf("%w；清理令牌失败：%v", err, clearErr)
+	}
+	m.notify(err)
+}
+
+// fetchIdentity reads GET /api/oauth/me (profile scope) for the display
+// name, then falls back to GET /api/v1/me/summary.
+func (m *AuthManager) fetchIdentity(ctx context.Context, access string) {
+	for _, p := range []string{"/oauth/me", "/v1/me/summary"} {
+		name, err := m.identityFrom(ctx, m.apiBase+p, access)
+		if err == nil && name != "" {
+			m.mu.Lock()
+			if m.token != nil {
+				m.token.Username = name
+				t := *m.token
+				dir := m.dir
+				m.mu.Unlock()
+				_ = writeJSONFile(filepath.Join(dir, "token.json"), t)
+				return
+			}
+			m.mu.Unlock()
+			return
+		}
+	}
+}
+
+func (m *AuthManager) identityFrom(ctx context.Context, u, access string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+access)
+	req.Header.Set("Accept", "application/json")
+	resp, err := m.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var env envelope
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&env); err != nil {
+		return "", err
+	}
+	if resp.StatusCode >= 400 || env.C != 0 {
+		return "", fmt.Errorf("HTTP %d %s", resp.StatusCode, env.Code)
+	}
+	var d struct {
+		Username string `json:"username"`
+		Name     string `json:"name"`
+		User     struct {
+			Username string `json:"username"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(env.D, &d); err != nil {
+		return "", err
+	}
+	if d.Username != "" {
+		return d.Username, nil
+	}
+	if d.User.Username != "" {
+		return d.User.Username, nil
+	}
+	return d.Name, nil
+}
+
+// verify is the documented connectivity check: GET /api/v1/me/summary.
+func (m *AuthManager) verify(ctx context.Context, access string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.apiBase+"/v1/me/summary", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+access)
+	req.Header.Set("Accept", "application/json")
+	resp, err := m.http.Do(req)
+	if err != nil {
+		m.setVerify("连通性检查失败：" + err.Error())
+		return err
+	}
+	defer resp.Body.Close()
+	var env envelope
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&env)
+	if resp.StatusCode >= 400 || env.C != 0 {
+		e := &apiError{Status: resp.StatusCode, Code: env.Code, Message: env.M}
+		m.setVerify("GET /v1/me/summary：" + e.friendly())
+		return e
+	}
+	m.setVerify("GET /v1/me/summary 连通正常")
+	return nil
+}
+
+func (m *AuthManager) setVerify(s string) {
+	m.mu.Lock()
+	m.lastVerify = s
+	m.mu.Unlock()
+}
