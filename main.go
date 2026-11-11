@@ -293,11 +293,9 @@ func (a *app) view(c *ui.Context) {
 			}
 		})
 		ui.Divider(c)
-		// 右侧内容区：正文列表 + 底部状态栏
+		// 右侧内容区：正文列表（无限滚动，无底部状态栏）
 		ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
 			a.body(c)
-			ui.Divider(c)
-			a.footer(c)
 		})
 	})
 	a.ensureLoaded()
@@ -415,25 +413,6 @@ func (a *app) row(c *ui.Context, it Item) {
 	} else if it.URL != "" {
 		row.OnClick(func() { a.srv.OpenURL(it.URL) })
 	}
-}
-
-func (a *app) footer(c *ui.Context) {
-	t := c.Theme()
-	st := a.tabs[a.tab]
-	spec := tabSpecs[a.tab]
-	ui.Row(c).Padding(8, 16).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, spec.Label).FontSize(11).TextColor(t.TextMuted).Grow(1)
-		// 无限滚动状态提示：加载中 / 已到底，不再展示页码、总数与翻页按钮
-		if st.loading && len(st.items) > 0 {
-			ui.Spinner(c).Size(14, 14)
-			ui.Text(c, "加载中…").FontSize(11).TextColor(t.TextMuted)
-		} else if spec.Paging == pagingPages && st.loaded && st.noMore && len(st.items) > 0 {
-			ui.Text(c, "没有更多内容").FontSize(11).TextColor(t.TextMuted)
-		}
-		if a.status != "" {
-			ui.Text(c, a.status).FontSize(11).TextColor(t.TextMuted).SingleLine()
-		}
-	})
 }
 
 func (a *app) loginView(c *ui.Context) {
