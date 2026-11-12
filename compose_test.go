@@ -771,6 +771,93 @@ func TestNewComposeStateDefaults(t *testing.T) {
 	}
 }
 
+// 投票与竞猜的选项是动态行：能加、能删，且卡在文档给的上下限上。
+func TestComposeOptionRowsAddRemove(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	st.voteOpen = true
+	st.voteOptions = []string{"甲"}
+	tt := ui.NewTester(a.composeWindowView, 780, 1100)
+	tt.Frame()
+	tt.Scroll(400, 500, 0, 4000)
+
+	if err := tt.Click("添加选项"); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.voteOptions) != 2 {
+		t.Fatalf("添加后行数 = %d，期望 2", len(st.voteOptions))
+	}
+	// 只剩一行时「删除」被禁用，避免删成空列表。
+	st.voteOptions = []string{"甲"}
+	tt.Frame()
+	tt.Scroll(400, 500, 0, 4000)
+	if info, ok := tt.Access("删除"); ok && !info.Disabled {
+		t.Errorf("只剩一个选项时删除按钮应当禁用")
+	}
+	// 到上限后不再加行。
+	st.voteOptions = make([]string, composeOptionMax)
+	tt.Frame()
+	tt.Scroll(400, 500, 0, 4000)
+	if info, ok := tt.Access("添加选项"); ok && !info.Disabled {
+		t.Errorf("选项到 %d 个后添加按钮应当禁用", composeOptionMax)
+	}
+}
+
+// 「清空」把草稿与各组件一起重置，但保留节点选择。
+func TestComposeClearKeepsNode(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	st.title = "写了一半"
+	st.body = "正文"
+	st.voteOpen = true
+	st.voteTitle = "投票"
+	st.nodeName = "生活 · 职场"
+	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	tt.Frame()
+	if err := tt.Click("清空"); err != nil {
+		t.Fatal(err)
+	}
+	if st.title != "" || st.body != "" || st.voteOpen || st.voteTitle != "" {
+		t.Errorf("清空后仍有残留：%+v", st)
+	}
+	if st.nodeName != "生活 · 职场" {
+		t.Errorf("清空不该丢掉节点选择：%q", st.nodeName)
+	}
+}
+
+// 窗口缩到最小尺寸时，工具条与底部按钮都还在（放不下的工具按钮收进菜单）。
+func TestComposeWindowMinimumSize(t *testing.T) {
+	a := testApp(t)
+	composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, composeWinMinWidth, composeWinMinHeight)
+	tt.Frame()
+	for _, want := range []string{"节点", "标题", "正文", "编辑", "预览", "发布", "清空"} {
+		if _, ok := tt.Find(want); !ok {
+			t.Errorf("最小窗口下找不到 %q", want)
+		}
+	}
+	// 工具条本身还在，放不下的按钮由它的溢出菜单接管。
+	if _, ok := tt.AccessByRole(ui.RoleToolbar, "编辑工具"); !ok {
+		t.Errorf("最小窗口下工具条消失了")
+	}
+}
+
+// 发帖窗口是独立窗口：主窗口关掉时一起关，退出登录时丢弃草稿。
+func TestComposeWindowLifecycle(t *testing.T) {
+	a := testApp(t)
+	// 无窗口（headless）时打开只准备状态，不建窗口。
+	a.showComposeWindow()
+	if a.compose == nil {
+		t.Fatal("打开发帖窗口后应当有草稿状态")
+	}
+	a.compose.title = "上一个账号的草稿"
+	// 退出登录：草稿属于上一个账号，一并丢弃。
+	a.onAuthChanged(nil)
+	if a.compose != nil {
+		t.Errorf("退出登录后应当丢弃草稿：%+v", a.compose)
+	}
+}
+
 // ------------------------------------------------------------------
 // 小工具
 // ------------------------------------------------------------------
