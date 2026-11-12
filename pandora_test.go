@@ -578,6 +578,20 @@ func TestPandoraTitleBarEntry(t *testing.T) {
 		!strings.Contains(hint, "小小金币雨，获得 67 金币。") {
 		t.Errorf("悬浮说明没有具体效果：%q", hint)
 	}
+	// 最小窗口宽度下，事件名不能挤到金币数上。
+	tt = ui.NewTester(a.view, 760, 600)
+	tt.Frame()
+	eventR, ok := tt.Find("金币雨")
+	if !ok {
+		t.Fatalf("窄窗口下标题栏没有事件名：%q", tt.Texts())
+	}
+	coinR, ok := tt.Find("金币余额")
+	if !ok {
+		t.Fatalf("窄窗口下找不到金币数：%q", tt.Texts())
+	}
+	if eventR.X+eventR.W > coinR.X {
+		t.Errorf("事件名挤到了金币数：事件 %v，金币 %v", eventR, coinR)
+	}
 
 	// 事件过期后不再顶替入口名，退回「潘多拉」。
 	a.pandora.entryStatus.Box.ExpireAt = "2026-11-12T11:00:00.000Z"
@@ -591,6 +605,83 @@ func TestPandoraTitleBarEntry(t *testing.T) {
 	tt.Frame()
 	if tt.HasText("潘多拉") {
 		t.Errorf("未登录时不该出现潘多拉入口：%q", tt.Texts())
+	}
+}
+
+// 悬浮首页的潘多拉入口时才展示具体效果：静止时只显示事件名，指针停留后
+// 弹出「事件名 + 效果 + 剩余时间」。
+func TestPandoraEntryTooltipShowsEffect(t *testing.T) {
+	freezePandoraNow(t)
+	a := pandoraTestApp(t, false)
+	a.pandora = &pandoraState{
+		entryKnown: true,
+		entryStatus: pandoraStatus{
+			Known: true, FlagsKnown: true, HasBox: true, OpenedToday: true,
+			BoxKnown: true,
+			Box: pandoraBox{
+				InstanceID: "b1", EventName: "金币雨",
+				EventTitle: "小小金币雨，获得 67 金币。", Rarity: "bronze",
+				RerollUsed: 0, RerollLimit: 1, CountersKnown: true,
+				RerollDeadlineAt: "2026-11-12T15:00:00.000Z",
+				ExpireAt:         "2026-11-12T16:05:46.604Z",
+			},
+		},
+	}
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	r, ok := tt.Find("潘多拉")
+	if !ok {
+		t.Fatalf("找不到潘多拉入口：%q", tt.Texts())
+	}
+	if tt.HasText("小小金币雨，获得 67 金币。") {
+		t.Fatalf("没有悬浮就露出了具体效果：%q", tt.Texts())
+	}
+	tt.Move(r.X+r.W/2, r.Y+r.H/2)
+	tt.Advance(700 * time.Millisecond) // 默认悬浮说明要停留 0.6 秒
+	if !tt.HasText("小小金币雨，获得 67 金币。") {
+		t.Fatalf("悬浮后没有显示具体效果：%q", tt.Texts())
+	}
+	// 指针离开后提示自己收起，首页回到只显示事件名。
+	tt.Move(10, 400)
+	tt.Advance(time.Second)
+	if tt.HasText("小小金币雨，获得 67 金币。") {
+		t.Errorf("指针离开后悬浮说明还在：%q", tt.Texts())
+	}
+	if !tt.HasText("金币雨") {
+		t.Errorf("指针离开后事件名丢了：%q", tt.Texts())
+	}
+}
+
+// 事件名过长时截断：标题栏里的金币数与账号标识不能被挤出窗口。
+func TestPandoraEntryNameTruncates(t *testing.T) {
+	a := pandoraTestApp(t, false)
+	a.pandora = &pandoraState{
+		entryKnown: true,
+		entryStatus: pandoraStatus{
+			Known: true, FlagsKnown: true, HasBox: true, OpenedToday: true,
+			BoxKnown: true,
+			Box: pandoraBox{
+				InstanceID: "b1", EventName: "特别长的潘多拉事件名字",
+				EventTitle: "具体效果",
+				ExpireAt:   "2026-11-13T16:05:46.604Z",
+			},
+		},
+	}
+	tt := ui.NewTester(a.view, 760, 600)
+	tt.Frame()
+	nameR, ok := tt.Find("潘多拉")
+	if !ok {
+		t.Fatalf("找不到潘多拉入口：%q", tt.Texts())
+	}
+	coinR, ok := tt.Find("金币余额")
+	if !ok {
+		t.Fatalf("找不到金币数：%q", tt.Texts())
+	}
+	if nameR.X+nameR.W > coinR.X {
+		t.Errorf("长事件名挤到了金币数：入口 %v，金币 %v", nameR, coinR)
+	}
+	if !strings.Contains(pandoraEntryName(a.pandora), "…") {
+		t.Errorf("长事件名没有截断：%q", pandoraEntryName(a.pandora))
 	}
 }
 
