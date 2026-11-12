@@ -135,6 +135,8 @@ func (a *app) settingsWindowView(c *ui.Context) {
 				a.updateSettingsSection(c)
 				ui.Divider(c)
 				a.imageCacheSection(c)
+				ui.Divider(c)
+				a.windowSettingsSection(c)
 			})
 		})
 	})
@@ -162,6 +164,30 @@ func (a *app) updateSettingsSection(c *ui.Context) {
 			}
 			ui.Spacer(c).Grow(1)
 		})
+	})
+}
+
+/* ------------------------------------------------------------------
+   窗口一块：关闭主窗口时退出还是收进托盘
+--------------------------------------------------------------- */
+
+// windowSettingsSection 是「窗口」一块：关闭主窗口时的行为。选择立即落盘，
+// 不用点保存；结果用窗口内 toast 说明。托盘不可用时「收进托盘」说不通，
+// 所以直接说明它会按退出处理。
+func (a *app) windowSettingsSection(c *ui.Context) {
+	t := c.Theme()
+	settingsSection(c, "窗口", func() {
+		ui.Text(c, "收进托盘后应用继续在后台接收通知，点托盘图标回到窗口；"+
+			"要从托盘菜单的「退出」或系统的退出命令才会真正结束。").
+			FontSize(12).TextColor(t.TextMuted).MaxLines(3)
+		if ui.Segmented(c, &a.closeMode.mode, "每次询问", "退出应用", "收进托盘").
+			Label("关闭主窗口时").Changed() {
+			a.setCloseMode(a.closeMode.mode)
+		}
+		if !a.trayReady {
+			ui.Text(c, "系统托盘当前不可用，关闭主窗口仍会退出应用。").
+				FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		}
 	})
 }
 

@@ -161,6 +161,19 @@ type app struct {
 	// tray 是系统托盘图标（见 tray.go）：应用就绪后创建，退出前销毁；
 	// 无头测试保持 nil，不会碰到原生托盘。只在主线程读写。
 	tray *mygo.Tray
+	// trayReady 表示托盘图标真的建出来了：没建出来时「收进托盘」不能让窗口
+	// 藏起来，否则用户既没有图标也回不到窗口。
+	trayReady bool
+	// closeMode 是「关闭主窗口时」的偏好（见 window_mode.go），落盘在
+	// window.json。只在主线程读写。
+	closeMode *closeModeStore
+	// closePromptOpen / closeRemember 是关闭提示弹窗的状态：是否正在询问
+	// 「退出还是收进托盘」，以及这次要不要记住选择。只在主线程读写。
+	closePromptOpen bool
+	closeRemember   bool
+	// quitting 表示已经在退出流程里：这时主窗口的 OnClose 不能再把退出拦成
+	// 「收进托盘」。由 OnBeforeQuit 与托盘的「退出」置位。
+	quitting bool
 	// quitApp 退出应用，生产里是 mygo.App.Quit；无头测试换成记录调用，
 	// 没有主循环时不能真的走退出流程。
 	quitApp       func()
@@ -230,10 +243,12 @@ func newApp(dir string) *app {
 		nativeNotify: true,
 		coins:        newCoinState(),
 		profile:      newProfileState(),
-		// 托盘的「退出」与窗口关闭走同一条退出流程；测试里换成记录调用，
-		// 无头环境没有主循环，不能真的退出。
-		quitApp: func() { mygo.App.Quit() },
+		closeMode:    newCloseModeStore(dir),
 	}
+	// 托盘的「退出」与窗口关闭走同一条退出流程；测试里换成记录调用，无头
+	// 环境没有主循环，不能真的退出。先立 quitting：退出时主窗口的 OnClose
+	// 不能再把这次退出拦成「收进托盘」。
+	a.quitApp = func() { a.quitting = true; mygo.App.Quit() }
 	// 本地缓存是"先读文件、后发请求"的首屏底稿：启动时就把金币与阅读记录
 	// 装进内存，第一帧就能画出来。文件不存在或损坏都只是空缓存。
 	if err := a.kv.load(); err != nil {
@@ -580,6 +595,7 @@ func (a *app) view(c *ui.Context) {
 // 叠在最上层。通知与设置都不在这里：它们各自是独立的窗口。
 func (a *app) dialogs(c *ui.Context) {
 	a.authDialog(c)
+	a.closePromptDialog(c)
 }
 
 // sidebarFooter 是主页侧边栏底部的固定区：从上到下是设置入口、外观的三档
@@ -1094,6 +1110,9 @@ func main() {
 	mygo.App.OnDidBecomeActive(func() {
 		a.publish(func() { a.onBecameActive() })
 	})
+	// 退出可能来自托盘菜单、系统菜单或会话结束：先立这个标记，主窗口的关闭
+	// 才不会被「收进托盘」拦下来，退不掉。
+	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.quitting = true })
 	mygo.App.WhenReady(func() {
 		// 原生通知要等应用就绪：Windows 走托盘气泡，macOS 首次会询问授权。
 		// 头less 测试不经过这里，a.notify 保持 nil，不会触碰系统通知。
@@ -1122,6 +1141,9 @@ func main() {
 			a.closeProfileWindow()
 			a.closeComposeWindow()
 		})
+		// 关闭按钮（自绘标题栏、Alt+F4、任务栏右键都一样）先问设置：默认
+		// 照常关闭，选了「收进托盘」就拦下来藏起窗口，见 window_mode.go。
+		a.win.OnClose(a.onMainWindowClose)
 		// 托盘图标：应用就绪后才有原生通知区域，见 tray.go。创建失败只记
 		// 日志，主窗口照常使用。
 		a.startTray()

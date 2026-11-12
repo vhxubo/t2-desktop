@@ -48,6 +48,8 @@ func (a *app) startTray() {
 		return
 	}
 	a.tray = tray
+	// 记下托盘真的建出来了：只有这时「关闭主窗口收进托盘」才敢藏窗口。
+	a.trayReady = true
 	// 平时不挂菜单：有菜单时左键会弹菜单，而不是回到窗口。右键才临时挂上
 	// 一份，见 showTrayMenu。
 	tray.OnClick(a.showMainWindow)
@@ -75,6 +77,7 @@ func (a *app) destroyTray() {
 		return
 	}
 	a.tray = nil
+	a.trayReady = false
 	tray.Destroy()
 }
 
