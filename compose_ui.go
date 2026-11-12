@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -27,10 +28,10 @@ const (
 	composeEditorLines   = 10
 	composeEditorMaxLine = 30
 	composePreviewHeight = 320
-	// composeFabClearance 是主页内容区底部为悬浮发帖按钮让出的高度。FAB 浮在
-	// 右下角，如果不留这条空带，列表最后几行与「加载更多 / 重试」那一行就
-	// 会被按钮盖住——按钮在按钮上面，点下去就变成了发帖。
-	composeFabClearance = 64
+	// composeFabInset 是 FAB 占用的右侧宽度（按钮 + 边距）。列表底部的
+	// 「加载更多 / 重试」那一行据此让出这一段，免得被浮在上面的按钮盖住；
+	// FAB 本身不占布局高度，只是浮在内容区右下角。
+	composeFabInset = 110
 )
 
 /* ------------------------------------------------------------------
@@ -646,9 +647,8 @@ func (a *app) composeFooter(c *ui.Context, st *composeState) {
 		}
 		ui.Spacer(c).Grow(1)
 		if ui.Button(c, "清空").Clicked() && !st.posting {
-			node := st.nodeName
-			*st = *newComposeState()
-			st.nodeName = node
+			// 清空草稿与各组件，但保留节点选择与已经拉到的节点列表。
+			st.resetComposeForm()
 		}
 		publish := ui.PrimaryButton(c, "发布").Disabled(st.posting)
 		if publish.Clicked() {
@@ -679,9 +679,18 @@ func (a *app) submitCompose() {
 		st.okShortID, st.okURL, st.okTitle = "", "", ""
 		return
 	}
-	// 幂等键在第一次提交时铸造，超时重试沿用同一个；发表成功后清掉。
-	if st.key == "" {
+	// 幂等键跟着「这一份请求体」走：超时重试与授权后重发都用同一个键（不会
+	// 重复发帖），但用户改过内容就换一个新键——同一个键配不同请求体会被
+	// 服务端判成 409 idempotency_key_reuse。json.Marshal 对 map 的键排序，
+	// 所以同一份内容得到的摘要稳定。
+	sig, err := json.Marshal(payload)
+	if err != nil {
+		st.err = "请求体无法编码：" + err.Error()
+		return
+	}
+	if st.key == "" || st.keySig != string(sig) {
 		st.key = randomURLSafe(24)
+		st.keySig = string(sig)
 	}
 	key := st.key
 	st.posting = true

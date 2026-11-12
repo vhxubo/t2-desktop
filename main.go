@@ -556,12 +556,9 @@ func (a *app) view(c *ui.Context) {
 			})
 			ui.Divider(c)
 			// 右侧内容区：正文列表（无限滚动，无底部状态栏）。发帖入口是
-			// 浮在内容区右下角的 FAB，绝对定位，不参与列表布局；内容区底部
-			// 为它让出一条空带，列表与「加载更多 / 重试」不会被按钮盖住。
+			// 浮在内容区右下角的 FAB，绝对定位，不占列表的高度。
 			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
-				ui.Column(c).Fill().Padding(0, 0, composeFabClearance, 0).Children(func() {
-					a.body(c)
-				})
+				a.body(c)
 				a.composeFab(c)
 			})
 		})
@@ -841,12 +838,14 @@ func (a *app) body(c *ui.Context) {
 
 // loadMoreFooter 是无限滚动列表底部的续拉状态行：加载中显示进度，失败时
 // 给出原因与「重试」。已有内容时，续拉失败只出现在这里，列表本身保持不动。
+// 右侧留出发帖 FAB 的位置：按钮浮在右下角，状态行里的「重试」不能压在它
+// 下面，否则点下去会变成发帖。
 func (a *app) loadMoreFooter(c *ui.Context, errText string, loading bool, retry func()) {
 	if errText == "" && !loading {
 		return
 	}
 	t := c.Theme()
-	ui.Row(c).FillWidth().Padding(8, 16).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Padding(8, composeFabInset, 8, 16).Gap(8).AlignItems(ui.Center).Children(func() {
 		if errText != "" {
 			ui.Text(c, "加载更多失败："+errText).FontSize(11).
 				TextColor(t.Danger).MaxLines(2).Grow(1)

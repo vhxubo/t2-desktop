@@ -858,6 +858,78 @@ func TestComposeWindowLifecycle(t *testing.T) {
 	}
 }
 
+// 幂等键：同一份内容重试沿用同一个键（不会重复发帖），改过内容就换新键
+// （同一个键配不同请求体会被服务端判成 409 idempotency_key_reuse）。
+func TestComposeIdempotencyKeyFollowsPayload(t *testing.T) {
+	var keys []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		keys = append(keys, r.Header.Get("Idempotency-Key"))
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, `{"c":500,"code":"internal_error","m":"服务端错误","d":null,"t":0}`)
+	}))
+	defer srv.Close()
+	a := loginApp(t, srv)
+	st := composeReady(a)
+	st.title = "标题"
+
+	submit := func() {
+		done := make(chan struct{})
+		a.onPostPublished = func(created createdTopic, err error) { close(done) }
+		a.submitCompose()
+		<-done
+	}
+
+	submit()
+	first := st.key
+	submit() // 内容没变：沿用同一个键
+	if st.key != first {
+		t.Errorf("同一份内容重试换了键：%s → %s", first, st.key)
+	}
+	st.body = "补了一段正文"
+	submit()
+	if st.key == first {
+		t.Errorf("改过内容后必须换新键，仍是 %s", first)
+	}
+	if len(keys) != 3 || keys[0] != first || keys[1] != first || keys[2] == first {
+		t.Errorf("幂等键序列不对：%v（首个 %s）", keys, first)
+	}
+}
+
+// FAB 是浮在内容之上的，不占列表的高度：滚到底时最后一行仍然延伸到窗口
+// 底部，与按钮处在同一条横带上。
+func TestComposeFabFloatsOverContent(t *testing.T) {
+	a := testApp(t)
+	for i := 0; i < 40; i++ {
+		a.tabs[0].items = append(a.tabs[0].items, Item{
+			Key:   "k" + string(rune('a'+i%26)) + string(rune('0'+i/26)),
+			Title: "第 " + string(rune('0'+i/10)) + string(rune('0'+i%10)) + " 项",
+		})
+	}
+	a.tabs[0].loaded = true
+	a.tabs[0].total = len(a.tabs[0].items)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	// 滚到底，最后一行应当贴近窗口底部。
+	tt.Scroll(500, 400, 0, 20000)
+	tt.Frame()
+	last, ok := tt.Find("第 39 项")
+	if !ok {
+		t.Fatalf("滚到底后找不到最后一行：%q", tt.Texts())
+	}
+	if bottom := last.Y + last.H; bottom < 760-24 {
+		t.Errorf("列表没有铺到窗口底部（最后一行底边 %v），说明 FAB 占了高度", bottom)
+	}
+	// 按钮与最后一行在同一条横带上：FAB 是浮起来的，不是列表下面的一块。
+	fab, ok := tt.Find("发帖")
+	if !ok {
+		t.Fatal("找不到发帖按钮")
+	}
+	if last.Y > fab.Y+fab.H || last.Y+last.H < fab.Y {
+		t.Errorf("最后一行 %+v 与 FAB %+v 没有重叠，FAB 没有浮在内容上", last, fab)
+	}
+}
+
 // ------------------------------------------------------------------
 // 小工具
 // ------------------------------------------------------------------

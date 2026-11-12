@@ -229,8 +229,11 @@ type composeState struct {
 	okShortID string
 	okURL     string
 	// key 是这一次提交的幂等键。网络超时后用同一个键重试不会重复发帖；
-	// 发表成功后清掉，下一次发帖换新的。
-	key string
+	// 发表成功后清掉，下一次发帖换新的。keySig 是铸键时那份请求体的摘要：
+	// 同一个键配不同的请求体会被服务端判成 idempotency_key_reuse（409），
+	// 所以用户一改内容就必须换键。
+	key    string
+	keySig string
 }
 
 // newComposeState 造一份空表单：默认可见性为「所有人可见」、投票单选、
