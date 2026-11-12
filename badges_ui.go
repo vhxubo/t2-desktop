@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
@@ -46,51 +45,9 @@ func (a *app) authorBadges(c *ui.Context, badges []badgeInfo) {
 	}
 }
 
-// commentText 渲染评论正文：纯文本，但把 :code: 内置表情 / 社区图标画成
-// 与正文同高的行内图片。没有可映射的短码时仍然返回普通 Text，保持评论
-// 原有的简洁与可选性。
+// commentText 渲染评论正文：与帖子正文同一套 Markdown 渲染（标题、列表、
+// 引用、代码、链接与配图），字号小一号；:code: 内置表情 / 社区图标与正文
+// 一样换成行内表情图片，而不是 [说明] 文字。
 func (a *app) commentText(c *ui.Context, text string, emojis map[string]emojiInfo) ui.Element {
-	const size = float32(13)
-	if len(emojis) == 0 || !shortCode.MatchString(text) {
-		return ui.Text(c, text).FontSize(size)
-	}
-	th := markdown.DefaultTheme(c.Theme())
-	base := articleStyle{size: size, color: th.Text}
-	r := &articleRenderer{a: a, th: th, objects: map[int]ui.ImageSource{}}
-	matches := shortCode.FindAllStringIndex(text, -1)
-	last := 0
-	found := false
-	for _, m := range matches {
-		code := text[m[0]:m[1]]
-		e, ok := emojis[code]
-		if !ok {
-			continue
-		}
-		if m[0] > last {
-			r.addText(text[last:m[0]], base)
-		}
-		name := e.Name
-		if name == "" {
-			name = strings.Trim(code, ":")
-		}
-		r.addImage(c, e.ImgURL, name, base)
-		last = m[1]
-		found = true
-	}
-	if !found {
-		return ui.Text(c, text).FontSize(size)
-	}
-	if last < len(text) {
-		r.addText(text[last:], base)
-	}
-	root := ui.RichText(c).FontSize(size).FillWidth()
-	root.Children(func() { r.flush(c) })
-	if len(r.objects) > 0 {
-		root.DrawObjects(func(p *ui.Painter, at int, rect ui.Rect) {
-			if src, ok := r.objects[at]; ok {
-				p.Image(src, rect, ui.Contain)
-			}
-		})
-	}
-	return root
+	return markdown.View(c, replaceEmoji(text, emojis, true), a.commentMd).FillWidth()
 }

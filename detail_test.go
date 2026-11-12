@@ -749,6 +749,73 @@ func TestReplyInfiniteScrollCanLoadMore(t *testing.T) {
 	}
 }
 
+// 续拉下一页评论失败时，已经显示的评论必须留在原地，不能被整页错误替换；
+// 失败原因只在列表底部出现，并带「重试」。
+func TestReplyLoadMoreFailureKeepsRows(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.detail.replyPage = 2
+	a.detail.replyTotalPages = 2
+	a.detail.replyMoreErr = "服务端错误（500），请稍后重试"
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	for _, want := range []string{"第一楼", "该评论已删除", "加载更多失败", "重试"} {
+		if !tt.HasText(want) {
+			t.Errorf("续拉评论失败时缺少 %q：%q", want, tt.Texts())
+		}
+	}
+}
+
+// 续拉下一页评论时，列表保持可见，底部显示加载进度。
+func TestReplyLoadMoreShowsProgress(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.detail.replyLoading = true
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	for _, want := range []string{"第一楼", "正在加载更多…"} {
+		if !tt.HasText(want) {
+			t.Errorf("续拉评论进度缺少 %q：%q", want, tt.Texts())
+		}
+	}
+}
+
+// 评论续拉失败后点「重试」会重新请求失败的那一页，新评论接在原有评论后面。
+func TestReplyLoadMoreRetryAppendsPage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.RawQuery, "page=2") {
+			t.Errorf("重试请求了错误的页码：%s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{
+			"items":[{"id":"late-1","content":"续拉的评论","floor":5,
+				"author":{"username":"latecomer"}}],
+			"total":5,"page":2,"limit":30,"total_pages":2}}`)
+	}))
+	defer srv.Close()
+
+	a := detailAppWithReplies(t)
+	a.client.Base = srv.URL + "/api"
+	a.client.HTTP = srv.Client()
+	a.autoLoad = true
+	a.detail.replyPage = 2
+	a.detail.replyTotalPages = 2
+	a.detail.replyMoreErr = "服务端错误（500），请稍后重试"
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	if err := tt.Click("重试"); err != nil {
+		t.Fatalf("点击重试失败：%v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !tt.HasText("续拉的评论") {
+		if time.Now().After(deadline) {
+			t.Fatalf("重试后没有加载出第 2 页评论：%q", tt.Texts())
+		}
+		tt.Frame()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !tt.HasText("第一楼") {
+		t.Errorf("续拉评论后原有评论丢失：%q", tt.Texts())
+	}
+}
+
 // Logged-in users get a send button; clicking 回复 on a floor targets that
 // comment for nesting and shows the "正在回复 N 楼" chip. An empty draft is a
 // synchronous no-op that surfaces a validation message (no network goroutine).

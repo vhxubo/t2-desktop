@@ -306,7 +306,9 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 	}
 	if p := o.sub("parent"); p != nil {
 		r.ParentFloor = p.num("floor")
-		r.ParentSummary = truncate(cleanText(p.str("content")), 60)
+		// 「回复 N 楼：…」是父评论的纯文本预览，与列表行的评论摘要同一套
+		// 规则去掉 Markdown 标记，避免引用里冒出 ** / > 之类符号。
+		r.ParentSummary = truncate(commentExcerpt(p.str("content")), 60)
 	}
 	r.Reactions = reactionSummary(o["reactions"])
 	if depth < 8 { // guard against pathological nesting

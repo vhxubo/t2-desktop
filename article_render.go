@@ -34,9 +34,17 @@ func (e *articleImageEntry) source() ui.ImageSource {
 	return e.src
 }
 
-// articleBlock 接管含表情或配图的段落 / 标题，其余块（代码、列表等）
-// 继续交给 Markdown 默认渲染。
-func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int) bool {
+// articleBlockAt 返回 Markdown 的 Options.Block：接管含表情或配图的段落 /
+// 标题，其余块（代码、列表等）继续交给 Markdown 默认渲染。size 是这类块的
+// 基准字号，0 表示跟随 Markdown 主题；评论区比正文小一号，用自己的一套。
+func (a *app) articleBlockAt(size float32) func(c *ui.Context, d *parser.Document, i int) bool {
+	return func(c *ui.Context, d *parser.Document, i int) bool {
+		return a.articleBlock(c, d, i, size)
+	}
+}
+
+// articleBlock 接管含表情或配图的段落 / 标题，size 见 articleBlockAt。
+func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float32) bool {
 	b := d.Block(i)
 	if b.Kind != parser.Paragraph && b.Kind != parser.Heading {
 		return false
@@ -49,11 +57,11 @@ func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int) bool {
 	}
 	if b.Kind == parser.Heading || !picture {
 		// 标题或没有配图的段落：表情按行内图片画，链接、强调原样保留。
-		a.articleParagraph(c, d, i, b)
+		a.articleParagraph(c, d, i, b, size)
 		return true
 	}
 	// 有配图的段落：把段落按图片切成几段文字，图片在段落内部独占一行。
-	a.articleMixedParagraph(c, d, i)
+	a.articleMixedParagraph(c, d, i, size)
 	return true
 }
 
@@ -169,14 +177,19 @@ type articleRenderer struct {
 }
 
 // articleBaseStyle 返回段落的基准字号、字重与颜色，标题按标题样式，
-// 引用内的正文用引用文字色。
-func articleBaseStyle(c *ui.Context, d *parser.Document, i int, b *parser.Block) articleStyle {
+// 引用内的正文用引用文字色。size 是基准字号（0 跟随 Markdown 主题），
+// 标题的 em 倍数按它换算。
+func articleBaseStyle(c *ui.Context, d *parser.Document, i int, b *parser.Block, size float32) articleStyle {
 	th := markdown.DefaultTheme(c.Theme())
-	base := articleStyle{size: th.FontSize, color: th.Text}
+	baseSize := th.FontSize
+	if size > 0 {
+		baseSize = size
+	}
+	base := articleStyle{size: baseSize, color: th.Text}
 	if b.Kind == parser.Heading {
 		level := min(max(b.Level, 1), len(th.Headings))
 		h := th.Headings[level-1]
-		base.size = th.FontSize * h.Size
+		base.size = baseSize * h.Size
 		base.weight = h.Weight
 		base.color = h.Color
 	} else if articleInQuote(d, i) {
@@ -186,8 +199,8 @@ func articleBaseStyle(c *ui.Context, d *parser.Document, i int, b *parser.Block)
 }
 
 // articleParagraph 把整段（含表情）收成一个可换行的 RichText。
-func (a *app) articleParagraph(c *ui.Context, d *parser.Document, i int, b *parser.Block) {
-	base := articleBaseStyle(c, d, i, b)
+func (a *app) articleParagraph(c *ui.Context, d *parser.Document, i int, b *parser.Block, size float32) {
+	base := articleBaseStyle(c, d, i, b, size)
 	th := markdown.DefaultTheme(c.Theme())
 	root := ui.RichText(c).FontSize(base.size).TextColor(base.color).FillWidth()
 	if base.weight != 0 {
@@ -213,8 +226,8 @@ func (a *app) articleParagraph(c *ui.Context, d *parser.Document, i int, b *pars
 
 // articleMixedParagraph 渲染「文字 + 配图 + 文字」的段落：每个文字
 // 片段仍是可换行的 RichText，配图作为片段之间的独立图片。
-func (a *app) articleMixedParagraph(c *ui.Context, d *parser.Document, i int) {
-	base := articleBaseStyle(c, d, i, d.Block(i))
+func (a *app) articleMixedParagraph(c *ui.Context, d *parser.Document, i int, size float32) {
+	base := articleBaseStyle(c, d, i, d.Block(i), size)
 	in := d.Inlines(i)
 	col := ui.Column(c).Gap(4)
 	col.Children(func() {

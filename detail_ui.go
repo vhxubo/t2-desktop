@@ -23,9 +23,12 @@ type detailState struct {
 	topicErr                      string
 	topicGen                      uint64
 
-	replyList             []replyItem
-	replyLoading          bool
-	replyErr              string
+	replyList    []replyItem
+	replyLoading bool
+	replyErr     string
+	// replyMoreErr 是「续拉下一页评论」失败的原因：已经显示出来的评论
+	// 不能被整页错误替换，只在列表底部提示并可重试。
+	replyMoreErr          string
 	replyLoaded           bool
 	replyPage, replyTotal int
 	replyTotalPages       int
@@ -64,8 +67,14 @@ func (d *detailState) originURL() string {
 	return d.fallbackURL
 }
 
-func newMarkdownOptions(a *app) *markdown.Options {
-	return &markdown.Options{
+// commentFontSize 是评论正文的字号：比帖子正文小一号，评论区读起来更紧凑。
+const commentFontSize float32 = 13
+
+// newMarkdownOptions 造一套 Markdown 渲染选项。size 是这类视图的基准字号，
+// 0 表示跟随主题（帖子正文）；评论区传 commentFontSize，标题、代码、列表
+// 缩进等以 em 计的长度都会按这个字号换算。
+func newMarkdownOptions(a *app, size float32) *markdown.Options {
+	o := &markdown.Options{
 		// Links to another 2Libra post are intercepted and shown in place;
 		// only other http(s) links leave the app. javascript: is dropped.
 		OnLink: a.handleLink,
@@ -74,9 +83,14 @@ func newMarkdownOptions(a *app) *markdown.Options {
 		},
 		// Markdown 默认只画整段图片，段落内的配图与 :code: 表情会只剩
 		// [说明]；这类段落改由 article_render.go 接管。
-		Block:    a.articleBlock,
+		Block:    a.articleBlockAt(size),
 		WrapCode: true,
 	}
+	if size > 0 {
+		// 只覆盖字号，其余颜色、字体与间距由 Markdown 默认主题补齐。
+		o.Theme = &markdown.Theme{FontSize: size}
+	}
+	return o
 }
 
 // handleLink is the Markdown OnLink. A link to another post replaces the
@@ -287,6 +301,7 @@ func (a *app) loadReplies(page int) {
 	}
 	d.replyLoading = true
 	d.replyErr = ""
+	d.replyMoreErr = ""
 	d.replyPage = page
 	a.reqSeq++
 	gen := a.reqSeq
@@ -302,9 +317,15 @@ func (a *app) loadReplies(page int) {
 			}
 			d.replyLoading = false
 			if err != nil {
-				d.replyErr = friendlyError(err)
+				if page > 1 && len(d.replyList) > 0 {
+					// 已经有评论时续拉失败：保留列表，在底部提示并可重试。
+					d.replyMoreErr = friendlyError(err)
+				} else {
+					d.replyErr = friendlyError(err)
+				}
 				return
 			}
+			d.replyMoreErr = ""
 			rows := flattenReplies(res)
 			if page == 1 {
 				d.replyList = rows
@@ -330,7 +351,9 @@ func (a *app) loadReplies(page int) {
 			d.replyTotalPages = res.TotalPages
 			d.replyPage = page
 			d.replyLoaded = true
-			if d.focusID != "" {
+			// 只定位首屏：续拉后面的页时再跳回被定位的评论，会把用户
+			// 刚滚到的位置猛地拽走。
+			if page == 1 && d.focusID != "" {
 				for i, r := range d.replyList {
 					if r.ID == d.focusID {
 						d.list.ScrollTo(i, ui.Start)
@@ -560,7 +583,7 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 			ui.Spinner(c).Size(24, 24)
 			ui.Text(c, "正在加载评论…").TextColor(t.TextMuted)
 		})
-	case d.replyErr != "":
+	case d.replyErr != "" && len(d.replyList) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Padding(16).Children(func() {
 			ui.Text(c, "评论加载失败").Bold()
 			ui.Text(c, d.replyErr).TextColor(t.Danger).MaxLines(4)
@@ -583,9 +606,13 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 		ui.List(c, &d.list, len(rows), func(i int) {
 			a.replyRow(c, rows[i], d.focusID)
 		}).Grow(1).MinHeight(0).Padding(6, 12).Gap(10)
+		a.loadMoreFooter(c, d.replyMoreErr, d.replyLoading, func() {
+			a.loadReplies(d.replyPage)
+		})
 		// 无限滚动：滚到底且还有下一页时自动加载更多，移除原来的页码与上下页按钮。
-		// 与首页 / 通知列表保持一致：AtEnd 触发、replyNoMore 兜底停止。
-		if replyCanLoadMore(d) && len(d.replyList) > 0 && d.list.AtEnd() {
+		// 与首页 / 通知列表保持一致：AtEnd 触发、replyNoMore 兜底停止；
+		// 续拉失败后停在底部提示上，等用户点「重试」，不再自动重发。
+		if replyCanLoadMore(d) && d.replyMoreErr == "" && d.list.AtEnd() {
 			a.loadReplies(d.replyPage + 1)
 		}
 	}
@@ -835,6 +862,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				d.replyList = nil
 				d.replyLoaded = false
 				d.replyNoMore = false
+				d.replyMoreErr = ""
 				a.loadReplies(1)
 			}
 		})

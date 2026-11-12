@@ -75,6 +75,9 @@ type app struct {
 	// 只在 UI 线程读写；后台下载完成后通过 publish 回填。
 	articleImages map[string]*articleImageEntry
 	md            *markdown.Options
+	// commentMd 是评论正文的 Markdown 选项：与正文同一套渲染，字号更小
+	// （commentFontSize），让评论区比正文紧凑一号。
+	commentMd *markdown.Options
 
 	// 通知 / 消息中心：未读数、SSE 长连接与原生通知。
 	unread        int
@@ -136,7 +139,8 @@ func newApp(dir string) *app {
 	a.auth.onChange = func(err error) {
 		a.publish(func() { a.onAuthChanged(err) })
 	}
-	a.md = newMarkdownOptions(a)
+	a.md = newMarkdownOptions(a, 0)
+	a.commentMd = newMarkdownOptions(a, commentFontSize)
 	return a
 }
 

@@ -143,6 +143,47 @@ func TestEmojiOnlyParagraphStaysInlineSized(t *testing.T) {
 	}
 }
 
+// 评论正文也按 Markdown 渲染：强调、列表、行内代码、引用与链接都变成排版
+// 结果，而不是把 ** / - / ` 原样留在评论区；链接仍走 Markdown 的点击处理。
+func TestCommentMarkdownRenders(t *testing.T) {
+	a, _ := emojiDetailApp(t, "正文")
+	a.detail.replyList = []replyItem{{
+		ID: "c1", Author: "dannyng", Floor: 1,
+		Content: "**重点**\n\n- 列表一\n- 列表二\n\n`代码` 与 [链接](https://example.com)\n\n> 引用一句",
+	}}
+	a.detail.replyTotal = 1
+	a.detail.replyLoaded = true
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	for _, want := range []string{"重点", "列表一", "列表二", "代码", "链接", "引用一句"} {
+		if !tt.HasText(want) {
+			t.Errorf("评论 Markdown 没有渲染出 %q：%q", want, tt.Texts())
+		}
+	}
+	for _, raw := range []string{"**重点**", "- 列表一", "`代码`", "[链接](https://example.com)"} {
+		if tt.HasText(raw) {
+			t.Errorf("评论里的 Markdown 标记被原样显示：%q", raw)
+		}
+	}
+	if err := tt.Click("链接"); err != nil {
+		t.Fatalf("点击评论里的链接失败：%v（%q）", err, tt.Texts())
+	}
+	if got := tt.OpenedURLs(); len(got) != 1 || got[0] != "https://example.com" {
+		t.Errorf("评论里的链接没有交给系统浏览器：%q", got)
+	}
+	// 悬浮在 Markdown 渲染出来的正文上，整条评论仍算悬浮：右上角出现
+	// 「回复」入口，说明评论行的悬浮判定没有被 Markdown 视图挡住。
+	if r, ok := tt.Find("引用一句"); ok {
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Frame()
+		if _, ok := tt.Find("回复"); !ok {
+			t.Errorf("悬浮评论正文时没有出现回复入口：%q", tt.Texts())
+		}
+	} else {
+		t.Errorf("找不到引用段落用于悬浮：%q", tt.Texts())
+	}
+}
+
 // waitForMarker 推动测试窗口重绘，直到正文图片画出来或超时。
 func waitForMarker(t *testing.T, tt *ui.Tester, what string) {
 	t.Helper()
