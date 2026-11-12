@@ -371,43 +371,49 @@ func TestSplitNoProxy(t *testing.T) {
 	}
 }
 
-func TestProxyDialogOpensAndSaves(t *testing.T) {
+// 设置是独立的窗口：标题栏只剩一个「设置」入口，代理、检查更新与图片
+// 缓存都在那个窗口里。无头测试没有 mygo 主循环，所以直接渲染设置视图。
+func TestSettingsProxySectionSaves(t *testing.T) {
 	clearProxyEnv(t)
 	a := testApp(t)
+	opened := false
+	a.onSettingsOpen = func() { opened = true }
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 
-	if _, ok := tt.Find("代理"); !ok {
-		t.Fatalf("标题栏没有「代理」入口：%q", tt.Texts())
+	if _, ok := tt.Find("设置"); !ok {
+		t.Fatalf("标题栏没有「设置」入口：%q", tt.Texts())
 	}
-	if err := tt.Click("代理"); err != nil {
+	if err := tt.Click("设置"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Frame()
-	if !a.proxyOpen {
-		t.Fatal("点击「代理」后面板没有打开")
+	if !opened {
+		t.Fatal("点击「设置」没有打开设置窗口")
 	}
-	for _, want := range []string{"网络代理", "跟随系统", "手动代理", "直连", "当前生效"} {
-		if !tt.HasText(want) {
-			t.Errorf("代理面板缺少 %q：%q", want, tt.Texts())
+
+	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
+	st.Frame()
+	for _, want := range []string{"设置", "网络代理", "跟随系统", "手动代理", "直连", "当前生效"} {
+		if !st.HasText(want) {
+			t.Errorf("设置窗口缺少 %q：%q", want, st.Texts())
 		}
 	}
 
-	if err := tt.Click("手动代理"); err != nil {
+	if err := st.Click("手动代理"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Frame()
+	st.Frame()
 	if a.proxyMode != proxyManual {
 		t.Fatalf("分段控件没有切到手动代理：%d", a.proxyMode)
 	}
-	if _, ok := tt.Find("代理地址"); !ok {
-		t.Fatalf("手动模式没有代理地址输入框：%q", tt.Texts())
+	if _, ok := st.Find("代理地址"); !ok {
+		t.Fatalf("手动模式没有代理地址输入框：%q", st.Texts())
 	}
 
 	a.proxyURL = "127.0.0.1:7890"
 	a.proxyNoProxy = "localhost"
-	tt.Frame()
-	if err := tt.Click("保存"); err != nil {
+	st.Frame()
+	if err := st.Click("保存代理设置"); err != nil {
 		t.Fatal(err)
 	}
 	if a.proxyMsgErr {
@@ -423,19 +429,30 @@ func TestProxyDialogOpensAndSaves(t *testing.T) {
 
 	// 无效地址留在面板里给出错误，不能悄悄按直连跑。
 	a.proxyURL = "ftp://127.0.0.1:21"
-	tt.Frame()
-	if err := tt.Click("保存"); err != nil {
+	st.Frame()
+	if err := st.Click("保存代理设置"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.proxyOpen || !a.proxyMsgErr || !strings.Contains(a.proxyMsg, "不支持") {
-		t.Errorf("无效代理没有在面板内报错：open=%v err=%v msg=%q", a.proxyOpen, a.proxyMsgErr, a.proxyMsg)
+	if !a.proxyMsgErr || !strings.Contains(a.proxyMsg, "不支持") {
+		t.Errorf("无效代理没有在面板内报错：err=%v msg=%q", a.proxyMsgErr, a.proxyMsg)
 	}
+}
 
-	if err := tt.Click("关闭面板"); err != nil {
+// 设置窗口里必须有检查更新入口，点击时接到 updater 上（无头测试用钩子
+// 确认接线，不碰更新插件的主循环）。
+func TestSettingsCheckForUpdatesWired(t *testing.T) {
+	a := testApp(t)
+	clicked := false
+	a.onUpdateCheck = func() { clicked = true }
+	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
+	st.Frame()
+	if !st.HasText("检查更新") {
+		t.Fatalf("设置窗口没有检查更新：%q", st.Texts())
+	}
+	if err := st.Click("检查更新"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Frame()
-	if a.proxyOpen {
-		t.Error("点「关闭面板」后弹窗仍然打开")
+	if !clicked {
+		t.Fatal("点击「检查更新」没有触发更新检查")
 	}
 }

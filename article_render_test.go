@@ -68,9 +68,7 @@ func emojiDetailApp(t *testing.T, content string) (*app, *ui.Bitmap) {
 	a.detail.replyLoaded = true
 	a.emojis = decodeEmojis([]byte(detailEmojisJSON))
 	bmp := solidBitmap(64, 64, marker)
-	a.articleImages = map[string]*articleImageEntry{
-		"https://r2.2libra.com/emojis/sigh.png": {src: bmp},
-	}
+	a.images.put("https://r2.2libra.com/emojis/sigh.png", bmp)
 	return a, bmp
 }
 
@@ -123,7 +121,7 @@ func TestCommunityEmojiRendersInline(t *testing.T) {
 		":community_icon:": "/emojis/community_icon.png?size=medium",
 	}
 	u := "https://r2.2libra.com/emojis/community_icon.png?size=medium"
-	a.articleImages[u] = &articleImageEntry{src: solidBitmap(64, 64, marker)}
+	a.images.put(u, solidBitmap(64, 64, marker))
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	if !tt.HasText("\uFFFC") {

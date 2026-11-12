@@ -1,10 +1,7 @@
 package main
 
 import (
-	"log"
-	"net/url"
 	"strings"
-	"sync"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
@@ -19,20 +16,9 @@ import (
 // 的正文恰好两者都有：表情会被换成行内图片语法，配图也常和文字写在同一
 // 段里。这里用 ui.RichText 的行内对象（Span.ObjectWidth + DrawObjects）
 // 把表情画在文字中间，配图则在该段落内部独占一行显示。
-
-// articleImageEntry 是一张已下载（或正在下载）的正文图片。详情页只在
-// UI 线程读写 src，后台协程通过 publish 回填；锁用于无窗口测试中
-// publish 直接执行的场景。
-type articleImageEntry struct {
-	mu  sync.Mutex
-	src ui.ImageSource
-}
-
-func (e *articleImageEntry) source() ui.ImageSource {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.src
-}
+//
+// 解码结果与磁盘字节都由全局图片缓存（image_cache.go）管理：表情进长期
+// 缓存，帖子配图进临时缓存。
 
 // articleBlockAt 返回 Markdown 的 Options.Block：接管含表情或配图的段落 /
 // 标题，其余块（代码、列表等）继续交给 Markdown 默认渲染。size 是这类块的
@@ -116,42 +102,18 @@ func (a *app) isEmojiImage(dest string) bool {
 	return false
 }
 
-// articleImage 取回正文图片。没有开启自动加载（无头测试）时只读缓存，
-// 避免测试访问网络；缓存里没有就先返回 nil，等下载完再重绘。
-func (a *app) articleImage(raw string) ui.ImageSource {
+// articleImage 取回正文 / 评论 / 徽章里的一张图，cat 决定缓存类别：表情与
+// 站内图标长期保留，帖子里的外部配图按 TTL 定期清理。没有开启自动加载
+// （无头测试）时只读内存缓存，不碰网络；未命中先返回 nil，下载完成后重绘。
+func (a *app) articleImage(raw string, cat imageCategory) ui.ImageSource {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil
 	}
-	if e, ok := a.articleImages[raw]; ok {
+	if e := a.images.get(raw); e != nil {
 		return e.source()
 	}
-	if !a.autoLoad {
-		return nil
-	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
-		return nil
-	}
-	e := &articleImageEntry{}
-	if a.articleImages == nil {
-		a.articleImages = make(map[string]*articleImageEntry)
-	}
-	a.articleImages[raw] = e
-	go func() {
-		data, err := a.fetchImage(raw)
-		var src ui.ImageSource
-		if err == nil {
-			src, err = ui.DecodeImage(data)
-		}
-		e.mu.Lock()
-		e.src = src
-		e.mu.Unlock()
-		if err != nil {
-			log.Printf("图片加载失败：%v", err)
-			return
-		}
-		a.publish(func() {}) // 走 Window.Update，让图片出现在下一帧
-	}()
+	a.prefetchImage(raw, cat)
 	return nil
 }
 
@@ -286,12 +248,13 @@ func articleSegmentEmpty(in []parser.Inline, from, to int) bool {
 }
 
 // articlePicture 显示一张正文配图：加载中先占位，加载后按原比例缩到栏宽。
+// 配图是帖子里的外部图片，进临时缓存，过期后自动清理。
 func (a *app) articlePicture(c *ui.Context, dest, alt string) {
 	th := markdown.DefaultTheme(c.Theme())
 	if alt == "" {
 		alt = "图片"
 	}
-	src := a.articleImage(dest)
+	src := a.articleImage(dest, imageCacheTemporary)
 	if src == nil {
 		ui.Text(c, "["+alt+"]").FontSize(12).TextColor(th.Muted)
 		return
@@ -390,7 +353,8 @@ func (r *articleRenderer) addImage(c *ui.Context, dest, alt string, st articleSt
 		r.addText("["+alt+"]", muted)
 		return
 	}
-	src := r.a.articleImage(dest)
+	// 表情与社区小图标是服务端固定的一批图，进长期缓存。
+	src := r.a.articleImage(dest, imageCacheStable)
 	if src == nil {
 		if alt == "" {
 			alt = "图片"

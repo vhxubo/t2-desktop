@@ -139,30 +139,17 @@ func (a *app) openExternal(raw string) {
 	a.srv.OpenURL(raw) // ui.Services.OpenURL must run on the UI thread
 }
 
-// loadImage backs markdown images (including the :code: emoji map) with a
-// bounded, http(s)-only fetch. ui.DecodeImage handles PNG/JPEG/GIF/SVG.
+// loadImage backs markdown images (including the :code: emoji map) with the
+// global image cache: memory first, then the disk cache, then one http(s)-only
+// download. Images here are post content, so they take the temporary cache
+// that expires after imageCacheTTL.
 func (a *app) loadImage(raw string) (ui.ImageSource, error) {
-	data, err := a.fetchImage(raw)
-	if err != nil {
-		return nil, err
-	}
-	return ui.DecodeImage(data)
-}
-
-// loadBitmap fetches an image for widgets that take a bitmap (Avatar, which
-// crops it to a circle).
-func (a *app) loadBitmap(raw string) (*ui.Bitmap, error) {
-	data, err := a.fetchImage(raw)
-	if err != nil {
-		return nil, err
-	}
-	return ui.DecodeBitmap(data)
+	return a.loadImageNow(raw, imageCacheTemporary)
 }
 
 func (a *app) fetchImage(raw string) ([]byte, error) {
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
-		return nil, fmt.Errorf("不支持的图片地址：%s", raw)
+	if _, err := parseImageURL(raw); err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()

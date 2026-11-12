@@ -4,17 +4,22 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
-// 通知的界面：标题栏上的铃铛（带未读数值）打开一个独立弹窗，弹窗里是
-// 分段筛选、消息列表与已读操作。数据、长连接与已读落账在 notify.go。
+// 通知窗口：通知不再是主窗口里的页面或弹窗，而是一个独立的小窗口。标题栏
+// 的铃铛（带未读数值）是它的入口，任何窗口、任何 goroutine 都可以调用
+// showNotifications 把它打开。点开一条消息，帖子与评论回到主窗口里打开。
+// 数据、长连接与已读落账在 notify.go。
 
-// notifDialogWidth / notifDialogHeight 是通知弹窗的首选尺寸；窗口更小
-// 时按窗口收缩，列表在面板里滚动，不把弹窗顶出屏幕。
+// 通知窗口的默认尺寸。用 StateKey 记住用户把它放在哪、拉成多大，所以这里
+// 只是首次打开时的默认值。
 const (
-	notifDialogWidth  = 640
-	notifDialogHeight = 560
+	notifWindowWidth     = 520
+	notifWindowHeight    = 660
+	notifWindowMinWidth  = 380
+	notifWindowMinHeight = 420
 )
 
 // unreadCountText 是铃铛上的数值：三位数以上收成 99+，0 返回空串表示不画
@@ -29,19 +34,20 @@ func unreadCountText(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// notificationBell 是标题栏上的通知入口：铃铛图标 + 未读数。图标本身是
-// 装饰，可访问名由 Label 提供（「通知（N 条未读）」），读屏与测试都按这个
+// notificationBell 是主窗口标题栏上的通知入口：铃铛图标 + 未读数。图标本身
+// 是装饰，可访问名由 Label 提供（「通知（N 条未读）」），读屏与测试都按这个
 // 名字找它。
 func (a *app) notificationBell(c *ui.Context) {
 	t := c.Theme()
 	idx := notificationTabIndex()
+	open := a.notificationWindowVisible()
 	b := ui.Box(c).Padding(4, 6).Radius(6).Center().Background(ui.Transparent)
-	if a.notifOpen || b.Hovered() {
+	if open || b.Hovered() {
 		b.Background(t.SurfaceHover)
 	}
 	ink := t.TextMuted
 	switch {
-	case a.notifOpen:
+	case open:
 		ink = t.Accent
 	case b.Hovered():
 		ink = t.Text
@@ -67,80 +73,166 @@ func (a *app) notificationBell(c *ui.Context) {
 	if n := a.unread; n > 0 {
 		label = fmt.Sprintf("通知（%d 条未读）", n)
 	}
-	hint := "打开通知弹窗"
+	hint := "打开通知窗口"
 	if a.unread > 0 {
 		hint = fmt.Sprintf("%d 条未读，点开查看", a.unread)
 	}
-	b.Label(label).Tooltip(hint).OnClick(func() { a.openNotifications() })
+	b.Label(label).Tooltip(hint).OnClick(a.showNotifications)
 }
 
-// openNotifications 打开通知弹窗。未登录时先走全局授权弹窗，授权成功后
-// 重跑这一步，用户不用回到标题栏再点一次。
-func (a *app) openNotifications() {
+/* ------------------------------------------------------------------
+   通知窗口：全局入口、显示与关闭
+----------------------------------------------------------------- */
+
+// showNotifications 是通知窗口的全局入口：任何窗口、任何 goroutine 都能
+// 调用。它把工作挪到主线程，窗口已经开着就只把它带到前台，不会开出第二个。
+func (a *app) showNotifications() {
+	a.publish(a.showNotificationWindow)
+}
+
+// showNotificationWindow 在主线程上真正打开通知窗口。先刷新未读数与列表，
+// 再创建窗口：首帧里看到的就是最新的一页，而不是空列表再闪一下。
+func (a *app) showNotificationWindow() {
 	idx := notificationTabIndex()
 	if idx < 0 {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录 2Libra 后才能查看「通知」。", func() { a.openNotifications() })
+		a.requestLogin("登录 2Libra 后才能查看「通知」。", a.showNotifications)
 		return
 	}
-	a.notifOpen = true
 	a.refreshUnread()
-	// 已经加载过的列表也刷新一次：弹窗打开时看到最新一页，加载过程中旧
-	// 内容仍然可见，不会被换成一片空白。headless 测试（autoLoad 为假）
-	// 只渲染已注入的列表，不发真实请求。
 	if a.autoLoad {
 		a.load(idx, 1)
 	}
+	// headless 测试没有主循环：碰 mygo 的窗口会等待一个不存在的处理者，
+	// 所以只把状态准备好，测试直接渲染 notificationsWindowView。
+	if a.win == nil {
+		return
+	}
+	if win := a.notifWin; win != nil {
+		if win.IsMinimized() {
+			win.Restore()
+		}
+		win.Show()
+		win.Focus()
+		win.Invalidate()
+		return
+	}
+	win := mygo.NewWindow(mygo.WindowOptions{
+		Title:             "通知",
+		Width:             notifWindowWidth,
+		Height:            notifWindowHeight,
+		MinWidth:          notifWindowMinWidth,
+		MinHeight:         notifWindowMinHeight,
+		StateKey:          "notifications",
+		BackgroundColor:   "light-dark(#ffffff, #18181b)",
+		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口一样自绘标题栏
+		HideWindowButtons: true,
+		Content:           ui.View(a.notificationsWindowView),
+	})
+	a.notifWin = win
+	win.OnClosed(func() { a.notifWin = nil })
 }
 
-// notificationsDialog 是通知弹窗本体。用 Modal 而不是页面：消息中心是
-// 随时要看一眼的东西，不该把正在浏览的列表或正文挤走。
-func (a *app) notificationsDialog(c *ui.Context) {
-	if !a.notifOpen {
+// notificationWindowVisible 报告通知窗口是否开着。headless 测试里没有窗口，
+// 用 notifWin 也够：它只在真实窗口存在时非空。
+func (a *app) notificationWindowVisible() bool {
+	win := a.notifWin
+	return win != nil && win.IsVisible()
+}
+
+// hideNotificationWindow 收起通知窗口但不销毁：下次从铃铛打开就是同一个
+// 窗口、同一个滚动位置。点开一条消息后也用它，把画面交回主窗口。
+func (a *app) hideNotificationWindow() {
+	if win := a.notifWin; win != nil {
+		win.Hide()
+	}
+}
+
+// closeNotificationWindow 关掉通知窗口：退出登录或主窗口关闭时调用，别让
+// 上一个账号的消息、或者一个没有主窗口的孤岛留在屏幕上。只在主线程调用。
+func (a *app) closeNotificationWindow() {
+	win := a.notifWin
+	if win == nil {
 		return
 	}
+	a.notifWin = nil
+	win.Close()
+}
+
+// showMainWindow 把主窗口带到前台，并让它按当前状态重建：在通知窗口里点开
+// 帖子后，主窗口要重新构建才会显示新的详情页。
+func (a *app) showMainWindow() {
+	win := a.win
+	if win == nil {
+		return
+	}
+	if win.IsMinimized() {
+		win.Restore()
+	}
+	win.Show()
+	win.Focus()
+	win.Invalidate()
+}
+
+/* ------------------------------------------------------------------
+   通知窗口的界面
+----------------------------------------------------------------- */
+
+// notificationsWindowView 是通知窗口的 view。窗口自己带标题栏与窗口按钮，
+// 所以这里不需要遮罩，也不占主窗口的位置。
+func (a *app) notificationsWindowView(c *ui.Context) {
+	a.applyTheme(c)
+	t := c.Theme()
+	// 这个窗口里的按钮（在站点查看等）要把链接交给系统浏览器，服务取本
+	// 窗口自己的那份。
+	a.srv = c.Services()
+	c.Root().Background(t.Background)
+	// Esc 收起窗口而不是退出：消息中心随时可以再打开。
+	c.OnShortcut(0, ui.KeyEscape, a.hideNotificationWindow)
+
 	idx := notificationTabIndex()
 	if idx < 0 {
-		a.notifOpen = false
 		return
 	}
-	t := c.Theme()
 	st := a.tabs[idx]
 	unreadText := "无未读"
 	if a.unread > 0 {
 		unreadText = fmt.Sprintf("%d 条未读", a.unread)
 	}
-	panelW, panelH := notificationsDialogSize(c)
 
-	ui.Modal(c, &a.notifOpen, func() {
-		ui.Column(c).Width(panelW).Height(panelH).Gap(8).Children(func() {
-			// 头部：铃铛、标题、未读数与实时连接状态，右侧是关闭。
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, tabIcons[idx]).Size(18, 18).TextColor(t.Accent)
-				ui.Text(c, "通知").FontSize(16).Bold().SingleLine()
-				ui.Text(c, unreadText).FontSize(12).TextColor(t.TextMuted).SingleLine()
+	ui.Column(c).Fill().Children(func() {
+		// 自绘标题栏：拖动窗口、双击最大化，右上角是最小化与关闭，按钮与
+		// 主窗口同一套画法。
+		ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
+			Background(t.Surface).DragWindow().Children(func() {
+			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
+				AlignItems(ui.Center).Children(func() {
+				ui.Icon(c, tabIcons[idx]).Size(16, 16).TextColor(t.Accent)
+				ui.Text(c, "通知").FontSize(13).Bold().SingleLine()
+				ui.Text(c, unreadText).FontSize(11).TextColor(t.TextMuted).SingleLine()
 				switch {
-				case !a.auth.loggedIn():
 				case a.streamLive:
-					ui.Text(c, "· 实时通知已连接").FontSize(11).TextColor(t.Success).SingleLine()
+					ui.Text(c, "· 已连接").FontSize(11).TextColor(t.Success).SingleLine()
 				default:
-					ui.Text(c, "· 实时通知未连接").FontSize(11).TextColor(t.TextMuted).SingleLine()
-				}
-				ui.Spacer(c).Grow(1)
-				closeBtn := ui.Button(c, "").Background(ui.Transparent).
-					Border(0, t.Border).TextColor(t.Text).FontSize(14).
-					Padding(4, 4).Radius(6)
-				closeBtn.Children(func() {
-					ui.Icon(c, closeIcon).Size(16, 16)
-				})
-				closeBtn.Label("关闭通知")
-				if closeBtn.Clicked() {
-					a.notifOpen = false
+					ui.Text(c, "· 未连接").FontSize(11).TextColor(t.TextMuted).SingleLine()
 				}
 			})
+			a.titleButton(c, titleMinimize, "最小化", func() {
+				if win := a.notifWin; win != nil {
+					win.Minimize()
+				}
+			})
+			a.titleButton(c, titleClose, "关闭", func() {
+				if win := a.notifWin; win != nil {
+					win.Close()
+				}
+			})
+		})
+		ui.Divider(c)
 
+		ui.Column(c).Grow(1).MinHeight(0).Padding(10, 12).Gap(8).Children(func() {
 			a.notificationActions(c, st)
 
 			// 分段筛选直接映射接口的 type / unread_only，切换后按新参数重拉。
@@ -159,7 +251,7 @@ func (a *app) notificationsDialog(c *ui.Context) {
 	})
 }
 
-// notificationActions 是弹窗里的操作行：全部已读、已读本页、勾选批量、
+// notificationActions 是窗口里的操作行：全部已读、已读本页、勾选批量、
 // 刷新、在站点查看与原生通知开关。勾选批量只在真勾了消息时出现，避免
 // 空按钮占位。
 func (a *app) notificationActions(c *ui.Context, st *tabState) {
@@ -195,7 +287,7 @@ func (a *app) notificationActions(c *ui.Context, st *tabState) {
 	})
 }
 
-// notificationsList 画弹窗里的消息区：加载中、错误、空状态与列表。
+// notificationsList 画窗口里的消息区：加载中、错误、空状态与列表。
 func (a *app) notificationsList(c *ui.Context, st *tabState) {
 	t := c.Theme()
 	switch {
@@ -240,7 +332,7 @@ func (a *app) notificationsList(c *ui.Context, st *tabState) {
 		}
 		ui.List(c, &st.list, len(items), func(i int) {
 			a.notificationRow(c, items[i])
-		}).Grow(1).MinHeight(0).Padding(4, 2).Gap(8)
+		}).Grow(1).MinHeight(0).Padding(4, 0).Gap(8)
 		a.loadMoreFooter(c, st.moreErr, st.loading, func() {
 			a.load(idx, st.page)
 		})
@@ -254,23 +346,6 @@ func (a *app) notificationsList(c *ui.Context, st *tabState) {
 			}
 		}
 	}
-}
-
-// notificationsDialogSize 是弹窗面板的尺寸：首选 640×560，窗口不够大时
-// 留出四周的空隙后收缩（窗口最小 760×520，仍能完整放下）。
-func notificationsDialogSize(c *ui.Context) (float32, float32) {
-	w, h := float32(notifDialogWidth), float32(notifDialogHeight)
-	if r := c.Root().Bounds(); r.W > 0 && r.H > 0 {
-		w = min(w, r.W-100)
-		h = min(h, r.H-100)
-	}
-	if w < 360 {
-		w = 360
-	}
-	if h < 240 {
-		h = 240
-	}
-	return w, h
 }
 
 // hasUnreadItem reports whether the loaded page has any unread message. It

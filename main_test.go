@@ -332,8 +332,9 @@ func TestLivePublicTabs(t *testing.T) {
 }
 
 // The native view runs headless: tab switching, the login gate on private
-// tabs and the list rows are all exercised here. The settings page is gone,
-// so the header must no longer offer a way to reach it.
+// tabs and the list rows are all exercised here. The old login settings page
+// is gone; the title bar's 设置 now opens the separate settings window that
+// holds the proxy, update and image-cache sections.
 func TestNativeView(t *testing.T) {
 	a := testApp(t)
 	a.tabs[0].items = []Item{
@@ -358,11 +359,22 @@ func TestNativeView(t *testing.T) {
 	if !tt.HasText("「收藏」需要登录") {
 		t.Errorf("私人 tab 未显示登录引导：%q", tt.Texts())
 	}
-	if tt.HasText("设置") {
-		t.Errorf("设置入口应已移除：%q", tt.Texts())
+	// 授权弹窗盖在整页上，先取消它再点标题栏。
+	if err := tt.Click("取消"); err != nil {
+		t.Fatal(err)
 	}
-	if err := tt.Click("设置"); err == nil {
-		t.Error("仍能点击「设置」按钮")
+	tt.Frame()
+	// 标题栏的「设置」打开独立设置窗口；登录配置的那个设置页不会回来。
+	opened := false
+	a.onSettingsOpen = func() { opened = true }
+	if err := tt.Click("设置"); err != nil {
+		t.Fatalf("点击「设置」失败：%v", err)
+	}
+	if !opened {
+		t.Errorf("点击「设置」没有打开设置窗口：%q", tt.Texts())
+	}
+	if tt.HasText("设置 · OAuth 公开客户端（PKCE S256）") {
+		t.Errorf("登录配置的设置页又出现了：%q", tt.Texts())
 	}
 }
 
@@ -752,9 +764,6 @@ func TestOnlyNativeSchemeLoginIsOffered(t *testing.T) {
 				}
 			}
 		}
-		if tt.HasText("设置") {
-			t.Errorf("%s 页仍有设置入口：%q", page, texts)
-		}
 		if page == "login" {
 			if !tt.HasText("打开浏览器授权") || !tt.HasText("用回调链接完成登录") {
 				t.Errorf("登录页缺少唯一流程的操作入口：%q", texts)
@@ -764,10 +773,11 @@ func TestOnlyNativeSchemeLoginIsOffered(t *testing.T) {
 			}
 		}
 	}
-	// A stale pageName must not resurrect the removed settings page.
+	// A stale pageName must not resurrect the removed login settings page.
+	// 设置窗口只放代理、更新与图片缓存，不含任何 OAuth 配置。
 	a.pageName = "settings"
 	tt := ui.NewTester(a.view, 1100, 760)
-	if tt.HasText("设置 · OAuth 公开客户端（PKCE S256）") || tt.HasText("保存") {
-		t.Errorf("设置页仍在渲染：%q", tt.Texts())
+	if tt.HasText("设置 · OAuth 公开客户端（PKCE S256）") {
+		t.Errorf("登录配置的设置页仍在渲染：%q", tt.Texts())
 	}
 }

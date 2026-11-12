@@ -142,11 +142,11 @@ func TestTitleBarWindowButtonsPaintTheirGlyphs(t *testing.T) {
 		t.Error("关闭图标的中心没有画出叉")
 	}
 
-	// 图标必须落在各自的按钮里：品牌与标题栏按钮（「检查更新」及其右侧的
-	// 外观图标、代理）之间不能出现窗口图标的墨迹。文字与图标本身当然会有
-	// 墨迹，所以边界取最左侧文字按钮的左边，而不是写死 700。
+	// 图标必须落在各自的按钮里：品牌与标题栏按钮（「设置」及其右侧的
+	// 外观图标、通知铃铛）之间不能出现窗口图标的墨迹。文字与图标本身当然
+	// 会有墨迹，所以边界取最左侧文字按钮的左边，而不是写死 700。
 	limit := 700
-	for _, label := range []string{"检查更新", "代理"} {
+	for _, label := range []string{"设置"} {
 		if r, ok := tt.Find(label); ok && int(r.X)-6 < limit {
 			limit = int(r.X) - 6
 		}

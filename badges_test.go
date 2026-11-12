@@ -118,10 +118,8 @@ func badgeApp(t *testing.T) *app {
 	a.detail.replyTotal = 1
 	a.detail.replyLoaded = true
 	bmp := solidBitmap(22, 15, marker)
-	a.articleImages = map[string]*articleImageEntry{
-		"https://r2.2libra.com/badge/svg/year_streak.svg": {src: bmp},
-		"https://r2.2libra.com/weather/svg/fog.svg":       {src: bmp},
-	}
+	a.images.put("https://r2.2libra.com/badge/svg/year_streak.svg", bmp)
+	a.images.put("https://r2.2libra.com/weather/svg/fog.svg", bmp)
 	return a
 }
 

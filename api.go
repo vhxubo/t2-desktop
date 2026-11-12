@@ -120,7 +120,7 @@ type Item struct {
 	SubtitleSuffix string
 	// Extra 是最新评论 / 动态行的富展示字段；普通榜单行为 nil。
 	Extra *rowExtra
-	// Notif 是通知行归一后的消息；只有通知 tab 的行非 nil。
+	// Notif 是通知行归一后的消息；只有通知数据的行非 nil。
 	Notif *notification
 }
 

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/plugins/updater"
 	updatenative "github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
@@ -33,7 +32,7 @@ type tabState struct {
 	authWait bool
 	gen      uint64
 
-	// 通知 tab 专用：分段筛选、正在提交已读的 id、勾选批量与操作错误。
+	// 通知（弹窗）专用：分段筛选、正在提交已读的 id、勾选批量与操作错误。
 	filter     int
 	reading    map[string]bool
 	selected   map[string]bool
@@ -52,9 +51,8 @@ type app struct {
 	srv      ui.Services
 	autoLoad bool
 
-	// 代理配置面板的草稿与提示。保存前只改这些字段，不影响正在使用的
+	// 设置窗口里的代理草稿与提示。保存前只改这些字段，不影响正在使用的
 	// transport；点「保存」才写入 proxy.json 并立即切换。
-	proxyOpen    bool
 	proxyMode    int
 	proxyURL     string
 	proxyUser    string
@@ -62,6 +60,20 @@ type app struct {
 	proxyNoProxy string
 	proxyMsg     string
 	proxyMsgErr  bool
+
+	// settingsWin 是设置窗口：代理、检查更新与图片缓存都收在这一个窗口里，
+	// 不再是标题栏上的两个按钮。入口见 showSettings；只在主线程读写。
+	settingsWin *mygo.Window
+	// cacheStatus 是设置窗口「图片缓存」一块的显示状态；统计在后台跑，
+	// 结果回到主线程。
+	cacheStatus cacheStatus
+	// updates 表示更新插件已安装（main 里 mygo.Use 之后置 true）。无头
+	// 测试不装插件，点「检查更新」只走测试钩子，不会碰 updater 的主循环。
+	updates bool
+	// onSettingsOpen / onUpdateCheck 是测试钩子：无窗口时用来确认按钮确实
+	// 接上了动作。生产为 nil。
+	onSettingsOpen func()
+	onUpdateCheck  func()
 
 	tab     int
 	lastTab int
@@ -76,10 +88,11 @@ type app struct {
 	// 登录：点「登录」直接打开浏览器，loginPending 表示正在等系统跳回；
 	// 只有失败或用户主动粘贴回调时才进入 login 页。
 	loginPending bool
-	// avatars 按头像地址缓存位图（见 user_ui.go）：登录账号、帖子作者、
-	// 评论作者与通知操作者共用同一份缓存，同一个地址只下载一次。下载完成
-	// 前 userTag 先画昵称首字母。
-	avatars avatarCache
+	// images 是全应用共用的图片缓存（见 image_cache.go）：登录账号、帖子
+	// 作者、评论作者与通知操作者的头像，正文与评论里的表情、社区图标，
+	// 以及帖子配图都由它统一管理，同一个地址只下载一次。下载完成前
+	// userTag 先画昵称首字母。
+	images *imageCache
 	// schemeWarn 是「系统没有把回调协议关联到本应用」的说明，仅在这种情况下
 	// 非空：它决定了浏览器授权后能不能自动跳回，得让用户在登录页看见。
 	schemeWarn string
@@ -96,10 +109,7 @@ type app struct {
 	emojis       map[string]emojiInfo
 	emojiLoading bool
 	emojiTried   bool
-	// articleImages 缓存正文图片（表情与配图）的下载结果，键是图片地址。
-	// 只在 UI 线程读写；后台下载完成后通过 publish 回填。
-	articleImages map[string]*articleImageEntry
-	md            *markdown.Options
+	md           *markdown.Options
 	// commentMd 是评论正文的 Markdown 选项：与正文同一套渲染，字号更小
 	// （commentFontSize），让评论区比正文紧凑一号。
 	commentMd *markdown.Options
@@ -111,9 +121,9 @@ type app struct {
 	unread        int
 	unreadLoading bool
 	unreadGen     uint64
-	// notifOpen 是通知弹窗是否打开。通知不再占用侧边栏的页面，入口是标题栏
-	// 上的铃铛与它旁边的未读数值（见 notificationBell / notificationsDialog）。
-	notifOpen     bool
+	// notifWin 是通知窗口：通知独立成一个 mygo 窗口，不再是主窗口里的页面
+	// 或弹窗。入口见 showNotifications；只在主线程读写。
+	notifWin      *mygo.Window
 	streamLive    bool
 	watchCancel   context.CancelFunc
 	watchGen      uint64
@@ -168,6 +178,7 @@ func newApp(dir string) *app {
 		proxy:        proxy,
 		theme:        newThemeManager(dir),
 		client:       &Client{Auth: auth, Proxy: proxy},
+		images:       newImageCache(dir),
 		tabs:         make([]*tabState, len(tabSpecs)),
 		lastTab:      -1,
 		navSel:       tabID(0),
@@ -186,14 +197,29 @@ func newApp(dir string) *app {
 	return a
 }
 
-// publish marshals a state change onto the UI thread. In headless tests
-// there is no window, so the change applies directly.
+// publish marshals a state change onto the UI thread, then rebuilds every
+// window that shows the same state. In headless tests there is no window, so
+// the change applies directly.
 func (a *app) publish(fn func()) {
 	if a.win == nil {
 		fn()
 		return
 	}
-	a.win.Update(fn)
+	a.win.Update(func() {
+		fn()
+		// 主窗口、通知窗口与设置窗口读的是同一份状态：改完之后另外两个窗口
+		// 也要重建，否则它们显示的仍是上一帧的未读数、代理状态或缓存大小。
+		a.redrawNotificationWindow()
+		a.redrawSettingsWindow()
+	})
+}
+
+// redrawNotificationWindow asks the notification window, when it is open, for
+// a frame. Main thread only.
+func (a *app) redrawNotificationWindow() {
+	if win := a.notifWin; win != nil {
+		win.Invalidate()
+	}
 }
 
 func (a *app) load(idx, page int) {
@@ -378,9 +404,9 @@ func (a *app) onAuthChanged(err error) {
 		a.startNotificationWatch()
 	} else {
 		a.stopNotificationWatch()
-		// 通知弹窗只展示当前账号的消息：退出后立即收起，别留一屏上一个
+		// 通知窗口只展示当前账号的消息：退出后立即关掉，别留一屏上一个
 		// 账号的内容。
-		a.notifOpen = false
+		a.closeNotificationWindow()
 		a.unread = 0
 		a.unreadLoading = false
 		a.notifSeen = nil
@@ -473,11 +499,9 @@ func (a *app) view(c *ui.Context) {
 	a.dialogs(c)
 }
 
-// dialogs 画出代理设置、通知与全局授权弹窗。列表页、登录回退页与详情页
-// 共用，放在内容之后叠在最上层。
+// dialogs 画出全局授权弹窗。列表页、登录回退页与详情页共用，放在内容之后
+// 叠在最上层。通知与设置都不在这里：它们各自是独立的窗口。
 func (a *app) dialogs(c *ui.Context) {
-	a.proxyDialog(c)
-	a.notificationsDialog(c)
 	a.authDialog(c)
 }
 
@@ -510,12 +534,11 @@ func (a *app) titleBar(c *ui.Context) {
 			AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "T2 Desktop").FontSize(13).Bold().SingleLine().TextColor(t.Text)
 			ui.Spacer(c).Grow(1)
-			// 手动检查更新：后台每天也会自动检查一次，这里给想立即确认版本的人
-			// 一个入口；开发构建没有更新源时，更新窗口会说明原因。
-			a.titleTextButton(c, "检查更新", updater.CheckForUpdates)
+			// 设置与外观：代理、检查更新和图片缓存都收进设置窗口，标题栏
+			// 只留一个入口；外观只有三档，直接摆在标题栏上。
+			a.titleTextButton(c, "设置", a.showSettings)
 			a.themeButtons(c)
-			a.titleTextButton(c, "代理", func() { a.openProxyDialog() })
-			// 通知铃铛：未读数值跟在铃铛右边，点开独立弹窗（不再是侧边栏页面）。
+			// 通知铃铛：未读数值跟在铃铛右边，点开独立窗口（不再是侧边栏页面）。
 			a.notificationBell(c)
 			a.accountBar(c)
 		})
@@ -929,8 +952,9 @@ func main() {
 	// 自动更新：更新包来自 github.com/vhxubo/t2-desktop 的 release，由
 	// mygo build 用 mygo.json 里 updates.publicKey 对应的私钥签名。native
 	// 更新窗口不需要 WebView，与本应用的原生 UI 一致：启动后检查一次，之后
-	// 每天一次，也在「检查更新」被点击时立即检查。
+	// 每天一次，也在设置窗口的「检查更新」被点击时立即检查。
 	mygo.Use(updatenative.Plugin)
+	a.updates = true
 	// 先按保存的外观模式设置原生外观，让启动首帧、原生更新/通知窗口与
 	// theme.json 一致；自绘界面仍由 view 每帧设置。
 	mygo.Theme.SetSource(themeSource(a.theme.Mode()))
@@ -971,6 +995,9 @@ func main() {
 		if mygo.NotificationsSupported() {
 			a.notify = showNativeNotice
 		}
+		// 图片缓存要在后台定期清理过期帖子图片：启动时先清一次，之后按
+		// imageCacheCleanupInterval 再清。无头测试不经过这里。
+		a.startImageCacheMaintenance()
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:             "T2 Desktop",
 			Width:             1080,
@@ -981,6 +1008,12 @@ func main() {
 			Content:           ui.View(a.view),
 			TitleBarStyle:     mygo.TitleBarHidden, // 隐藏原生标题栏
 			HideWindowButtons: true,                // 连系统按钮也隐藏，完全自绘最小化/最大化/关闭
+		})
+		// 主窗口关掉时把通知与设置窗口一起关掉：没有主窗口的它们都是孤岛，
+		// 而且应用的最后一个窗口关闭时进程就该退出。
+		a.win.OnClosed(func() {
+			a.closeNotificationWindow()
+			a.closeSettingsWindow()
 		})
 		if a.auth.loggedIn() {
 			a.refreshUnread()

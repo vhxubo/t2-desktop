@@ -1,6 +1,8 @@
 package main
 
 import (
+	"image"
+	"image/color"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -74,7 +76,6 @@ func TestNotificationRowShowsActorAvatar(t *testing.T) {
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
 		t.Fatal(err)
 	}
-	a.notifOpen = true
 	st := a.tabs[notificationTabIndex()]
 	st.loaded = true
 	st.items = []Item{{Key: "n1", Notif: &notification{
@@ -82,7 +83,7 @@ func TestNotificationRowShowsActorAvatar(t *testing.T) {
 		FromUser: mustObject(t, `{"username":"dannyng"}`),
 		Payload:  mustObject(t, `{"commentText":"这条是提及"}`),
 	}}}
-	tt := ui.NewTester(a.view, 1200, 800)
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
 	tt.Frame()
 
 	// 通知卡片本身是按钮，头像在无障碍树里并入按钮文案；Find 取先出现的
@@ -247,11 +248,10 @@ func TestNotificationReactionNamesGetAvatars(t *testing.T) {
 	if n == nil {
 		t.Fatal("消息解码失败")
 	}
-	a.notifOpen = true
 	st := a.tabs[notificationTabIndex()]
 	st.loaded = true
 	st.items = []Item{{Key: "n2", Notif: n}}
-	tt := ui.NewTester(a.view, 1200, 800)
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
 	tt.Frame()
 
 	for _, name := range []string{"alice", "bob"} {
@@ -265,6 +265,67 @@ func TestNotificationReactionNamesGetAvatars(t *testing.T) {
 	}
 	if !tt.HasText("👍3") || !tt.HasText("@alice") || !tt.HasText("@bob") {
 		t.Errorf("表态文案没有保留：%q", tt.Texts())
+	}
+}
+
+// 头像图片必须按头像框的实际尺寸绘制。ui.Avatar 的图片子元素按主题字号的
+// 2.25 倍创建，外部缩小头像框后图片仍按大尺寸绘制，被圆圈裁成中间一块；
+// 这里用一张四周带绿色边框的图片验证边框能画到头像边缘，说明整图完整显示。
+func TestAvatarImageIsNotCropped(t *testing.T) {
+	const src = 40
+	img := image.NewRGBA(image.Rect(0, 0, src, src))
+	white := color.RGBA{R: 255, G: 255, B: 255, A: 255}
+	for y := 0; y < src; y++ {
+		for x := 0; x < src; x++ {
+			c := white
+			if x < 2 || y < 2 || x >= src-2 || y >= src-2 {
+				c = marker
+			}
+			img.SetRGBA(x, y, c)
+		}
+	}
+	bmp := ui.NewBitmap(img)
+
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Row(c).Padding(10).Children(func() {
+			avatarView(c, "borderuser", bmp, 18)
+		})
+	}, 80, 80)
+	tt.Frame()
+
+	r, ok := tt.Find("borderuser")
+	if !ok {
+		t.Fatalf("头像没有渲染：%q", tt.Texts())
+	}
+	if r.W != 18 || r.H != 18 {
+		t.Errorf("头像框 = %.0f×%.0f，期望 18×18", r.W, r.H)
+	}
+	if n := countMarker(tt.Image()); n == 0 {
+		t.Error("头像图片的绿色边框没有画出来：图片没有按头像框尺寸完整显示")
+	}
+}
+
+// 没有图片时画昵称首字母，文字要落在头像框内，不能被圆圈裁掉。
+func TestAvatarInitialsFallback(t *testing.T) {
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Row(c).Padding(10).Children(func() {
+			avatarView(c, "jimmy", nil, 24)
+		})
+	}, 80, 80)
+	tt.Frame()
+
+	avatar, ok := tt.Find("jimmy")
+	if !ok {
+		t.Fatalf("头像没有渲染：%q", tt.Texts())
+	}
+	initial, ok := tt.Find("J")
+	if !ok {
+		t.Fatalf("头像没有画昵称首字母：%q", tt.Texts())
+	}
+	if initial.X < avatar.X || initial.Y < avatar.Y ||
+		initial.X+initial.W > avatar.X+avatar.W ||
+		initial.Y+initial.H > avatar.Y+avatar.H {
+		t.Errorf("首字母 %v 超出了头像框 %v", initial, avatar)
 	}
 }
 
