@@ -211,6 +211,9 @@ func (a *app) openDetail(it Item) {
 	}
 	// 先摆上缓存里的正文和第一页评论：网络慢或断开时第一帧就有内容。
 	a.preloadDetailCache(a.detail)
+	// 本地已读：点开即算读过，回到列表时这一行标题置灰（见 post_read.go）。
+	// 正文没加载出来也算读过，用户已经打开过它了。
+	a.markPostRead(it.ShortID)
 	// 阅读记录用缓存里的标题补全打开时缺的字段。
 	a.recordReading(it, a.detail.topic)
 	a.pageName = "detail"

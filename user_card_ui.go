@@ -413,6 +413,9 @@ func (a *app) userCardMore(c *ui.Context, cs *userCardState, kind userCardListKi
 // 它所属的帖子；右侧是时间。点一下回到主窗口的正文页。
 func (a *app) userCardRow(c *ui.Context, it Item, kind userCardListKind) {
 	t := c.Theme()
+	// 主题行跟着本地已读状态把标题置灰；回复行表示的是评论内容，不跟帖子
+	// 的已读走（与 rows.go 的富行同一规则）。
+	titleColor := postTitleColor(t, kind == userCardTopics && a.isPostRead(it.ShortID))
 	row := ui.ButtonBase(c).FillWidth().Padding(8, 10).Radius(8).
 		Background(t.Background).Border(1, t.Border)
 	if row.Hovered() {
@@ -422,7 +425,7 @@ func (a *app) userCardRow(c *ui.Context, it Item, kind userCardListKind) {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 				ui.Text(c, "· "+it.Title).FontSize(12).
-					MaxLines(2).TextColor(t.Text)
+					MaxLines(2).TextColor(titleColor)
 				if meta := userCardRowMeta(it, kind); meta != "" {
 					ui.Text(c, meta).FontSize(11).TextColor(t.TextMuted).MaxLines(1)
 				}

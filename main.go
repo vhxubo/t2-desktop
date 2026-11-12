@@ -101,6 +101,12 @@ type app struct {
 	readingFor    string
 	readingLoaded bool
 	readingList   ui.ListState
+	// readAt 是当前账号在本机读过的帖子（short_id → 首次打开时间），列表
+	// 据此把读过的帖子置灰（见 post_read.go）。它和阅读记录一样按账号
+	// 作用域懒加载，只记本机，不向服务端同步。只在 UI 线程读写。
+	readAt     map[string]time.Time
+	readFor    string
+	readLoaded bool
 	// toasts 是等着显示的窗口内提示（见 toasts.go）：操作结果先排队，等到
 	// 对应窗口下一次重建时再交给 c.Toast。只在 UI 线程读写。
 	toasts []toastNote
@@ -282,6 +288,7 @@ func newApp(dir string) *app {
 	}
 	a.loadCoinCache()
 	a.loadReadingHistory()
+	a.loadPostReads()
 	for i := range a.tabs {
 		a.tabs[i] = &tabState{}
 	}
@@ -935,11 +942,12 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 		return
 	}
 	t := c.Theme()
+	titleColor := postTitleColor(t, a.isPostRead(it.ShortID))
 	row := ui.ButtonBase(c).FillWidth().Padding(14, 16).Radius(10).
 		Background(t.Background).Border(1, t.Border)
 	row.Children(func() {
 		ui.Column(c).Grow(1).Gap(4).Children(func() {
-			ui.Text(c, it.Title).FontSize(14).Bold().MaxLines(2)
+			ui.Text(c, it.Title).FontSize(14).Bold().MaxLines(2).TextColor(titleColor)
 			// 副标题里的作者用统一用户标识渲染：头像跟着 11px 的昵称走，
 			// 同时保留「节点 · 昵称 · 时间」的原有顺序；节点名或时间太长时
 			// 允许折行，不把右侧的元信息挤出去。

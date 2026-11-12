@@ -7,13 +7,15 @@ import (
 
 // 离线缓存的分组与账号作用域。
 //
-// 金币与阅读记录是个人数据：换一个账号登录时不能把上一个账号的余额、
-// 资产曲线或阅读历史拿出来。作用域按服务端返回的昵称区分；名字还没拿到
-// （刚登录、身份接口没回来）时宁可不落盘，也不写入一个会被下个账号复用的
-// 公共键。未登录时阅读记录单独放在 anonymous 下，仍可在本机回看。
+// 金币、阅读记录与帖子已读是个人数据：换一个账号登录时不能把上一个账号
+// 的余额、资产曲线、阅读历史或已读状态拿出来。作用域按服务端返回的昵称
+// 区分；名字还没拿到（刚登录、身份接口没回来）时宁可不落盘，也不写入一个
+// 会被下个账号复用的公共键。未登录时阅读记录与已读状态单独放在 anonymous
+// 下，仍可在本机回看。
 const (
 	coinCachePrefix    = "coin:"
 	readingCachePrefix = "reading:"
+	readCachePrefix    = "read:"
 	detailCachePrefix  = "detail:"
 
 	anonymousScope = "anonymous"
@@ -59,6 +61,16 @@ func (a *app) readingCacheKey() string {
 		return ""
 	}
 	return readingCachePrefix + scope
+}
+
+// postReadKey 是帖子已读状态的存储键。和阅读记录一样按账号隔离：换一个
+// 账号登录时，不会把上一个账号读过什么当成自己的已读。
+func (a *app) postReadKey() string {
+	scope := a.persistableScope()
+	if scope == "" {
+		return ""
+	}
+	return readCachePrefix + scope
 }
 
 // formatCacheTime 是缓存时间在界面上的统一写法。秒没有意义，统一到分钟。

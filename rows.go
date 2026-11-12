@@ -17,6 +17,9 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 		return
 	}
 	comment := it.CommentID != ""
+	// 帖子行跟着本地已读状态把标题置灰；评论行不跟着变——读过帖子不等于
+	// 读过这一条新评论，把评论标题也压灰会把新内容藏起来。
+	titleColor := postTitleColor(t, !comment && a.isPostRead(it.ShortID))
 
 	row := ui.ButtonBase(c).FillWidth().Padding(12, 14).Radius(10).
 		Background(t.Background).Border(1, t.Border)
@@ -67,7 +70,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 
 			// 帖子行保留标题；评论行的正文在下面作为摘要展示。
 			if !comment && it.Title != "" {
-				ui.Text(c, it.Title).FontSize(14).Bold().MaxLines(2)
+				ui.Text(c, it.Title).FontSize(14).Bold().MaxLines(2).TextColor(titleColor)
 			}
 			body := x.Excerpt
 			if body == "" && comment {
