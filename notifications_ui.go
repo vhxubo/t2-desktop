@@ -162,7 +162,7 @@ func (a *app) setNotificationWindowShown(shown bool) {
 }
 
 // hideNotificationWindow 收起通知窗口但不销毁：下次从铃铛打开就是同一个
-// 窗口、同一个滚动位置。点开一条消息后也用它，把画面交回主窗口。
+// 窗口、同一个滚动位置。Esc 用它。点开一条消息时不收起，用户回头还能接着看。
 func (a *app) hideNotificationWindow() {
 	if win := a.notifWin; win != nil {
 		a.setNotificationWindowShown(false)
@@ -206,8 +206,7 @@ func (a *app) showMainWindow() {
 func (a *app) notificationsWindowView(c *ui.Context) {
 	a.applyTheme(c)
 	t := c.Theme()
-	// 这个窗口里的按钮（在站点查看等）要把链接交给系统浏览器，服务取本
-	// 窗口自己的那份。
+	// 消息行等入口可能把链接交给系统浏览器，服务取本窗口自己的那份。
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
 	// 标记已读等操作的结果以 toast 显示在这个窗口里。
@@ -272,8 +271,7 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 }
 
 // notificationActions 是窗口里的操作行：全部已读、已读本页、勾选批量、
-// 刷新、在站点查看与原生通知开关。勾选批量只在真勾了消息时出现，避免
-// 空按钮占位。
+// 刷新与原生通知开关。勾选批量只在真勾了消息时出现，避免空按钮占位。
 func (a *app) notificationActions(c *ui.Context, st *tabState) {
 	t := c.Theme()
 	ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
@@ -293,9 +291,6 @@ func (a *app) notificationActions(c *ui.Context, st *tabState) {
 				func() { a.markSelectedNotificationsRead() })
 		}
 		a.smallAction(c, "刷新", st.loading, func() { a.reloadNotifications() })
-		a.smallAction(c, "在站点查看", false, func() {
-			a.openExternal(siteBaseURL + "/notifications")
-		})
 		switch {
 		case a.notify == nil:
 			ui.Text(c, "原生通知不可用").FontSize(11).TextColor(t.TextMuted)

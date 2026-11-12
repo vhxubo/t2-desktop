@@ -139,15 +139,6 @@ func (cs *userCardState) title() string {
 	return "用户资料"
 }
 
-// userSiteURL 是用户在站点的公开主页：网页打开、打赏与「查看完整简介」都
-// 去这里。昵称里的特殊字符必须转义。
-func userSiteURL(username string) string {
-	if username == "" {
-		return siteBaseURL
-	}
-	return siteBaseURL + "/user/" + url.PathEscape(username)
-}
-
 /* ------------------------------------------------------------------
    加载：每个请求都有 seq，过期的结果直接丢弃
 --------------------------------------------------------------- */

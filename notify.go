@@ -298,7 +298,8 @@ func (a *app) rememberNoticeTarget(id, target string) {
 // openNotificationTarget opens the message's target: a 2Libra post or comment
 // goes back to the main window, which is brought to the front with the post
 // (and the comment anchor) opened; anything else goes to the system browser.
-// 通知窗口只是入口：点开帖子后收起它，把画面交回主窗口。
+// 通知窗口只是入口：点开帖子时主窗口照常切到详情页，通知窗口自己不关 ——
+// 读完后还能回到原来的消息列表与滚动位置。
 func (a *app) openNotificationTarget(target string) {
 	if target == "" {
 		return
@@ -309,7 +310,6 @@ func (a *app) openNotificationTarget(target string) {
 		return
 	}
 	a.openDetail(it)
-	a.hideNotificationWindow()
 	a.showMainWindow()
 }
 

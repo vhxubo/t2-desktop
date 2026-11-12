@@ -20,7 +20,7 @@ import (
 //	│  (头像)  昵称                                │
 //	│          @username  [PRO] [徽章]            │
 //	│                                            │
-//	│  [关注他] [打赏金币] [网页打开]               │
+//	│  [关注他]                                   │
 //	│  ────────────────────────────────────────  │
 //	│  个人简介：…                                │
 //	│  ────────────────────────────────────────  │
@@ -137,7 +137,7 @@ func (a *app) redrawUserCardWindow() {
 func (a *app) userCardWindowView(c *ui.Context) {
 	a.applyTheme(c)
 	t := c.Theme()
-	// 这个窗口里的按钮要把链接交给系统浏览器，服务取本窗口自己的那份。
+	// 列表行等入口可能把链接交给系统浏览器，服务取本窗口自己的那份。
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
 	// Esc 收起窗口：随时可以再打开。
@@ -245,24 +245,11 @@ func userCardChip(c *ui.Context, label string, tint ui.Color) {
 	})
 }
 
-// userCardActions 是三个动作：关注 / 取关、打赏金币、网页打开。
+// userCardActions 只剩关注 / 取关：打赏与网页打开都要去站点，已经去掉。
 func (a *app) userCardActions(c *ui.Context, cs *userCardState) {
-	t := c.Theme()
 	ui.Row(c).FillWidth().Padding(0, 16, 12, 16).Gap(8).
 		AlignItems(ui.Center).Wrap().Children(func() {
 		a.userCardFollowButton(c, cs)
-		// 打赏：接口没有「按用户打赏」，打赏要落在具体的帖子或评论上，
-		// 所以这里把该用户的帖子列表交给站点，金额在站点上确认。
-		if ui.Button(c, "打赏金币").FontSize(12).Padding(4, 10).Radius(6).
-			Background(ui.Transparent).Border(1, t.Border).
-			TextColor(t.Text).Clicked() {
-			a.openExternal(userSiteURL(cs.username) + "/topics")
-		}
-		if ui.Button(c, "网页打开").FontSize(12).Padding(4, 10).Radius(6).
-			Background(ui.Transparent).Border(1, t.Border).
-			TextColor(t.Text).Clicked() {
-			a.openExternal(userSiteURL(cs.username))
-		}
 	})
 }
 
@@ -298,8 +285,8 @@ func (a *app) userCardFollowButton(c *ui.Context, cs *userCardState) {
 	}
 }
 
-// userCardBio 是「个人简介」一块。接口只给 has_readme 这个布尔值，正文要
-// 到站点看，所以这里说明状态并给出出口，不假装拿到了正文。
+// userCardBio 是「个人简介」一块。接口只给 has_readme 这个布尔值，正文不在
+// 应用内展示，所以这里只说明填写状态。
 func (a *app) userCardBio(c *ui.Context, cs *userCardState) {
 	t := c.Theme()
 	ui.Column(c).FillWidth().Padding(10, 16).Gap(4).Children(func() {
@@ -309,16 +296,11 @@ func (a *app) userCardBio(c *ui.Context, cs *userCardState) {
 		case cs.profileErr != "":
 			text = "资料暂时不可用：" + cs.profileErr
 		case cs.profileLoaded && cs.user.HasReadme:
-			text = "这位用户填写了个人简介。接口只返回「是否填写」，正文请到站点查看。"
+			text = "这位用户填写了个人简介。接口只返回「是否填写」，正文没有在这里展示。"
 		case cs.profileLoaded:
 			text = "这位用户还没有填写个人简介。"
 		}
 		ui.Text(c, text).FontSize(12).TextColor(t.Text).MaxLines(3)
-		if cs.profileLoaded && cs.user.HasReadme {
-			a.smallAction(c, "到站点看完整简介", false, func() {
-				a.openExternal(userSiteURL(cs.username))
-			})
-		}
 	})
 }
 
@@ -487,13 +469,13 @@ func userCardWhen(it Item) string {
 	return strings.TrimPrefix(it.SubtitleSuffix, " · ")
 }
 
-// openUserCardDetail 从资料卡打开一篇帖子或一条回复：关掉本窗口，把主窗口
-// 带到前台并换到详情页。评论行会带上 CommentID，正文里据此定位楼层。
+// openUserCardDetail 从资料卡打开一篇帖子或一条回复：把主窗口带到前台并换到
+// 详情页，资料卡本身留着不关 —— 读完后还能回到原来的列表。评论行会带上
+// CommentID，正文里据此定位楼层。
 func (a *app) openUserCardDetail(it Item) {
 	if it.ShortID == "" {
 		return
 	}
-	a.closeUserCardWindow()
 	a.pageName = "list" // 从详情页的返回栈里出来，避免把列表页顶掉
 	a.detailStack = nil
 	a.openDetail(it)

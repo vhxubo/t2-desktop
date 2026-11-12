@@ -44,7 +44,6 @@ func (a *app) coinsBody(c *ui.Context) {
 			busy := cs.baseLoading || cs.todayLoading || cs.historyLoading ||
 				cs.dailyLoading || cs.breakdownLoading || cs.rankingLoading
 			a.smallAction(c, "刷新", busy, func() { a.reloadCoins() })
-			a.smallAction(c, "在站点查看", false, func() { a.openExternal(siteBaseURL + "/coins") })
 		})
 		ui.Divider(c)
 		ui.Row(c).FillWidth().Padding(8, 14, 6, 14).Gap(10).AlignItems(ui.Center).Children(func() {

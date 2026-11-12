@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -144,8 +143,7 @@ func (a *app) profileTag(c *ui.Context, name string) {
 func (a *app) profileWindowView(c *ui.Context) {
 	a.applyTheme(c)
 	t := c.Theme()
-	// 窗口里的「在站点管理授权」等按钮要把链接交给系统浏览器，服务取本
-	// 窗口自己的那份。
+	// 帖子行等入口可能把链接交给系统浏览器，服务取本窗口自己的那份。
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
 	// Esc 收起窗口：随时可以再打开。
@@ -305,7 +303,7 @@ func (a *app) profileBalanceCard(c *ui.Context, ps *profileState) {
 }
 
 // profileTxSection 是金币明细的快捷入口：默认收起，展开后列出最近几条变动
-// （签到收益、发帖消耗、打赏等），再给一个到站点看全部流水的出口。
+// （签到收益、发帖消耗、打赏等），再给一个去金币页看全部流水的出口。
 func (a *app) profileTxSection(c *ui.Context, ps *profileState) {
 	t := c.Theme()
 	settingsSection(c, "金币明细", func() {
@@ -420,19 +418,14 @@ func profileStatChip(c *ui.Context, label, value string) {
 	})
 }
 
-// profileAuthEntry 是概览页底部的授权管理快速入口：一条说明 + 两个出口。
+// profileAuthEntry 是概览页底部的授权管理快速入口：一段说明 + 一个出口。
 func (a *app) profileAuthEntry(c *ui.Context, ps *profileState) {
 	t := c.Theme()
 	settingsSection(c, "授权管理", func() {
 		ui.Text(c, "本应用通过 2Libra OAuth 读取你的账号，只能用你授予的权限范围；"+
 			"随时可以在站点后台撤销，撤销后本应用的接口调用会立即失效。").
 			FontSize(11).TextColor(t.TextMuted).MaxLines(3)
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			a.smallAction(c, "查看当前权限", false, func() { ps.tab = profileTabAccount })
-			a.smallAction(c, "在站点管理授权", false, func() {
-				a.openExternal(siteBaseURL + oauthManagePath)
-			})
-		})
+		a.smallAction(c, "查看当前权限", false, func() { ps.tab = profileTabAccount })
 	})
 }
 
@@ -449,9 +442,6 @@ func (a *app) profileTopicsBody(c *ui.Context, ps *profileState) {
 		}
 		ui.Spacer(c).Grow(1)
 		a.smallAction(c, "刷新", ps.topicLoading, func() { a.loadProfileTopics() })
-		a.smallAction(c, "在站点查看全部", false, func() {
-			a.openExternal(siteBaseURL + "/user/" + url.PathEscape(a.auth.username()) + "/topics")
-		})
 	})
 
 	switch {
@@ -543,9 +533,6 @@ func (a *app) profileRepliesBody(c *ui.Context, ps *profileState) {
 			if name != "" {
 				a.loadProfileReplies(name, 1)
 			}
-		})
-		a.smallAction(c, "在站点查看全部", false, func() {
-			a.openExternal(siteBaseURL + "/user/" + url.PathEscape(name) + "/replies")
 		})
 	})
 
@@ -696,9 +683,6 @@ func (a *app) profileAccountBody(c *ui.Context, ps *profileState) {
 			ui.Divider(c)
 
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				if ui.PrimaryButton(c, "在 2Libra 管理授权").Clicked() {
-					a.openExternal(siteBaseURL + oauthManagePath)
-				}
 				if ui.Button(c, "退出登录").Clicked() {
 					a.auth.Logout()
 				}
@@ -759,13 +743,13 @@ func profileFollowText(known bool, followers, following int) string {
    打开正文与切换主窗口
 ---------------------------------------------------------------- */
 
-// openProfileDetail 从「我的」窗口打开一篇帖子或一条回复：关掉本窗口，把
-// 主窗口带到前台并换到详情页。评论行会带上 CommentID，正文里据此定位楼层。
+// openProfileDetail 从「我的」窗口打开一篇帖子或一条回复：把主窗口带到前台并
+// 换到详情页，「我的」窗口本身留着不关 —— 读完后还能回到原来的标签页。
+// 评论行会带上 CommentID，正文里据此定位楼层。
 func (a *app) openProfileDetail(it Item) {
 	if it.ShortID == "" {
 		return
 	}
-	a.closeProfileWindow()
 	a.pageName = "list" // 从详情页的返回栈里出来，避免把列表页顶掉
 	a.detailStack = nil
 	a.openDetail(it)

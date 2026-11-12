@@ -55,10 +55,6 @@ var profileTabLabels = []string{"概览与资产", "我的帖子", "我的回复
 // profileNow 单独提出来给测试替换：注册天数按本地时间算。
 var profileNow = func() time.Time { return time.Now() }
 
-// oauthManagePath 是站点后台的「授权应用」页面：撤销授权必须去那里，
-// 应用内只提供跳转。
-const oauthManagePath = "/user/setting/oauth"
-
 // profileScopeLabels 把授权范围翻成一句人话。未列出的范围原样展示，新
 // scope 上线时不会显示成空白，也不会假装认识它。
 var profileScopeLabels = map[string]string{

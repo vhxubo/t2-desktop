@@ -166,7 +166,7 @@ func TestProfileWindowView(t *testing.T) {
 		"1,280 金币", "今日已签到 · 连续 5 天",
 		"金币明细", "展开最近记录", "全部流水",
 		"最近统计", "粉丝", "关注", "主页访问", "等级",
-		"授权管理", "查看当前权限", "在站点管理授权",
+		"授权管理", "查看当前权限",
 	} {
 		if !tt.HasText(want) {
 			t.Errorf("「我的」窗口缺少文案 %q：%q", want, tt.Texts())
@@ -212,7 +212,7 @@ func TestProfileTabs(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	for _, want := range []string{"共 2 篇", "第一篇帖子", "第二篇帖子", "在站点查看全部"} {
+	for _, want := range []string{"共 2 篇", "第一篇帖子", "第二篇帖子"} {
 		if !tt.HasText(want) {
 			t.Errorf("我的帖子页缺少 %q：%q", want, tt.Texts())
 		}
@@ -228,22 +228,15 @@ func TestProfileTabs(t *testing.T) {
 		}
 	}
 
-	// 权限与账号：令牌里的 scope 原样列出，并给出到站点的撤销入口。
+	// 权限与账号：令牌里的 scope 原样列出。
 	if err := tt.Click("权限与账号"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	for _, want := range []string{"授权范围", "read:me", "读取我的内容", "read:economy", "在 2Libra 管理授权"} {
+	for _, want := range []string{"授权范围", "read:me", "读取我的内容", "read:economy"} {
 		if !tt.HasText(want) {
 			t.Errorf("权限与账号页缺少 %q：%q", want, tt.Texts())
 		}
-	}
-	if err := tt.Click("在 2Libra 管理授权"); err != nil {
-		t.Fatal(err)
-	}
-	opened := tt.OpenedURLs()
-	if len(opened) == 0 || opened[len(opened)-1] != siteBaseURL+oauthManagePath {
-		t.Errorf("撤销授权没有打开站点设置页：%v", opened)
 	}
 }
 
@@ -261,10 +254,11 @@ func TestProfileAccountTabWithoutScope(t *testing.T) {
 	}
 }
 
-// 点帖子行回到主窗口的正文页；「我的」窗口先收起。
+// 点帖子行回到主窗口的正文页；「我的」窗口留在原地不关。
 func TestProfileTopicOpensDetail(t *testing.T) {
 	a := profileWindowApp(t)
 	a.profile.tab = profileTabTopics
+	a.setProfileWindowShown(true)
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
 	if err := tt.Click("第一篇帖子"); err != nil {
@@ -276,12 +270,16 @@ func TestProfileTopicOpensDetail(t *testing.T) {
 	if a.detail == nil || a.detail.shortID != "T1" {
 		t.Fatalf("打开的帖子不对：%+v", a.detail)
 	}
+	if !a.profileShown {
+		t.Error("打开帖子后「我的」窗口不该被关掉")
+	}
 }
 
 // 点回复行同样回到正文，并带上评论 id 用于定位楼层。
 func TestProfileReplyOpensDetailWithComment(t *testing.T) {
 	a := profileWindowApp(t)
 	a.profile.tab = profileTabReplies
+	a.setProfileWindowShown(true)
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
 	if err := tt.Click("我的一条回复"); err != nil {
@@ -289,6 +287,9 @@ func TestProfileReplyOpensDetailWithComment(t *testing.T) {
 	}
 	if a.detail == nil || a.detail.shortID != "T1" || a.detail.focusID != "R1" {
 		t.Fatalf("打开的回复定位不对：%+v", a.detail)
+	}
+	if !a.profileShown {
+		t.Error("打开回复后「我的」窗口不该被关掉")
 	}
 }
 

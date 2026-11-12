@@ -538,7 +538,7 @@ func TestNotificationWindowView(t *testing.T) {
 	tt.Frame()
 	for _, want := range []string{
 		"通知", "2 条未读",
-		"全部已读", "已读本页 1", "已读选中 1", "刷新", "在站点查看",
+		"全部已读", "已读本页 1", "已读选中 1", "刷新",
 		"@dannyng 提到了你", "这条是提及",
 		"全部", "未读", "回复", "提及", "表态", "打赏",
 		"原生通知不可用",
@@ -600,7 +600,7 @@ func TestNotificationBellNeedsLogin(t *testing.T) {
 	}
 }
 
-// 点开一条帖子 / 评论类消息，主窗口切到该帖（带评论定位），通知窗口收起；
+// 点开一条帖子 / 评论类消息，主窗口切到该帖（带评论定位），通知窗口不关；
 // 其它目标交给系统浏览器，主窗口不动。
 func TestNotificationTargetOpensInMainWindow(t *testing.T) {
 	a := notificationWindowApp(t)
@@ -616,10 +616,14 @@ func TestNotificationTargetOpensInMainWindow(t *testing.T) {
 
 	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
 	tt.Frame()
+	a.notifShown = true // 模拟窗口正开着：点开消息不该把它收起来
 	// 点卡片上不属于用户标识的部分：句首的头像与昵称现在是统一用户标识的
 	// 点击区，点它会打开资料卡而不是这条消息的目标。
 	if err := tt.Click("《社会观察》"); err != nil {
 		t.Fatalf("点击消息行失败：%v", err)
+	}
+	if !a.notifShown {
+		t.Error("点开帖子后通知窗口不该被关掉")
 	}
 	if a.pageName != "detail" {
 		t.Fatalf("点开消息后主窗口应进入详情页，实际 %q", a.pageName)
