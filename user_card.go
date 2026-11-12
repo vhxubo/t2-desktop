@@ -308,7 +308,7 @@ func (a *app) toggleUserCardFollow(follow bool) {
 	if cs.follow.userID == "" {
 		cs.follow.userID = cs.user.ID
 	}
-	a.submitFollow(&cs.follow, follow,
+	a.submitFollow(&cs.follow, follow, toastUserCard,
 		func() bool { return a.userCard == cs },
 		func() {
 			if a.userCard == cs {

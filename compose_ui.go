@@ -150,6 +150,8 @@ func (a *app) composeWindowView(c *ui.Context) {
 	// 回执里的「看原文」要打开系统浏览器：服务在 UI 线程取一次，回调里不再碰 Context。
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
+	// 本窗口里发起的操作结果以 toast 显示在这里，不退回主窗口。
+	a.drainToasts(c, a.claimsToasts(toastCompose))
 	// Ctrl+Enter 发布、Esc 关闭：两者都是写长文的常用手势。Esc 不会丢草稿，
 	// 草稿留在 a.compose 里，重新打开还在。
 	c.OnShortcut(ui.Ctrl, ui.KeyEnter, a.submitCompose)

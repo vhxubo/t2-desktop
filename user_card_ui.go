@@ -140,6 +140,8 @@ func (a *app) userCardWindowView(c *ui.Context) {
 	// 列表行等入口可能把链接交给系统浏览器，服务取本窗口自己的那份。
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
+	// 关注 / 取关的结果以 toast 显示在这个窗口里，不退回主窗口。
+	a.drainToasts(c, a.claimsToasts(toastUserCard))
 	// Esc 收起窗口：随时可以再打开。
 	c.OnShortcut(0, ui.KeyEscape, a.closeUserCardWindow)
 

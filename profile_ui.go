@@ -146,6 +146,8 @@ func (a *app) profileWindowView(c *ui.Context) {
 	// 帖子行等入口可能把链接交给系统浏览器，服务取本窗口自己的那份。
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
+	// 本窗口里发起的操作结果以 toast 显示在这里，不退回主窗口。
+	a.drainToasts(c, a.claimsToasts(toastProfile))
 	// Esc 收起窗口：随时可以再打开。
 	c.OnShortcut(0, ui.KeyEscape, a.closeProfileWindow)
 

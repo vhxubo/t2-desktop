@@ -110,6 +110,8 @@ func (a *app) searchWindowView(c *ui.Context) {
 	t := c.Theme()
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
+	// 本窗口里发起的操作结果以 toast 显示在这里，不退回主窗口。
+	a.drainToasts(c, a.claimsToasts(toastSearch))
 	// Esc 关闭窗口：随时可以从标题栏的放大镜再打开。
 	c.OnShortcut(0, ui.KeyEscape, a.closeSearchWindow)
 

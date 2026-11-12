@@ -26,7 +26,7 @@ const followTimeout = 20 * time.Second
 
 // followState 是一篇帖子作者关注状态的 UI 侧缓存。所有字段只在 UI 线程
 // 读写；网络结果通过 app.publish 回来。关注失败的原因不落在这里：它是一次
-// 操作的结果，用主窗口的 toast 说明（见 toggleFollow）。
+// 操作的结果，用操作所在窗口的 toast 说明（见 toggleFollow / submitFollow）。
 type followState struct {
 	userID    string // 作者 uuid，关注 / 取关路径用
 	following bool
@@ -189,7 +189,7 @@ func (a *app) toggleFollow(d *detailState, follow bool) {
 		})
 		return
 	}
-	a.submitFollow(&d.follow, follow,
+	a.submitFollow(&d.follow, follow, toastMain,
 		func() bool { return a.detail == d },
 		func() {
 			if a.detail == d {
@@ -200,13 +200,14 @@ func (a *app) toggleFollow(d *detailState, follow bool) {
 
 // submitFollow 提交一次关注 / 取关，并把结果写回 fs。帖子详情的作者块与
 // 用户资料卡共用这一条路径：两边只有「状态属于谁」不同，current 报告这份
-// 状态是否仍属于当前界面，replay 在重新授权成功后重跑同一次操作。
-func (a *app) submitFollow(fs *followState, follow bool, current func() bool, replay func()) {
+// 状态是否仍属于当前界面，replay 在重新授权成功后重跑同一次操作。target 是
+// 发起这次操作的窗口，结果就提示在那里，而不是一律回主窗口。
+func (a *app) submitFollow(fs *followState, follow bool, target toastTarget, current func() bool, replay func()) {
 	if fs == nil || fs.busy || !current() || !a.auth.loggedIn() {
 		return
 	}
 	if fs.userID == "" {
-		a.toast(toastMain, "缺少用户标识，暂时无法关注")
+		a.toast(target, "缺少用户标识，暂时无法关注")
 		return
 	}
 	fs.busy = true
@@ -237,7 +238,7 @@ func (a *app) submitFollow(fs *followState, follow bool, current func() bool, re
 				if a.handleAuthError(err, replay) {
 					return
 				}
-				a.toast(toastMain, friendlyError(err))
+				a.toast(target, friendlyError(err))
 				return
 			}
 			fs.following = follow
