@@ -12,9 +12,9 @@ import (
 )
 
 // 金币窗口的界面：标题栏下面是余额 / 今日获得 / 签到状态，再按「今日、历史、
-// 统计、排行」切换。窗口本身在 coins_window.go；这里只画窗口里的内容，且所有
-// 操作都是只读的，界面上不提供签到、开盲盒、打赏等会改变金币的按钮；需要这些
-// 操作时引导用户去站点。
+// 统计、排行」切换。窗口本身在 coins_window.go；这里只画窗口里的内容。
+// 唯一会改变金币的操作是签到（POST /v1/me/sign）：余额卡片里有一颗签到
+// 按钮，结果以 toast 报告；开盲盒、打赏等其它写操作仍然引导用户去站点。
 
 const (
 	coinViewToday = iota
@@ -38,7 +38,7 @@ func (a *app) coinsBody(c *ui.Context) {
 			ui.Spacer(c).Grow(1)
 			a.coinSignLine(c, cs)
 			busy := cs.baseLoading || cs.todayLoading || cs.historyLoading ||
-				cs.dailyLoading || cs.breakdownLoading || cs.rankingLoading
+				cs.dailyLoading || cs.breakdownLoading || cs.rankingLoading || cs.signBusy
 			a.smallAction(c, "刷新", busy, func() { a.reloadCoins() })
 		})
 		ui.Divider(c)
@@ -57,8 +57,8 @@ func (a *app) coinsBody(c *ui.Context) {
 	})
 }
 
-// coinSignLine 是分段栏右侧的一行签到状态，只展示，不提供签到按钮：
-// POST /v1/me/sign 属于会改变金币的写操作，本次没有实现。
+// coinSignLine 是分段栏右侧的一行签到状态：只说明今天签没签，按钮放在下面
+// 的余额卡片里，避免一行里塞两个入口。
 func (a *app) coinSignLine(c *ui.Context, cs *coinState) {
 	t := c.Theme()
 	switch {
@@ -111,27 +111,114 @@ func (a *app) coinBalanceCard(c *ui.Context, cs *coinState) {
 				}
 			})
 
-			ui.Column(c).Shrink(0).Gap(3).Children(func() {
+			ui.Column(c).Shrink(0).Gap(4).Children(func() {
 				ui.Text(c, "今日签到").FontSize(11).TextColor(t.TextMuted)
 				switch {
-				case cs.signErr != "":
-					ui.Text(c, "暂不可用").FontSize(12).TextColor(t.TextMuted)
 				case cs.sign.Known && cs.sign.Signed:
 					text := "已签到"
 					if cs.sign.Streak > 0 {
 						text = fmt.Sprintf("已签到 · %d 天", cs.sign.Streak)
 					}
 					ui.Text(c, text).FontSize(12).Bold().TextColor(t.Success)
-				case cs.sign.Known:
-					ui.Text(c, "未签到").FontSize(12).Bold().TextColor(t.TextMuted)
-				case cs.baseLoaded:
-					ui.Text(c, "状态未知").FontSize(12).TextColor(t.TextMuted)
-				default:
+				case cs.signBusy:
+					ui.Spinner(c).Size(16, 16)
+				case !cs.sign.Known && !cs.baseLoaded:
 					ui.Text(c, "加载中…").FontSize(12).TextColor(t.TextMuted)
+				default:
+					a.coinSignButton(c, cs)
 				}
 			})
 		})
 	})
+}
+
+// coinSignButton 是余额卡片里的签到按钮：只在今天还没签到时出现。签到会
+// 改变金币，结果一律交给 toast（见 signInNow），按钮本身不写结果文字。
+func (a *app) coinSignButton(c *ui.Context, cs *coinState) {
+	b := ui.PrimaryButton(c, "签到")
+	tip := "签到领金币"
+	if cs.signErr != "" {
+		// 读签到状态失败不影响提交：一次签到也可能把缺的权限补出来。
+		tip = "签到状态未知，仍可尝试签到"
+	}
+	// 可访问名与可见文字分开：流水行里的「签到」也是同一个词，读屏与测试
+	// 需要能准确指到这颗按钮。
+	b.Label("立即签到").Tooltip(tip)
+	if b.Clicked() {
+		a.signInNow()
+	}
+}
+
+// signInNow 提交今日签到。未登录或缺少 write:economy 时走全局授权弹窗，
+// 授权成功后同一次签到自动重跑；今日重复签到（409 conflict）按「已经签过」
+// 处理。成功后先用响应里的状态点亮按钮，再刷新余额与今日明细，因为签到会
+// 同时改变金币与流水。
+func (a *app) signInNow() {
+	cs := a.coins
+	if cs == nil || cs.signBusy {
+		return
+	}
+	if !a.auth.loggedIn() {
+		a.requestLogin("登录 2Libra 后才能签到。", a.signInNow)
+		return
+	}
+	if cs.sign.Known && cs.sign.Signed {
+		a.toast(toastCoins, "今天已经签过了，明天再来")
+		return
+	}
+	cs.signBusy = true
+	cs.signGen++
+	gen := cs.signGen
+	actor := a.auth.username()
+	ctx, cancel := context.WithTimeout(context.Background(), coinSignTimeout)
+	go func() {
+		defer cancel()
+		status, err := a.client.signToday(ctx)
+		a.publish(func() {
+			if a.coins != cs || cs.signGen != gen {
+				return
+			}
+			cs.signBusy = false
+			// 请求期间换了账号 / 退出了登录：这次结果不属于当前会话。
+			if !a.auth.loggedIn() || a.auth.username() != actor {
+				return
+			}
+			if err != nil {
+				var ae *apiError
+				if errors.As(err, &ae) && ae.Code == "conflict" {
+					// 今日已签到：服务端拒绝重复签到，状态按已签到处理并同步。
+					cs.sign.Known, cs.sign.Signed = true, true
+					a.toast(toastCoins, "今天已经签过了，明天再来")
+					a.reloadCoinBase()
+					return
+				}
+				if a.handleAuthError(err, a.signInNow) {
+					return
+				}
+				a.toast(toastCoins, friendlyError(err))
+				return
+			}
+			// 成功：响应里的连续天数 / 今日奖励不一定齐全，缺的沿用已知状态。
+			next := status
+			next.Known, next.Signed = true, true
+			if next.Streak == 0 {
+				next.Streak = cs.sign.Streak
+			}
+			cs.sign = next
+			text := "签到成功"
+			// 只有响应明确给出奖励字段时才报金额；coins 可能是余额，留白更稳。
+			if next.RewardKnown && next.Coins > 0 {
+				text += "，获得 " + coinAmountText(next.Coins) + " 金币"
+			}
+			if next.Streak > 1 {
+				text += fmt.Sprintf(" · 连续 %d 天", next.Streak)
+			}
+			a.toast(toastCoins, text)
+			// 余额、排名与今日明细都跟着签到变了：重新读一遍，不自行加减金币。
+			a.reloadCoinBase()
+			a.reloadCoinToday()
+		})
+	}()
 }
 
 // coinCoreError 展示余额 / 今日 / 流水等核心端点的普通错误。缺权限的失败

@@ -17,6 +17,7 @@ const (
 	toastMain          toastTarget = iota // 主窗口：列表、详情、登录页
 	toastNotifications                    // 通知窗口
 	toastSettings                         // 设置窗口
+	toastCoins                            // 金币窗口：签到等金币操作
 )
 
 // toastNote 是一条等着显示的提示。
@@ -43,6 +44,11 @@ func (a *app) toast(target toastTarget, text string) {
 	case toastSettings:
 		if a.settingsWin != nil {
 			a.redrawSettingsWindow()
+			return
+		}
+	case toastCoins:
+		if a.coinWin != nil {
+			a.redrawCoinWindow()
 			return
 		}
 	}
@@ -74,18 +80,20 @@ func (a *app) drainToasts(c *ui.Context, claims func(toastTarget) bool) {
 }
 
 // mainClaimsToasts 说主窗口该不该显示这条提示：主窗口自己的当然显示；通知
-// 窗口或设置窗口不在了，它们的提示也退到主窗口，免得结果没人看见。
+// 窗口、设置窗口或金币窗口不在了，它们的提示也退到主窗口，免得结果没人看见。
 func (a *app) mainClaimsToasts(target toastTarget) bool {
 	switch target {
 	case toastNotifications:
 		return a.notifWin == nil
 	case toastSettings:
 		return a.settingsWin == nil
+	case toastCoins:
+		return a.coinWin == nil
 	}
 	return true
 }
 
-// claimsToasts 是通知窗口、设置窗口用的规则：只显示发给自己的提示。
+// claimsToasts 是通知窗口、设置窗口与金币窗口用的规则：只显示发给自己的提示。
 func (a *app) claimsToasts(mine toastTarget) func(toastTarget) bool {
 	return func(target toastTarget) bool { return target == mine }
 }

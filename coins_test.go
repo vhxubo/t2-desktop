@@ -84,6 +84,15 @@ func TestDecodeCoinSignAndRanking(t *testing.T) {
 	if !sign.Known || !sign.Signed {
 		t.Errorf("只有 sign_date 时也应识别为今天已签到：%+v", sign)
 	}
+	// coins 也可能是余额：只有明确写了奖励字段才允许当成「获得」展示。
+	reward := decodeCoinSign(json.RawMessage(`{"signed":true,"streak":6,"reward_coins":5}`))
+	if !reward.RewardKnown || reward.Coins != 5 {
+		t.Errorf("明确的奖励字段没有识别：%+v", reward)
+	}
+	ambiguous := decodeCoinSign(json.RawMessage(`{"signed":true,"coins":1234}`))
+	if ambiguous.RewardKnown {
+		t.Errorf("coins 不应被当成明确的签到奖励：%+v", ambiguous)
+	}
 
 	ranking := decodeCoinRanking(json.RawMessage(`[
 		{"username":"bopomofo","balance":1139778,"rank":1,"is_pro":true},
@@ -387,19 +396,20 @@ func TestCoinBreakdownToggleReadsExpenseOnly(t *testing.T) {
 	}
 }
 
-func TestCoinPageHasNoWriteActions(t *testing.T) {
+// 金币页唯一会改变金币的入口是签到。按钮只在今天还没签到时出现；开盲盒、
+// 打赏等其它写操作仍然只引导用户去站点。
+func TestCoinPageOnlySignsAndNeverOtherWrites(t *testing.T) {
 	a := testApp(t)
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
 		t.Fatal(err)
 	}
 	a.coins.baseLoaded, a.coins.todayLoaded, a.coins.sign = true, true, coinSignStatus{Known: true, Signed: false}
 	tt := ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
-	for _, forbidden := range []string{"签到", "签到领金币", "开盲盒", "打赏"} {
-		// 「签到」作为状态文案可以出现，但界面上不应有签到按钮；
-		// 这里只检查会导致金币变化的动作文案。
-		if forbidden == "签到" {
-			continue
-		}
+	tt.Frame()
+	if _, ok := tt.Find("立即签到"); !ok {
+		t.Fatalf("未签到时缺少签到按钮：%q", tt.Texts())
+	}
+	for _, forbidden := range []string{"签到领金币", "开盲盒", "打赏"} {
 		if tt.HasText(forbidden) {
 			t.Errorf("金币页不该出现写操作入口 %q：%q", forbidden, tt.Texts())
 		}
@@ -409,6 +419,219 @@ func TestCoinPageHasNoWriteActions(t *testing.T) {
 		if _, ok := tt.Find(label); !ok {
 			t.Errorf("金币窗口缺少「%s」按钮：%q", label, tt.Texts())
 		}
+	}
+}
+
+// 签到是金币页唯一实现的写操作：POST 不带请求体、不带幂等键；成功后按响应
+// 点亮签到状态，并重新拉余额与今日明细（签到同时改变金币与流水）。
+func TestCoinSignInPostsAndRefreshes(t *testing.T) {
+	var mu sync.Mutex
+	posts, balances, todays := 0, 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer tok" {
+			t.Errorf("%s 缺少令牌：%q", r.URL.Path, got)
+		}
+		switch {
+		case r.URL.Path == "/api/v1/me/sign" && r.Method == http.MethodPost:
+			if key := r.Header.Get("Idempotency-Key"); key != "" {
+				t.Errorf("签到没有幂等要求，不该带 Idempotency-Key：%q", key)
+			}
+			if body, _ := io.ReadAll(r.Body); len(body) != 0 {
+				t.Errorf("签到不该带请求体：%q", body)
+			}
+			mu.Lock()
+			posts++
+			mu.Unlock()
+			_, _ = io.WriteString(w, envelopeJSON(`{"signed":true,"streak":6,"reward_coins":5}`))
+		case r.URL.Path == "/api/v1/me/sign":
+			_, _ = io.WriteString(w, envelopeJSON(`{"signed":true,"streak":6,"reward_coins":5}`))
+		case r.URL.Path == "/api/v1/me/coins/balance":
+			mu.Lock()
+			balances++
+			mu.Unlock()
+			_, _ = io.WriteString(w, envelopeJSON(`{"coins":105}`))
+		case r.URL.Path == "/api/v1/me/coins/balance-with-ranking":
+			_, _ = io.WriteString(w, envelopeJSON(`{"coins":105,"rank":9}`))
+		case r.URL.Path == "/api/v1/me/coins/today-transaction":
+			mu.Lock()
+			todays++
+			mu.Unlock()
+			_, _ = io.WriteString(w, envelopeJSON(`[{"id":"c1","reason":"checkin","amount":5}]`))
+		case r.URL.Path == "/api/v1/pandora/today":
+			_, _ = io.WriteString(w, envelopeJSON(`{"has_box":false}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	a := coinTestClient(t, srv)
+	a.coins.sign = coinSignStatus{Known: true, Signed: false}
+	a.signInNow()
+	waitCoin(t, "签到并刷新余额", func() bool {
+		return !a.coins.signBusy && a.coins.sign.Signed &&
+			a.coins.balance == 105 && a.coins.todayLoaded
+	})
+	mu.Lock()
+	gotPosts, gotBalances, gotTodays := posts, balances, todays
+	mu.Unlock()
+	if gotPosts != 1 {
+		t.Errorf("应提交 1 次签到，实际 %d", gotPosts)
+	}
+	if gotBalances == 0 || gotTodays == 0 {
+		t.Errorf("签到后应刷新余额与今日明细：余额 %d 次，今日 %d 次", gotBalances, gotTodays)
+	}
+	if a.coins.sign.Streak != 6 || a.coins.sign.Coins != 5 {
+		t.Errorf("签到状态没有按响应更新：%+v", a.coins.sign)
+	}
+	if len(a.coins.todayItems) != 1 || a.coins.todayItems[0].Reason != "checkin" {
+		t.Errorf("今日明细没有刷新：%+v", a.coins.todayItems)
+	}
+	if len(a.toasts) != 1 || a.toasts[0].target != toastCoins {
+		t.Fatalf("签到结果应投递到金币窗口：%+v", a.toasts)
+	}
+	for _, want := range []string{"签到成功", "5 金币", "连续 6 天"} {
+		if !strings.Contains(a.toasts[0].text, want) {
+			t.Errorf("签到成功提示缺少 %q：%q", want, a.toasts[0].text)
+		}
+	}
+}
+
+// 今天已经签过时服务端返回 409 conflict：不要当成失败展示，按已签到处理，
+// 并从签到状态接口同步连续天数。
+func TestCoinSignConflictMarksSignedToday(t *testing.T) {
+	var mu sync.Mutex
+	posts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/me/sign":
+			if r.Method == http.MethodPost {
+				mu.Lock()
+				posts++
+				mu.Unlock()
+				w.WriteHeader(http.StatusConflict)
+				_, _ = io.WriteString(w, `{"c":409,"code":"conflict","m":"今日已签到","d":null}`)
+				return
+			}
+			_, _ = io.WriteString(w, envelopeJSON(`{"signed":true,"streak":3}`))
+		case "/api/v1/me/coins/balance":
+			_, _ = io.WriteString(w, envelopeJSON(`{"coins":100}`))
+		case "/api/v1/me/coins/balance-with-ranking":
+			_, _ = io.WriteString(w, envelopeJSON(`{"coins":100,"rank":9}`))
+		case "/api/v1/pandora/today":
+			_, _ = io.WriteString(w, envelopeJSON(`{"has_box":false}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	a := coinTestClient(t, srv)
+	a.coins.sign = coinSignStatus{Known: true, Signed: false, Streak: 2}
+	a.signInNow()
+	waitCoin(t, "重复签到按已签到处理", func() bool {
+		return !a.coins.signBusy && a.coins.sign.Signed && a.coins.sign.Streak == 3
+	})
+	mu.Lock()
+	gotPosts := posts
+	mu.Unlock()
+	if gotPosts != 1 {
+		t.Errorf("应提交 1 次签到，实际 %d", gotPosts)
+	}
+	if len(a.toasts) != 1 || !strings.Contains(a.toasts[0].text, "已经签过") {
+		t.Errorf("重复签到应提示今天已经签过：%+v", a.toasts)
+	}
+}
+
+// 缺少 write:economy 时和收藏 / 表态一样交给全局授权弹窗，而不是弹一条
+// 普通错误 toast；授权成功后会原样重跑一次签到。
+func TestCoinSignNeedsWriteEconomyScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/me/sign" && r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"c":403,"code":"insufficient_scope","required_scope":["write:economy"],"m":"缺少权限范围","d":null}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	a := coinTestClient(t, srv)
+	a.coins.sign = coinSignStatus{Known: true, Signed: false}
+	a.signInNow()
+	waitCoin(t, "签到缺权限进授权弹窗", func() bool {
+		return !a.coins.signBusy && a.authGate.open
+	})
+	found := false
+	for _, scope := range a.authGate.need.Scopes {
+		if scope == "write:economy" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("授权弹窗缺少 write:economy：%+v", a.authGate.need)
+	}
+	if len(a.authGate.replays) != 1 {
+		t.Errorf("授权成功后应重跑签到：%+v", a.authGate.replays)
+	}
+	if len(a.toasts) != 0 {
+		t.Errorf("缺权限时不该弹普通错误 toast：%+v", a.toasts)
+	}
+	if a.coins.sign.Signed {
+		t.Error("缺权限失败时不能把状态改成已签到")
+	}
+}
+
+// 签到按钮接在金币窗口的余额卡片里：未签到时出现，点一下真的提交；结果以
+// 金币窗口自己的 toast 报告，签完之后按钮消失。
+func TestCoinSignButtonSubmitsAndReportsToast(t *testing.T) {
+	var posts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/me/sign":
+			if r.Method == http.MethodPost {
+				posts.Add(1)
+				_, _ = io.WriteString(w, envelopeJSON(`{"signed":true,"streak":6,"reward_coins":5}`))
+				return
+			}
+			_, _ = io.WriteString(w, envelopeJSON(`{"signed":true,"streak":6}`))
+		case "/api/v1/me/coins/balance":
+			_, _ = io.WriteString(w, envelopeJSON(`{"coins":105}`))
+		case "/api/v1/me/coins/balance-with-ranking":
+			_, _ = io.WriteString(w, envelopeJSON(`{"coins":105,"rank":9}`))
+		case "/api/v1/me/coins/today-transaction":
+			_, _ = io.WriteString(w, envelopeJSON(`[{"id":"c1","reason":"checkin","amount":5}]`))
+		case "/api/v1/pandora/today":
+			_, _ = io.WriteString(w, envelopeJSON(`{"has_box":false}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	a := coinTestClient(t, srv)
+	a.coins.baseLoaded, a.coins.balance, a.coins.balanceOK = true, 100, true
+	a.coins.todayLoaded = true
+	a.coins.sign = coinSignStatus{Known: true, Signed: false}
+	tt := ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
+	tt.Frame()
+	if _, ok := tt.Find("立即签到"); !ok {
+		t.Fatalf("未签到时缺少签到按钮：%q", tt.Texts())
+	}
+	if err := tt.Click("立即签到"); err != nil {
+		t.Fatalf("点击签到失败：%v", err)
+	}
+	waitCoin(t, "点击签到提交", func() bool {
+		return posts.Load() == 1 && !a.coins.signBusy && a.coins.sign.Signed
+	})
+
+	tt = ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
+	tt.Frame()
+	if !tt.HasText("获得 5 金币 · 连续 6 天") {
+		t.Fatalf("金币窗口没有显示签到结果的 toast：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("立即签到"); ok {
+		t.Errorf("已签到后仍显示签到按钮：%q", tt.Texts())
+	}
+	tt.Advance(6 * time.Second)
+	if tt.HasText("获得 5 金币 · 连续 6 天") {
+		t.Errorf("签到提示过期后还留在窗口里，说明它是内联文字而不是 toast：%q", tt.Texts())
 	}
 }
 
@@ -564,6 +787,18 @@ func TestCoinWindowMinimumSize(t *testing.T) {
 			t.Errorf("%q 超出 %d 宽的窗口：x=%.0f 宽 %.0f",
 				label, coinWinMinWidth, r.X, r.W)
 		}
+	}
+
+	// 未签到时多出一颗签到按钮，最小尺寸下它也不能被挤出窗口。
+	a.coins.sign = coinSignStatus{Known: true, Signed: false}
+	tt = ui.NewTester(a.coinWindowView, coinWinMinWidth, coinWinMinHeight)
+	tt.Frame()
+	r, ok := tt.Find("立即签到")
+	if !ok {
+		t.Fatalf("最小窗口下缺少签到按钮：%q", tt.Texts())
+	}
+	if r.X < 0 || r.X+r.W > coinWinMinWidth {
+		t.Errorf("签到按钮超出 %d 宽的窗口：x=%.0f 宽 %.0f", coinWinMinWidth, r.X, r.W)
 	}
 }
 

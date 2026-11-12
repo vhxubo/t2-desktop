@@ -16,22 +16,24 @@ import (
 )
 
 // 金币页的数据层。这一页是独立的金币窗口（见 coins_window.go），入口是
-// 主窗口标题栏上登录账号左侧的金币数。全部是只读端点，与 api-economy.md
-// 的「金币查询 / 签到 / 榜单」一一对应；标「需开通」的端点失败时只降级
-// 展示，不参与授权弹窗。
+// 主窗口标题栏上登录账号左侧的金币数。除签到外都是只读端点，与
+// api-economy.md 的「金币查询 / 签到 / 榜单」一一对应；标「需开通」的端点
+// 失败时只降级展示，不参与授权弹窗。
 //
-//	GET /v1/me/coins/balance             余额
-//	GET /v1/me/coins/transactions        金币流水（分页 + 日期过滤，无 limit）
-//	GET /v1/me/coins/balance-with-ranking 余额 + 我的排名（需开通）
-//	GET /v1/me/coins/today-transaction   今日收支明细（需开通）
-//	GET /v1/me/coins/daily-flow          按日聚合（需开通）
-//	GET /v1/me/coins/expense-breakdown   收入 / 支出分类（需开通）
-//	GET /v1/me/sign                      今日签到状态
-//	GET /v1/coins/ranking                金币排行榜（需开通）
-//	GET /v1/pandora/today                今日盲盒状态（需开通，只读）
+//	GET  /v1/me/coins/balance              余额
+//	GET  /v1/me/coins/transactions         金币流水（分页 + 日期过滤，无 limit）
+//	GET  /v1/me/coins/balance-with-ranking 余额 + 我的排名（需开通）
+//	GET  /v1/me/coins/today-transaction    今日收支明细（需开通）
+//	GET  /v1/me/coins/daily-flow           按日聚合（需开通）
+//	GET  /v1/me/coins/expense-breakdown    收入 / 支出分类（需开通）
+//	GET  /v1/me/sign                       今日签到状态
+//	POST /v1/me/sign                       签到（scope write:economy）
+//	GET  /v1/coins/ranking                 金币排行榜（需开通）
+//	GET  /v1/pandora/today                 今日盲盒状态（需开通，只读）
 //
-// 这里没有任何 POST：签到、开盲盒、打赏、竞猜、兑换、解锁等会改变金币的
-// 操作都不属于本次实现范围。
+// 签到是唯一实现的写操作：它没有请求体、没有幂等键，今日重复签到由服务端
+// 以 409 conflict 拒绝。开盲盒、打赏、竞猜、兑换、解锁等其它会改变金币的
+// 操作仍然不做，界面上也不提供入口。
 const (
 	coinBalancePath        = "/v1/me/coins/balance"
 	coinBalanceRankingPath = "/v1/me/coins/balance-with-ranking"
@@ -45,6 +47,10 @@ const (
 
 	coinRankingLimit = 30
 	coinFlowDays     = 30
+
+	// coinSignTimeout 是提交签到的超时。签到本身很轻，和收藏 / 表态一样给
+	// 20 秒，避免网络卡住时按钮一直转圈。
+	coinSignTimeout = 20 * time.Second
 )
 
 // 金币历史的时间范围。只作为 query 参数使用，客户端不做二次筛选：
@@ -120,6 +126,10 @@ type coinSignStatus struct {
 	Signed bool
 	Streak int
 	Coins  float64
+	// RewardKnown 表示 Coins 来自明确的奖励字段（reward_coins / today_coins /
+	// reward）。文档没有给签到响应的字段表，name 为 coins 的字段可能是余额，
+	// 所以只有明确标注过是奖励的字段才允许展示成「获得」。
+	RewardKnown bool
 }
 
 type coinDailyFlow struct {
@@ -172,6 +182,8 @@ type coinState struct {
 
 	sign        coinSignStatus
 	signErr     string
+	signBusy    bool   // 正在提交签到；按钮据此禁用，避免连点
+	signGen     uint64 // 丢弃过期的签到结果（刷新、重授权、换账号）
 	pandora     coinPandoraStatus
 	pandoraSeen bool
 
@@ -444,8 +456,13 @@ func decodeCoinSign(d json.RawMessage) coinSignStatus {
 				out.Streak = int(math.Round(n))
 			}
 		}
+		if !out.RewardKnown {
+			if n, ok := o.number("reward_coins", "today_coins", "reward"); ok {
+				out.Coins, out.RewardKnown = n, true
+			}
+		}
 		if out.Coins == 0 {
-			if n, ok := o.number("coins", "coin", "reward", "today_coins"); ok {
+			if n, ok := o.number("coins", "coin"); ok {
 				out.Coins = n
 			}
 		}
@@ -644,6 +661,23 @@ func (c *Client) fetchCoinSign(ctx context.Context) (coinSignStatus, error) {
 		return coinSignStatus{}, err
 	}
 	return decodeCoinSign(d), nil
+}
+
+// signToday 提交今日签到（POST /v1/me/sign，scope write:economy）。签到没有
+// 请求体，也不在文档的幂等键清单里，因此不带 Idempotency-Key。它和其它写
+// 操作一样走 withAuthRetry：401 先刷新令牌再重试一次，403 / 429 等原样交给
+// 调用方。今日已签到时服务端返回 409 conflict，由调用方按「已经签过」处理。
+func (c *Client) signToday(ctx context.Context) (coinSignStatus, error) {
+	var status coinSignStatus
+	_, err := withAuthRetry(c, ctx, func(token string) (struct{}, error) {
+		d, err := c.postJSON(ctx, c.base()+coinSignPath, token, "", nil)
+		if err != nil {
+			return struct{}{}, err
+		}
+		status = decodeCoinSign(d)
+		return struct{}{}, nil
+	})
+	return status, err
 }
 
 func (c *Client) fetchCoinDailyFlow(ctx context.Context, start, end string) ([]coinDailyFlow, error) {

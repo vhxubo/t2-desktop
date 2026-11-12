@@ -262,6 +262,8 @@ func (a *app) coinWindowView(c *ui.Context) {
 	// 排行榜里的用户标识可能把链接交给系统浏览器，服务取本窗口自己的那份。
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
+	// 签到的结果以 toast 显示在这个窗口里；窗口不在了就退回主窗口。
+	a.drainToasts(c, a.claimsToasts(toastCoins))
 	// Esc 关闭窗口：随时可以从标题栏的金币数再打开。
 	c.OnShortcut(0, ui.KeyEscape, a.closeCoinWindow)
 
