@@ -502,8 +502,9 @@ func TestClickOpensDetailView(t *testing.T) {
 	}
 }
 
-// 详情页要把帖子与评论的表情表态、打赏状态都展示出来：帖子在正文末尾的
-// 左栏，评论在正文下方，因此同一个窗口里两边的数值不会互相顶掉。
+// 详情页的互动区：表态归并成一枚胶囊（只给总数与表情），点开才看到每种表情
+// 各几次；打赏汇总单独一枚。帖子在正文末尾，评论在正文下方，两边的数值不会
+// 互相顶掉。
 func TestDetailShowsReactionsAndRewards(t *testing.T) {
 	a := testApp(t)
 	a.openDetail(Item{ShortID: "JBYGf2A", URL: "https://2libra.com/post/work/JBYGf2A"})
@@ -529,34 +530,89 @@ func TestDetailShowsReactionsAndRewards(t *testing.T) {
 	if left.X >= right.X {
 		t.Errorf("帖子打赏应位于左栏、评论打赏位于右栏：%+v / %+v", left, right)
 	}
-	for _, want := range []string{"👍", "❤️", "8", "6", "💰", "我"} {
-		if !tt.HasText(want) {
-			t.Errorf("详情页缺少表情 / 打赏标签 %q：%q", want, tt.Texts())
+	// 表态摘要只给总数：帖子 8 + 6 = 14，评论 2；每种表情各几次不直接铺开。
+	// 右侧是两个图标入口（表态 / 打赏），不再是一条文字标签。
+	for _, want := range []string{"👍", "❤️", "💰", "表态 14 次", "表态 2 次", "表态", "打赏"} {
+		if tt.HasText(want) {
+			continue
+		}
+		if _, ok := tt.Find(want); !ok {
+			t.Errorf("详情页缺少 %q：%q", want, tt.Texts())
 		}
 	}
-	// 自己已表态的 👍 标签整块高亮并带「我」字；颜色由 socialBadges 的
-	// 单元逻辑保证，这里确认可读的标记确实在界面上。
-	if len(topic.Reactions) != 2 || !topic.Reactions[0].Mine {
-		t.Errorf("帖子表情状态解析错误：%+v", topic.Reactions)
+	if tt.HasText("8 次") || tt.HasText("6 次") {
+		t.Errorf("摘要不该铺开每种表情的次数：%q", tt.Texts())
 	}
-	if _, ok := tt.Find("我"); !ok {
-		t.Errorf("自己的表态没有显著标出：%q", tt.Texts())
+
+	// 点摘要才看到明细：各表情的次数与自己是否表过。
+	if err := tt.Click("表态 14 次"); err != nil {
+		t.Fatalf("点开表态明细失败：%v", err)
 	}
-	// 自己的 👍 标签整块带强调色底，别人只表过的 ❤️ 仍是普通表面色：
-	// 在表情左侧的标签内边距上取色，两处必须不同。
-	mineEmoji, ok := tt.Find("👍")
+	tt.Frame()
+	for _, want := range []string{"表态明细", "👍 8 次", "❤️ 6 次", "我"} {
+		if !tt.HasText(want) {
+			t.Errorf("表态明细缺少 %q：%q", want, tt.Texts())
+		}
+	}
+}
+
+// 详情页是左右两张卡片：左边标题 + 正文，右边评论；评论卡片用和页面
+// 不同的底色分出来，输入框固定在评论卡片底部。
+func TestDetailSplitViewLayout(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+
+	title, ok := tt.Find("正文与评论的测试帖")
 	if !ok {
-		t.Fatal("找不到自己的表态标签")
+		t.Fatalf("找不到帖子标题：%q", tt.Texts())
 	}
-	otherEmoji, ok := tt.Find("❤️")
+	comment, ok := tt.Find("评论")
 	if !ok {
-		t.Fatal("找不到其他人的表态标签")
+		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
 	}
+	if title.X >= comment.X {
+		t.Errorf("标题应在左栏、评论在右栏：标题 %+v / 评论 %+v", title, comment)
+	}
+	// 标题用大字号加粗：24px 的行高明显高于正文的 13px 评论。
+	if title.H < 28 {
+		t.Errorf("帖子标题字号不够大：%+v", title)
+	}
+	// 标题只出现一次，页头不再重复一遍。
+	seen := 0
+	for _, s := range tt.Texts() {
+		if s == "正文与评论的测试帖" {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Errorf("帖子标题出现了 %d 次，应只在正文顶部出现一次：%q", seen, tt.Texts())
+	}
+
+	// 评论列表在右栏，输入框固定在列表下方的卡片底部。
+	first, ok := tt.Find("1 楼")
+	if !ok {
+		t.Fatalf("找不到第一条评论：%q", tt.Texts())
+	}
+	editor, ok := tt.Find("写评论")
+	if !ok {
+		t.Fatalf("找不到评论输入框：%q", tt.Texts())
+	}
+	if editor.X < comment.X-20 {
+		t.Errorf("输入框应属于右栏：输入框 %+v / 评论 %+v", editor, comment)
+	}
+	if first.Y >= editor.Y {
+		t.Errorf("输入框应固定在评论列表下方：第一条评论 %+v / 输入框 %+v", first, editor)
+	}
+	if bottom := editor.Y + editor.H; bottom > 760 {
+		t.Errorf("输入框被顶出窗口：底边 %.1f", bottom)
+	}
+
+	// 右侧卡片的底色必须和页面底色不同，双栏边界才看得清。
 	im := tt.Image()
-	mineBG := im.RGBAAt(int(mineEmoji.X)-3, int(mineEmoji.Y+mineEmoji.H/2))
-	otherBG := im.RGBAAt(int(otherEmoji.X)-3, int(otherEmoji.Y+otherEmoji.H/2))
-	if mineBG == otherBG {
-		t.Errorf("自己的表态没有单独高亮：mine=%v other=%v", mineBG, otherBG)
+	page := im.RGBAAt(4, int(comment.Y+comment.H/2))
+	panel := im.RGBAAt(int(comment.X)-6, int(comment.Y+comment.H/2))
+	if page == panel {
+		t.Errorf("评论卡片没有独立底色：页面 %v / 卡片 %v", page, panel)
 	}
 }
 

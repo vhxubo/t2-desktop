@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -16,7 +15,7 @@ import (
 //
 // 端点与字段名逐字照抄 openapi v1 的 api-write.md：
 //
-//	GET  /v1/nodes      节点列表（返回数组；?parent=<slug> 取子节点）
+//	GET  /v1/nodes      节点列表（顶层自带 children；?parent=<slug> 取子节点）
 //	POST /v1/topics 🔑  发帖（必须带 Idempotency-Key，成功返回 201）
 //
 // 发帖的可选块按文档的字段名原样组装：vote（投票）、score（评分）、
@@ -60,13 +59,10 @@ const (
 	composeGuardLevelLo = 1
 	composeGuardLevelHi = 100
 	composeGuardAttrHi  = 10
-
-	// 节点列表变化极少，文档建议缓存 10 分钟以上。
-	composeNodeCacheTTL = 10 * time.Minute
 )
 
 // composeNode 是一个可发帖的节点。发帖必须用 uuid（node_id），不是 slug；
-// 下拉框只认字符串，所以列表项自己带着 id，选中时再换回去。
+// 级联选择按 id 记选中项，显示时才换成名字。
 type composeNode struct {
 	ID         string
 	Slug       string
@@ -74,12 +70,26 @@ type composeNode struct {
 	ParentSlug string
 	ParentName string
 	PostCount  int
+	// Label 只在显示名撞车时使用（同一个父节点下有两个同名节点，例如 AI 下的
+	// 两个「中转站」）：补上 slug 才能在两列级联选择里区分。正常情况下为空，
+	// nameDisplay() 现算。
+	Label string
 }
 
-// display 是下拉框里的一行：子节点带上父节点名，避免两个同名节点分不清。
-func (n composeNode) display() string {
+// parentDisplay 是「父节点 · 子节点」的形式，子节点才带父名，避免两个同名
+// 节点分不清。
+func (n composeNode) parentDisplay() string {
 	if n.ParentName != "" && n.ParentName != n.Name {
 		return n.ParentName + " · " + n.Name
+	}
+	return n.Name
+}
+
+// nameDisplay 是级联选择第二列里的一行。父节点已经在第一列展开，所以只
+// 显示这一级自己的名字；同名兄弟补上 slug，否则两行看起来一模一样。
+func (n composeNode) nameDisplay() string {
+	if n.Label != "" {
+		return n.Name + " (" + n.Slug + ")"
 	}
 	return n.Name
 }
@@ -149,15 +159,19 @@ type composeSelection struct {
 // composeState 是「发帖」窗口的全部界面状态。只在 UI 线程读写；后台请求
 // 完成后通过 publish 回填，并用 seq 丢弃过期结果。
 type composeState struct {
-	// 节点下拉框
+	// 节点级联选择
 	nodes       []composeNode
 	nodesAt     time.Time
 	nodeSeq     uint64
 	nodeLoading bool
 	nodeLoaded  bool
 	nodeErr     string
-	// nodeName 是下拉框里选中的显示名；payload 时按它换回 uuid。
-	nodeName string
+	// nodeFailedAt 是上一次刷新失败的时间：失败后按 nodeRetryCooldown 冷却，
+	// 否则视图每帧重建都会再发一次注定失败的请求（「重试」按钮会清掉它）。
+	nodeFailedAt time.Time
+	// nodePick 是第一列的展开状态；nodeID 是选中的节点 uuid，提交时直接用。
+	nodePick cascaderState
+	nodeID   string
 
 	// 基础字段
 	title       string
@@ -251,83 +265,32 @@ func newComposeState() *composeState {
 }
 
 // ------------------------------------------------------------------
-// 节点列表
+// 节点列表（请求与本地缓存在 nodes.go）
 // ------------------------------------------------------------------
 
-// fetchNodeList 读 GET /v1/nodes；parent 非空时取该节点的子节点。响应 d 是
-// 数组，不是分页对象。
-func (c *Client) fetchNodeList(ctx context.Context, parent string) ([]composeNode, error) {
-	return withAuthRetry(c, ctx, func(token string) ([]composeNode, error) {
-		u := c.apiURL("/v1/nodes")
-		if parent != "" {
-			u += "?parent=" + url.QueryEscape(parent)
-		}
-		d, err := c.getJSON(ctx, u, token)
-		if err != nil {
-			return nil, err
-		}
-		rows := rawArray(d)
-		out := make([]composeNode, 0, len(rows))
-		for _, raw := range rows {
-			o := asObject(raw)
-			if o == nil {
-				continue
-			}
-			n := composeNode{
-				ID:         o.str("id"),
-				Slug:       o.str("slug"),
-				Name:       o.str("name"),
-				ParentSlug: o.str("parent_slug"),
-				PostCount:  o.num("post_count"),
-			}
-			if n.ID == "" || n.Name == "" {
-				continue
-			}
-			out = append(out, n)
-		}
-		return out, nil
-	})
-}
-
-// loadNodeTree 把顶层节点与它们的子节点拼成一份扁平列表。文档没有「一次取
-// 全部节点」的端点，子节点要按 parent 逐个问；节点总量很小，而且结果会缓存
-// 十分钟，所以这样问是可以接受的。某个父节点的子节点取不到时只丢那一支，
-// 不让整份列表失败。
-func (c *Client) loadNodeTree(ctx context.Context) ([]composeNode, error) {
-	top, err := c.fetchNodeList(ctx, "")
-	if err != nil {
-		return nil, err
-	}
-	out := make([]composeNode, 0, len(top)+16)
-	for _, n := range top {
-		out = append(out, n)
-		if len(out) >= 200 {
-			break
-		}
-		children, err := c.fetchNodeList(ctx, n.Slug)
-		if err != nil {
-			continue
-		}
-		for _, ch := range children {
-			// 子节点响应里的 parent_slug 可能缺省，用已知的父节点补上。
-			if ch.ParentSlug == "" {
-				ch.ParentSlug = n.Slug
-			}
-			ch.ParentName = n.Name
-			out = append(out, ch)
-		}
-	}
-	return out, nil
-}
-
-// ensureComposeNodes 是受保护的任务：节点列表按 TTL 缓存，正在加载时不重复
-// 发起请求，失败时保留上一次的结果。
+// ensureComposeNodes 是受保护的任务：先把本地缓存里的节点摆进级联选择（内存
+// 或磁盘，哪怕过期），再按新鲜度决定要不要刷新；正在加载时不重复发请求，
+// 失败时保留上一次的结果。
 func (a *app) ensureComposeNodes() {
 	st := a.compose
 	if st == nil || st.nodeLoading {
 		return
 	}
-	if len(st.nodes) > 0 && time.Since(st.nodesAt) < composeNodeCacheTTL {
+	// 1) 缓存优先：首帧就有可选项，不用先看一屏「正在读取节点…」。
+	if len(st.nodes) == 0 {
+		if nodes, at, ok := a.nodeSnapshot(); ok {
+			st.nodes, st.nodesAt, st.nodeLoaded = nodes, at, true
+			if st.selectedNode() == nil {
+				st.nodeID = defaultComposeNode(nodes)
+			}
+		}
+	}
+	// 2) 新鲜期内直接用，不再请求。
+	if len(st.nodes) > 0 && nodeCacheFresh(st.nodesAt) {
+		return
+	}
+	// 3) 刚失败过就先等一下，别对着一个失败的服务端每帧重试。
+	if !st.nodeFailedAt.IsZero() && time.Since(st.nodeFailedAt) < nodeRetryCooldown {
 		return
 	}
 	if !a.autoLoad && len(st.nodes) == 0 {
@@ -342,26 +305,41 @@ func (a *app) ensureComposeNodes() {
 		defer cancel()
 		nodes, err := a.client.loadNodeTree(ctx)
 		a.publish(func() {
+			if err == nil {
+				// 窗口已经关掉也把结果留下来，下次打开直接命中缓存。
+				a.storeNodeCache(nodes, time.Now())
+			}
 			if st != a.compose || st.nodeSeq != gen {
 				return
 			}
 			st.nodeLoading = false
 			if err != nil {
-				// 已经有上一次的列表就继续用，只把原因记下来。
+				// 已经有上一次的列表就继续用，只把原因记下来；冷却从这里开始。
+				st.nodeFailedAt = time.Now()
 				if len(st.nodes) == 0 {
 					st.nodeErr = friendlyError(err)
 				}
+				a.notifyNodesLoaded(err)
 				return
 			}
 			st.nodeErr = ""
+			st.nodeFailedAt = time.Time{}
 			st.nodes = nodes
 			st.nodeLoaded = true
-			st.nodesAt = time.Now()
+			st.nodesAt = a.nodes.at
 			if st.selectedNode() == nil {
-				st.nodeName = defaultComposeNode(nodes)
+				st.nodeID = defaultComposeNode(nodes)
 			}
+			a.notifyNodesLoaded(nil)
 		})
 	}()
+}
+
+// notifyNodesLoaded 触发节点加载完成的测试钩子。
+func (a *app) notifyNodesLoaded(err error) {
+	if a.onNodesLoaded != nil {
+		a.onNodesLoaded(err)
+	}
 }
 
 // hasAuthScope 报告当前令牌是否已经带上某个权限范围。发帖窗口据此在底部
@@ -376,29 +354,76 @@ func (a *app) hasAuthScope(want string) bool {
 }
 
 // defaultComposeNode 是首次打开时的默认节点：优先「社区讨论」，其次第一个。
+// 返回 uuid，提交与级联选择都用它。
 func defaultComposeNode(nodes []composeNode) string {
 	for _, n := range nodes {
 		if n.ID == communityNodeID {
-			return n.display()
+			return n.ID
 		}
 	}
 	if len(nodes) > 0 {
-		return nodes[0].display()
+		return nodes[0].ID
 	}
 	return ""
 }
 
-// selectedNode 返回下拉框当前选中的节点；没选中时为 nil。
+// selectedNode 返回级联选择当前选中的节点；没选中时为 nil。
 func (st *composeState) selectedNode() *composeNode {
-	if st == nil || st.nodeName == "" {
+	if st == nil || st.nodeID == "" {
 		return nil
 	}
 	for i := range st.nodes {
-		if st.nodes[i].display() == st.nodeName {
+		if st.nodes[i].ID == st.nodeID {
 			return &st.nodes[i]
 		}
 	}
 	return nil
+}
+
+// nodeCascaderOptions 把扁平的节点表拼成级联选择的两列：第一列是顶层
+// 分类，第二列是它下面的节点。顶层分类本身只是分类，不单独作为可选项；
+// 没有子节点的分类是叶子，点第一列就会直接选中。
+func nodeCascaderOptions(nodes []composeNode) []cascaderOption {
+	roots := make([]composeNode, 0, len(nodes))
+	for _, n := range nodes {
+		if n.ParentSlug == "" {
+			roots = append(roots, n)
+		}
+	}
+	// 数据异常（全是子节点、没有顶层）时退回一份平铺列表，至少还能选。
+	if len(roots) == 0 {
+		roots = nodes
+	}
+	out := make([]cascaderOption, 0, len(roots))
+	for _, root := range roots {
+		opt := cascaderOption{Value: root.ID, Label: root.nameDisplay()}
+		if root.ParentSlug == "" && root.Slug != "" {
+			for _, n := range nodes {
+				if n.ID != root.ID && n.ParentSlug == root.Slug {
+					opt.Children = append(opt.Children, cascaderOption{
+						Value:  n.ID,
+						Label:  n.nameDisplay(),
+						Detail: nodePostCount(n.PostCount),
+					})
+				}
+			}
+		}
+		// 有子节点的顶层分类只是分类，post_count 是下面所有子节点的合计，
+		// 显示在分类上会让人以为能直接发到这里；只有叶子才显示帖子数。
+		if len(opt.Children) == 0 {
+			opt.Detail = nodePostCount(root.PostCount)
+		}
+		out = append(out, opt)
+	}
+	return out
+}
+
+// nodePostCount 是级联选择里的帖子数说明；0 不显示。
+func nodePostCount(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strconv.Itoa(n)
 }
 
 // ------------------------------------------------------------------
@@ -873,7 +898,7 @@ func (c *Client) createTopic(ctx context.Context, payload map[string]any, key st
 // resetComposeForm 在发表成功后清空正文与各组件，保留节点选择：连着发两篇
 // 通常还是发到同一个节点，节点列表也不用重拉。
 func (st *composeState) resetComposeForm() {
-	nodes, nodesAt, loaded, name := st.nodes, st.nodesAt, st.nodeLoaded, st.nodeName
+	nodes, nodesAt, loaded, id, pick := st.nodes, st.nodesAt, st.nodeLoaded, st.nodeID, st.nodePick
 	*st = *newComposeState()
-	st.nodes, st.nodesAt, st.nodeLoaded, st.nodeName = nodes, nodesAt, loaded, name
+	st.nodes, st.nodesAt, st.nodeLoaded, st.nodeID, st.nodePick = nodes, nodesAt, loaded, id, pick
 }

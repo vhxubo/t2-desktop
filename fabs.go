@@ -2,7 +2,8 @@ package main
 
 import "github.com/egoist/mygo/ui"
 
-// 右下角的悬浮按钮（FAB）组：主页与详情页共用同一套画法与几何。
+// 右下角的悬浮按钮（FAB）组：主页列表用这一套画法与几何。详情页不再
+// 使用浮在内容上的按钮：刷新与返回顶部收进页头，避免压住评论输入框。
 //
 // 一列按钮贴着内容区右下角，最下面那个恒定不动，其余往上长——新出现的
 // 按钮（「返回顶部」）不会把「刷新」「发帖」顶得上下跳。整列绝对定位：
@@ -12,10 +13,6 @@ const (
 	fabBottom float32 = 24 // 距内容区下边
 	fabGap    float32 = 10 // 竖排按钮之间的间距
 	fabCircle float32 = 40 // 次级按钮（刷新 / 返回顶部）的直径
-	// fabColumnInset 是这一列按钮占用的右侧宽度：按钮 + 右边距 + 间隙。
-	// 贴着右下角的内容（详情页的评论输入框）据此让出这一段，免得点「发送」
-	// 时点到浮在上面的按钮。
-	fabColumnInset float32 = fabCircle + fabRight + fabGap
 )
 
 // fabStack 画右下角竖排的一列悬浮按钮。buttons 按从上到下的顺序给出，
@@ -96,31 +93,4 @@ func (a *app) listFabs(c *ui.Context) {
 func listScrolled(st *tabState) bool {
 	first, _ := st.list.Visible()
 	return first > 0
-}
-
-// detailFabs 是详情页右下角的一列悬浮按钮：刷新，以及正文或评论滚离顶部
-// 之后才出现的「返回顶部」。两栏各自滚动，任一栏离开顶部就说明页面上方
-// 还有内容。
-func (a *app) detailFabs(c *ui.Context, d *detailState) {
-	first, _ := d.list.Visible()
-	var buttons []func(*ui.Context)
-	if d.bodyScroll.Y > 0 || first > 0 {
-		buttons = append(buttons, func(c *ui.Context) {
-			a.fabButton(c, backTopIcon, "返回顶部", "正文与评论都回到顶部", false, func() {
-				// 直接把偏移写回 ScrollState 就是立即回顶（ScrollTo 会走一段
-				// 动画，回顶部不必拖时间）；评论列表按行号同样立即回顶。
-				d.bodyScroll.X, d.bodyScroll.Y = 0, 0
-				d.list.ScrollTo(0, ui.Start)
-			})
-		})
-	}
-	loading := d.topicLoading || d.replyLoading
-	buttons = append(buttons, func(c *ui.Context) {
-		tip := "重新加载正文与评论"
-		if loading {
-			tip = "正在刷新…"
-		}
-		a.fabButton(c, refreshIcon, "刷新", tip, loading, a.refreshDetail)
-	})
-	a.fabStack(c, buttons...)
 }

@@ -196,21 +196,21 @@ func (a *app) composeWindowView(c *ui.Context) {
 }
 
 // composeBasics 是节点、匿名与标题三块。节点是必填项：发帖必须给 node_id
-// （uuid），不是 slug，所以下拉框的显示名在提交前会换回 uuid。
+// （uuid），不是 slug，所以级联选择按 uuid 记选中项。节点的父子关系来自
+// GET /v1/nodes：第一列是顶层分类，第二列才是可发帖的节点。
 func (a *app) composeBasics(c *ui.Context, st *composeState) {
 	t := c.Theme()
 	ui.Row(c).FillWidth().Gap(12).AlignItems(ui.End).Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 			ui.Text(c, "节点").FontSize(12).TextColor(t.TextMuted)
 			if len(st.nodes) > 0 {
-				options := make([]string, 0, len(st.nodes))
-				for _, n := range st.nodes {
-					options = append(options, n.display())
+				options := nodeCascaderOptions(st.nodes)
+				if len(options) > 0 {
+					cascader(c, "节点", options, &st.nodeID, &st.nodePick)
+					return
 				}
-				ui.Select(c, &st.nodeName, options).Label("节点").FillWidth()
-				return
 			}
-			// 节点还没到（或取不到）时不给一个空的下拉框：说明正在做什么，
+			// 节点还没到（或取不到）时不给一个空的级联选择：说明正在做什么，
 			// 失败时把原因和服务端的原话摆出来。
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				if st.nodeLoading {
@@ -227,7 +227,9 @@ func (a *app) composeBasics(c *ui.Context, st *composeState) {
 				ui.Text(c, msg).FontSize(12).TextColor(t.TextMuted).MaxLines(2).Grow(1)
 				if st.nodeErr != "" || st.nodeLoaded {
 					if ui.Button(c, "重试").Clicked() {
+						// 手动重试要跳过失败冷却，并立刻重新请求。
 						st.nodesAt = time.Time{}
+						st.nodeFailedAt = time.Time{}
 						a.ensureComposeNodes()
 					}
 				}

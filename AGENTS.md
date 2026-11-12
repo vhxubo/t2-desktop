@@ -56,6 +56,59 @@ a pure white page.
   后台结果通过 `Window.Update` / `app.publish` 回到 UI 线程。
 - 改 UI 前先按 `.agents/skills/mygo-maintenance/SKILL.md` 的约定核对 mygo 版本与 API。
 
+## 2Libra 开放 API 文档
+
+应用里的数据全部来自 2Libra 开放 API v1。文档入口：
+<https://r2.2libra.com/openapi/v1/index.md>（通用约定、错误码、端点总表）。加端点
+或改字段前先读对应分册，不要凭记忆写：
+
+| 分册 | 内容 |
+| --- | --- |
+| [oauth.md](https://r2.2libra.com/openapi/v1/oauth.md) | 授权流程、PKCE、令牌刷新与撤销 |
+| [api-read.md](https://r2.2libra.com/openapi/v1/api-read.md) | 读端点：参数、分页、响应字段 |
+| [api-write.md](https://r2.2libra.com/openapi/v1/api-write.md) | 发帖、评论、投票、表态、收藏、关注 |
+| [api-economy.md](https://r2.2libra.com/openapi/v1/api-economy.md) | 金币、签到、打赏、盲盒、付费墙、上传 |
+| [terms.md](https://r2.2libra.com/openapi/v1/terms.md) | 第三方接入条款，涉及新能力时必读 |
+| [changelog.md](https://r2.2libra.com/openapi/v1/changelog.md) | 面向第三方的变更记录 |
+| [full.md](https://r2.2libra.com/openapi/v1/full.md) | 以上全文拼接版 |
+
+硬规则（写错任何一条都会是难查的线上问题）：
+
+- **路径、参数名、字段名原样照抄**，包括 camelCase 与 snake_case 混用的端点
+  （投票的 `voteId` / `optionId`、评论的 `parentId`）。
+- 所有响应（含 `POST /api/oauth/token`）都在 `{c,m,d,t}` 信封里；令牌在
+  `d.access_token`，不在顶层。
+- 逻辑判断只依赖 HTTP 状态码 + `code`，不要解析 `m` 的中文文案。
+  `insufficient_scope` 与 `permission_denied` 都是 403，只能靠 `code` 区分；缺权限
+  统一交给 `auth_gate.go` 的授权链路，它会重跑被中断的调用。
+- 标 🔑 的写端点必须带 `Idempotency-Key`（`postJSON` 的第 3 个参数）：超时重试用
+  同一个键，内容变了换新键，见 `compose.go`。
+- **列表字段名不统一**：`posts` / `items` / `list` / 裸数组按端点各不相同。用
+  `tabSpec.ListKey` 声明，不要写通用的「取 items」函数。
+- 未知字段必须忽略：解码走 `object.str/num/sub` 这类容错读取，不要用严格结构体
+  一次 Unmarshal 到位（v1 承诺只增字段）。
+- scope 按最小必要申请；新增能力要加进 `auth.go` 的 `defaultScopes`。文档标
+  「需开通」的端点默认不授予，需要在应用申请页面说明用途。
+- SSE 端点 `GET /v1/me/notifications/stream` 没有信封，只认 `Authorization` 头，
+  实现见 `stream.go`（15 分钟一轮重连是正常节奏）。
+
+文档分册与代码的对应关系：
+
+| 分册 | 代码 |
+| --- | --- |
+| oauth.md | `auth.go`、`auth_ui.go`、`auth_gate.go` |
+| api-read.md | `api.go`（列表与解码）、`detail.go`、`profile.go`、`user_card.go`、`notifications.go` |
+| api-write.md | `compose.go`、`detail.go`（发评论）、`follow.go`、`interact.go` |
+| api-economy.md | `coins.go`、`coins_window.go` |
+| 搜索（`/v1/search`） | `search.go`、`search_ui.go` |
+| 节点（`/v1/nodes`） | `nodes.go`（请求、父子关系、本地缓存）、`compose.go`（两列选项）、`cascader.go`（级联选择组件） |
+
+新端点的落地顺序：按文档声明路径与解码 → 用 `httptest` 加测试（断言路径、查询
+参数、请求体字段与错误分支）→ 最后画界面。文档与线上响应不一致时以实测为准，
+并在注释里写清原因（例：`GET /v1/nodes` 顶层节点自带 `children`，而
+`?parent=<slug>` 返回的是 `{items:[...]}` 而不是文档写的数组；`nodes.go` 两种
+形状都认，正常情况一次顶层请求就够）。
+
 ## 提交前验证
 
 - `CGO_ENABLED=0 go test ./...`

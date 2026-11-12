@@ -34,9 +34,9 @@ func unreadCountText(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// notificationBell 是主窗口标题栏上的通知入口：铃铛图标 + 未读数。图标本身
-// 是装饰，可访问名由 Label 提供（「通知（N 条未读）」），读屏与测试都按这个
-// 名字找它。
+// notificationBell 是主窗口标题栏上的通知入口：铃铛图标 + 右下角的红色未读
+// 角标。图标本身是装饰，可访问名由 Label 提供（「通知（N 条未读）」），读屏
+// 与测试都按这个名字找它。
 func (a *app) notificationBell(c *ui.Context) {
 	t := c.Theme()
 	idx := notificationTabIndex()
@@ -52,19 +52,28 @@ func (a *app) notificationBell(c *ui.Context) {
 	case b.Hovered():
 		ink = t.Text
 	case a.unread > 0:
-		// 有未读时铃铛用正文色，和右边的数值一起提示「有事」。
+		// 有未读时铃铛用正文色，和右下角的红点一起提示「有事」。
 		ink = t.Text
 	}
 	b.Children(func() {
-		// 图标与数值并排：Box 默认是纵向的，这里显式排一行，否则数值会掉到
-		// 铃铛下面，把 32px 的标题栏撑高。
-		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+		// 铃铛与角标叠在一起：图标盒固定 16×16，角标绝对定位在它的右下角，
+		// 压出一点图标边缘。旧写法把数值排在铃铛右边，标题栏因此被撑宽，
+		// 数字离图标也远；现在数值贴在铃铛上，看起来就是一个角标。
+		ui.Box(c).Width(16).Height(16).Shrink(0).Children(func() {
 			if idx >= 0 {
 				ui.Icon(c, tabIcons[idx]).Size(16, 16).TextColor(ink)
 			}
 			if count := unreadCountText(a.unread); count != "" {
-				ui.Box(c).Padding(0, 5).Radius(999).Center().Background(t.Accent).Children(func() {
-					ui.Text(c, count).FontSize(10).Bold().SingleLine().TextColor(t.AccentText)
+				// 角标外圈用铃铛底色描一圈，压住铃铛线条处也留得出一条缝，
+				// 红点不会和图标糊在一起。悬停、打开时底色换成 SurfaceHover。
+				ring := t.Surface
+				if open || b.Hovered() {
+					ring = t.SurfaceHover
+				}
+				ui.Box(c).Absolute().Right(-3).Bottom(-3).
+					MinWidth(14).Height(14).Padding(0, 3).Radius(999).Center().
+					Border(1, ring).Background(t.Danger).Children(func() {
+					ui.Text(c, count).FontSize(9).Bold().SingleLine().TextColor(ui.Hex("#ffffff"))
 				})
 			}
 		})

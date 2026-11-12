@@ -54,6 +54,10 @@ type detailState struct {
 	// follow 是左下角作者块里关注按钮的状态：作者 uuid、是否已关注、
 	// 在途请求与错误。只在 UI 线程读写，见 follow.go。
 	follow followState
+	// fav 是页头收藏按钮的状态；react 是表态条与选择器的状态（见 interact.go）。
+	// 两者都只在 UI 线程读写，网络结果通过 publish 回来。
+	fav   favoriteState
+	react reactionState
 
 	// composer: write a comment (optionally as a nested reply to replyToID).
 	// 发送失败的原因不落在页面上，用主窗口的 toast 说明（见 submitReply）。
@@ -267,6 +271,8 @@ func (a *app) loadTopic() {
 			d.fromCache = false
 			d.cacheNote = ""
 			a.prefetchAvatars(topic.Avatar)
+			// 收藏状态随详情下发（带上令牌才有意义）；交给页头按钮。
+			syncFavorite(d, topic, a.auth.username())
 			// 主题详情带作者的 uuid；关注状态若已随作者对象下发就直接用，
 			// 否则标记为待读取，登录后由 ensureFollowState 读用户主页补齐。
 			d.follow.userID = topic.AuthorID
@@ -448,69 +454,139 @@ func (a *app) detailView(c *ui.Context) {
 		return
 	}
 	ui.Column(c).Grow(1).FillWidth().Children(func() {
-		ui.Row(c).Padding(10, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-			label := "帖子 " + d.shortID
-			if d.topic != nil && d.topic.Title != "" {
-				label = d.topic.Title
-			}
-			ui.Text(c, truncate(label, 42)).FontSize(15).Bold().SingleLine().Grow(1)
-			if d.focusID != "" {
-				label, color := "来自评论定位", t.TextMuted
-				if d.focusMiss {
-					label, color = "未找到该评论", t.Danger
-				}
-				ui.Text(c, label).FontSize(11).TextColor(color)
-			}
-			// 离线说明：正文来自本地缓存时，明确告诉用户这是哪个时间的
-			// 内容，而不是让旧内容看起来像刚刷新过。
-			if d.cacheNote != "" {
-				ui.Text(c, d.cacheNote).FontSize(11).TextColor(t.TextMuted).SingleLine()
-			}
-			if n := len(a.detailStack); n > 0 {
-				ui.Textf(c, "内联浏览 %d 层", n).FontSize(11).TextColor(t.TextMuted)
-			}
-			// 右上角纯图标关闭，无边框、无填充；内联浏览时仍先退一层再回列表。
-			closeBtn := ui.Button(c, "").
-				Background(ui.Transparent).
-				Border(0, t.Border).
-				TextColor(t.Text).
-				FontSize(14).
-				Padding(6, 6).
-				Radius(6)
-			closeBtn.Children(func() {
-				ui.Icon(c, closeIcon).Size(18, 18)
-			})
-			closeBtn.Label("关闭详情")
-			if closeBtn.Clicked() {
-				a.closeDetail()
-			}
-		})
+		a.detailHeader(c, d)
 		ui.Divider(c)
-		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Children(func() {
-			// 正文与评论各占一半：两栏 Grow(1) 均分剩余宽度，MinWidth(0)
-			// 防止长代码/图片把某一栏撑宽；中间用 1px 分隔线而非会吃
-			// 宽度的 Spacer（Spacer 默认 Grow(1)，会留下空白带）。
-			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
+		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Padding(12, 14).Gap(12).Children(func() {
+			// 双栏各自成卡片：正文占约 55%，评论占约 45%；MinWidth(0) 防止
+			// 长代码、长链接或嵌套评论把某一栏撑宽，中间用 12px 的空隙 +
+			// 圆角描边形成清楚的边界。
+			ui.Column(c).Grow(55).MinWidth(0).FillHeight().MinHeight(0).
+				Radius(12).Background(t.Background).Border(1, t.Border).Children(func() {
 				// 正文可滚动（Grow(1) 吃满左栏剩余高度，MinHeight(0) 允许
 				// 它收缩到比正文内容更矮，正文在框内滚动，底栏不被顶出）；
 				// 底部固定作者头像 + 昵称 + 分类（节点）+ 标签，不随正文滚动。
-				ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Padding(14, 18).Gap(10).
+				ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Padding(18, 24).Gap(12).
 					TrackScroll(&d.bodyScroll).Children(func() {
 					a.topicBody(c, d)
 				})
 				a.topicAuthorBlock(c, d)
 			})
-			ui.Divider(c)
-			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
+			// 评论卡片用比页面底色略深一点的中性色：浅色下是极浅的灰、
+			// 深色下比页面稍亮，两种外观都能把评论区从正文里分出来，又
+			// 不抢正文的注意力。
+			ui.Column(c).Grow(45).MinWidth(0).FillHeight().MinHeight(0).
+				Radius(12).Background(detailReplySurface(t)).Border(1, t.Border).Children(func() {
 				a.replyPane(c, d)
 			})
-			// 右下角浮着刷新 / 返回顶部：绝对定位，不占两栏的宽度。
-			a.detailFabs(c, d)
 		})
 		// 数据来源声明 + 可点击的原文链接占满整个窗口底部，放在最底部，
 		// 正文加载完成（d.topic 非空）时才出现。
 		a.topicSourceFooter(c, d)
 	})
+	// 表态、打赏与明细都是贴着各自入口的气泡（见 interact.go），在互动区
+	// 构建时已经就地挂好，这里不需要再叠一层弹窗。
+}
+
+// detailReplySurface 是评论区卡片的底色：页面底色与文字色按很小比例混合，
+// 得到浅色下的浅灰、深色下的深灰。比单独写死两个十六进制值更能跟随主题，
+// 也不会和正文卡片（页面底色 + 描边）混成一片。
+func detailReplySurface(t *ui.Theme) ui.Color {
+	return t.Background.Mix(t.Text, 0.05)
+}
+
+// detailHeader 是详情页固定在顶部的操作栏：左边是页面标识与定位 / 离线
+// 状态，右边是「返回顶部」「刷新」「关闭」。这三项以前浮在右下角，会压住
+// 评论输入框；收进页头后不再和「发送」抢同一个角落。
+func (a *app) detailHeader(c *ui.Context, d *detailState) {
+	t := c.Theme()
+	ui.Row(c).FillWidth().Padding(8, 16).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "帖子 "+d.shortID).FontSize(13).Bold().SingleLine()
+		if d.focusID != "" {
+			label, color := "来自评论定位", t.TextMuted
+			if d.focusMiss {
+				label, color = "未找到该评论", t.Danger
+			}
+			ui.Text(c, label).FontSize(11).TextColor(color)
+		}
+		// 离线说明：正文来自本地缓存时，明确告诉用户这是哪个时间的
+		// 内容，而不是让旧内容看起来像刚刷新过。
+		if d.cacheNote != "" {
+			ui.Text(c, d.cacheNote).FontSize(11).TextColor(t.TextMuted).SingleLine()
+		}
+		if n := len(a.detailStack); n > 0 {
+			ui.Textf(c, "内联浏览 %d 层", n).FontSize(11).TextColor(t.TextMuted)
+		}
+		ui.Spacer(c).Grow(1)
+		// 只有正文或评论滚离顶部时才出现：放在页头，永远可达，也不会
+		// 像悬浮按钮那样挡在内容上。
+		if first, _ := d.list.Visible(); d.bodyScroll.Y > 0 || first > 0 {
+			a.detailToolButton(c, backTopIcon, "返回顶部", "正文与评论都回到顶部", func() {
+				// 直接把偏移写回 ScrollState 就是立即回顶（ScrollTo 会走一段
+				// 动画，回顶部不必拖时间）；评论列表按行号同样立即回顶。
+				d.bodyScroll.X, d.bodyScroll.Y = 0, 0
+				d.list.ScrollTo(0, ui.Start)
+			})
+		}
+		a.detailRefreshButton(c, d)
+		// 收藏是帖子级的动作，和刷新 / 关闭并排放在页头右端：不占正文空间，
+		// 也不会随正文滚走。
+		a.favoriteButton(c, d)
+		a.detailToolButton(c, closeIcon, "关闭详情", "关闭详情（Esc）", a.closeDetail)
+	})
+}
+
+// detailToolButton 是页头里的纯图标按钮：无边框、无填充，悬停才出现浅底，
+// 与列表页的 FAB 区分开。label 供读屏与测试识别，tip 是悬停说明。
+func (a *app) detailToolButton(c *ui.Context, icon *ui.SVG, label, tip string, onClick func()) {
+	t := c.Theme()
+	b := ui.Box(c).Size(30, 30).Radius(8).Center().Background(ui.Transparent)
+	hovered := b.Hovered()
+	if hovered {
+		b.Background(t.SurfaceHover)
+	}
+	ink := t.TextMuted
+	if hovered {
+		ink = t.Text
+	}
+	b.Children(func() {
+		ui.Icon(c, icon).Size(17, 17).TextColor(ink)
+	})
+	b.Label(label).Tooltip(tip).OnClick(onClick)
+}
+
+// detailRefreshButton 是页头的刷新按钮：请求在途时换成转圈并禁用，避免
+// 连点重复发请求。它刷新的是整页（正文 + 第一页评论）。
+func (a *app) detailRefreshButton(c *ui.Context, d *detailState) {
+	t := c.Theme()
+	loading := d.topicLoading || d.replyLoading
+	b := ui.Box(c).Size(30, 30).Radius(8).Center().Background(ui.Transparent)
+	hovered := b.Hovered()
+	if hovered && !loading {
+		b.Background(t.SurfaceHover)
+	}
+	if loading {
+		b.Disabled(true)
+	}
+	b.Children(func() {
+		if loading {
+			ui.Spinner(c).Size(14, 14)
+			return
+		}
+		ink := t.TextMuted
+		if hovered {
+			ink = t.Text
+		}
+		ui.Icon(c, refreshIcon).Size(17, 17).TextColor(ink)
+	})
+	b.Label("刷新")
+	tip := "重新加载正文与评论"
+	if loading {
+		tip = "正在刷新…"
+	}
+	b.Tooltip(tip)
+	if !loading {
+		b.OnClick(a.refreshDetail)
+	}
 }
 
 func (a *app) topicBody(c *ui.Context, d *detailState) {
@@ -532,6 +608,12 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 	if p == nil {
 		ui.Text(c, "暂无正文").TextColor(t.TextMuted)
 		return
+	}
+	// 标题留在正文卡片顶部，而不是页头：页头只留页面标识与操作，
+	// 正文从这里开始，24px 加粗的标题与 12px 的元信息、正文拉开字号差，
+	// 读者第一眼就能抓住主题。
+	if title := strings.TrimSpace(p.Title); title != "" {
+		ui.Text(c, title).FontSize(24).Bold().MaxLines(3)
 	}
 	// 顶部只保留帖子级元信息（等级 / 置顶 / 评论已关闭）。时间、浏览、回复数
 	// 不再展示；作者头像 + 昵称、分类（节点）与标签收敛到左栏底部的固定块
@@ -582,10 +664,13 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 			}
 		})
 	}
-	// 正文末尾的互动状态：表情表态与打赏汇总；没有互动时不画分隔线。
-	if len(p.Reactions) > 0 || p.Rewards.Total > 0 {
+	// 正文末尾的互动区：左边是归并后的表态与打赏汇总，右边是表态（笑脸）与
+	// 打赏（金币）两个图标入口。还没有人互动时也留这一条：帖子页总要有个
+	// 表态的地方。
+	if len(p.Reactions) > 0 || p.Rewards.Total > 0 ||
+		canActOn(d, reactionTopic) || canRewardOn(d, reactionTopic) {
 		ui.Divider(c)
-		a.socialBadges(c, p.Reactions, p.Rewards)
+		a.reactionSummary(c, d, reactionTopic, p.Rewards, true, true)
 	}
 }
 
@@ -615,7 +700,9 @@ func (a *app) topicAuthorBlock(c *ui.Context, d *detailState) {
 					}
 				})
 				if len(p.Tags) > 0 {
-					ui.Text(c, "#"+strings.Join(p.Tags, "  #")).FontSize(11).TextColor(t.TextMuted)
+					// 标签属于正文之外的辅助信息：小一号、用弱化色，
+					// 不让「#水贴 #中奖」抢走正文的注意力。
+					ui.Text(c, "#"+strings.Join(p.Tags, "  #")).FontSize(10).TextColor(t.TextMuted)
 				}
 			})
 			// 关注按钮固定在作者块右端，与头像同一条基线；昵称再长也不会
@@ -649,6 +736,10 @@ func (a *app) topicSourceFooter(c *ui.Context, d *detailState) {
 
 func (a *app) replyPane(c *ui.Context, d *detailState) {
 	t := c.Theme()
+	// 评论区自己有一行标题与计数 / 视图切换，输入框只负责编写与发送：
+	// 原来挤在输入框右侧的评论数、视图切换移到这里，输入栏因此干净得多。
+	a.replyHeader(c, d)
+	ui.Divider(c)
 	switch {
 	case d.replyLoading && len(d.replyList) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
@@ -675,9 +766,12 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 			}
 			return i
 		}
+		// MyGo 的 ui.List 是虚拟化滚动区：只构建可视行，长帖也不会一次
+		// 排完所有评论；Grow(1) + MinHeight(0) 让它吃满卡片中间，输入栏
+		// 始终固定在卡片底部。
 		ui.List(c, &d.list, len(rows), func(i int) {
 			a.replyRow(c, rows[i], d.focusID)
-		}).Grow(1).MinHeight(0).Padding(6, 12).Gap(10)
+		}).Grow(1).MinHeight(0).Padding(4, 10).Gap(10)
 		a.loadMoreFooter(c, d.replyMoreErr, d.replyLoading, func() {
 			a.loadReplies(d.replyPage)
 		})
@@ -689,6 +783,64 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 		}
 	}
 	a.replyComposer(c, d)
+}
+
+// replyHeader 是评论卡片顶部固定的一行：「评论」标题、评论数（点一下回到
+// 列表顶部）与楼层 / 扁平视图切换。它不参与滚动，也不和输入框抢位置。
+func (a *app) replyHeader(c *ui.Context, d *detailState) {
+	t := c.Theme()
+	ui.Row(c).FillWidth().Padding(10, 14, 8, 14).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "评论").FontSize(14).Bold()
+		cnt := ui.Button(c, "").
+			Background(ui.Transparent).
+			Border(0, t.Border).
+			TextColor(t.TextMuted).
+			FontSize(12).
+			Padding(2, 4).
+			Radius(6)
+		cnt.Children(func() {
+			ui.Icon(c, commentBubbleIcon).Size(14, 14).TextColor(t.TextMuted)
+			ui.Textf(c, "%d", d.replyTotal).FontSize(11).TextColor(t.TextMuted)
+		})
+		cnt.Label("评论数")
+		cnt.Tooltip("回到评论顶部")
+		if cnt.Clicked() {
+			d.list.ScrollTo(0, ui.Start)
+		}
+		ui.Spacer(c).Grow(1)
+		// 视图切换：图标表示将要切到的视图，点一下在楼层 / 扁平时间序间切换。
+		target := flatViewIcon
+		viewLabel := "切到扁平时间序"
+		if d.flat {
+			target = floorViewIcon
+			viewLabel = "切到楼层视图"
+		}
+		tg := ui.Button(c, "").
+			Background(ui.Transparent).
+			Border(0, t.Border).
+			TextColor(t.Accent).
+			FontSize(12).
+			Padding(2, 4).
+			Radius(6).
+			Disabled(d.replyLoading)
+		tg.Children(func() {
+			ui.Icon(c, target).Size(16, 16).TextColor(t.Accent)
+		})
+		tg.Label(viewLabel)
+		tg.Tooltip(viewLabel)
+		if tg.Clicked() {
+			d.flat = !d.flat
+			d.replyList = nil
+			d.replyLoaded = false
+			d.replyNoMore = false
+			d.replyMoreErr = ""
+			// 换了视图重新找一次被定位的评论：楼层/扁平的分页位置不同。
+			d.focusPending = d.focusID != ""
+			d.focusTries = 0
+			d.focusMiss = false
+			a.loadReplies(1)
+		}
+	})
 }
 
 // replyCanLoadMore 汇报是否还能（且应）续拉下一页评论：已加载、未在读、未到底、
@@ -743,7 +895,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 				if href != "" {
 					link := ui.Button(c, floor).Background(ui.Transparent).
 						Border(0, t.Border).TextColor(t.TextMuted).
-						FontSize(11).Padding(0, 0).Radius(4)
+						FontSize(10).Padding(0, 0).Radius(4)
 					if link.Hovered() {
 						link.TextColor(t.Accent)
 					}
@@ -752,7 +904,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 						a.openExternal(href)
 					}
 				} else {
-					ui.Text(c, floor).FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, floor).FontSize(10).TextColor(t.TextMuted)
 				}
 			}
 			// 评论作者统一由 userTag 渲染：头像跟着 12px 的昵称大小走，
@@ -768,19 +920,32 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 				ui.Text(c, relativeTime(r.CreatedAt)).FontSize(11).TextColor(t.TextMuted)
 			}
 			ui.Spacer(c).Grow(1)
-			// 回复入口以文字形式放在每条评论的右上角，悬浮整条评论时才
-			// 出现，保持默认列表的清爽；已删除 / 评论已关闭的楼层不提供
-			// 该入口。点一下就展开并聚焦输入框，点完就能写。
-			if !r.Deleted && !closed && hovered {
-				a.replyAction(c, "回复", func() {
-					a.detail.replyToID = r.ID
-					a.detail.replyToFloor = r.Floor
-					if a.detail.replyToFloor == 0 {
-						a.detail.replyToFloor = r.FlatFloor
+			// 右上角只放图标入口：表态（笑脸）与打赏（金币）。它们只在
+			// 悬浮整条评论时出现；这条评论没有下方互动摘要时才需要它们
+			//（有摘要时右侧已经是同一对图标）。气泡开着时入口继续画出来，
+			// 否则鼠标一离开评论，气泡的锚点就没了。
+			hasSummary := len(r.Reactions) > 0 || r.Rewards.Total > 0
+			entryOpen := a.detail != nil && popupEntryOpen(a.detail, r.ID)
+			if !r.Deleted && !closed && (hovered || entryOpen) {
+				if !hasSummary && a.detail != nil {
+					if canActOn(a.detail, r.ID) {
+						a.reactionEntry(c, a.detail, r.ID)
 					}
-					a.detail.composerIdle = false
-					a.detail.composerField.Focus(c)
-				})
+					if canRewardOn(a.detail, r.ID) {
+						a.rewardEntry(c, a.detail, r.ID)
+					}
+				}
+				if hovered {
+					a.replyAction(c, "回复", func() {
+						a.detail.replyToID = r.ID
+						a.detail.replyToFloor = r.Floor
+						if a.detail.replyToFloor == 0 {
+							a.detail.replyToFloor = r.FlatFloor
+						}
+						a.detail.composerIdle = false
+						a.detail.composerField.Focus(c)
+					})
+				}
 			}
 		})
 		if r.ParentSummary != "" || r.ParentFloor > 0 {
@@ -805,8 +970,9 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 		}
 		a.commentText(c, content, mergeEmojiMaps(a.emojis, r.Emojis))
 		// 表情表态与打赏状态放在正文下方，始终可见：不挤占右上角的「回复」
-		// 入口，也不会在悬浮时把按钮顶出评论栏。
-		a.socialBadges(c, r.Reactions, r.Rewards)
+		// 入口，也不会在悬浮时把按钮顶出评论栏。摘要只给总数，点开看明细；
+		// 这一条出现时右侧同样给两个图标入口，和帖子页保持一致。
+		a.reactionSummary(c, a.detail, r.ID, r.Rewards, true, false)
 		// 评论里的应用内链接是次级操作：仅悬浮整条评论时出现，保持默认
 		// 状态的清爽；回复入口已常驻右上角，这里不再重复。其所在行固定
 		// 高度占位，出现时同样不会撑高整条评论。
@@ -848,48 +1014,6 @@ func (a *app) parentJump(c *ui.Context, label, parentID string, at int) {
 		a.detail.focusMiss = false
 		a.detail.list.ScrollTo(at, ui.Start)
 	}
-}
-
-// socialBadges 展示一条内容的表情表态与打赏状态：每种表情一枚小标签，
-// 数量跟在后面；自己已表态的那枚整块用强调色标出并跟一个「我」字，
-// 悬停也会说明「你已表态」。打赏只显示金币合计，悬停给出次数与打赏者。
-// 没有互动时不占位。
-func (a *app) socialBadges(c *ui.Context, reactions []reactionStat, rewards rewardStat) {
-	t := c.Theme()
-	if len(reactions) == 0 && rewards.Total <= 0 {
-		return
-	}
-	ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-		for _, r := range reactions {
-			bg, border, countColor := t.Surface, t.Border, t.TextMuted
-			if r.Mine {
-				// 自己已表态的那枚整块换成强调色：浅色底 + 强调色描边 + 数字
-				// 同色，再跟一个「我」字，扫一眼就能认出来。
-				bg, border, countColor = t.Accent.Alpha(0.12), t.Accent, t.Accent
-			}
-			chip := ui.Row(c).Padding(1, 7).Radius(999).Gap(4).
-				Background(bg).Border(1, border).AlignItems(ui.Center)
-			chip.Tooltip(reactionBadgeTip(r))
-			chip.Children(func() {
-				ui.Text(c, r.Emoji).FontSize(12)
-				if r.Count > 0 {
-					ui.Textf(c, "%d", r.Count).FontSize(11).TextColor(countColor)
-				}
-				if r.Mine {
-					ui.Text(c, "我").FontSize(10).Bold().TextColor(t.Accent)
-				}
-			})
-		}
-		if rewards.Total > 0 {
-			chip := ui.Row(c).Padding(1, 7).Radius(999).Gap(4).
-				Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center)
-			chip.Tooltip(rewardBadgeTip(rewards))
-			chip.Children(func() {
-				ui.Text(c, "💰").FontSize(11)
-				ui.Textf(c, "%d", rewards.Total).FontSize(11).TextColor(t.Warning)
-			})
-		}
-	})
 }
 
 // reactionBadgeTip 是表情标签的悬停说明：人数 + 我是否也选过。
@@ -939,9 +1063,9 @@ func (a *app) replyAction(c *ui.Context, label string, onClick func()) {
 func (a *app) replyComposer(c *ui.Context, d *detailState) {
 	t := c.Theme()
 	ui.Divider(c)
-	// 右边留出 FAB 那一列的位置：刷新 / 返回顶部浮在右下角，输入框与
-	// 「发送」不能伸到它们下面，否则点发送会点到按钮。
-	ui.Column(c).FillWidth().Padding(6, fabColumnInset, 6, 10).Gap(4).Children(func() {
+	// 输入栏固定在评论卡片底部，不再为右下角的悬浮按钮让出宽度：刷新与
+	// 返回顶部已经收进页头，这里只需要普通的内边距。
+	ui.Column(c).FillWidth().Padding(8, 12).Gap(4).Children(func() {
 		if d.replyToID != "" {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				who := "评论"
@@ -1025,53 +1149,6 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				if send.Clicked() {
 					a.submitReply()
 				}
-			}
-			// 评论数（图标 + 数值）与视图切换（图标）贴着发送按钮右侧，同一行展示。
-			cnt := ui.Button(c, "").
-				Background(ui.Transparent).
-				Border(0, t.Border).
-				TextColor(t.TextMuted).
-				FontSize(12).
-				Padding(2, 4).
-				Radius(6)
-			cnt.Children(func() {
-				ui.Icon(c, commentBubbleIcon).Size(16, 16)
-				ui.Textf(c, "%d", d.replyTotal).FontSize(12)
-			})
-			cnt.Label("评论数")
-			if cnt.Clicked() {
-				d.list.ScrollTo(0, ui.Start)
-			}
-			// 视图切换：图标表示将要切到的视图，点一下在楼层 / 扁平时间序间切换。
-			target := flatViewIcon
-			viewLabel := "切到扁平时间序"
-			if d.flat {
-				target = floorViewIcon
-				viewLabel = "切到楼层视图"
-			}
-			tg := ui.Button(c, "").
-				Background(ui.Transparent).
-				Border(0, t.Border).
-				TextColor(t.Accent).
-				FontSize(12).
-				Padding(2, 4).
-				Radius(6).
-				Disabled(d.replyLoading)
-			tg.Children(func() {
-				ui.Icon(c, target).Size(16, 16)
-			})
-			tg.Label(viewLabel)
-			if tg.Clicked() {
-				d.flat = !d.flat
-				d.replyList = nil
-				d.replyLoaded = false
-				d.replyNoMore = false
-				d.replyMoreErr = ""
-				// 换了视图重新找一次被定位的评论：楼层/扁平的分页位置不同。
-				d.focusPending = d.focusID != ""
-				d.focusTries = 0
-				d.focusMiss = false
-				a.loadReplies(1)
 			}
 		})
 	})

@@ -151,7 +151,7 @@ type app struct {
 	// 事件维护：铃铛据此高亮，免得每帧去问一次原生窗口（那是跨线程调用）。
 	// 只在主线程读写。
 	notifShown bool
-	// profileWin 是「我的」窗口：点标题栏上的登录头像打开，资产 / 帖子 /
+	// profileWin 是「我的」窗口：点标题栏上的登录头像打开，概览 / 内容 /
 	// 回复 / 权限分四个标签页。入口见 showProfile，界面与数据在 profile.go
 	// 与 profile_ui.go。只在主线程读写。
 	profileWin *mygo.Window
@@ -164,6 +164,9 @@ type app struct {
 	// 都只在主线程读写；关窗口后草稿保留，退出登录时丢弃。
 	composeWin *mygo.Window
 	compose    *composeState
+	// nodes 是节点表的共享缓存（内存 + cache/offline.json，见 nodes.go）：
+	// 发帖级联选择用它，节点页以后也读这一份。只在主线程读写。
+	nodes nodeCache
 	// userCardWin 是「用户资料」窗口：点任何一处统一用户标识（头像 + 昵称）
 	// 打开，见 user_ui.go 的 userTag；userCard 是它读的状态，userCardShown
 	// 表示窗口此刻是否在屏幕上。界面与请求在 user_card.go / user_card_ui.go。
@@ -171,6 +174,10 @@ type app struct {
 	userCardWin   *mygo.Window
 	userCard      *userCardState
 	userCardShown bool
+	// searchWin 是搜索窗口：入口是标题栏的放大镜。search 是它的输入、结果与
+	// 防抖状态，界面与请求在 search.go / search_ui.go。都只在主线程读写。
+	searchWin *mygo.Window
+	search    *searchState
 	// tray 是系统托盘图标（见 tray.go）：应用就绪后创建，退出前销毁；
 	// 无头测试保持 nil，不会碰到原生托盘。只在主线程读写。
 	tray *mygo.Tray
@@ -220,6 +227,12 @@ type app struct {
 	// onPostPublished 是发帖完成（成功或失败）后的测试钩子：headless 测试
 	// 没有窗口，publish 在请求协程里直接执行，靠它把结果同步回测试。
 	onPostPublished func(created createdTopic, err error)
+	// onSearchDone 是搜索完成（成功或失败）后的测试钩子，原因同上。
+	onSearchDone func(query string, err error)
+	// onInteractDone 是收藏 / 表态完成（成功或失败）后的测试钩子，原因同上。
+	onInteractDone func(err error)
+	// onNodesLoaded 是节点表刷新完成（成功或失败）后的测试钩子，原因同上。
+	onNodesLoaded func(err error)
 }
 
 // tabID / tabFromID 把 tab 序号与侧边栏条目的 id 互相映射。
@@ -299,6 +312,7 @@ func (a *app) publish(fn func()) {
 		a.redrawCoinWindow()
 		a.redrawComposeWindow()
 		a.redrawUserCardWindow()
+		a.redrawSearchWindow()
 	})
 }
 
@@ -474,8 +488,8 @@ func (a *app) onAuthChanged(err error) {
 	// 金币页同样绑定当前会话；授权补上的 read:economy 也从这个空状态重新
 	// 发起请求，不会沿用授权前的空结果。
 	a.coins = newCoinState()
-	// 「我的」窗口里的资料、资产与列表同样属于某个账号：换账号或退出后
-	// 一律丢弃，下次打开时按新会话重新拉取。
+	// 「我的」窗口里的资料与列表同样属于某个账号：换账号或退出后一律
+	// 丢弃，下次打开时按新会话重新拉取。
 	a.profile = newProfileState()
 	// 授权状态变了，之前因缺权限停住的 tab 可以重新拉取。
 	for _, st := range a.tabs {
@@ -497,7 +511,7 @@ func (a *app) onAuthChanged(err error) {
 		// 通知窗口只展示当前账号的消息：退出后立即关掉，别留一屏上一个
 		// 账号的内容。
 		a.closeNotificationWindow()
-		// 「我的」窗口展示的是当前账号的资料与资产，同样随退出关掉。
+		// 「我的」窗口展示的是当前账号的资料与列表，同样随退出关掉。
 		a.closeProfileWindow()
 		// 金币窗口与标题栏金币数也只属于当前账号：停掉定时刷新并关掉窗口。
 		a.stopCoinTagWatch()
@@ -515,6 +529,9 @@ func (a *app) onAuthChanged(err error) {
 	// 资料卡上的关注状态与「是不是我」都跟着账号走：登录、退出、换账号都
 	// 重新读一次（窗口没开时是空操作）。
 	a.refreshUserCardForAuth()
+	// 搜索窗口里的「收藏」结果属于上一个账号：换账号 / 退出后清掉结果，
+	// 关键词与类型保留。窗口本身留着：搜索结果大多是公开内容。
+	a.resetSearchResults()
 	a.ensureLoaded()
 	// 授权成功后，把因为缺权限被打断的调用照原样重跑。放在 ensureLoaded
 	// 之后：两者都只会真正发出一次请求（load 自己会去重）。
@@ -697,7 +714,11 @@ func (a *app) titleBar(c *ui.Context) {
 			AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "T2 Desktop").FontSize(13).Bold().SingleLine().TextColor(t.Text)
 			ui.Spacer(c).Grow(1)
-			// 通知铃铛：未读数值跟在铃铛右边，点开独立窗口（不再是侧边栏页面）。
+			// 搜索：任何页面都能用，不依赖登录，也不占侧边栏。窗口开着时
+			// 放大镜用强调色标出来。
+			a.titleIconButton(c, searchIcon, a.searchWindowVisible(),
+				"搜索", "搜索帖子、用户、节点与标签", a.showSearch)
+			// 通知铃铛：未读数叠在铃铛右下角，点开独立窗口（不再是侧边栏页面）。
 			a.notificationBell(c)
 			if a.auth.loggedIn() {
 				// 金币数与账号标识只给登录用户看。金币数在账号左侧：💰 + 千分位
@@ -1171,6 +1192,7 @@ func main() {
 			a.closeProfileWindow()
 			a.closeCoinWindow()
 			a.closeComposeWindow()
+			a.closeSearchWindow()
 		})
 		// 关闭按钮（自绘标题栏、Alt+F4、任务栏右键都一样）先问设置：默认
 		// 照常关闭，选了「收进托盘」就拦下来藏起窗口，见 window_mode.go。

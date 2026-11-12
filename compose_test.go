@@ -37,20 +37,88 @@ func loginApp(t *testing.T, srv *httptest.Server) *app {
 }
 
 // composeReady 让发帖窗口有节点可选：无头测试不自动加载，直接摆好列表。
+// 列表按 /v1/nodes 的顺序：顶层分类后面跟着它的子节点。
 func composeReady(a *app) *composeState {
 	if a.compose == nil {
 		a.compose = newComposeState()
 	}
 	a.compose.nodes = []composeNode{
-		{ID: "uuid-community", Slug: "community", Name: "社区讨论"},
-		{ID: "uuid-work", Slug: "work", Name: "职场", ParentName: "生活"},
+		{ID: "uuid-forum", Slug: "forum", Name: "社区"},
+		{ID: "uuid-community", Slug: "community", Name: "社区讨论", ParentSlug: "forum", ParentName: "社区"},
+		{ID: "uuid-life", Slug: "life", Name: "生活"},
+		{ID: "uuid-work", Slug: "work", Name: "职场", ParentSlug: "life", ParentName: "生活"},
 	}
 	a.compose.nodeLoaded = true
-	a.compose.nodeName = a.compose.nodes[0].display()
+	a.compose.nodeID = "uuid-community"
 	return a.compose
 }
 
-// 节点下拉框：GET /v1/nodes 的响应 d 是数组；子节点要按 parent 再问一次，
+// 节点用两列级联选择：第一列分类，第二列节点；选中后触发框显示父/子名字，
+// 提交用的仍是 uuid。
+func TestComposeNodeCascader(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	st.nodes = append(st.nodes, composeNode{ID: "uuid-q", Slug: "q-and-a", Name: "问与答"})
+	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	tt.Frame()
+	if !tt.HasText("社区 · 社区讨论") {
+		t.Fatalf("触发框没有显示当前节点：%q", tt.Texts())
+	}
+
+	if err := tt.Click("社区 · 社区讨论"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	for _, want := range []string{"社区", "生活", "社区讨论"} {
+		if _, ok := tt.Find(want); !ok {
+			t.Errorf("展开后缺少 %q：%q", want, tt.Texts())
+		}
+	}
+
+	// 点第一列的分类只展开，不选中；第二列随之换成它的子节点。
+	if err := tt.Click("生活"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if _, ok := tt.Find("职场"); !ok {
+		t.Fatalf("切到「生活」后没有显示它的子节点：%q", tt.Texts())
+	}
+	if st.nodeID != "uuid-community" {
+		t.Errorf("点分类就改了选中节点：%q", st.nodeID)
+	}
+
+	if err := tt.Click("职场"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if st.nodeID != "uuid-work" {
+		t.Errorf("选中节点 = %q，期望 uuid-work", st.nodeID)
+	}
+	if !tt.HasText("生活 · 职场") {
+		t.Errorf("触发框没有跟着更新：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("社区讨论"); ok {
+		t.Errorf("选中后级联面板应当收起：%q", tt.Texts())
+	}
+
+	// 没有子节点的分类是叶子：点第一列直接选中。
+	if err := tt.Click("生活 · 职场"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("问与答"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if st.nodeID != "uuid-q" {
+		t.Errorf("叶子分类应当直接选中，实际 = %q", st.nodeID)
+	}
+	if !tt.HasText("问与答") || tt.HasText("社区 · 社区讨论") {
+		t.Errorf("叶子分类选中后显示不对：%q", tt.Texts())
+	}
+}
+
+// 节点级联选择：GET /v1/nodes 的响应 d 是数组；子节点要按 parent 再问一次，
 // 拼成一份带父节点名的扁平列表。发帖必须用 uuid，所以列表项要带着 id。
 func TestComposeNodesLoadTree(t *testing.T) {
 	var mu sync.Mutex
@@ -94,11 +162,11 @@ func TestComposeNodesLoadTree(t *testing.T) {
 	for _, n := range nodes {
 		byID[n.ID] = n
 	}
-	if got := byID["uuid-work"]; got.ParentName != "生活" || got.display() != "生活 · 职场" {
+	if got := byID["uuid-work"]; got.ParentName != "生活" || got.parentDisplay() != "生活 · 职场" {
 		t.Errorf("子节点没有带上父节点名：%+v", got)
 	}
 	// 响应里缺 parent_slug 的子节点也要归到已知的父节点下。
-	if got := byID["uuid-pet"]; got.ParentSlug != "life" || got.display() != "生活 · 萌宠" {
+	if got := byID["uuid-pet"]; got.ParentSlug != "life" || got.parentDisplay() != "生活 · 萌宠" {
 		t.Errorf("缺 parent_slug 的子节点归错了父节点：%+v", got)
 	}
 	mu.Lock()
@@ -245,7 +313,7 @@ func TestComposePublishSendsDocumentedPayload(t *testing.T) {
 func TestComposeGuardPayload(t *testing.T) {
 	st := newComposeState()
 	st.nodes = []composeNode{{ID: "uuid-node", Name: "社区讨论"}}
-	st.nodeName = "社区讨论"
+	st.nodeID = "uuid-node"
 	st.title = "标题"
 
 	p, err := st.payload()
@@ -287,7 +355,7 @@ func TestComposePayloadValidation(t *testing.T) {
 	base := func() *composeState {
 		st := newComposeState()
 		st.nodes = []composeNode{{ID: "uuid-node", Name: "社区讨论"}}
-		st.nodeName = "社区讨论"
+		st.nodeID = "uuid-node"
 		st.title = "标题"
 		return st
 	}
@@ -296,7 +364,7 @@ func TestComposePayloadValidation(t *testing.T) {
 		mut  func(st *composeState)
 		want string
 	}{
-		{"无节点", func(st *composeState) { st.nodeName = "" }, "请选择要发到哪个节点"},
+		{"无节点", func(st *composeState) { st.nodeID = "" }, "请选择要发到哪个节点"},
 		{"空标题", func(st *composeState) { st.title = "   " }, "标题不能为空"},
 		{"标题过长", func(st *composeState) { st.title = strings.Repeat("字", composeTitleMax+1) }, "标题最多"},
 		{"正文过长", func(st *composeState) { st.body = strings.Repeat("字", composeContentMax+1) }, "正文最多"},
@@ -520,7 +588,7 @@ func TestComposeFabStaysBottomRight(t *testing.T) {
 	}
 }
 
-// 发帖窗口：标题、正文与 Markdown 工具条都在，节点下拉框有选项；
+// 发帖窗口：标题、正文与 Markdown 工具条都在，节点级联选择有选项；
 // 附加组件默认收起，展开后才显示各自的字段。
 func TestComposeWindowLayout(t *testing.T) {
 	a := testApp(t)
@@ -811,7 +879,7 @@ func TestComposeClearKeepsNode(t *testing.T) {
 	st.body = "正文"
 	st.voteOpen = true
 	st.voteTitle = "投票"
-	st.nodeName = "生活 · 职场"
+	st.nodeID = "uuid-work"
 	tt := ui.NewTester(a.composeWindowView, 780, 900)
 	tt.Frame()
 	if err := tt.Click("清空"); err != nil {
@@ -820,8 +888,8 @@ func TestComposeClearKeepsNode(t *testing.T) {
 	if st.title != "" || st.body != "" || st.voteOpen || st.voteTitle != "" {
 		t.Errorf("清空后仍有残留：%+v", st)
 	}
-	if st.nodeName != "生活 · 职场" {
-		t.Errorf("清空不该丢掉节点选择：%q", st.nodeName)
+	if st.nodeID != "uuid-work" {
+		t.Errorf("清空不该丢掉节点选择：%q", st.nodeID)
 	}
 }
 

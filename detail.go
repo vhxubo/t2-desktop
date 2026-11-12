@@ -51,15 +51,24 @@ type topicDetail struct {
 	// Following / FollowingKnown 是作者对象里可选的 is_following。线上详情
 	// 目前不带这个字段，关注状态改由 GET /v1/users/:userName 补齐；这里
 	// 仍然解析，字段一旦下发就不必多发一次请求。
-	Following                bool
-	FollowingKnown           bool
-	NodeName, NodeSlug       string
+	Following          bool
+	FollowingKnown     bool
+	NodeName, NodeSlug string
+	// NodeID 是节点 uuid：表态接口把它作为必填的 nodeId。NodeEmojis 是节点
+	// 推荐的表态表情（main_emojis + sub_emojis），表态选择器直接用它。
+	NodeID                   string
+	NodeEmojis               []string
 	CreatedAt, UpdatedAt     string
 	Views, CommentCount      int
 	IsPinned, CommentsClosed bool
 	Tags                     []string
 	Postscripts              []postscript
 	Vote                     *voteBlock
+	// 收藏状态：favorited 只在带令牌时有意义。字段缺失时 FavoriteKnown 为
+	// false，按钮按未收藏展示，点一下以服务端结果为准。
+	Favorited      bool
+	FavoriteKnown  bool
+	FavoritedCount int
 	// Reactions 是帖子收到的表情表态汇总；Rewards 是打赏合计与打赏者。
 	Reactions []reactionStat
 	Rewards   rewardStat
@@ -104,6 +113,8 @@ type weatherInfo struct {
 }
 
 type voteBlock struct {
+	// ID 是投票 uuid：投票接口的 voteId 必填。
+	ID        string
 	Title     string
 	Finished  bool
 	Options   []voteOption
@@ -111,6 +122,8 @@ type voteBlock struct {
 }
 
 type voteOption struct {
+	// ID 是选项 uuid：投票接口的 optionId / optionIds 必填。
+	ID    string
 	Text  string
 	Votes int
 }
@@ -119,6 +132,9 @@ type voteOption struct {
 // display with Depth, so the UI needs no recursive layout.
 type replyItem struct {
 	ID, Content, Author, CreatedAt string
+	// AuthorID 是评论作者的 uuid：表态接口的 recUserId 必填，和帖子作者
+	// 一样只能从响应里取，不能拿昵称代替。
+	AuthorID string
 	// Avatar 是评论作者的头像地址；统一用户标识据此在昵称旁画头像。
 	Avatar                         string
 	Floor, FlatFloor, LocatedFloor int
@@ -215,8 +231,17 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 	if n := o.sub("node"); n != nil {
 		t.NodeName = n.str("name")
 		t.NodeSlug = n.str("slug")
+		t.NodeID = n.str("id")
+		t.NodeEmojis = nodeEmojiList(n)
 		t.URL = topicURL(shortID, t.NodeSlug)
 	}
+	// favorited 在匿名响应里是 false，但要靠字段本身判断「是不是知道」：
+	// 老版本接口或未登录时可能根本不带这个键。
+	if o.has("favorited", "is_favorited") {
+		t.FavoriteKnown = true
+		t.Favorited = o.flag("favorited", "is_favorited")
+	}
+	t.FavoritedCount = o.num("favorited_count")
 	for _, raw := range rawArray(o["tags"]) {
 		tag := asObject(raw)
 		if tag == nil {
@@ -274,6 +299,7 @@ func decodePostscripts(raw json.RawMessage) []postscript {
 
 func decodeVote(o object) *voteBlock {
 	v := &voteBlock{
+		ID:        o.str("id"),
 		Title:     o.str("title"),
 		Finished:  o.flag("voting_finished"),
 		MaxChoice: o.num("max_choices"),
@@ -284,6 +310,7 @@ func decodeVote(o object) *voteBlock {
 			continue
 		}
 		v.Options = append(v.Options, voteOption{
+			ID:    opt.str("id"),
 			Text:  opt.str("text"),
 			Votes: opt.num("vote_count"),
 		})
@@ -347,6 +374,7 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 		if name := a.str("username"); name != "" {
 			r.Author = name
 		}
+		r.AuthorID = a.str("id")
 		r.Avatar = authorAvatar(a)
 		r.Badges = decodeBadges(a)
 	}
@@ -405,6 +433,31 @@ func decodeBadges(a object) []badgeInfo {
 
 func weatherIconURL(symbol string) string {
 	return "https://r2.2libra.com/weather/svg/" + url.PathEscape(symbol) + ".svg"
+}
+
+// nodeEmojiList 合并节点推荐的表态表情：main_emojis 是主表态，sub_emojis
+// 是更多可选。线上这两个数组里都是字面表情（也可能是站点自定义图标的名字），
+// 表态接口原样收下即可。去重并截断，节点没给时返回 nil。
+func nodeEmojiList(n object) []string {
+	if n == nil {
+		return nil
+	}
+	seen := make(map[string]bool, reactionEmojiMax)
+	out := make([]string, 0, reactionEmojiMax)
+	for _, key := range []string{"main_emojis", "sub_emojis"} {
+		for _, raw := range rawArray(n[key]) {
+			var emoji string
+			if json.Unmarshal(raw, &emoji) != nil || emoji == "" || seen[emoji] {
+				continue
+			}
+			seen[emoji] = true
+			out = append(out, emoji)
+			if len(out) == reactionEmojiMax {
+				return out
+			}
+		}
+	}
+	return out
 }
 
 // decodeReactionStats 汇总帖子 / 评论的表情表态。summary 是现在的字段名

@@ -29,7 +29,7 @@ const (
 	appIdentifier      = "com.vhxubo.t2-desktop"
 	defaultRedirectURI = appIdentifier + ":/callback"
 	clientID           = "e471281af4d84ecfae77c39f94bcf372"
-	defaultScopes      = "read profile read:me write:comment read:economy"
+	defaultScopes      = "read profile read:me write:comment interact read:economy"
 
 	// Some platforms normalise :/callback into ://callback before handing
 	// the URL to the app. This is the same native callback, not a second

@@ -533,7 +533,7 @@ func TestHardcodedClientIDIgnoresLegacyConfig(t *testing.T) {
 		q.Get("redirect_uri") != defaultRedirectURI {
 		t.Errorf("授权参数被旧配置或环境变量改写：%v", q)
 	}
-	if defaultScopes != "read profile read:me write:comment read:economy" {
+	if defaultScopes != "read profile read:me write:comment interact read:economy" {
 		t.Errorf("scope 常量被改动：%s", defaultScopes)
 	}
 

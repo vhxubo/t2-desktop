@@ -507,7 +507,38 @@ func TestNotificationBellShowsUnreadCount(t *testing.T) {
 		t.Errorf("铃铛没有落在标题栏里：%v", bell)
 	}
 	if !tt.HasText("2") {
-		t.Errorf("铃铛旁没有未读数值：%q", tt.Texts())
+		t.Errorf("铃铛没有未读数值：%q", tt.Texts())
+	}
+	// 数值是叠在铃铛右下角的红色小圆点，而不是排在铃铛右边的另一个胶囊。
+	badge, ok := tt.Find("2")
+	if !ok {
+		t.Fatalf("找不到未读数值：%q", tt.Texts())
+	}
+	if cx, cy := bell.X+bell.W/2, bell.Y+bell.H/2; badge.X+badge.W/2 < cx || badge.Y+badge.H/2 < cy {
+		t.Errorf("未读角标 %v 不在铃铛 %v 的右下角", badge, bell)
+	}
+	if badge.X < bell.X || badge.Y < bell.Y ||
+		badge.X+badge.W > bell.X+bell.W || badge.Y+badge.H > bell.Y+bell.H {
+		t.Errorf("未读角标 %v 超出了铃铛 %v", badge, bell)
+	}
+	// 角标底色必须是红色：以数值为中心数一数 14×14 里的红色像素，太少
+	// 说明底色没画上或沿用了主题的强调色。
+	im := tt.Image()
+	cx, cy := int(badge.X+badge.W/2), int(badge.Y+badge.H/2)
+	red := 0
+	for y := cy - 7; y <= cy+7; y++ {
+		for x := cx - 7; x <= cx+7; x++ {
+			if x < 0 || y < 0 || x >= im.Bounds().Dx() || y >= im.Bounds().Dy() {
+				continue
+			}
+			c := im.RGBAAt(x, y)
+			if c.R >= 0xb0 && c.G <= 0x60 && c.B <= 0x60 {
+				red++
+			}
+		}
+	}
+	if red < 40 {
+		t.Errorf("未读角标里的红色像素只有 %d 个，底色可能不是红色", red)
 	}
 	for _, text := range tt.Texts() {
 		if text == "通知" {

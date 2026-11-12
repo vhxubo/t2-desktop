@@ -154,9 +154,9 @@ func TestListFabRefreshReloads(t *testing.T) {
 	}
 }
 
-// 详情页右下角有刷新与返回顶部：评论滚到底后出现返回顶部，点了评论回到
-// 开头；两个按钮都不压在输入框的「发送」上。
-func TestDetailFabsRefreshAndBackToTop(t *testing.T) {
+// 详情页的刷新与返回顶部收在页头，不再浮在右下角：评论滚到底后出现返回
+// 顶部，点了评论回到开头；两个按钮都不会和卡片底部的「发送」抢位置。
+func TestDetailHeaderRefreshAndBackToTop(t *testing.T) {
 	a := detailAppWithReplies(t)
 	rows := make([]replyItem, 0, 60)
 	for i := 0; i < 60; i++ {
@@ -177,25 +177,26 @@ func TestDetailFabsRefreshAndBackToTop(t *testing.T) {
 	}
 	refresh, ok := tt.Find("刷新")
 	if !ok {
-		t.Fatalf("详情页没有刷新 FAB：%q", tt.Texts())
+		t.Fatalf("详情页没有刷新按钮：%q", tt.Texts())
 	}
 	top, ok := tt.Find("返回顶部")
 	if !ok {
 		t.Fatalf("评论滚离顶部后没有出现返回顶部：%q", tt.Texts())
 	}
-	if top.Y+top.H > refresh.Y {
-		t.Errorf("返回顶部没有排在刷新上面：返回顶部 %+v / 刷新 %+v", top, refresh)
+	// 两个按钮都在页头：靠近窗口顶部，并且与「评论」标题同处一行附近。
+	if refresh.Y > 90 || top.Y > 90 {
+		t.Errorf("刷新 / 返回顶部应收进页头：刷新 %+v / 返回顶部 %+v", refresh, top)
 	}
-	// 评论输入框给 FAB 让出了右侧宽度：发送按钮不能伸到按钮下面。
+	if top.Y != refresh.Y {
+		t.Errorf("返回顶部与刷新应在同一行页头：返回顶部 %+v / 刷新 %+v", top, refresh)
+	}
+	// 评论输入栏固定在卡片底部，远在页头按钮下方，不再需要为 FAB 让宽度。
 	send, ok := tt.Find("发送")
 	if !ok {
 		t.Fatalf("找不到发送按钮：%q", tt.Texts())
 	}
-	if right := send.X + send.W; right > refresh.X {
-		t.Errorf("发送按钮 %+v 伸到了刷新 FAB（%+v）下面", send, refresh)
-	}
-	if right := send.X + send.W; right > top.X {
-		t.Errorf("发送按钮 %+v 伸到了返回顶部 FAB（%+v）下面", send, top)
+	if send.Y <= refresh.Y+100 {
+		t.Errorf("发送按钮应固定在评论卡片底部：发送 %+v / 页头刷新 %+v", send, refresh)
 	}
 
 	if err := tt.Click("返回顶部"); err != nil {
@@ -210,8 +211,8 @@ func TestDetailFabsRefreshAndBackToTop(t *testing.T) {
 	}
 }
 
-// 详情页「刷新」重新拉正文与评论：页面上还挂着的旧失败提示要被清掉。
-func TestDetailFabRefreshClearsError(t *testing.T) {
+// 详情页页头的「刷新」重新拉正文与评论：页面上还挂着的旧失败提示要被清掉。
+func TestDetailHeaderRefreshClearsError(t *testing.T) {
 	a := detailAppWithReplies(t)
 	a.detail.topicErr = "上一次读取失败的原因"
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -236,8 +237,9 @@ func TestDetailFabRefreshClearsError(t *testing.T) {
 	}
 }
 
-// 正文那一栏自己滚动同样会露出「返回顶部」：它把正文与评论一起拉回开头。
-func TestDetailFabBackToTopScrollsBody(t *testing.T) {
+// 正文那一栏自己滚动同样会露出页头的「返回顶部」：它把正文与评论一起拉回
+// 开头。
+func TestDetailHeaderBackToTopScrollsBody(t *testing.T) {
 	a := detailAppWithReplies(t)
 	var body strings.Builder
 	for i := 0; i < 120; i++ {
