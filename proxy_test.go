@@ -416,9 +416,6 @@ func TestSettingsProxySectionSaves(t *testing.T) {
 	if err := st.Click("保存代理设置"); err != nil {
 		t.Fatal(err)
 	}
-	if a.proxyMsgErr {
-		t.Fatalf("保存有效代理失败：%s", a.proxyMsg)
-	}
 	cfg, status := a.proxy.Snapshot()
 	if cfg.Mode != proxyManual || cfg.URL != "127.0.0.1:7890" || cfg.NoProxy != "localhost" {
 		t.Errorf("保存后的配置 = %+v", cfg)
@@ -426,15 +423,25 @@ func TestSettingsProxySectionSaves(t *testing.T) {
 	if !strings.Contains(status, "http://127.0.0.1:7890") {
 		t.Errorf("状态没有显示手动代理：%q", status)
 	}
+	// 保存结果用窗口内 toast 说明，面板里不再留一行提示文字。
+	st.Frame()
+	if !st.HasText("已保存，新请求立即生效") {
+		t.Errorf("保存成功没有弹出 toast：%q", st.Texts())
+	}
 
-	// 无效地址留在面板里给出错误，不能悄悄按直连跑。
+	// 无效地址不落盘、不静默按直连跑，原因同样用 toast 说明；草稿原样留在
+	// 输入框里等用户改。
 	a.proxyURL = "ftp://127.0.0.1:21"
 	st.Frame()
 	if err := st.Click("保存代理设置"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.proxyMsgErr || !strings.Contains(a.proxyMsg, "不支持") {
-		t.Errorf("无效代理没有在面板内报错：err=%v msg=%q", a.proxyMsgErr, a.proxyMsg)
+	st.Frame()
+	if !st.HasText("不支持") {
+		t.Errorf("无效代理没有报错：%q", st.Texts())
+	}
+	if cfg, _ := a.proxy.Snapshot(); cfg.URL != "127.0.0.1:7890" {
+		t.Errorf("无效地址被写进配置：%+v", cfg)
 	}
 }
 

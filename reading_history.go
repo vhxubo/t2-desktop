@@ -259,5 +259,5 @@ func (a *app) clearReadingHistory() {
 		}
 	}
 	a.readingList.ScrollTo(0, ui.Start)
-	a.offlineMsg = "已清空阅读记录与缓存的正文"
+	a.toast(toastSettings, "已清空阅读记录与缓存的正文")
 }

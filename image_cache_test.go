@@ -198,16 +198,18 @@ func TestSettingsShowsCacheSizeAndClearsIt(t *testing.T) {
 	}
 	deadline = time.Now().Add(3 * time.Second)
 	for {
-		if s := a.cacheStatus.snapshot(); !s.Busy && strings.Contains(s.Msg, "已清理") {
-			if !strings.HasPrefix(s.Msg, "已清理 3.0 KB") {
-				t.Errorf("清理提示 = %q，期望释放 3.0 KB", s.Msg)
-			}
+		if s := a.cacheStatus.snapshot(); !s.Busy {
 			break
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("清理缓存没有完成：%+v", a.cacheStatus.snapshot())
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	// 清理结果用窗口内 toast 说明，面板里不留结论文字。
+	tt.Frame()
+	if !tt.HasText("已清理 3.0 KB") {
+		t.Errorf("清理后没有弹出释放了多少的 toast：%q", tt.Texts())
 	}
 	if stats := c.Stats(); stats.TotalFiles() != 0 {
 		t.Errorf("清理后磁盘上仍有 %d 个缓存文件", stats.TotalFiles())

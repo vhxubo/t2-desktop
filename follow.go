@@ -25,7 +25,8 @@ import (
 const followTimeout = 20 * time.Second
 
 // followState 是一篇帖子作者关注状态的 UI 侧缓存。所有字段只在 UI 线程
-// 读写；网络结果通过 app.publish 回来。
+// 读写；网络结果通过 app.publish 回来。关注失败的原因不落在这里：它是一次
+// 操作的结果，用主窗口的 toast 说明（见 toggleFollow）。
 type followState struct {
 	userID    string // 作者 uuid，关注 / 取关路径用
 	following bool
@@ -33,8 +34,7 @@ type followState struct {
 	checked   bool // 是否已经查过一次（失败也置位，避免每帧重试）
 	need      bool // 关注状态还没确定，需要（或等待登录后）读取
 	loading   bool
-	busy      bool // 正在提交关注 / 取关
-	err       string
+	busy      bool   // 正在提交关注 / 取关
 	viewer    string // 状态属于哪个登录账号；换账号后重新读取
 	gen       uint64
 }
@@ -206,11 +206,10 @@ func (a *app) submitFollow(fs *followState, follow bool, current func() bool, re
 		return
 	}
 	if fs.userID == "" {
-		fs.err = "缺少用户标识，暂时无法关注"
+		a.toast(toastMain, "缺少用户标识，暂时无法关注")
 		return
 	}
 	fs.busy = true
-	fs.err = ""
 	fs.gen++ // 作废可能还在途的关注状态读取
 	gen := fs.gen
 	userID := fs.userID
@@ -238,7 +237,7 @@ func (a *app) submitFollow(fs *followState, follow bool, current func() bool, re
 				if a.handleAuthError(err, replay) {
 					return
 				}
-				fs.err = friendlyError(err)
+				a.toast(toastMain, friendlyError(err))
 				return
 			}
 			fs.following = follow
@@ -246,7 +245,6 @@ func (a *app) submitFollow(fs *followState, follow bool, current func() bool, re
 			fs.checked = true
 			fs.need = false
 			fs.viewer = a.auth.username()
-			fs.err = ""
 		})
 	}()
 }
