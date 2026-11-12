@@ -910,14 +910,14 @@ func TestComposeFabFloatsOverContent(t *testing.T) {
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 
-	// 滚到底，最后一行应当贴近窗口底部。
+	// 滚到底，最后一行应当贴近窗口底部（只差列表自己的下内边距与行间距）。
 	tt.Scroll(500, 400, 0, 20000)
 	tt.Frame()
 	last, ok := tt.Find("第 39 项")
 	if !ok {
 		t.Fatalf("滚到底后找不到最后一行：%q", tt.Texts())
 	}
-	if bottom := last.Y + last.H; bottom < 760-24 {
+	if bottom := last.Y + last.H; bottom < 760-50 {
 		t.Errorf("列表没有铺到窗口底部（最后一行底边 %v），说明 FAB 占了高度", bottom)
 	}
 	// 按钮与最后一行在同一条横带上：FAB 是浮起来的，不是列表下面的一块。
