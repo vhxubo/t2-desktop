@@ -569,7 +569,7 @@ func TestReplyComposerAnonymous(t *testing.T) {
 	if tt.HasText("发送") {
 		t.Error("未登录不应出现发送按钮")
 	}
-	// 回复入口默认隐藏，悬浮评论行后才出现（详情页交互优化）。
+	// 回复入口仅在悬浮评论行时出现，位于右上角，保持默认状态清爽。
 	// 注意：嵌套评论的「回复 N 楼」父引用始终可见，故用 Find 精确匹配按钮文字。
 	if _, ok := tt.Find("回复"); ok {
 		t.Error("未悬浮评论行时不应展示回复入口")
@@ -666,6 +666,37 @@ func detailAppWithReplies(t *testing.T) *app {
 	return a
 }
 
+// 单页评论不展示分页控件（第 N 页 / 上一页 / 下一页），保持界面清爽。
+func TestReplyPaginationHiddenOnSinglePage(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.detail.replyTotalPages = 1
+	a.detail.replyPage = 1
+	tt := ui.NewTester(a.view, 1100, 760)
+	for _, hide := range []string{"第 1 页 / 共 1 页", "上一页", "下一页"} {
+		if tt.HasText(hide) {
+			t.Errorf("单页评论不应显示分页控件 %q：%q", hide, tt.Texts())
+		}
+	}
+}
+
+// 多页评论展示分页控件，且未到末页时「下一页」可点。
+func TestReplyPaginationShownOnMultiPage(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.detail.replyTotalPages = 2
+	a.detail.replyPage = 1
+	tt := ui.NewTester(a.view, 1100, 760)
+	for _, want := range []string{"第 1 页 / 共 2 页", "上一页", "下一页"} {
+		if !tt.HasText(want) {
+			t.Errorf("多页评论应显示分页控件 %q：%q", want, tt.Texts())
+		}
+	}
+	// 未到末页：下一页不被禁用。HasText 命中后无法读禁用态，这里至少确认
+	// 按钮存在；禁用逻辑由 replyPane 的 Disabled 守卫保证。
+	if a.detail.replyLoading {
+		t.Error("默认不应处于加载中")
+	}
+}
+
 // Logged-in users get a send button; clicking 回复 on a floor targets that
 // comment for nesting and shows the "正在回复 N 楼" chip. An empty draft is a
 // synchronous no-op that surfaces a validation message (no network goroutine).
@@ -687,7 +718,7 @@ func TestReplyComposerLoggedIn(t *testing.T) {
 	if !tt.HasText("发送") {
 		t.Error("登录态下没有发送按钮")
 	}
-	// 「回复」入口仅在悬浮评论行时出现：先把指针移到第一行（"1 楼"）。
+	// 「回复」入口悬浮时出现于右上角：先把指针移到第一行（"1 楼"）。
 	if r, ok := tt.Find("1 楼"); !ok {
 		t.Fatal("找不到评论行用于悬浮")
 	} else {

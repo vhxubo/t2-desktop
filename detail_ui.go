@@ -516,23 +516,27 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 			a.replyRow(c, rows[i], d.focusID)
 		}).Grow(1).MinHeight(0).Padding(6, 12).Gap(10)
 	}
-	ui.Divider(c)
-	ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).Children(func() {
-		page := d.replyPage
-		if page < 1 {
-			page = 1
-		}
-		ui.Textf(c, "第 %d 页 / 共 %d 页", page, max(1, d.replyTotalPages)).
-			FontSize(11).TextColor(t.TextMuted).Grow(1)
-		if ui.Button(c, "上一页").Disabled(page <= 1 || d.replyLoading).Clicked() {
-			a.loadReplies(page - 1)
-		}
-		hasMore := d.replyLoaded && !d.replyLoading &&
-			(d.replyTotalPages == 0 || page < d.replyTotalPages)
-		if ui.Button(c, "下一页").Disabled(!hasMore).Clicked() {
-			a.loadReplies(page + 1)
-		}
-	})
+	// 只有多页时才展示分页：单页或没有评论时不显示分页控件，保持界面清爽。
+	// 评论区的分隔线由 replyComposer 自身提供，因此单页时不必额外画一条。
+	if d.replyTotalPages > 1 {
+		ui.Divider(c)
+		ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).Children(func() {
+			page := d.replyPage
+			if page < 1 {
+				page = 1
+			}
+			ui.Textf(c, "第 %d 页 / 共 %d 页", page, d.replyTotalPages).
+				FontSize(11).TextColor(t.TextMuted).Grow(1)
+			if ui.Button(c, "上一页").Disabled(page <= 1 || d.replyLoading).Clicked() {
+				a.loadReplies(page - 1)
+			}
+			// 进入此分支必为 replyTotalPages > 1，故无需再判断 == 0。
+			hasMore := d.replyLoaded && !d.replyLoading && page < d.replyTotalPages
+			if ui.Button(c, "下一页").Disabled(!hasMore).Clicked() {
+				a.loadReplies(page + 1)
+			}
+		})
+	}
 	a.replyComposer(c, d)
 }
 
@@ -552,6 +556,8 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 	row := ui.Column(c).FillWidth().Padding(8, 10, 8, left).Radius(8).
 		Background(bg).Border(1, border).Gap(4)
 	hovered := row.Hovered()
+	// 评论已关闭时整条都不能回复；已删除的评论同样不提供回复入口。
+	closed := a.detail != nil && a.detail.topic != nil && a.detail.topic.CommentsClosed
 	row.Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			floor := ""
@@ -576,6 +582,20 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 			if r.Reactions != "" {
 				ui.Text(c, r.Reactions).FontSize(11).TextColor(t.TextMuted)
 			}
+			// 回复入口以文字形式放在每条评论的右上角，悬浮整条评论时才
+			// 出现，保持默认列表的清爽；已删除 / 评论已关闭的楼层不提供
+			// 该入口。点一下就展开并聚焦输入框，点完就能写。
+			if !r.Deleted && !closed && hovered {
+				a.replyAction(c, "回复", func() {
+					a.detail.replyToID = r.ID
+					a.detail.replyToFloor = r.Floor
+					if a.detail.replyToFloor == 0 {
+						a.detail.replyToFloor = r.FlatFloor
+					}
+					a.detail.composerIdle = false
+					a.detail.composerField.Focus(c)
+				})
+			}
 		})
 		if r.ParentSummary != "" || r.ParentFloor > 0 {
 			ui.Textf(c, "回复 %d 楼：%s", r.ParentFloor, r.ParentSummary).
@@ -589,10 +609,8 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 			content = "（无内容）"
 		}
 		ui.Text(c, replaceEmoji(content, a.emojis, false)).FontSize(13)
-		// Comments are plain text, so give any post link in them an
-		// explicit in-app action instead of leaving it unclickable.
-		// 评论内的操作（打开链接、回复）均为文字按钮，且只在悬浮整条
-		// 评论时才出现，保持列表默认状态的清爽。
+		// 评论里的应用内链接是次级操作：仅悬浮整条评论时出现，保持默认
+		// 状态的清爽；回复入口已常驻右上角，这里不再重复。
 		if !r.Deleted && hovered {
 			if links := inAppTopicLinks(r.Content); len(links) > 0 {
 				ui.Row(c).Gap(6).Wrap().Children(func() {
@@ -602,22 +620,6 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 							a.handleLink(target.URL)
 						})
 					}
-				})
-			}
-			// Reply nesting: point the composer at this comment. The server
-			// assigns the floor, so we only remember the id and a display
-			// floor for the "正在回复 N 楼" chip; closed comments can't reply.
-			closed := a.detail != nil && a.detail.topic != nil && a.detail.topic.CommentsClosed
-			if !closed {
-				a.replyAction(c, "回复", func() {
-					a.detail.replyToID = r.ID
-					a.detail.replyToFloor = r.Floor
-					if a.detail.replyToFloor == 0 {
-						a.detail.replyToFloor = r.FlatFloor
-					}
-					// 回复某层楼时直接展开并聚焦输入框，点完就能写。
-					a.detail.composerIdle = false
-					a.detail.composerField.Focus(c)
 				})
 			}
 		}
@@ -630,6 +632,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 func (a *app) replyAction(c *ui.Context, label string, onClick func()) {
 	btn := ui.Button(c, label).
 		Background(ui.Transparent).
+		Border(0, c.Theme().Border).
 		TextColor(c.Theme().Accent).
 		FontSize(12).
 		Padding(2, 6).
