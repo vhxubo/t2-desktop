@@ -247,142 +247,21 @@ func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 			}
 			ui.Text(c, line).FontSize(11).TextColor(t.TextMuted).SingleLine()
 		})
-		a.smallAction(c, "刷新", ps.infoLoading || ps.coinLoading, func() { a.reloadProfile() })
+		a.smallAction(c, "刷新", ps.infoLoading, func() { a.reloadProfile() })
 	})
 }
 
 /* ------------------------------------------------------------------
-   Tab 1：概览与资产
+   Tab 1：概览
 ---------------------------------------------------------------- */
 
 func (a *app) profileOverviewBody(c *ui.Context, ps *profileState) {
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).FillWidth().Gap(14).Children(func() {
-			a.profileBalanceCard(c, ps)
-			a.profileTxSection(c, ps)
 			a.profileStatsSection(c, ps)
 			a.profileAuthEntry(c, ps)
 		})
 	})
-}
-
-// profileBalanceCard 是余额 + 签到：两列并排，和金币页顶部同一个口径。
-func (a *app) profileBalanceCard(c *ui.Context, ps *profileState) {
-	t := c.Theme()
-	ui.Box(c).FillWidth().Padding(12, 14).Radius(10).
-		Background(t.Background).Border(1, t.Border).Children(func() {
-		ui.Row(c).FillWidth().Gap(16).AlignItems(ui.Start).Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-				ui.Text(c, "金币余额").FontSize(11).TextColor(t.TextMuted)
-				switch {
-				case ps.coinLoading && !ps.balanceOK:
-					ui.Spinner(c).Size(20, 20)
-				case ps.balanceOK:
-					ui.Text(c, coinThousands(ps.balance)+" 金币").FontSize(24).Bold().SingleLine()
-				default:
-					ui.Text(c, "—").FontSize(24).Bold().TextColor(t.TextMuted)
-				}
-				if ps.coinErr != "" {
-					ui.Text(c, ps.coinErr).FontSize(10).TextColor(t.Danger).MaxLines(2)
-				} else {
-					ui.Text(c, "需授权 read:economy").FontSize(10).TextColor(t.TextMuted).SingleLine()
-				}
-			})
-			ui.Column(c).Shrink(0).Gap(2).Children(func() {
-				ui.Text(c, "今日签到").FontSize(11).TextColor(t.TextMuted)
-				text := profileSignText(ps.sign, ps.coinErr)
-				line := ui.Text(c, text).FontSize(12).Bold().SingleLine()
-				if ps.sign.Known && ps.sign.Signed && ps.coinErr == "" {
-					line.TextColor(t.Success)
-				} else {
-					line.TextColor(t.TextMuted)
-				}
-				if ps.sign.Known && ps.sign.Coins != 0 {
-					ui.Text(c, "今日 +"+coinAmountText(ps.sign.Coins)).FontSize(10).TextColor(t.TextMuted)
-				}
-			})
-		})
-	})
-}
-
-// profileTxSection 是金币明细的快捷入口：默认收起，展开后列出最近几条变动
-// （签到收益、发帖消耗、打赏等），再给一个切到「金币」页看全部流水的出口。
-func (a *app) profileTxSection(c *ui.Context, ps *profileState) {
-	t := c.Theme()
-	settingsSection(c, "金币明细", func() {
-		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-			label := "展开最近记录"
-			if ps.txOpen {
-				label = "收起"
-			}
-			a.smallAction(c, label, ps.txLoading && !ps.txLoaded, func() {
-				ps.txOpen = !ps.txOpen
-				if ps.txOpen && !ps.txLoaded && !ps.txLoading {
-					a.loadProfileTransactions()
-				}
-			})
-			ui.Spacer(c).Grow(1)
-			// 「全部流水」打开独立的金币窗口，并直接落在「历史」一页。
-			a.smallAction(c, "全部流水", false, func() {
-				if a.coins != nil {
-					a.coins.view = coinViewHistory
-				}
-				a.showCoins()
-			})
-		})
-		if !ps.txOpen {
-			return
-		}
-		switch {
-		case ps.txLoading && len(ps.txItems) == 0:
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Spinner(c).Size(14, 14)
-				ui.Text(c, "正在加载金币记录…").FontSize(11).TextColor(t.TextMuted)
-			})
-		case ps.txErr != "":
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, ps.txErr).FontSize(11).TextColor(t.Danger).MaxLines(2).Grow(1)
-				a.smallAction(c, "重试", false, func() { a.loadProfileTransactions() })
-			})
-		case len(ps.txItems) == 0:
-			ui.Text(c, "最近没有金币变动。").FontSize(11).TextColor(t.TextMuted)
-		default:
-			for _, tx := range ps.txItems {
-				a.profileTxRow(c, tx)
-			}
-		}
-	})
-}
-
-// profileTxRow 是一行金币变动：原因、时间与带符号的金额。点有相关帖子的
-// 记录会回到应用内的正文，其余只读。
-func (a *app) profileTxRow(c *ui.Context, tx coinTransaction) {
-	t := c.Theme()
-	row := ui.ButtonBase(c).FillWidth().Padding(8, 10).Radius(8).
-		Background(t.Background).Border(1, t.Border)
-	if row.Hovered() {
-		row.Background(t.SurfaceHover)
-	}
-	row.Children(func() {
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
-				ui.Text(c, coinReasonLabel(tx.Reason)).FontSize(12).Bold().SingleLine()
-				if detail := coinTransactionDetail(tx); detail != "" {
-					ui.Text(c, detail).FontSize(11).TextColor(t.TextMuted).MaxLines(1)
-				}
-			})
-			ui.Column(c).Shrink(0).Gap(1).Children(func() {
-				ui.Text(c, coinSignedText(tx.Amount)).FontSize(13).Bold().
-					TextColor(coinAmountColor(t, tx.Amount)).TextAlign(ui.End)
-				ui.Text(c, coinWhen(tx.CreatedAt, false)).FontSize(10).
-					TextColor(t.TextMuted).TextAlign(ui.End)
-			})
-		})
-	})
-	if tx.RelatePath != "" {
-		row.Tooltip("打开相关帖子或页面")
-		row.OnClick(func() { a.handleLink(tx.RelatePath) })
-	}
 }
 
 // profileStatsSection 是「最近统计」：粉丝、关注、主页访问与等级来自公开

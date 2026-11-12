@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -153,14 +154,6 @@ func profileWindowApp(t *testing.T) *app {
 		Following:   3,
 		HomeView:    1024,
 	}
-	ps.coinLoaded = true
-	ps.balance, ps.balanceOK = 1280, true
-	ps.sign = coinSignStatus{Known: true, Signed: true, Streak: 5}
-	ps.txLoaded = true
-	ps.txItems = []coinTransaction{
-		{ID: "c1", Reason: "checkin", Amount: 5, CreatedAt: "2026-11-12T02:00:00Z"},
-		{ID: "c2", Reason: "post", Amount: -2, RelateTitle: "一篇帖子", CreatedAt: "2026-11-11T02:00:00Z"},
-	}
 	topics := &ps.content[profileContentTopics]
 	topics.loaded = true
 	topics.items = []Item{
@@ -176,7 +169,7 @@ func profileWindowApp(t *testing.T) *app {
 	return a
 }
 
-// 窗口第一屏：资料头、四个标签页与概览里的资产区块。
+// 窗口第一屏：资料头、四个标签页与概览里的统计区块。
 func TestProfileWindowView(t *testing.T) {
 	a := profileWindowApp(t)
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
@@ -184,9 +177,7 @@ func TestProfileWindowView(t *testing.T) {
 	for _, want := range []string{
 		"我的", "吉米",
 		"用户 ID: #123456", "注册 2024-02-01",
-		"概览与资产", "我的内容", "我的回复", "权限与账号",
-		"1,280 金币", "今日已签到 · 连续 5 天",
-		"金币明细", "展开最近记录", "全部流水",
+		"概览", "我的内容", "我的回复", "权限与账号",
 		"最近统计", "粉丝", "关注", "主页访问", "等级",
 		"授权管理", "查看当前权限",
 	} {
@@ -213,49 +204,26 @@ func TestProfileWindowView(t *testing.T) {
 	}
 }
 
-// 金币页已经独立成金币窗口：概览里的「全部流水」不再切换「我的」窗口里的
-// 标签页，而是打开金币窗口并直接落在「历史」一页。
-func TestProfileAllTransactionsOpensCoinWindow(t *testing.T) {
+// 金币相关的入口都不在「我的」窗口里：余额、签到、金币明细与全部流水
+// 都随金币页一起搬去了独立的金币窗口。
+func TestProfileHasNoCoinEntries(t *testing.T) {
 	a := profileWindowApp(t)
+	a.coins.balance, a.coins.balanceOK = 1280, true
+	a.coins.sign = coinSignStatus{Known: true, Signed: true, Streak: 5}
 	opened := 0
 	a.onCoinsOpen = func() { opened++ }
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
-	if err := tt.Click("全部流水"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if opened != 1 {
-		t.Fatalf("点「全部流水」后没有打开金币窗口：opened=%d", opened)
-	}
-	if a.coins.view != coinViewHistory {
-		t.Errorf("「全部流水」应落在金币窗口的历史页：view=%d", a.coins.view)
-	}
-	// 「我的」窗口本身不切换标签页，仍然停在概览。
-	if a.profile.tab != profileTabOverview {
-		t.Errorf("打开金币窗口不该切走「我的」的标签页：tab=%d", a.profile.tab)
-	}
-}
-
-// 金币明细默认收起，点「展开」才列出最近几笔变动。
-func TestProfileCoinTransactionsExpand(t *testing.T) {
-	a := profileWindowApp(t)
-	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
-	tt.Frame()
-	if tt.HasText("签到") && tt.HasText("发表帖子") {
-		t.Fatalf("明细默认应收起：%q", tt.Texts())
-	}
-	if err := tt.Click("展开最近记录"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	for _, want := range []string{"签到", "发表帖子"} {
-		if !tt.HasText(want) {
-			t.Errorf("展开后看不到 %q：%q", want, tt.Texts())
+	for _, forbidden := range []string{
+		"金币余额", "今日签到", "金币明细", "展开最近记录", "全部流水",
+		"1,280 金币", "今日已签到",
+	} {
+		if tt.HasText(forbidden) {
+			t.Errorf("「我的」窗口不该再有金币入口 %q：%q", forbidden, tt.Texts())
 		}
 	}
-	if !tt.HasText("+5") {
-		t.Errorf("明细里没有带符号的金额：%q", tt.Texts())
+	if opened != 0 {
+		t.Errorf("打开「我的」窗口不该打开金币窗口：opened=%d", opened)
 	}
 }
 
@@ -485,62 +453,40 @@ func TestProfileNeedsLogin(t *testing.T) {
    数据加载
 ----------------------------------------------------------------- */
 
-// 首屏一次拉齐资料、余额、签到与最近流水；展开明细后才有流水请求。
-func TestProfileLoadsOverview(t *testing.T) {
+// 「我的」窗口只拉账号资料，不再请求金币余额、签到或流水。
+func TestProfileLoadsInfoOnly(t *testing.T) {
 	var mu sync.Mutex
 	var paths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		paths = append(paths, r.URL.Path)
 		mu.Unlock()
-		switch r.URL.Path {
-		case "/api/v1/users/jimmy":
-			fmt.Fprint(w, `{"c":0,"d":{"username":"jimmy","user_number":123456,"created_at":"2024-02-01T08:00:00Z"}}`)
-		case "/api/v1/me/coins/balance":
-			fmt.Fprint(w, `{"c":0,"d":{"coins":1280}}`)
-		case "/api/v1/me/sign":
-			fmt.Fprint(w, `{"c":0,"d":{"signed":true,"streak":5}}`)
-		case "/api/v1/me/coins/transactions":
-			fmt.Fprint(w, `{"c":0,"d":{"items":[{"id":"c1","reason":"checkin","amount":5,"created_at":"2026-11-12T02:00:00Z"}],"total":1,"page":1,"limit":20,"total_pages":1}}`)
-		default:
+		if r.URL.Path != "/api/v1/users/jimmy" {
 			http.NotFound(w, r)
+			return
 		}
+		fmt.Fprint(w, `{"c":0,"d":{"username":"jimmy","user_number":123456,"created_at":"2024-02-01T08:00:00Z"}}`)
 	}))
 	defer srv.Close()
 
 	a := testApp(t)
+	a.autoLoad = true
 	a.client.Base = srv.URL + "/api"
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer", Username: "jimmy"}); err != nil {
 		t.Fatal(err)
 	}
-	a.loadProfileInfo("jimmy")
-	a.loadProfileCoins()
-	waitProfile(t, "资料与余额", func() bool {
-		return a.profile.infoLoaded && a.profile.coinLoaded
-	})
+	a.ensureProfileLoaded()
+	waitProfile(t, "资料", func() bool { return a.profile.infoLoaded })
 	if a.profile.user.UserNumber != 123456 {
 		t.Errorf("资料没有回填：%+v", a.profile.user)
 	}
-	if !a.profile.balanceOK || a.profile.balance != 1280 {
-		t.Errorf("余额没有回填：%+v", a.profile)
-	}
-	if !a.profile.sign.Signed || a.profile.sign.Streak != 5 {
-		t.Errorf("签到状态没有回填：%+v", a.profile.sign)
-	}
-	// 明细只在展开时才拉：这时还没有请求过它。
-	mu.Lock()
-	for _, p := range paths {
-		if p == "/api/v1/me/coins/transactions" {
-			t.Errorf("没展开明细就请求了流水：%v", paths)
-		}
-	}
-	mu.Unlock()
 
-	a.profile.txOpen = true
-	a.loadProfileTransactions()
-	waitProfile(t, "最近流水", func() bool { return a.profile.txLoaded })
-	if len(a.profile.txItems) != 1 || a.profile.txItems[0].Reason != "checkin" {
-		t.Errorf("流水没有回填：%+v", a.profile.txItems)
+	mu.Lock()
+	defer mu.Unlock()
+	for _, p := range paths {
+		if strings.Contains(p, "/coins") || p == "/api/v1/me/sign" {
+			t.Errorf("「我的」窗口不该请求金币数据：%v", paths)
+		}
 	}
 }
 

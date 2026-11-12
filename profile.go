@@ -18,19 +18,18 @@ import (
 //
 // 四个标签页对应这几组只读端点：
 //
-//	概览与资产  GET /v1/me/coins/balance、/v1/me/sign、/v1/me/coins/transactions
+//	概览        GET /v1/users/:userName（最近统计）
 //	我的内容    GET /v1/me/topics、/v1/me/favorites、/v1/me/bookmarks、/v1/me/collections
 //	我的回复    GET /v1/users/:userName/replies
 //	权限与账号  GET /v1/users/:userName + 令牌里的 scope
 //
-// 金币页原先在这里占一个标签页，如今是独立的金币窗口（见 coins_window.go），
-// 入口是标题栏上登录账号左侧的金币数。概览里仍保留余额卡片与「全部流水」
-// 的快捷入口，点「全部流水」打开金币窗口的「历史」一页。
+// 金币不在这里：金币页是独立的金币窗口（见 coins_window.go），入口是标题栏
+// 上登录账号左侧的金币数。本窗口不展示余额、签到，也不提供金币相关的入口。
 //
 // 「我的内容」一页里有四个分段：帖子、收藏、书签、合集。这四类原先占着主
 // 窗口的侧边栏，现在只在这里出现。
 //
-// 这里没有任何写操作：签到、打赏、发帖都引导到站点完成。
+// 这里没有任何写操作：发帖、互动等操作都在各自的窗口或站点完成。
 
 // 弹窗的默认尺寸。它和通知窗口一样用 StateKey 记住位置与大小，这里只是
 // 首次打开时的默认值。
@@ -42,11 +41,9 @@ const (
 
 	// profileReplyPageSize 是「我的回复」每页条数：该端点默认 20、上限 50。
 	profileReplyPageSize = 20
-	// profileTxShown 是「金币明细」展开后直接列出的最近几条。
-	profileTxShown = 6
 )
 
-// 弹窗里的标签页。金币页已经独立成金币窗口，不在这里。
+// 弹窗里的标签页。金币页不在这个窗口里，去独立的金币窗口看。
 const (
 	profileTabOverview = iota
 	profileTabContent
@@ -54,7 +51,7 @@ const (
 	profileTabAccount
 )
 
-var profileTabLabels = []string{"概览与资产", "我的内容", "我的回复", "权限与账号"}
+var profileTabLabels = []string{"概览", "我的内容", "我的回复", "权限与账号"}
 
 // 「我的内容」里的四个分段。
 const (
@@ -141,23 +138,6 @@ type profileState struct {
 	infoLoaded  bool
 	infoErr     string
 	user        accountProfile
-
-	// 金币余额与今日签到
-	coinSeq     uint64
-	coinLoading bool
-	coinLoaded  bool
-	coinErr     string
-	balance     int
-	balanceOK   bool
-	sign        coinSignStatus
-
-	// 最近金币明细：点「展开」才拉，收起后保留已拉到的数据
-	txSeq     uint64
-	txLoading bool
-	txLoaded  bool
-	txOpen    bool
-	txErr     string
-	txItems   []coinTransaction
 
 	// 我的内容：帖子 / 收藏 / 书签 / 合集各有一份列表状态，切换分段时保留
 	// 已经拉到的内容，不重新请求。加载走主窗口同一套通用加载（loadSpec）。
@@ -308,22 +288,6 @@ func profileIdentityLine(u accountProfile) string {
 	return strings.Join(parts, "  |  ")
 }
 
-// profileSignText 是一行签到状态，措辞与金币页保持一致。
-func profileSignText(sign coinSignStatus, errText string) string {
-	switch {
-	case errText != "":
-		return "签到状态暂不可用"
-	case sign.Known && sign.Signed:
-		if sign.Streak > 0 {
-			return fmt.Sprintf("今日已签到 · 连续 %d 天", sign.Streak)
-		}
-		return "今日已签到"
-	case sign.Known:
-		return "今日未签到"
-	}
-	return "签到状态加载中…"
-}
-
 /* ------------------------------------------------------------------
    加载：每个请求都有 seq，过期的结果直接丢弃
 ---------------------------------------------------------------- */
@@ -339,14 +303,7 @@ func (a *app) ensureProfileLoaded() {
 	if name != "" && !ps.infoLoaded && !ps.infoLoading {
 		a.loadProfileInfo(name)
 	}
-	if !ps.coinLoaded && !ps.coinLoading {
-		a.loadProfileCoins()
-	}
 	switch ps.tab {
-	case profileTabOverview:
-		if ps.txOpen && !ps.txLoaded && !ps.txLoading {
-			a.loadProfileTransactions()
-		}
 	case profileTabContent:
 		st := &ps.content[ps.contentKind]
 		if !st.loaded && !st.loading && !st.authWait {
@@ -385,73 +342,6 @@ func (a *app) loadProfileInfo(name string) {
 			ps.user = p
 			ps.infoErr = ""
 			a.prefetchAvatars(p.Avatar)
-		})
-	}()
-}
-
-func (a *app) loadProfileCoins() {
-	ps := a.profile
-	if ps == nil || ps.coinLoading {
-		return
-	}
-	ps.coinSeq++
-	seq := ps.coinSeq
-	ps.coinLoading = true
-	ps.coinErr = ""
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	go func() {
-		defer cancel()
-		balance, balanceErr := a.client.fetchCoinBalance(ctx)
-		sign, signErr := a.client.fetchCoinSign(ctx)
-		a.publish(func() {
-			if a.profile != ps || ps.coinSeq != seq {
-				return
-			}
-			ps.coinLoading = false
-			ps.coinLoaded = true
-			switch {
-			case balanceErr == nil:
-				ps.balance, ps.balanceOK, ps.coinErr = balance, true, ""
-			default:
-				ps.coinErr = friendlyError(balanceErr)
-			}
-			if signErr == nil {
-				ps.sign = sign
-			}
-		})
-	}()
-}
-
-func (a *app) loadProfileTransactions() {
-	ps := a.profile
-	if ps == nil || ps.txLoading {
-		return
-	}
-	ps.txSeq++
-	seq := ps.txSeq
-	ps.txLoading = true
-	ps.txErr = ""
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	go func() {
-		defer cancel()
-		res, err := a.client.fetchCoinTransactions(ctx, 1, "", "")
-		a.publish(func() {
-			if a.profile != ps || ps.txSeq != seq {
-				return
-			}
-			ps.txLoading = false
-			ps.txLoaded = true
-			if err != nil {
-				ps.txErr = friendlyError(err)
-				return
-			}
-			items := res.Items
-			if len(items) > profileTxShown {
-				items = items[:profileTxShown]
-			}
-			ps.txItems = items
-			ps.txErr = ""
-			a.prefetchCoinTransactions(items)
 		})
 	}()
 }
@@ -556,15 +446,15 @@ func (a *app) loadProfileReplies(name string, page int) {
 	}()
 }
 
-// reloadProfile 是窗口里的「刷新」：保留当前标签页、「我的内容」当前分段与
-// 明细的展开状态，其余状态清空后按需重拉。
+// reloadProfile 是窗口里的「刷新」：保留当前标签页与「我的内容」当前分段，
+// 其余状态清空后按需重拉。
 func (a *app) reloadProfile() {
 	ps := a.profile
 	if ps == nil {
 		return
 	}
-	tab, content, txOpen := ps.tab, ps.contentKind, ps.txOpen
+	tab, content := ps.tab, ps.contentKind
 	*a.profile = *newProfileState()
-	a.profile.tab, a.profile.contentKind, a.profile.txOpen = tab, content, txOpen
+	a.profile.tab, a.profile.contentKind = tab, content
 	a.ensureProfileLoaded()
 }
