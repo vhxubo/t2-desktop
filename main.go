@@ -158,6 +158,12 @@ type app struct {
 	userCardWin   *mygo.Window
 	userCard      *userCardState
 	userCardShown bool
+	// tray 是系统托盘图标（见 tray.go）：应用就绪后创建，退出前销毁；
+	// 无头测试保持 nil，不会碰到原生托盘。只在主线程读写。
+	tray *mygo.Tray
+	// quitApp 退出应用，生产里是 mygo.App.Quit；无头测试换成记录调用，
+	// 没有主循环时不能真的走退出流程。
+	quitApp       func()
 	streamLive    bool
 	watchCancel   context.CancelFunc
 	watchGen      uint64
@@ -224,6 +230,9 @@ func newApp(dir string) *app {
 		nativeNotify: true,
 		coins:        newCoinState(),
 		profile:      newProfileState(),
+		// 托盘的「退出」与窗口关闭走同一条退出流程；测试里换成记录调用，
+		// 无头环境没有主循环，不能真的退出。
+		quitApp: func() { mygo.App.Quit() },
 	}
 	// 本地缓存是"先读文件、后发请求"的首屏底稿：启动时就把金币与阅读记录
 	// 装进内存，第一帧就能画出来。文件不存在或损坏都只是空缓存。
@@ -1113,6 +1122,9 @@ func main() {
 			a.closeProfileWindow()
 			a.closeComposeWindow()
 		})
+		// 托盘图标：应用就绪后才有原生通知区域，见 tray.go。创建失败只记
+		// 日志，主窗口照常使用。
+		a.startTray()
 		if a.auth.loggedIn() {
 			a.refreshUnread()
 			a.startNotificationWatch()
