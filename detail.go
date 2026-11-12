@@ -44,16 +44,11 @@ func (c *Client) apiURL(pathQuery string) string {
 type topicDetail struct {
 	ShortID, Title, Content, Type string
 	Author                        string
-	AuthorID                      string // 作者 uuid，关注 / 取关路径需要
-	Avatar                        string // 作者头像 URL，正文底部左下角展示
+	AuthorID                      string // 作者 uuid，表态接口的 recUserId 需要
+	Avatar                        string // 作者头像 URL，标题下方展示
 	Badges                        []badgeInfo
 	AuthorLevel                   int
-	// Following / FollowingKnown 是作者对象里可选的 is_following。线上详情
-	// 目前不带这个字段，关注状态改由 GET /v1/users/:userName 补齐；这里
-	// 仍然解析，字段一旦下发就不必多发一次请求。
-	Following          bool
-	FollowingKnown     bool
-	NodeName, NodeSlug string
+	NodeName, NodeSlug            string
 	// NodeParentName / NodeParentSlug 是节点上一级：线上详情把父节点放在
 	// node.parent 里（同时带 parent_slug），列表接口只带 parent_slug。
 	// 两级分类据此显示成「父 · 子」，只有 slug、拿不到父名时退回一级。
@@ -132,8 +127,8 @@ type voteOption struct {
 	Votes int
 }
 
-// replyItem is one floor. Children of the floor view are flattened for
-// display with Depth, so the UI needs no recursive layout.
+// replyItem 是一条评论。楼层视图里的 children 会按 Depth 摊平显示，界面
+// 不需要递归布局。
 type replyItem struct {
 	ID, Content, Author, CreatedAt string
 	// AuthorID 是评论作者的 uuid：表态接口的 recUserId 必填，和帖子作者
@@ -142,8 +137,9 @@ type replyItem struct {
 	// Avatar 是评论作者的头像地址；统一用户标识据此在昵称旁画头像。
 	Avatar                         string
 	Floor, FlatFloor, LocatedFloor int
-	ParentID                       string // 被回复评论的 uuid，点「回复 N 楼」时用来定位
-	ParentFloor                    int
+	ParentID                       string // 被回复评论的 uuid，点父评论引用时用来定位
+	ParentFloor                    int    // 父评论的楼层；父评论也是楼中楼时为 0
+	ParentAuthor                   string // 父评论作者，父评论没有楼层时用于引用
 	ParentSummary                  string
 	Reactions                      []reactionStat
 	Rewards                        rewardStat
@@ -227,10 +223,6 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 		t.AuthorLevel = a.num("level")
 		t.Avatar = authorAvatar(a)
 		t.Badges = decodeBadges(a)
-		if _, ok := a["is_following"]; ok {
-			t.FollowingKnown = true
-			t.Following = a.flag("is_following", "followed")
-		}
 	}
 	if n := o.sub("node"); n != nil {
 		t.NodeName = n.str("name")
@@ -411,6 +403,9 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 	if p := o.sub("parent"); p != nil {
 		r.ParentID = p.str("id")
 		r.ParentFloor = p.num("floor")
+		if a := p.sub("author"); a != nil {
+			r.ParentAuthor = a.str("username")
+		}
 		// 「回复 N 楼：…」是父评论的纯文本预览，与列表行的评论摘要同一套
 		// 规则去掉 Markdown 标记，避免引用里冒出 ** / > 之类符号。
 		r.ParentSummary = truncate(commentExcerpt(p.str("content")), 60)
@@ -694,7 +689,14 @@ func (c *Client) createReply(ctx context.Context, shortID, content, parentID str
 		if err != nil {
 			return replyItem{}, err
 		}
-		return decodeReply(d, 0), nil
+		r := decodeReply(d, 0)
+		// 线上 201 只保证回创建结果，不保证带正文：有的响应只有 id / 楼层 /
+		// 作者。刚发的评论此时若直接拿返回值插进列表，会显示「（无内容）」，
+		// 刷新后才看到正文。正文就是这次提交的内容，缺失时直接补上。
+		if strings.TrimSpace(r.Content) == "" {
+			r.Content = content
+		}
+		return r, nil
 	})
 }
 

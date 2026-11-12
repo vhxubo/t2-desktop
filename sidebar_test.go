@@ -77,6 +77,39 @@ func TestSidebarHasNoMyContentEntries(t *testing.T) {
 	}
 }
 
+// 「动态」归入「浏览」：侧边栏只剩一个分组，动态排在公开榜单之后；未登录
+// 时也照常显示（点它才弹授权），不再单独占一个「我的」分组。
+func TestSidebarTimelineBelongsToBrowse(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	browse, ok := tt.Find("浏览")
+	if !ok {
+		t.Fatalf("侧边栏没有「浏览」分组：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("我的"); ok {
+		t.Errorf("侧边栏不该再有「我的」分组：%q", tt.Texts())
+	}
+	timeline, ok := tt.Find("动态")
+	if !ok {
+		t.Fatalf("侧边栏没有「动态」：%q", tt.Texts())
+	}
+	if timeline.Y <= browse.Y {
+		t.Errorf("「动态」的 y=%.0f，应在「浏览」分组标题（y=%.0f）下方", timeline.Y, browse.Y)
+	}
+	last, ok := tt.Find("社区讨论")
+	if !ok {
+		t.Fatalf("侧边栏缺少「社区讨论」：%q", tt.Texts())
+	}
+	if timeline.Y <= last.Y {
+		t.Errorf("「动态」的 y=%.0f，应排在「社区讨论」（y=%.0f）之后", timeline.Y, last.Y)
+	}
+	if timeline.X >= sidebarWidth {
+		t.Errorf("「动态」的 x=%.0f 越出了侧边栏宽度 %d", timeline.X, sidebarWidth)
+	}
+}
+
 // 未登录时侧边栏的「登录」直接打开浏览器授权，不离开当前页；等待期间变成
 // 「粘贴回调」与「取消」，点「取消」就回到未登录。
 func TestSidebarLoginStartsAndCancels(t *testing.T) {

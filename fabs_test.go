@@ -154,9 +154,10 @@ func TestListFabRefreshReloads(t *testing.T) {
 	}
 }
 
-// 详情页的刷新与返回顶部收在页头，不再浮在右下角：评论滚到底后出现返回
-// 顶部，点了评论回到开头；两个按钮都不会和卡片底部的「发送」抢位置。
-func TestDetailHeaderRefreshAndBackToTop(t *testing.T) {
+// 详情页不再有页头：刷新与返回顶部收在右上角的悬浮工具条里，压在评论卡片
+// 头部右侧的留白上，不占正文高度。评论滚到底后出现返回顶部，点了评论回到
+// 开头；按钮不会和卡片底部的「发送」抢位置。
+func TestDetailToolbarRefreshAndBackToTop(t *testing.T) {
 	a := detailAppWithReplies(t)
 	rows := make([]replyItem, 0, 60)
 	for i := 0; i < 60; i++ {
@@ -183,20 +184,31 @@ func TestDetailHeaderRefreshAndBackToTop(t *testing.T) {
 	if !ok {
 		t.Fatalf("评论滚离顶部后没有出现返回顶部：%q", tt.Texts())
 	}
-	// 两个按钮都在页头：靠近窗口顶部，并且与「评论」标题同处一行附近。
+	// 工具条悬浮在右上角：靠近窗口顶部与右边缘，并与评论卡片头部同一带，
+	// 说明它没有像旧版页头那样单独占一行。
 	if refresh.Y > 90 || top.Y > 90 {
-		t.Errorf("刷新 / 返回顶部应收进页头：刷新 %+v / 返回顶部 %+v", refresh, top)
+		t.Errorf("刷新 / 返回顶部应悬浮在内容右上角：刷新 %+v / 返回顶部 %+v", refresh, top)
+	}
+	if refresh.X < 900 {
+		t.Errorf("悬浮工具条应贴在窗口右侧：刷新 %+v", refresh)
 	}
 	if top.Y != refresh.Y {
-		t.Errorf("返回顶部与刷新应在同一行页头：返回顶部 %+v / 刷新 %+v", top, refresh)
+		t.Errorf("返回顶部与刷新应在同一行：返回顶部 %+v / 刷新 %+v", top, refresh)
 	}
-	// 评论输入栏固定在卡片底部，远在页头按钮下方，不再需要为 FAB 让宽度。
+	comment, ok := tt.Find("评论")
+	if !ok {
+		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
+	}
+	if dy := refresh.Y + refresh.H/2 - (comment.Y + comment.H/2); dy > 20 || dy < -20 {
+		t.Errorf("悬浮工具条没有压在评论卡片头部一带：刷新 %+v / 评论 %+v", refresh, comment)
+	}
+	// 评论输入栏固定在卡片底部，远在工具条下方，不再需要为 FAB 让宽度。
 	send, ok := tt.Find("发送")
 	if !ok {
 		t.Fatalf("找不到发送按钮：%q", tt.Texts())
 	}
 	if send.Y <= refresh.Y+100 {
-		t.Errorf("发送按钮应固定在评论卡片底部：发送 %+v / 页头刷新 %+v", send, refresh)
+		t.Errorf("发送按钮应固定在评论卡片底部：发送 %+v / 工具条刷新 %+v", send, refresh)
 	}
 
 	if err := tt.Click("返回顶部"); err != nil {
@@ -211,8 +223,9 @@ func TestDetailHeaderRefreshAndBackToTop(t *testing.T) {
 	}
 }
 
-// 详情页页头的「刷新」重新拉正文与评论：页面上还挂着的旧失败提示要被清掉。
-func TestDetailHeaderRefreshClearsError(t *testing.T) {
+// 详情页悬浮工具条里的「刷新」重新拉正文与评论：页面上还挂着的旧失败提示
+// 要被清掉。
+func TestDetailToolbarRefreshClearsError(t *testing.T) {
 	a := detailAppWithReplies(t)
 	a.detail.topicErr = "上一次读取失败的原因"
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -237,9 +250,9 @@ func TestDetailHeaderRefreshClearsError(t *testing.T) {
 	}
 }
 
-// 正文那一栏自己滚动同样会露出页头的「返回顶部」：它把正文与评论一起拉回
-// 开头。
-func TestDetailHeaderBackToTopScrollsBody(t *testing.T) {
+// 正文那一栏自己滚动同样会露出悬浮工具条的「返回顶部」：它把正文与评论一起
+// 拉回开头。
+func TestDetailToolbarBackToTopScrollsBody(t *testing.T) {
 	a := detailAppWithReplies(t)
 	var body strings.Builder
 	for i := 0; i < 120; i++ {
@@ -251,6 +264,10 @@ func TestDetailHeaderBackToTopScrollsBody(t *testing.T) {
 	if _, ok := tt.Find("返回顶部"); ok {
 		t.Fatalf("正文在顶部时不该出现返回顶部：%q", tt.Texts())
 	}
+	before, ok := tt.Find("刷新")
+	if !ok {
+		t.Fatalf("找不到工具条刷新：%q", tt.Texts())
+	}
 
 	// 指针放在左栏正文上滚轮。
 	tt.Scroll(300, 300, 0, 800)
@@ -260,6 +277,10 @@ func TestDetailHeaderBackToTopScrollsBody(t *testing.T) {
 	}
 	if _, ok := tt.Find("返回顶部"); !ok {
 		t.Fatalf("正文滚离顶部后没有出现返回顶部：%q", tt.Texts())
+	}
+	// 悬浮工具条不随正文滚动：刷新始终停在同一位置。
+	if after, ok := tt.Find("刷新"); !ok || after != before {
+		t.Errorf("滚动后悬浮工具条移动了：刷新 %+v → %+v", before, after)
 	}
 
 	if err := tt.Click("返回顶部"); err != nil {

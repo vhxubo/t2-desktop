@@ -624,7 +624,7 @@ func TestDetailSplitViewLayout(t *testing.T) {
 	if title.H < 28 {
 		t.Errorf("帖子标题字号不够大：%+v", title)
 	}
-	// 标题只出现一次，页头不再重复一遍。
+	// 标题只出现一次，正文里不再重复一遍。
 	seen := 0
 	for _, s := range tt.Texts() {
 		if s == "正文与评论的测试帖" {
@@ -663,38 +663,43 @@ func TestDetailSplitViewLayout(t *testing.T) {
 	}
 }
 
-// 页头显示发帖人头像、昵称与等级，帖子编号让位；分类和标签收进标题下的
-// 副标题：分类显示两级，第二行是标签，并在分类行给出浏览数。
-func TestDetailHeaderShowsAuthorInsteadOfShortID(t *testing.T) {
+// 作者信息收进正文、放在标题下面：小头像、昵称与等级在标题与副标题之间，
+// 帖子编号让位；分类和标签收在作者下方的副标题里（分类显示两级，第二行是
+// 标签，并在分类行给出浏览数）。详情页不再显示关注按钮：关注入口只在用户
+// 资料卡里。
+func TestDetailAuthorSitsBelowTitle(t *testing.T) {
 	a := detailAppWithReplies(t)
 	tt := ui.NewTester(a.view, 1100, 760)
 
 	if tt.HasText("帖子 JBYGf2A") {
-		t.Errorf("页头不应再显示帖子编号：%q", tt.Texts())
+		t.Errorf("正文已有内容时不应再显示帖子编号：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("关注"); ok {
+		t.Errorf("详情页不应再有作者关注按钮：%q", tt.Texts())
 	}
 	author, ok := tt.Find("jimmy")
 	if !ok {
-		t.Fatalf("页头没有发帖人昵称：%q", tt.Texts())
+		t.Fatalf("正文里没有发帖人昵称：%q", tt.Texts())
 	}
 	title, ok := tt.Find("正文与评论的测试帖")
 	if !ok {
 		t.Fatalf("找不到正文标题：%q", tt.Texts())
 	}
-	if author.Y >= title.Y {
-		t.Errorf("发帖人信息应在页头（标题上方），实际昵称 %+v / 标题 %+v", author, title)
+	if author.Y <= title.Y {
+		t.Errorf("发帖人信息应在标题下方，实际昵称 %+v / 标题 %+v", author, title)
 	}
-	if r, ok := tt.Find("Lv.4"); !ok || r.Y >= title.Y {
-		t.Errorf("作者等级应在页头：%+v ok=%v / 标题 %+v", r, ok, title)
+	if r, ok := tt.Find("Lv.4"); !ok || r.Y <= title.Y {
+		t.Errorf("作者等级应在标题下方：%+v ok=%v / 标题 %+v", r, ok, title)
 	}
-	// 分类（两级）与标签在标题下方，不在页头。
+	// 分类（两级）与标签在作者行下面。
 	for _, want := range []string{"生活 · 职场", "340 次浏览", "#职场  #讨论"} {
 		r, ok := tt.Find(want)
 		if !ok {
-			t.Errorf("标题下缺少 %q：%q", want, tt.Texts())
+			t.Errorf("作者下方缺少 %q：%q", want, tt.Texts())
 			continue
 		}
-		if r.Y <= title.Y {
-			t.Errorf("%q 应在正文标题下方：%+v / 标题 %+v", want, r, title)
+		if r.Y <= author.Y {
+			t.Errorf("%q 应在作者行下方：%+v / 作者 %+v", want, r, author)
 		}
 	}
 }
@@ -719,6 +724,56 @@ func TestReplyFloorSitsAtRowRight(t *testing.T) {
 	// 楼层号贴着这一行右端，不会停在中间。
 	if right := floor.X + floor.W; right < 1020 {
 		t.Errorf("楼层号没有吸在评论行右端：右边缘 %.1f", right)
+	}
+}
+
+// 楼中楼不占楼层：服务端给楼中楼的 floor 是 null，界面不能拿 flat_floor
+// 当楼层号；父评论本身也是楼中楼时，引用改用作者名而不是「回复 0 楼」。
+func TestNestedReplyIsNotCountedAsFloor(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.detail.replyList = []replyItem{
+		{ID: "c1", Author: "dannyng", Floor: 1, Content: "第一楼"},
+		{ID: "c2", Author: "alice", Floor: 2, Content: "第二楼"},
+		{ID: "c2a", Author: "bob", FlatFloor: 3, ParentID: "c2", ParentFloor: 2,
+			ParentAuthor: "alice", ParentSummary: "第二楼", Content: "楼中楼"},
+		{ID: "c2a1", Author: "carol", FlatFloor: 4, ParentID: "c2a",
+			ParentAuthor: "bob", ParentSummary: "楼中楼", Content: "回复楼中楼"},
+	}
+	a.detail.replyTotal = len(a.detail.replyList)
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	for _, want := range []string{"1 楼", "2 楼", "回复 2 楼：第二楼", "回复 bob：楼中楼"} {
+		if !tt.HasText(want) {
+			t.Errorf("缺少 %q：%q", want, tt.Texts())
+		}
+	}
+	for _, unwanted := range []string{"3 楼", "4 楼", "回复 0 楼"} {
+		if tt.HasText(unwanted) {
+			t.Errorf("楼中楼不应显示 %q：%q", unwanted, tt.Texts())
+		}
+	}
+}
+
+// 回复楼中楼时，输入框上方的提示用作者名：目标没有楼层，不能把
+// flat_floor 当成「正在回复 N 楼」。
+func TestReplyComposerNestedTargetUsesAuthor(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.detail.replyList = []replyItem{{
+		ID: "c1a", Author: "alice", FlatFloor: 2, ParentID: "c1", ParentFloor: 1,
+		ParentAuthor: "dannyng", ParentSummary: "第一楼", Content: "楼中楼",
+	}}
+	a.detail.replyTotal = 1
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	if err := tt.Click("回复"); err != nil {
+		t.Fatalf("点回复失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if !tt.HasText("正在回复 alice") {
+		t.Errorf("回复楼中楼应显示作者名：%q", tt.Texts())
+	}
+	if tt.HasText("正在回复 2 楼") {
+		t.Errorf("楼中楼没有楼层，不能提示正在回复 2 楼：%q", tt.Texts())
 	}
 }
 
@@ -852,6 +907,25 @@ func TestCreateReplyPostsComment(t *testing.T) {
 	defer mu.Unlock()
 	if strings.Contains(body, "parentId") {
 		t.Errorf("顶层评论不该带 parentId：%s", body)
+	}
+}
+
+// 线上 201 有时只回 id / 楼层，不回正文。刚发的评论必须用这次提交的内容
+// 补上，否则它在列表里显示「（无内容）」，刷新后才看得到正文。
+func TestCreateReplyFallsBackToSubmittedContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"r9","floor":7,"author":{"username":"jimmy"}}`))
+	}))
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), Base: srv.URL + "/api", bearer: func() string { return "tok" }}
+
+	reply, err := c.createReply(context.Background(), "JBYGf2A", "刚发的评论", "")
+	if err != nil {
+		t.Fatalf("发评论失败：%v", err)
+	}
+	if reply.Content != "刚发的评论" {
+		t.Errorf("服务端没回正文时应补上提交内容：%+v", reply)
 	}
 }
 
@@ -1519,5 +1593,106 @@ func TestReplyComposerSends(t *testing.T) {
 	// 顶层评论应接在已加载列表末尾（而不是插到置顶和第 1 楼前面）。
 	if last := a.detail.replyList[len(a.detail.replyList)-1]; last.ID != "new1" {
 		t.Errorf("新评论没有接到列表末尾：%+v", a.detail.replyList)
+	}
+}
+
+// 服务端创建评论后只回 id / 楼层、不回正文时，新评论也要立刻带着提交的
+// 正文显示出来，不能等到刷新。这是「发完显示（无内容）」的回归测试。
+func TestReplyComposerShowsSubmittedContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"new1","floor":99,"author":{"username":"jimmy"}}`))
+	}))
+	defer srv.Close()
+
+	a := loginApp(t, srv)
+	a.client.Base = srv.URL + "/api"
+	a.openDetail(Item{ShortID: "JBYGf2A", URL: "https://2libra.com/post/work/JBYGf2A"})
+	topic, _ := decodeTopic([]byte(detailTopicJSON), "JBYGf2A")
+	a.detail.topic = &topic
+	pg := decodeReplies([]byte(detailRepliesJSON))
+	a.detail.replyList = flattenReplies(pg)
+	a.detail.replyTotal = pg.Total
+	a.detail.replyLoaded = true
+
+	a.detail.draft = "发完立刻显示"
+	done := make(chan struct{})
+	a.onReplyPosted = func(replyItem, error) { close(done) }
+	tt := ui.NewTester(a.view, 1100, 760)
+	a.submitReply()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("发送回调超时")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !tt.HasText("发完立刻显示") {
+		if time.Now().After(deadline) {
+			t.Fatalf("发送后没有立刻显示评论正文：%q", tt.Texts())
+		}
+		tt.Frame()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if tt.HasText("（无内容）") {
+		t.Errorf("新评论不应显示「（无内容）」：%q", tt.Texts())
+	}
+}
+
+// 回复别人的评论发出去后也不能占楼层：服务端只给 flat_floor，不能把它
+// 提成 floor 显示成「9 楼」；父评论引用仍按顶层楼层显示。
+func TestReplyComposerNestedReplyHasNoFloor(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"new2","floor":null,"flat_floor":9,"author":{"username":"jimmy"}}`))
+	}))
+	defer srv.Close()
+
+	a := loginApp(t, srv)
+	a.client.Base = srv.URL + "/api"
+	a.openDetail(Item{ShortID: "JBYGf2A", URL: "https://2libra.com/post/work/JBYGf2A"})
+	topic, _ := decodeTopic([]byte(detailTopicJSON), "JBYGf2A")
+	a.detail.topic = &topic
+	pg := decodeReplies([]byte(detailRepliesJSON))
+	a.detail.replyList = flattenReplies(pg)
+	a.detail.replyTotal = pg.Total
+	a.detail.replyLoaded = true
+
+	a.detail.replyToID = "c1"
+	a.detail.replyToFloor = 1
+	a.detail.replyToName = "dannyng"
+	a.detail.draft = "回复第一楼"
+	done := make(chan struct{})
+	a.onReplyPosted = func(replyItem, error) { close(done) }
+	tt := ui.NewTester(a.view, 1100, 760)
+	a.submitReply()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("发送回调超时")
+	}
+	at := replyIndexByID(a.detail.replyList, "new2")
+	if at < 0 {
+		t.Fatalf("新回复没有插入列表：%+v", a.detail.replyList)
+	}
+	last := a.detail.replyList[at]
+	if last.Floor != 0 || last.FlatFloor != 9 {
+		t.Errorf("楼中楼不应被提成楼层：%+v", last)
+	}
+	if last.ParentID != "c1" || last.ParentFloor != 1 || last.ParentAuthor != "dannyng" {
+		t.Errorf("父评论引用没有补齐：%+v", last)
+	}
+	if a.detail.replyToName != "" {
+		t.Errorf("发送后应清空回复目标：%q", a.detail.replyToName)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !tt.HasText("回复第一楼") {
+		if time.Now().After(deadline) {
+			t.Fatalf("发送后没有显示回复内容：%q", tt.Texts())
+		}
+		tt.Frame()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if tt.HasText("9 楼") {
+		t.Errorf("楼中楼不应显示成 9 楼：%q", tt.Texts())
 	}
 }

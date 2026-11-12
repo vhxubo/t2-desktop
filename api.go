@@ -118,6 +118,25 @@ type Item struct {
 	Extra *rowExtra
 	// Notif 是通知行归一后的消息；只有通知数据的行非 nil。
 	Notif *notification
+	// Stats 是帖子列表行的时效信息；合集、阅读记录等非帖子行为 nil。
+	Stats *replyStats
+	// Pinned 标记置顶帖：列表行的置顶角标读它，不用再从 Meta 文本里猜。
+	Pinned bool
+}
+
+// replyStats 是帖子列表接口里与「最近一次回复」有关的一组字段：
+//
+//	latest_commented_at       最后回复时间（无人回复时等于发帖时间）
+//	last_commented_by.username 最后回复人
+//	extra.latest_comment_floor 最新（也是最高）楼层
+//	comment_count             回复数
+//
+// 时间在解码时已经转成「3 分钟前」这种展示文本，界面直接读。
+type replyStats struct {
+	Replier  string
+	Updated  string
+	MaxFloor int
+	Replies  int
 }
 
 type pageResult struct {
@@ -701,6 +720,17 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 	}
 	when := relativeTime(created)
 
+	// 列表接口在帖子对象上直接给出最后回复人、最后回复时间、最高楼层与
+	// 回复数（实测字段见 replyStats）。这几项只属于帖子行，评论与合集不走。
+	stats := &replyStats{
+		Replier: authorName(o.sub("last_commented_by", "last_replier", "latest_commenter")),
+		Updated: relativeTime(o.str("latest_commented_at", "last_commented_at")),
+		// extra 可能为 null；latest_comment_floor 是顶层楼层号，楼中楼不占楼层，
+		// 所以它就是最高楼层。
+		MaxFloor: o.sub("extra").num("latest_comment_floor", "max_floor"),
+		Replies:  o.num("comment_count", "reply_count", "comments"),
+	}
+
 	shortID := o.str("short_id", "shortId")
 	if shortID == "" && post != nil {
 		shortID = post.str("short_id", "shortId")
@@ -766,8 +796,10 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 			it.SubtitleSuffix = " · " + when
 		}
 		it.Subtitle = strings.Join(parts, " · ")
+		it.Pinned = o.flag("is_pinned", "pinned")
+		it.Stats = stats
 		meta := []string{}
-		if o.flag("is_pinned", "pinned") {
+		if it.Pinned {
 			meta = append(meta, "置顶")
 		}
 		if n := o.num("comment_count", "reply_count", "comments"); n > 0 {

@@ -195,7 +195,7 @@ func (a *app) loadUserCardProfile() {
 }
 
 // seedUserCardFollow 用资料里的 is_following 初始化关注按钮：资料响应本身
-// 就带了这个字段，不必再单独请求一次用户主页（帖子详情那边才需要）。
+// 就带了这个字段，不必再单独请求一次用户主页。
 func (a *app) seedUserCardFollow() {
 	cs := a.userCard
 	if cs == nil || !a.auth.loggedIn() || cs.follow.busy {
@@ -205,10 +205,8 @@ func (a *app) seedUserCardFollow() {
 		cs.follow.userID = id
 	}
 	cs.follow.viewer = a.auth.username()
-	cs.follow.need = false
 	if cs.user.FollowKnown {
 		cs.follow.known = true
-		cs.follow.checked = true
 		cs.follow.following = cs.user.IsFollowing
 	}
 }
@@ -287,7 +285,7 @@ func (a *app) loadUserCardList(kind userCardListKind, page int) {
 }
 
 /* ------------------------------------------------------------------
-   关注：与帖子详情共用 follow.go 的提交路径
+   关注：提交路径在 follow.go
 --------------------------------------------------------------- */
 
 // toggleUserCardFollow 关注或取消关注资料卡上的这位用户。未登录时先走全局

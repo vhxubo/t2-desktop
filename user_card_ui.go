@@ -462,7 +462,17 @@ func userCardRowMeta(it Item, kind userCardListKind) string {
 	if prefix := strings.TrimSuffix(it.SubtitlePrefix, " · "); prefix != "" {
 		parts = append(parts, prefix)
 	}
-	if it.Meta != "" {
+	// 帖子行同样用新的时效字段：置顶、最高楼层、回复数（只写数字，不写
+	// 「N 回复」）。手工构造的 Item 没有 Stats 时退回旧的 Meta 摘要。
+	if it.Stats != nil {
+		if it.Pinned {
+			parts = append(parts, "置顶")
+		}
+		if it.Stats.MaxFloor > 0 {
+			parts = append(parts, fmt.Sprintf("%d 楼", it.Stats.MaxFloor))
+		}
+		parts = append(parts, fmt.Sprintf("%d", it.Stats.Replies))
+	} else if it.Meta != "" {
 		parts = append(parts, it.Meta)
 	}
 	return strings.Join(parts, " · ")

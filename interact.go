@@ -500,9 +500,17 @@ func (a *app) openReactionDetails(d *detailState, target string) {
 	d.react.detailsOpen = true
 }
 
+// isOwnReply 报告这条评论是不是当前登录用户自己写的。表态与打赏都要通知
+// 目标作者，发给自己的评论没有意义，入口直接隐藏。
+func (a *app) isOwnReply(r replyItem) bool {
+	name := strings.TrimSpace(a.auth.username())
+	return name != "" && strings.EqualFold(name, strings.TrimSpace(r.Author))
+}
+
 // canActOn 报告某个表态目标能不能操作：帖子要有作者 uuid / 节点 / 标题与
-// 原文路径；评论还要有作者 uuid。匿名帖没有可通知的人，只读展示。
-func canActOn(d *detailState, target string) bool {
+// 原文路径；评论还要有作者 uuid，且不能是自己写的。匿名帖没有可通知的人，
+// 只读展示。
+func (a *app) canActOn(d *detailState, target string) bool {
 	if d == nil || d.topic == nil {
 		return false
 	}
@@ -510,12 +518,14 @@ func canActOn(d *detailState, target string) bool {
 		return canReactTopic(d.topic)
 	}
 	r, ok := findReply(d.replyList, target)
-	return ok && r.AuthorID != "" && d.topic.NodeID != "" && topicSitePath(d.topic) != ""
+	return ok && !a.isOwnReply(r) && r.AuthorID != "" &&
+		d.topic.NodeID != "" && topicSitePath(d.topic) != ""
 }
 
 // canRewardOn 报告能不能打赏这个目标：打赏是金币变动，必须有接收方与目标
-// 标识；匿名内容的 author 是 null，没有接收方，只能表态展示。
-func canRewardOn(d *detailState, target string) bool {
+// 标识；匿名内容的 author 是 null，没有接收方，只能表态展示。自己的评论
+// 同样不打赏。
+func (a *app) canRewardOn(d *detailState, target string) bool {
 	if d == nil || d.topic == nil {
 		return false
 	}
@@ -523,7 +533,7 @@ func canRewardOn(d *detailState, target string) bool {
 		return d.topic.AuthorID != "" && d.shortID != ""
 	}
 	r, ok := findReply(d.replyList, target)
-	return ok && r.AuthorID != "" && d.shortID != ""
+	return ok && !a.isOwnReply(r) && r.AuthorID != "" && d.shortID != ""
 }
 
 // reactionEmojisOf 是表态气泡里的表情：节点推荐 + 已有的聚合表情（保证已经
@@ -636,8 +646,9 @@ func (a *app) notifyInteractDone(err error) {
    界面：收藏按钮、互动区与弹窗
 -------------------------------------------------------------- */
 
-// favoriteButton 是详情页页头的收藏按钮：未收藏是描边星，已收藏是实心星并
-// 换成强调色。请求在途时禁用，避免连点。
+// favoriteButton 是标题下方作者行最右侧的收藏按钮：星形图标 + 「收藏」/
+// 「已收藏」短文案，描边胶囊；已收藏时星形填实并换成强调色。请求在途时
+// 禁用，避免连点。
 func (a *app) favoriteButton(c *ui.Context, d *detailState) {
 	if d.topic == nil {
 		return
@@ -651,35 +662,46 @@ func (a *app) favoriteButton(c *ui.Context, d *detailState) {
 		d.fav.viewer = ""
 	}
 	favorited := a.auth.loggedIn() && d.fav.known && d.fav.viewer == viewer && d.fav.favorited
-	b := ui.Box(c).Size(30, 30).Radius(8).Center().Background(ui.Transparent)
-	hovered := b.Hovered()
-	if hovered && !d.fav.busy {
-		b.Background(t.SurfaceHover)
-	}
-	if d.fav.busy {
-		b.Disabled(true)
-	}
-	ink := t.TextMuted
-	switch {
-	case favorited:
-		ink = t.Warning
-	case hovered:
-		ink = t.Text
-	}
-	b.Children(func() {
-		if favorited {
-			ui.Icon(c, favoriteOnIcon).Size(17, 17).TextColor(ink)
-			return
-		}
-		ui.Icon(c, favoriteIcon).Size(17, 17).TextColor(ink)
-	})
-	label, tip := "收藏", "收藏这篇帖子"
+	text, label, tip := "收藏", "收藏", "收藏这篇帖子"
 	if favorited {
-		label, tip = "取消收藏", "已收藏，点一下取消收藏"
+		text, label, tip = "已收藏", "取消收藏", "已收藏，点一下取消收藏"
 	}
 	if d.fav.busy {
 		tip = "正在提交…"
 	}
+	b := ui.Button(c, "").
+		Background(ui.Transparent).
+		Border(1, t.Border).
+		FontSize(11).
+		Padding(3, 8).
+		Radius(999).
+		Shrink(0)
+	hovered := b.Hovered()
+	ink := t.TextMuted
+	switch {
+	case favorited:
+		ink = t.Warning
+	case hovered && !d.fav.busy:
+		ink = t.Text
+	}
+	if hovered && !d.fav.busy {
+		b.Background(t.SurfaceHover)
+		if !favorited {
+			b.Border(1, t.Accent)
+		}
+	}
+	if d.fav.busy {
+		b.Disabled(true)
+	}
+	b.TextColor(ink)
+	b.Children(func() {
+		icon := favoriteIcon
+		if favorited {
+			icon = favoriteOnIcon
+		}
+		ui.Icon(c, icon).Size(14, 14).TextColor(ink)
+		ui.Text(c, text).FontSize(11).TextColor(ink).SingleLine()
+	})
 	b.Label(label).Tooltip(tip)
 	if !d.fav.busy {
 		b.OnClick(func() { a.toggleFavorite(d) })
@@ -690,7 +712,7 @@ func (a *app) favoriteButton(c *ui.Context, d *detailState) {
 // 右边是表态（笑脸）与打赏（金币）两个图标入口。它由 topicInteractionBar
 // 固定渲染在正文底部，不再跟在正文末尾滚动。
 func (a *app) topicInteractionRow(c *ui.Context, d *detailState) {
-	if !topicInteractionVisible(d) {
+	if !a.topicInteractionVisible(d) {
 		return
 	}
 	p := d.topic
@@ -703,20 +725,20 @@ func (a *app) topicInteractionRow(c *ui.Context, d *detailState) {
 
 // topicInteractionVisible 报告帖子的互动行有没有内容可画：已经有人表态或
 // 打赏，或者当前用户可以表态 / 打赏。匿名浏览且没人互动时整条不占位。
-func topicInteractionVisible(d *detailState) bool {
+func (a *app) topicInteractionVisible(d *detailState) bool {
 	if d == nil || d.topic == nil {
 		return false
 	}
 	p := d.topic
 	return len(visibleReactions(p.Reactions)) > 0 || p.Rewards.Total > 0 ||
-		canActOn(d, reactionTopic) || canRewardOn(d, reactionTopic)
+		a.canActOn(d, reactionTopic) || a.canRewardOn(d, reactionTopic)
 }
 
 // topicInteractionBar 是左栏正文底部固定的一条互动栏：帖子收到的表态 /
 // 打赏汇总在左，表态（笑脸）与打赏（金币）入口在右。它不参与正文滚动，长帖
 // 滚到哪儿，汇总与入口都留在手边。
 func (a *app) topicInteractionBar(c *ui.Context, d *detailState) {
-	if !topicInteractionVisible(d) {
+	if !a.topicInteractionVisible(d) {
 		return
 	}
 	ui.Divider(c)
@@ -781,14 +803,14 @@ const (
 // reactionEntries 画右侧两个图标入口（表态 / 打赏）；两个都不可用时什么
 // 都不画。评论与帖子共用，尺寸因此保持一致。
 func (a *app) reactionEntries(c *ui.Context, d *detailState, target string) {
-	if !canActOn(d, target) && !canRewardOn(d, target) {
+	if !a.canActOn(d, target) && !a.canRewardOn(d, target) {
 		return
 	}
 	ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
-		if canActOn(d, target) {
+		if a.canActOn(d, target) {
 			a.reactionEntry(c, d, target)
 		}
-		if canRewardOn(d, target) {
+		if a.canRewardOn(d, target) {
 			a.rewardEntry(c, d, target)
 		}
 	})
@@ -982,7 +1004,7 @@ func (a *app) rewardPanel(c *ui.Context, d *detailState, target string) {
 func (a *app) detailsPanel(c *ui.Context, d *detailState, target string) {
 	t := c.Theme()
 	shown := visibleReactions(reactionStatsOf(d, target))
-	canAct := canActOn(d, target)
+	canAct := a.canActOn(d, target)
 	ui.Column(c).Width(260).Gap(4).Children(func() {
 		ui.Text(c, "表情明细").FontSize(12).TextColor(t.TextMuted)
 		if len(shown) == 0 {

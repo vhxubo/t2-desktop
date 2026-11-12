@@ -577,20 +577,12 @@ func (a *app) view(c *ui.Context) {
 			// 左侧导航栏：带图标的侧边栏
 			ui.Column(c).Width(150).Shrink(0).FillHeight().Background(t.Surface).Children(func() {
 				sb := ui.Sidebar(c, &a.navSel, func() {
-					// 公开功能
+					// 侧边栏只有「浏览」一组：动态虽然要登录，但它也是浏览
+					// 内容，不再单独占一个「我的」分组。通知不在这里：它已经
+					// 从页面改成标题栏铃铛打开的弹窗。
 					ui.SidebarSection(c, "浏览", nil, func() {
 						for i, s := range tabSpecs {
-							if s.NeedsAuth {
-								continue
-							}
-							ui.SidebarItem(c, tabID(i), tabIcons[i], s.Label)
-						}
-					})
-					// 「我的」单独成组：需登录后才能查看的功能。通知不在这里：
-					// 它已经从页面改成标题栏铃铛打开的弹窗。
-					ui.SidebarSection(c, "我的", nil, func() {
-						for i, s := range tabSpecs {
-							if !s.NeedsAuth || s.Kind == kindNotification {
+							if s.Kind == kindNotification {
 								continue
 							}
 							ui.SidebarItem(c, tabID(i), tabIcons[i], s.Label)
@@ -601,8 +593,8 @@ func (a *app) view(c *ui.Context) {
 				if sb.Changed() {
 					if i, ok := tabFromID(a.navSel); ok && i != a.tab {
 						a.tab = i
-						// 点上「我的」里的页面而没登录：统一弹授权窗，登录成功
-						// 后自动把这一页拉出来，不用再点一次。
+						// 点上需要登录的页面（动态）而没登录：统一弹授权窗，
+						// 登录成功后自动把这一页拉出来，不用再点一次。
 						if spec := tabSpecs[i]; spec.NeedsAuth && !a.auth.loggedIn() {
 							idx := i
 							a.requestLogin("「"+spec.Label+"」需要登录 2Libra 后才能查看。",
@@ -946,10 +938,12 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 	row := ui.ButtonBase(c).FillWidth().Padding(14, 16).Radius(10).
 		Background(t.Background).Border(1, t.Border)
 	row.Children(func() {
-		ui.Column(c).Grow(1).Gap(4).Children(func() {
-			ui.Text(c, it.Title).FontSize(14).Bold().MaxLines(2).TextColor(titleColor)
+		ui.Column(c).Grow(1).MinWidth(0).Gap(5).Children(func() {
+			// 标题是这一行里唯一的重心：字号明显大于副标题和时效信息，
+			// 并保持 700 粗体，扫一眼就能把标题与下方文案分开。
+			ui.Text(c, it.Title).FontSize(16).Bold().MaxLines(2).TextColor(titleColor)
 			// 副标题里的作者用统一用户标识渲染：头像跟着 11px 的昵称走，
-			// 同时保留「节点 · 昵称 · 时间」的原有顺序；节点名或时间太长时
+			// 同时保留「节点 · 昵称 · 发帖时间」的原有顺序；节点名或时间太长时
 			// 允许折行，不把右侧的元信息挤出去。
 			switch {
 			case it.Author != "":
@@ -972,8 +966,15 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 			case it.Subtitle != "":
 				ui.Text(c, it.Subtitle).FontSize(11).TextColor(t.TextMuted).SingleLine()
 			}
+			// 帖子行多一行时效信息：最后回复人、更新时间与最高楼层。没人
+			// 回复时没有这一行，右侧的回复数仍显示 0。
+			if it.Stats != nil && it.Stats.Replier != "" {
+				a.latestReplyRow(c, it.Stats)
+			}
 		})
-		if it.Meta != "" {
+		if it.Stats != nil {
+			a.postStatsBadge(c, it)
+		} else if it.Meta != "" {
 			ui.Text(c, it.Meta).FontSize(11).TextColor(t.TextMuted).
 				SingleLine().Width(190).TextAlign(ui.End)
 		}
@@ -982,6 +983,45 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 	if it.ShortID != "" || it.URL != "" {
 		row.OnClick(func() { open(it) })
 	}
+}
+
+// latestReplyRow 是帖子行标题下方的时效行：谁最后回复、多久以前、以及
+// 最新（也是最高）楼层。没人回复过的帖子没有这一行；评论与合集行也不会走
+// 到这里（它们的 Stats 为 nil）。
+func (a *app) latestReplyRow(c *ui.Context, st *replyStats) {
+	t := c.Theme()
+	ui.Row(c).MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "最后回复").FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(0)
+		ui.Text(c, st.Replier).FontSize(11).Bold().TextColor(t.TextMuted).
+			SingleLine().Shrink(1).Ellipsis("…")
+		if st.Updated != "" {
+			ui.Text(c, "·").FontSize(11).TextColor(t.TextMuted).Shrink(0)
+			ui.Text(c, st.Updated).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(0)
+		}
+		if st.MaxFloor > 0 {
+			ui.Text(c, "·").FontSize(11).TextColor(t.TextMuted).Shrink(0)
+			ui.Textf(c, "%d 楼", st.MaxFloor).FontSize(11).
+				TextColor(t.TextMuted).SingleLine().Shrink(0)
+		}
+	})
+}
+
+// postStatsBadge 是帖子行右端的状态块：置顶角标，以及一个回复气泡加回复数。
+// 回复数只显示数字、不写「N 回复」，气泡图标负责说明这个数字是什么；完整
+// 说法留在提示里。
+func (a *app) postStatsBadge(c *ui.Context, it Item) {
+	t := c.Theme()
+	badge := ui.Row(c).Gap(6).Shrink(0).AlignItems(ui.Center)
+	badge.Children(func() {
+		if it.Pinned {
+			ui.Text(c, "置顶").FontSize(10).Bold().TextColor(t.Accent).
+				SingleLine().Shrink(0)
+		}
+		ui.Icon(c, commentBubbleIcon).Size(12, 12).TextColor(t.TextMuted)
+		ui.Textf(c, "%d", it.Stats.Replies).FontSize(12).
+			TextColor(t.TextMuted).SingleLine().Shrink(0)
+	})
+	badge.Tooltip(strconv.Itoa(it.Stats.Replies) + " 条回复")
 }
 
 // openItem 是列表行的默认打开方式：站内帖子进正文，其余交给系统浏览器。

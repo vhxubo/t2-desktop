@@ -51,11 +51,8 @@ type detailState struct {
 	focusTries   int
 	focusMiss    bool
 
-	// follow 是页头发帖人信息里关注按钮的状态：作者 uuid、是否已关注、
-	// 在途请求与错误。只在 UI 线程读写，见 follow.go。
-	follow followState
-	// fav 是页头收藏按钮的状态；react 是表态条与选择器的状态（见 interact.go）。
-	// 两者都只在 UI 线程读写，网络结果通过 publish 回来。
+	// fav 是标题下方作者行收藏按钮的状态；react 是表态条与选择器的状态
+	// （见 interact.go）。两者都只在 UI 线程读写，网络结果通过 publish 回来。
 	fav   favoriteState
 	react reactionState
 
@@ -64,6 +61,7 @@ type detailState struct {
 	draft        string
 	replyToID    string
 	replyToFloor int
+	replyToName  string
 	posting      bool
 	// composerField is the input's identity across builds: its committed
 	// focus decides whether the composer rests at one line or unfolds.
@@ -274,19 +272,8 @@ func (a *app) loadTopic() {
 			d.fromCache = false
 			d.cacheNote = ""
 			a.prefetchAvatars(topic.Avatar)
-			// 收藏状态随详情下发（带上令牌才有意义）；交给页头按钮。
+			// 收藏状态随详情下发（带上令牌才有意义）；交给作者行的收藏按钮。
 			syncFavorite(d, topic, a.auth.username())
-			// 主题详情带作者的 uuid；关注状态若已随作者对象下发就直接用，
-			// 否则标记为待读取，登录后由 ensureFollowState 读用户主页补齐。
-			d.follow.userID = topic.AuthorID
-			d.follow.need = !topic.FollowingKnown
-			if topic.FollowingKnown {
-				d.follow.following = topic.Following
-				d.follow.known = true
-				d.follow.viewer = a.auth.username()
-			}
-			a.prefetchAvatars(topic.Avatar)
-			a.ensureFollowState(d)
 			// 正文拿到后写一份本机缓存，并补全阅读记录里打开时还缺的字段。
 			a.updateReadingTopic(d.shortID, &topic)
 			a.saveCachedDetail(d)
@@ -457,8 +444,6 @@ func (a *app) detailView(c *ui.Context) {
 		return
 	}
 	ui.Column(c).Grow(1).FillWidth().Children(func() {
-		a.detailHeader(c, d)
-		ui.Divider(c)
 		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Padding(12, 14).Gap(12).Children(func() {
 			// 双栏各自成卡片：正文占约 55%，评论占约 45%；MinWidth(0) 防止
 			// 长代码、长链接或嵌套评论把某一栏撑宽，中间用 12px 的空隙 +
@@ -466,8 +451,8 @@ func (a *app) detailView(c *ui.Context) {
 			ui.Column(c).Grow(55).MinWidth(0).FillHeight().MinHeight(0).
 				Radius(12).Background(t.Background).Border(1, t.Border).Children(func() {
 				// 正文可滚动（Grow(1) 吃满左栏剩余高度，MinHeight(0) 允许
-				// 它收缩到比正文内容更矮，正文在框内滚动）；作者信息已经
-				// 收到页头，底部固定的是表态 / 打赏互动栏。
+				// 它收缩到比正文内容更矮，正文在框内滚动）；作者信息收在
+				// 标题下方，底部固定的是表态 / 打赏互动栏。
 				ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Padding(18, 24).Gap(12).
 					TrackScroll(&d.bodyScroll).Children(func() {
 					a.topicBody(c, d)
@@ -485,6 +470,9 @@ func (a *app) detailView(c *ui.Context) {
 		// 数据来源声明 + 可点击的原文链接占满整个窗口底部，放在最底部，
 		// 正文加载完成（d.topic 非空）时才出现。
 		a.topicSourceFooter(c, d)
+		// 操作按钮不再占一行页头，而是悬浮在内容右上角：不占正文高度，
+		// 也不会随正文滚走（见 detailToolBar）。
+		a.detailToolBar(c, d)
 	})
 	// 表态、打赏与明细都是贴着各自入口的气泡（见 interact.go），在互动区
 	// 构建时已经就地挂好，这里不需要再叠一层弹窗。
@@ -497,49 +485,35 @@ func detailReplySurface(t *ui.Theme) ui.Color {
 	return t.Background.Mix(t.Text, 0.05)
 }
 
-// detailHeader 是详情页固定在顶部的操作栏：左边是发帖人信息与定位 / 离线
-// 状态，右边是「返回顶部」「刷新」「关闭」。这三项以前浮在右下角，会压住
-// 评论输入框；收进页头后不再和「发送」抢同一个角落。
-func (a *app) detailHeader(c *ui.Context, d *detailState) {
+// detailToolBar 是详情页右上角的悬浮工具条：返回顶部、刷新与关闭。收藏
+// 已经移到标题下方的作者行最右侧（见 favoriteButton）。工具条绝对定位在
+// 内容区右上角，不参与页面布局，所以正文和评论能多吃到原来被页头占掉的
+// 高度；按钮本体仍是 30×30 的图标块，整条加一层描边底色，压在评论卡片
+// 头部右侧的留白上也能看清。评论卡片的头部行不往右挤占这块空间
+// （见 replyHeader）。
+func (a *app) detailToolBar(c *ui.Context, d *detailState) {
 	t := c.Theme()
-	ui.Row(c).FillWidth().Padding(8, 16).Gap(8).AlignItems(ui.Center).Children(func() {
-		a.topicAuthorTag(c, d)
-		if d.focusID != "" {
-			label, color := "来自评论定位", t.TextMuted
-			if d.focusMiss {
-				label, color = "未找到该评论", t.Danger
+	ui.Row(c).Absolute().Top(15).Right(22).Gap(2).Padding(3).Radius(10).
+		Background(t.Surface).Border(1, t.Border).
+		Shadow(0, 3, 12, 0, ui.RGBA(0, 0, 0, 0.16)).
+		Children(func() {
+			// 只有正文或评论滚离顶部时才出现：工具条始终可达，不会像旧版
+			// 页头那样为了放它固定占掉一行。
+			if first, _ := d.list.Visible(); d.bodyScroll.Y > 0 || first > 0 {
+				a.detailToolButton(c, backTopIcon, "返回顶部", "正文与评论都回到顶部", func() {
+					// 直接把偏移写回 ScrollState 就是立即回顶（ScrollTo 会走一段
+					// 动画，回顶部不必拖时间）；评论列表按行号同样立即回顶。
+					d.bodyScroll.X, d.bodyScroll.Y = 0, 0
+					d.list.ScrollTo(0, ui.Start)
+				})
 			}
-			ui.Text(c, label).FontSize(11).TextColor(color)
-		}
-		// 离线说明：正文来自本地缓存时，明确告诉用户这是哪个时间的
-		// 内容，而不是让旧内容看起来像刚刷新过。
-		if d.cacheNote != "" {
-			ui.Text(c, d.cacheNote).FontSize(11).TextColor(t.TextMuted).SingleLine()
-		}
-		if n := len(a.detailStack); n > 0 {
-			ui.Textf(c, "内联浏览 %d 层", n).FontSize(11).TextColor(t.TextMuted)
-		}
-		ui.Spacer(c).Grow(1)
-		// 只有正文或评论滚离顶部时才出现：放在页头，永远可达，也不会
-		// 像悬浮按钮那样挡在内容上。
-		if first, _ := d.list.Visible(); d.bodyScroll.Y > 0 || first > 0 {
-			a.detailToolButton(c, backTopIcon, "返回顶部", "正文与评论都回到顶部", func() {
-				// 直接把偏移写回 ScrollState 就是立即回顶（ScrollTo 会走一段
-				// 动画，回顶部不必拖时间）；评论列表按行号同样立即回顶。
-				d.bodyScroll.X, d.bodyScroll.Y = 0, 0
-				d.list.ScrollTo(0, ui.Start)
-			})
-		}
-		a.detailRefreshButton(c, d)
-		// 收藏是帖子级的动作，和刷新 / 关闭并排放在页头右端：不占正文空间，
-		// 也不会随正文滚走。
-		a.favoriteButton(c, d)
-		a.detailToolButton(c, closeIcon, "关闭详情", "关闭详情（Esc）", a.closeDetail)
-	})
+			a.detailRefreshButton(c, d)
+			a.detailToolButton(c, closeIcon, "关闭详情", "关闭详情（Esc）", a.closeDetail)
+		})
 }
 
-// detailToolButton 是页头里的纯图标按钮：无边框、无填充，悬停才出现浅底，
-// 与列表页的 FAB 区分开。label 供读屏与测试识别，tip 是悬停说明。
+// detailToolButton 是悬浮工具条里的纯图标按钮：无边框、无填充，悬停才出现
+// 浅底，与列表页的 FAB 区分开。label 供读屏与测试识别，tip 是悬停说明。
 func (a *app) detailToolButton(c *ui.Context, icon *ui.SVG, label, tip string, onClick func()) {
 	t := c.Theme()
 	b := ui.Box(c).Size(30, 30).Radius(8).Center().Background(ui.Transparent)
@@ -557,8 +531,8 @@ func (a *app) detailToolButton(c *ui.Context, icon *ui.SVG, label, tip string, o
 	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
 
-// detailRefreshButton 是页头的刷新按钮：请求在途时换成转圈并禁用，避免
-// 连点重复发请求。它刷新的是整页（正文 + 第一页评论）。
+// detailRefreshButton 是悬浮工具条里的刷新按钮：请求在途时换成转圈并禁用，
+// 避免连点重复发请求。它刷新的是整页（正文 + 第一页评论）。
 func (a *app) detailRefreshButton(c *ui.Context, d *detailState) {
 	t := c.Theme()
 	loading := d.topicLoading || d.replyLoading
@@ -594,6 +568,9 @@ func (a *app) detailRefreshButton(c *ui.Context, d *detailState) {
 
 func (a *app) topicBody(c *ui.Context, d *detailState) {
 	t := c.Theme()
+	// 评论定位、离线缓存与内联浏览层级原来占着页头的一整行；现在收进
+	// 正文顶部，只在有话说时才占一点点高度。
+	a.topicNotice(c, d)
 	if d.topicLoading && d.topic == nil {
 		ui.Spinner(c).Size(24, 24)
 		ui.Text(c, "正在加载正文…").TextColor(t.TextMuted)
@@ -609,16 +586,22 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 	}
 	p := d.topic
 	if p == nil {
+		// 正文还没到时仍以帖子编号占位：内联跳转后能看出当前是哪一帖。
+		ui.Text(c, "帖子 "+d.shortID).FontSize(13).Bold().SingleLine()
 		ui.Text(c, "暂无正文").TextColor(t.TextMuted)
 		return
 	}
-	// 标题留在正文卡片顶部，不放页头：24px 加粗的标题与下面的副标题、12px
-	// 正文拉开字号差，读者第一眼就能抓住主题。
+	// 标题在正文最上面：24px 加粗的标题与下面的作者行、副标题、正文拉开
+	// 字号差，读者第一眼就能抓住主题。
 	if title := strings.TrimSpace(p.Title); title != "" {
 		ui.Text(c, title).FontSize(24).Bold().MaxLines(3)
 	}
-	// 标题下面两行就是副标题：分类（两级）· 浏览数 · 置顶 / 评论已关闭，
-	// 以及标签。作者信息已经在页头，这里不再重复。
+	// 作者行放在标题下面：头像缩到与正文同级的 20px，昵称、等级、徽章
+	// 跟在旁边，收藏按钮贴在这一行的最右侧。它不再单独占一条页头，随正文
+	// 一起滚动。
+	a.topicAuthorLine(c, d)
+	// 再下面是两行副标题：分类（两级）· 浏览数 · 置顶 / 评论已关闭，
+	// 以及标签。作者信息已经在标题下方，这里不再重复。
 	a.topicSubtitle(c, p)
 	// 副标题与正文之间不再画分隔线：这条线在正文顶端显得像多余的一条。
 	// 帖子自己的 emojis 可能包含社区自定义图标；并到全局表情表后一起渲染。
@@ -655,9 +638,65 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 	// （见 detailView 的 topicInteractionBar），正文再长也始终可达。
 }
 
-// topicAvatarSize 是页头发帖人头像的边长：比评论里的 18px 头像明显放大，
-// 让帖子页第一眼就能认出作者；再大就会把页头撑得比操作按钮高太多。
-const topicAvatarSize float32 = 40
+// topicNotice 是正文顶部的一条状态说明：评论定位、离线缓存与内联浏览层级。
+// 这些提示原先各占页头的一部分，压得页头很高；收到正文顶部后，没有提示时
+// 连一行都不占。多条同时出现时在同一行内换行。
+func (a *app) topicNotice(c *ui.Context, d *detailState) {
+	t := c.Theme()
+	type notice struct {
+		text  string
+		color ui.Color
+	}
+	var notes []notice
+	if d.focusID != "" {
+		text, color := "来自评论定位", t.TextMuted
+		if d.focusMiss {
+			text, color = "未找到该评论", t.Danger
+		}
+		notes = append(notes, notice{text, color})
+	}
+	// 离线说明：正文来自本地缓存时，明确告诉用户这是哪个时间的内容，
+	// 而不是让旧内容看起来像刚刷新过。
+	if d.cacheNote != "" {
+		notes = append(notes, notice{d.cacheNote, t.TextMuted})
+	}
+	if n := len(a.detailStack); n > 0 {
+		notes = append(notes, notice{fmt.Sprintf("内联浏览 %d 层", n), t.TextMuted})
+	}
+	if len(notes) == 0 {
+		return
+	}
+	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+		for _, nt := range notes {
+			ui.Text(c, nt.text).FontSize(11).TextColor(nt.color).SingleLine()
+		}
+	})
+}
+
+// topicAuthorLine 是标题下方的作者信息：左边是 20px 小头像 + 昵称 + 等级 +
+// 徽章，右边是收藏按钮。它跟着正文一起滚动，不再固定占一条页头；头像仍可
+// 点开作者资料卡。关注按钮已经从详情页移除，关注入口只在用户资料卡里。
+func (a *app) topicAuthorLine(c *ui.Context, d *detailState) {
+	p := d.topic
+	if p == nil {
+		return
+	}
+	t := c.Theme()
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		// 作者身份在左侧自己的区域里换行，窄窗口也不会把收藏挤出这一行。
+		ui.Row(c).Grow(1).MinWidth(0).Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
+			if strings.TrimSpace(p.Author) != "" {
+				a.userTag(c, userTagSpec{Name: p.Author, Avatar: p.Avatar, Size: 13, Bold: true})
+			}
+			if p.AuthorLevel > 0 {
+				ui.Textf(c, "Lv.%d", p.AuthorLevel).FontSize(10).TextColor(t.TextMuted)
+			}
+			a.authorBadges(c, p.Badges)
+		})
+		// 收藏是帖子级的动作，贴在这条元信息行的最右侧。
+		a.favoriteButton(c, d)
+	})
+}
 
 // topicSubtitle 是标题下面的两行副标题：第一行是两级分类、浏览数与帖子状态
 // （置顶 / 评论已关闭），第二行是标签。分类和标签原来贴在页头作者旁边，收回
@@ -693,38 +732,6 @@ func (a *app) topicSubtitle(c *ui.Context, p *topicDetail) {
 			ui.Text(c, "#"+strings.Join(p.Tags, "  #")).FontSize(11).
 				TextColor(t.TextMuted).SingleLine()
 		}
-	})
-}
-
-// topicAuthorTag 是页头最左侧的帖子身份块：放大的发帖人头像，右边是昵称、
-// 等级、徽章，再右边是关注按钮。分类与标签已经收进标题下的副标题
-// （topicSubtitle），页头只留作者身份；这一块原来固定在左栏底部，会占掉正文
-// 的高度，上移到页头后始终可见，帖子编号也随之让位。正文还没到时仍以帖子
-// 编号占位。
-func (a *app) topicAuthorTag(c *ui.Context, d *detailState) {
-	p := d.topic
-	if p == nil {
-		ui.Text(c, "帖子 "+d.shortID).FontSize(13).Bold().SingleLine()
-		return
-	}
-	t := c.Theme()
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		// 头像独占页头最左侧，点它和点昵称一样打开作者资料卡。
-		av := avatarView(c, p.Author, a.avatarBitmap(p.Avatar), topicAvatarSize)
-		av.Cursor(ui.CursorPointer).Tooltip("查看 @" + p.Author + " 的资料")
-		av.OnClick(func() { a.showUserCard(p.Author) })
-		name := ui.Row(c).Gap(6).AlignItems(ui.Center).Cursor(ui.CursorPointer)
-		name.Tooltip("查看 @" + p.Author + " 的资料")
-		name.Children(func() {
-			ui.Text(c, p.Author).FontSize(14).Bold().SingleLine()
-			if p.AuthorLevel > 0 {
-				ui.Textf(c, "Lv.%d", p.AuthorLevel).FontSize(10).TextColor(t.TextMuted)
-			}
-			a.authorBadges(c, p.Badges)
-		})
-		name.OnClick(func() { a.showUserCard(p.Author) })
-		// 关注按钮紧跟在作者信息右侧，与头像同一条基线。
-		a.followButton(c, d)
 	})
 }
 
@@ -822,8 +829,9 @@ func (a *app) replyHeader(c *ui.Context, d *detailState) {
 		if cnt.Clicked() {
 			d.list.ScrollTo(0, ui.Start)
 		}
-		ui.Spacer(c).Grow(1)
-		// 视图切换：图标表示将要切到的视图，点一下在楼层 / 扁平时间序间切换。
+		// 视图切换紧跟在评论数后面，不再用 Spacer 推到最右：右上角留给
+		// 详情页的悬浮工具条（见 detailToolBar），两边不会叠在一起。
+		// 图标表示将要切到的视图，点一下在楼层 / 扁平时间序间切换。
 		target := flatViewIcon
 		viewLabel := "切到扁平时间序"
 		if d.flat {
@@ -902,7 +910,9 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 				ui.Text(c, relativeTime(r.CreatedAt)).FontSize(11).TextColor(t.TextMuted)
 			}
 			// 楼层号放在这一行的最右侧：它是每层楼的标识，靠边排列不会把
-			// 作者与时间挤散，长昵称也不会和它抢位置。
+			// 作者与时间挤散，长昵称也不会和它抢位置。只有顶层评论才有
+			// floor；楼中楼服务端给的是 null，不能拿 flat_floor 当楼层号，
+			// 否则回复别人的评论也会被算成一楼。
 			ui.Spacer(c).Grow(1)
 			floor := ""
 			switch {
@@ -910,10 +920,6 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 				floor = "置顶"
 			case r.Floor > 0:
 				floor = fmt.Sprintf("%d 楼", r.Floor)
-			case r.FlatFloor > 0:
-				floor = fmt.Sprintf("%d 楼", r.FlatFloor)
-			case r.LocatedFloor > 0:
-				floor = fmt.Sprintf("%d 楼", r.LocatedFloor)
 			}
 			if floor != "" {
 				// 楼层号也是评论的永久链接：点一下用系统浏览器打开站点上的
@@ -940,8 +946,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 			// 回复、表态与打赏都收到评论底部那一行（见下面的 replyFooter），
 			// 头部只留身份信息，不再随悬浮长出按钮。
 		})
-		if r.ParentSummary != "" || r.ParentFloor > 0 {
-			label := fmt.Sprintf("回复 %d 楼：%s", r.ParentFloor, r.ParentSummary)
+		if label := replyParentLabel(r); label != "" {
 			at := -1
 			if a.detail != nil {
 				at = replyIndexByID(a.detail.replyList, r.ParentID)
@@ -997,12 +1002,12 @@ func (a *app) replyFooter(c *ui.Context, r replyItem, closed bool) {
 	}
 	d := a.detail
 	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-		if canActOn(d, r.ID) {
+		if a.canActOn(d, r.ID) {
 			a.reactionEntry(c, d, r.ID)
 		}
 		a.reactionSummaryInfo(c, d, r.ID, r.Rewards)
 		ui.Spacer(c).Grow(1)
-		if canRewardOn(d, r.ID) {
+		if a.canRewardOn(d, r.ID) {
 			a.rewardEntry(c, d, r.ID)
 		}
 		if !closed {
@@ -1030,12 +1035,33 @@ func (a *app) replyEntry(c *ui.Context, d *detailState, r replyItem) {
 	if b.Clicked() {
 		d.replyToID = r.ID
 		d.replyToFloor = r.Floor
-		if d.replyToFloor == 0 {
-			d.replyToFloor = r.FlatFloor
-		}
+		d.replyToName = r.Author
 		d.composerIdle = false
 		d.composerField.Focus(c)
 	}
+}
+
+// replyParentLabel 是楼中楼上方那条父评论引用。父评论有楼层号时用「回复 N
+// 楼」，父评论本身也是楼中楼（没有 floor）时退回作者名，避免出现「回复 0
+// 楼」这种并不存在的楼层。
+func replyParentLabel(r replyItem) string {
+	if r.ParentFloor > 0 {
+		if r.ParentSummary != "" {
+			return fmt.Sprintf("回复 %d 楼：%s", r.ParentFloor, r.ParentSummary)
+		}
+		return fmt.Sprintf("回复 %d 楼", r.ParentFloor)
+	}
+	who := r.ParentAuthor
+	if who != "" {
+		if r.ParentSummary != "" {
+			return "回复 " + who + "：" + r.ParentSummary
+		}
+		return "回复 " + who
+	}
+	if r.ParentSummary != "" {
+		return "回复：" + r.ParentSummary
+	}
+	return ""
 }
 
 // parentJump 是「回复 N 楼：…」的可点击版本：父评论已经在列表里时，
@@ -1107,18 +1133,23 @@ func (a *app) replyComposer(c *ui.Context, d *detailState) {
 	t := c.Theme()
 	ui.Divider(c)
 	// 输入栏固定在评论卡片底部，不再为右下角的悬浮按钮让出宽度：刷新与
-	// 返回顶部已经收进页头，这里只需要普通的内边距。
+	// 返回顶部已经收进右上角的悬浮工具条，这里只需要普通的内边距。
 	ui.Column(c).FillWidth().Padding(8, 12).Gap(4).Children(func() {
 		if d.replyToID != "" {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				who := "评论"
+				// 回复顶层评论时报楼层；回复楼中楼时它没有楼层，改用作者名。
+				who := d.replyToName
 				if d.replyToFloor > 0 {
 					who = fmt.Sprintf("%d 楼", d.replyToFloor)
+				}
+				if who == "" {
+					who = "评论"
 				}
 				ui.Text(c, "正在回复 "+who).FontSize(12).TextColor(t.Accent).Grow(1)
 				a.replyAction(c, "取消", func() {
 					d.replyToID = ""
 					d.replyToFloor = 0
+					d.replyToName = ""
 				})
 			})
 		}
@@ -1223,9 +1254,13 @@ func (a *app) submitReply() {
 	}
 	parentID := d.replyToID
 	parentFloor := d.replyToFloor
+	parentName := d.replyToName
 	parentSummary := ""
 	if at := replyIndexByID(d.replyList, parentID); at >= 0 {
 		parentSummary = truncate(commentExcerpt(d.replyList[at].Content), 60)
+		if parentName == "" {
+			parentName = d.replyList[at].Author
+		}
 	}
 	d.posting = true
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -1259,16 +1294,21 @@ func (a *app) submitReply() {
 					}
 				}
 			}
-			if created.Floor == 0 && created.FlatFloor > 0 {
+			// 只有顶层评论才有楼层号。回复别人的评论不占楼层，不能把
+			// flat_floor 提成 floor，否则刚发的楼中楼会显示成「N 楼」。
+			if parentID == "" && created.Floor == 0 && created.FlatFloor > 0 {
 				created.Floor = created.FlatFloor
 			}
 			// 服务端没回父评论信息时用提交前的目标补齐，刚发的楼中楼
-			// 立刻就能显示「回复 N 楼：…」并点回父评论。
+			// 立刻就能显示父评论引用并点回去；父评论没有楼层时引用作者名。
 			if created.ParentID == "" {
 				created.ParentID = parentID
 			}
 			if created.ParentFloor == 0 {
 				created.ParentFloor = parentFloor
+			}
+			if created.ParentAuthor == "" {
+				created.ParentAuthor = parentName
 			}
 			if created.ParentSummary == "" {
 				created.ParentSummary = parentSummary
@@ -1276,6 +1316,7 @@ func (a *app) submitReply() {
 			d.draft = ""
 			d.replyToID = ""
 			d.replyToFloor = 0
+			d.replyToName = ""
 			d.composerIdle = true // 发送后折回一行，把空间还给评论列表
 			// 按当前视图放到正确的位置：楼中楼落在父评论的子树后面，
 			// 顶层与扁平时间序接在已加载评论之后，而不是插到最顶端。

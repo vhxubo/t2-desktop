@@ -317,7 +317,8 @@ func TestReactionRollsBackOnError(t *testing.T) {
 	t.Errorf("失败后 👍 从表态里消失了：%+v", a.detail.topic.Reactions)
 }
 
-// 详情页页头的收藏按钮要能点：点一下发出收藏请求，状态切到已收藏。
+// 详情页的收藏按钮在标题下方作者行的最右侧：点一下发出收藏请求，状态切到
+// 已收藏，按钮文案与可访问名一起更新。
 func TestDetailFavoriteButton(t *testing.T) {
 	var mu sync.Mutex
 	var calls []string
@@ -342,8 +343,19 @@ func TestDetailFavoriteButton(t *testing.T) {
 	a.onInteractDone = func(err error) { done <- err }
 
 	tt := ui.NewTester(a.view, 1100, 760)
-	if _, ok := tt.Find("收藏"); !ok {
-		t.Fatalf("页头没有收藏按钮：%q", tt.Texts())
+	favorite, ok := tt.Find("收藏")
+	if !ok {
+		t.Fatalf("作者行没有收藏按钮：%q", tt.Texts())
+	}
+	author, ok := tt.Find("jimmy")
+	if !ok {
+		t.Fatalf("找不到作者行：%q", tt.Texts())
+	}
+	if favorite.X <= author.X {
+		t.Errorf("收藏按钮应在作者信息右侧：收藏 %+v / 作者 %+v", favorite, author)
+	}
+	if dy := favorite.Y - author.Y; dy > 20 || dy < -20 {
+		t.Errorf("收藏按钮应与作者信息在同一行：收藏 %+v / 作者 %+v", favorite, author)
 	}
 	if err := tt.Click("收藏"); err != nil {
 		t.Fatalf("点击收藏失败：%v", err)
@@ -357,10 +369,13 @@ func TestDetailFavoriteButton(t *testing.T) {
 	if len(got) != 1 || got[0] != "POST /v1/topics/AB12/favorite" {
 		t.Errorf("请求 = %v", got)
 	}
-	// 状态变了之后按钮的可访问名也变成「取消收藏」。
+	// 状态变了之后按钮的可访问名也变成「取消收藏」，可见文案变成「已收藏」。
 	tt.Frame()
 	if _, ok := tt.Find("取消收藏"); !ok {
 		t.Errorf("收藏后按钮没有变成「取消收藏」：%q", tt.Texts())
+	}
+	if !tt.HasText("已收藏") {
+		t.Errorf("收藏后按钮没有显示「已收藏」：%q", tt.Texts())
 	}
 }
 
@@ -709,6 +724,50 @@ func TestReactionEntryRequiresLogin(t *testing.T) {
 	}
 	if len(a.authGate.replays) != 1 {
 		t.Errorf("授权后应重跑这次表态入口，待重跑 %d 个", len(a.authGate.replays))
+	}
+}
+
+// 自己写的评论不显示表态与打赏入口：这两个动作都会通知评论作者，发给
+// 自己既没有意义也会打扰自己。回复入口仍保留。
+func TestOwnCommentHidesReactionAndReward(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	a := loginApp(t, srv) // 登录用户名是 reader
+
+	// 帖子本身没有作者 uuid，互动条不出现；这里只验证评论底行。
+	topic := topicDetail{
+		ShortID: "AB12", Title: "标题", NodeID: "node-1",
+		URL: "https://2libra.com/post/work/AB12", NodeEmojis: []string{"👍"},
+	}
+	a.pageName = "detail"
+	a.detail = &detailState{
+		shortID: "AB12",
+		topic:   &topic,
+		replyList: []replyItem{{
+			ID: "r1", AuthorID: "u2", Author: "danny", Content: "别人的评论", Floor: 1,
+		}},
+	}
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	for _, entry := range []string{"表情", "打赏"} {
+		if _, ok := tt.Find(entry); !ok {
+			t.Fatalf("别人的评论应有「%s」入口：%q", entry, tt.Texts())
+		}
+	}
+
+	// 同一条评论换成当前登录用户写的：两个入口都消失，回复还在。
+	a.detail.replyList[0].Author = "reader"
+	tt.Frame()
+	for _, entry := range []string{"表情", "打赏"} {
+		if _, ok := tt.Find(entry); ok {
+			t.Errorf("自己的评论不该有「%s」入口", entry)
+		}
+	}
+	if _, ok := tt.Find("回复"); !ok {
+		t.Errorf("自己的评论仍应保留回复入口：%q", tt.Texts())
+	}
+	if a.canActOn(a.detail, "r1") || a.canRewardOn(a.detail, "r1") {
+		t.Error("自己的评论不应允许表态或打赏")
 	}
 }
 

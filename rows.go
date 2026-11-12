@@ -68,9 +68,10 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 				}
 			})
 
-			// 帖子行保留标题；评论行的正文在下面作为摘要展示。
+			// 帖子行保留标题；评论行的正文在下面作为摘要展示。标题字号比
+			// 作者、节点等辅助信息大一档，和主列表行保持一致。
 			if !comment && it.Title != "" {
-				ui.Text(c, it.Title).FontSize(14).Bold().MaxLines(2).TextColor(titleColor)
+				ui.Text(c, it.Title).FontSize(16).Bold().MaxLines(2).TextColor(titleColor)
 			}
 			body := x.Excerpt
 			if body == "" && comment {

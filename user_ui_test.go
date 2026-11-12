@@ -46,8 +46,9 @@ func TestUserTagAvatarFollowsNameSize(t *testing.T) {
 }
 
 // 评论作者与列表行作者的头像跟着昵称字号走：评论区 12px 昵称配 18px 头像。
-// 帖子作者的头像在详情页头单独放大到固定边长，并贴在页头最左侧。
-func TestDetailAuthorAvatarsFollowNameSize(t *testing.T) {
+// 帖子作者的头像也回到同一套规则里——13px 昵称配 20px 头像，放在标题下方
+// 随正文滚动，不再在页头单独放大。
+func TestDetailAuthorAvatarFollowsNameSize(t *testing.T) {
 	a := detailAppWithReplies(t)
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
@@ -56,11 +57,12 @@ func TestDetailAuthorAvatarsFollowNameSize(t *testing.T) {
 	if !ok {
 		t.Fatalf("帖子作者没有头像：%q", tt.Texts())
 	}
-	if got, want := author.Bounds.W, topicAvatarSize; got != want {
+	if got, want := author.Bounds.W, userAvatarSize(13); got != want {
 		t.Errorf("帖子作者头像宽 %.1f，期望 %.1f", got, want)
 	}
-	if author.Bounds.X > 20 {
-		t.Errorf("帖子作者头像应贴在页头最左侧：x=%.1f", author.Bounds.X)
+	// 头像在正文卡片内（卡片左边 14 + 正文内边距 24），不再贴着窗口页头。
+	if author.Bounds.X < 30 {
+		t.Errorf("帖子作者头像应在正文卡片内：x=%.1f", author.Bounds.X)
 	}
 	for _, name := range []string{"dannyng", "alice", "mod"} {
 		comment, ok := tt.AccessByRole(ui.RoleImage, name)
