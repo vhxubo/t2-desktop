@@ -294,11 +294,8 @@ func TestCoinTabRendersBalanceTodayHistoryStatsRanking(t *testing.T) {
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer", Username: "jimmy"}); err != nil {
 		t.Fatal(err)
 	}
-	idx := coinTabIndex()
-	if idx < 0 {
-		t.Fatal("没有金币 tab")
-	}
-	a.tab, a.lastTab, a.navSel = idx, idx, tabID(idx)
+	// 金币整页在「我的」窗口里，不再占侧边栏。
+	a.profile.tab = profileTabCoins
 	cs := a.coins
 	cs.baseLoaded, cs.baseLoading = true, false
 	cs.balance, cs.balanceOK, cs.rank, cs.rankOK = 1234, true, 3, true
@@ -324,7 +321,7 @@ func TestCoinTabRendersBalanceTodayHistoryStatsRanking(t *testing.T) {
 		{Rank: 2, Username: "jimmy", Balance: 99},
 	}
 
-	tt := ui.NewTester(a.view, 1200, 800)
+	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	for _, want := range []string{"金币", "1,234 金币", "今日获得", "+5 金币", "今日已签到 · 连续 5 天", "签到", "今日明细"} {
 		if !tt.HasText(want) {
 			t.Fatalf("金币首页缺少 %q：%q", want, tt.Texts())
@@ -395,9 +392,9 @@ func TestCoinPageHasNoWriteActions(t *testing.T) {
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
 		t.Fatal(err)
 	}
-	a.tab, a.lastTab, a.navSel = coinTabIndex(), coinTabIndex(), tabID(coinTabIndex())
+	a.profile.tab = profileTabCoins
 	a.coins.baseLoaded, a.coins.todayLoaded, a.coins.sign = true, true, coinSignStatus{Known: true, Signed: false}
-	tt := ui.NewTester(a.view, 1200, 800)
+	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	for _, forbidden := range []string{"签到", "签到领金币", "开盲盒", "打赏"} {
 		// 「签到」作为状态文案可以出现，但界面上不应有签到按钮；
 		// 这里只检查会导致金币变化的动作文案。

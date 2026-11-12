@@ -297,20 +297,24 @@ func (a *app) redrawNotificationWindow() {
 }
 
 func (a *app) load(idx, page int) {
-	if idx < 0 || idx >= len(a.tabs) || page < 1 {
+	if idx < 0 || idx >= len(a.tabs) {
 		return
 	}
 	st := a.tabs[idx]
 	spec := tabSpecs[idx]
-	// 金币页不是单列表端点：授权成功后的重跑也要走聚合加载，而不是把余额
-	// 响应当成列表来解析。
-	if spec.Kind == kindCoin {
-		a.reloadCoins()
-		return
-	}
 	if spec.Kind == kindNotification {
 		// 分段筛选直接改接口参数，不额外请求参数名。
 		spec.Query = notificationsQuery(st.filter)
+	}
+	a.loadSpec(st, spec, page, func() { a.load(idx, page) })
+}
+
+// loadSpec 是通用的列表加载：把 spec 的第 page 页拉回来填进 st。「我的」
+// 窗口里的四类内容也走这条路，所以它按 spec 而不是按侧边栏下标工作。
+// replay 是授权补上权限后重跑这次请求用的回调。
+func (a *app) loadSpec(st *tabState, spec tabSpec, page int, replay func()) {
+	if st == nil || page < 1 {
+		return
 	}
 	if st.loading {
 		return
@@ -339,7 +343,7 @@ func (a *app) load(idx, page int) {
 			if err != nil {
 				// 首页因授权失败时，弹窗负责去补权限；把这一页标成等待授权，
 				// 避免每帧重建都再发一次注定失败的请求。
-				if a.handleAuthError(err, func() { a.load(idx, page) }) {
+				if a.handleAuthError(err, replay) {
 					st.authWait = true
 				}
 				if page == 1 {
@@ -391,10 +395,6 @@ func (a *app) ensureLoaded() {
 		return
 	}
 	spec := tabSpecs[a.tab]
-	if spec.Kind == kindCoin {
-		a.ensureCoinsLoaded()
-		return
-	}
 	st := a.tabs[a.tab]
 	if st.loading || st.loaded || st.authWait {
 		return
@@ -406,10 +406,6 @@ func (a *app) ensureLoaded() {
 }
 
 func (a *app) reloadCurrent() {
-	if tabSpecs[a.tab].Kind == kindCoin {
-		a.reloadCoins()
-		return
-	}
 	st := a.tabs[a.tab]
 	if st.loading {
 		return
@@ -574,7 +570,7 @@ func (a *app) view(c *ui.Context) {
 					a.lastTab = a.tab
 					a.status = ""
 				}
-				// 底部固定区：设置入口，以及紧挨在它下面的三档外观。
+				// 底部固定区：三档外观、设置入口，以及账号入口。
 				ui.Divider(c)
 				a.sidebarFooter(c)
 			})
@@ -598,13 +594,13 @@ func (a *app) dialogs(c *ui.Context) {
 	a.closePromptDialog(c)
 }
 
-// sidebarFooter 是主页侧边栏底部的固定区：从上到下是设置入口、外观的三档
-// 图标，以及账号入口（登录 / 退出登录）。放在滚动区之外，导航项再多也不会
+// sidebarFooter 是主页侧边栏底部的固定区：从上到下是外观的三档图标、设置
+// 入口，以及账号入口（登录 / 退出登录）。放在滚动区之外，导航项再多也不会
 // 把这些常驻入口挤走。
 func (a *app) sidebarFooter(c *ui.Context) {
 	ui.Column(c).FillWidth().Shrink(0).Padding(6, 8).Gap(2).Children(func() {
-		a.sidebarButton(c, "设置", settingsIcon, "打开设置窗口", a.showSettings)
 		a.themeButtons(c)
+		a.sidebarButton(c, "设置", settingsIcon, "打开设置窗口", a.showSettings)
 		a.sidebarAccount(c)
 	})
 }
@@ -676,7 +672,7 @@ func (a *app) titleBar(c *ui.Context) {
 	ui.Row(c).Height(h).FillWidth().AlignItems(ui.Stretch).
 		Padding(0, 0, 0, bar.Left).Background(t.Surface).DragWindow().Children(func() {
 		// 左段：品牌、通知铃铛，登录后再加上头像与昵称，整体可随标题栏拖动。
-		// 设置、外观与登录 / 退出登录都在主页侧边栏底部（见 sidebarFooter）。
+		// 外观、设置与登录 / 退出登录都在主页侧边栏底部（见 sidebarFooter）。
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 12).Gap(10).
 			AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "T2 Desktop").FontSize(13).Bold().SingleLine().TextColor(t.Text)
@@ -800,11 +796,6 @@ func (a *app) body(c *ui.Context) {
 		})
 		return
 	}
-	// 金币页聚合多个只读端点，自己管理余额、今日、流水、统计与排行。
-	if spec.Kind == kindCoin {
-		a.coinsBody(c)
-		return
-	}
 	if st.loading && len(st.items) == 0 {
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
 			ui.Spinner(c).Size(28, 28)
@@ -849,9 +840,9 @@ func (a *app) body(c *ui.Context) {
 		a.load(a.tab, st.page)
 	})
 	// 无限滚动：滚动到列表底部且还有下一页时，自动加载更多，不再依赖
-	// 页码按钮。「我的帖子 / 我的合集」不分页、最新评论服务端忽略 page，
-	// 因此只对 pagingPages 的 tab 触发。续拉失败后停在提示上，等用户点
-	// 「重试」，否则每次重建都会再发一次注定失败的请求。
+	// 页码按钮。「最新评论」服务端忽略 page，因此只对 pagingPages 的 tab 触发。
+	// 续拉失败后停在提示上，等用户点「重试」，否则每次重建都会再发一次注定
+	// 失败的请求。
 	if spec.Paging == pagingPages && st.loaded && !st.loading && st.moreErr == "" &&
 		!st.noMore && len(st.items) > 0 && st.list.AtEnd() {
 		hasMore := st.totalPages == 0 || st.page < st.totalPages
@@ -885,12 +876,18 @@ func (a *app) loadMoreFooter(c *ui.Context, errText string, loading bool, retry 
 }
 
 func (a *app) row(c *ui.Context, it Item) {
+	a.rowWith(c, it, a.openItem)
+}
+
+// rowWith 画一行列表项，但由调用方决定点开它的动作。「我的」窗口渲染同一
+// 批行时传 openProfileItem：正文在主窗口打开，本窗口留着不动。
+func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 	if it.Notif != nil {
 		a.notificationRow(c, it)
 		return
 	}
 	if it.Extra != nil {
-		a.richRow(c, it)
+		a.richRow(c, it, open)
 		return
 	}
 	t := c.Theme()
@@ -930,10 +927,18 @@ func (a *app) row(c *ui.Context, it Item) {
 		}
 	})
 	// 有 short_id 的帖子/评论在应用内看正文和评论；其余条目保持打开原文。
-	if it.ShortID != "" {
-		row.OnClick(func() { a.openDetail(it) })
-	} else if it.URL != "" {
-		row.OnClick(func() { a.srv.OpenURL(it.URL) })
+	if it.ShortID != "" || it.URL != "" {
+		row.OnClick(func() { open(it) })
+	}
+}
+
+// openItem 是列表行的默认打开方式：站内帖子进正文，其余交给系统浏览器。
+func (a *app) openItem(it Item) {
+	switch {
+	case it.ShortID != "":
+		a.openDetail(it)
+	case it.URL != "":
+		a.srv.OpenURL(it.URL)
 	}
 }
 

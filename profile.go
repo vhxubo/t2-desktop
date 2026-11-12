@@ -16,12 +16,18 @@ import (
 // 「我的」窗口的数据层与界面状态。窗口本身在 profile_ui.go：它是独立窗口
 // （和通知、设置一样），入口是标题栏上登录账号的头像。
 //
-// 四个标签页对应四组只读端点：
+// 五个标签页对应这几组只读端点：
 //
 //	概览与资产  GET /v1/me/coins/balance、/v1/me/sign、/v1/me/coins/transactions
-//	我的帖子    GET /v1/me/topics
+//	金币        /v1/me/coins/*、/v1/me/sign 与 /v1/coins/ranking（见 coins.go）
+//	我的内容    GET /v1/me/topics、/v1/me/favorites、/v1/me/bookmarks、/v1/me/collections
 //	我的回复    GET /v1/users/:userName/replies
 //	权限与账号  GET /v1/users/:userName + 令牌里的 scope
+//
+// 「金币」整页原先占着主窗口侧边栏的一格，现在是这里的一页。
+//
+// 「我的内容」一页里有四个分段：帖子、收藏、书签、合集。这四类原先占着主
+// 窗口的侧边栏，现在只在这里出现。
 //
 // 这里没有任何写操作：签到、打赏、发帖都引导到站点完成。
 
@@ -37,20 +43,40 @@ const (
 	profileReplyPageSize = 20
 	// profileTxShown 是「金币明细」展开后直接列出的最近几条。
 	profileTxShown = 6
-	// profileListLimit 是「我的帖子」的条数上限：/v1/me/topics 不分页，只作为
-	// 选择器使用，整页返回，这里只展示最新的这些条，其余引导到站点。
-	profileListLimit = 30
 )
 
-// 弹窗里的四个标签页。
+// 弹窗里的标签页。金币整页也在这里：它原先占着主窗口侧边栏的一格。
 const (
 	profileTabOverview = iota
-	profileTabTopics
+	profileTabCoins
+	profileTabContent
 	profileTabReplies
 	profileTabAccount
 )
 
-var profileTabLabels = []string{"概览与资产", "我的帖子", "我的回复", "权限与账号"}
+var profileTabLabels = []string{"概览与资产", "金币", "我的内容", "我的回复", "权限与账号"}
+
+// 「我的内容」里的四个分段。
+const (
+	profileContentTopics = iota
+	profileContentFavorites
+	profileContentBookmarks
+	profileContentCollections
+	profileContentCount
+)
+
+// profileContentLabels 是分段按钮上的短标签；spec 里的 Label 是完整说法，
+// 用在错误提示里（「需要登录后才能查看「我的收藏」」）。
+var profileContentLabels = []string{"帖子", "收藏", "书签", "合集"}
+
+// profileContentSpecs 是「我的内容」四个分段的端点。字段名与分页方式沿用
+// 接口文档：帖子与合集整页返回，收藏与书签按页返回。
+var profileContentSpecs = []tabSpec{
+	{"我的帖子", "/v1/me/topics", "", "auto", true, pagingOff, kindTopic},
+	{"我的收藏", "/v1/me/favorites", "page=1&limit=50", "posts", true, pagingPages, kindTopic},
+	{"我的书签", "/v1/me/bookmarks", "page=1&limit=50", "items", true, pagingPages, kindComment},
+	{"我的合集", "/v1/me/collections", "", "", true, pagingOff, kindCollection},
+}
 
 // profileNow 单独提出来给测试替换：注册天数按本地时间算。
 var profileNow = func() time.Time { return time.Now() }
@@ -133,13 +159,10 @@ type profileState struct {
 	txErr     string
 	txItems   []coinTransaction
 
-	// 我的帖子
-	topicSeq     uint64
-	topicLoading bool
-	topicLoaded  bool
-	topicErr     string
-	topics       []Item
-	topicList    ui.ListState
+	// 我的内容：帖子 / 收藏 / 书签 / 合集各有一份列表状态，切换分段时保留
+	// 已经拉到的内容，不重新请求。加载走主窗口同一套通用加载（loadSpec）。
+	contentKind int
+	content     [profileContentCount]tabState
 
 	// 我的回复
 	replySeq     uint64
@@ -162,19 +185,6 @@ func newProfileState() *profileState {
    端点契约
 ---------------------------------------------------------------- */
 
-// profileTopicsSpec 是「我的帖子」的端点。它不参与侧边栏的 tabSpecs，
-// 只是复用通用的 fetch / decodePage：不分页、列表字段按 auto 识别。
-func profileTopicsSpec() tabSpec {
-	return tabSpec{
-		Label:     "我的帖子",
-		Path:      "/v1/me/topics",
-		ListKey:   "auto",
-		NeedsAuth: true,
-		Paging:    pagingOff,
-		Kind:      kindTopic,
-	}
-}
-
 // profileRepliesSpec 是「我的回复」的端点：公开资料里该用户发布的评论。
 // 它需要用户名而不是「我」，因此调用方要先知道当前账号的昵称。
 func profileRepliesSpec(name string, page int) tabSpec {
@@ -186,10 +196,6 @@ func profileRepliesSpec(name string, page int) tabSpec {
 		Paging:  pagingPages,
 		Kind:    kindComment,
 	}
-}
-
-func (c *Client) fetchProfileTopics(ctx context.Context) (pageResult, error) {
-	return c.fetch(ctx, profileTopicsSpec(), 1)
 }
 
 func (c *Client) fetchProfileReplies(ctx context.Context, name string, page int) (pageResult, error) {
@@ -341,9 +347,13 @@ func (a *app) ensureProfileLoaded() {
 		if ps.txOpen && !ps.txLoaded && !ps.txLoading {
 			a.loadProfileTransactions()
 		}
-	case profileTabTopics:
-		if !ps.topicLoaded && !ps.topicLoading {
-			a.loadProfileTopics()
+	case profileTabCoins:
+		// 金币页自己调度余额、今日、流水、统计与排行各自的加载。
+		a.ensureCoinsLoaded()
+	case profileTabContent:
+		st := &ps.content[ps.contentKind]
+		if !st.loaded && !st.loading && !st.authWait {
+			a.loadProfileContent(ps.contentKind, 1)
 		}
 	case profileTabReplies:
 		if !ps.replyLoaded && !ps.replyLoading && name != "" {
@@ -449,39 +459,36 @@ func (a *app) loadProfileTransactions() {
 	}()
 }
 
-func (a *app) loadProfileTopics() {
+// loadProfileContent 拉「我的内容」某一分段的第 page 页。它复用主窗口的
+// 通用加载：四个分段的 spec 与错误、分页、去重都跟侧边栏列表同一套。
+func (a *app) loadProfileContent(kind, page int) {
 	ps := a.profile
-	if ps == nil || ps.topicLoading {
+	if ps == nil || kind < 0 || kind >= profileContentCount {
 		return
 	}
-	ps.topicSeq++
-	seq := ps.topicSeq
-	ps.topicLoading = true
-	ps.topicErr = ""
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	go func() {
-		defer cancel()
-		res, err := a.client.fetchProfileTopics(ctx)
-		a.publish(func() {
-			if a.profile != ps || ps.topicSeq != seq {
-				return
-			}
-			ps.topicLoading = false
-			ps.topicLoaded = true
-			if err != nil {
-				ps.topicErr = friendlyError(err)
-				return
-			}
-			items := res.Items
-			if len(items) > profileListLimit {
-				items = items[:profileListLimit]
-			}
-			ps.topics = items
-			ps.topicErr = ""
-			ps.topicList.ScrollTo(0, ui.Start)
-			a.prefetchItemAvatars(items)
-		})
-	}()
+	a.loadSpec(&ps.content[kind], profileContentSpecs[kind], page,
+		func() { a.loadProfileContent(kind, page) })
+}
+
+// reloadProfileContent 丢掉某一分段已拉到的内容，再从第一页重拉（分段上的
+// 「刷新」）。
+func (a *app) reloadProfileContent(kind int) {
+	ps := a.profile
+	if ps == nil || kind < 0 || kind >= profileContentCount {
+		return
+	}
+	st := &ps.content[kind]
+	if st.loading {
+		return
+	}
+	st.authWait = false
+	st.loaded = false
+	st.items = nil
+	st.err = ""
+	st.moreErr = ""
+	st.noMore = false
+	st.list.ScrollTo(0, ui.Start)
+	a.loadProfileContent(kind, 1)
 }
 
 // loadProfileReplies 拉第 page 页。page==1 时重建列表，page>1 时按 ID 去重
@@ -552,15 +559,15 @@ func (a *app) loadProfileReplies(name string, page int) {
 	}()
 }
 
-// reloadProfile 是窗口里的「刷新」：保留当前标签页与明细的展开状态，其余
-// 状态清空后按需重拉。
+// reloadProfile 是窗口里的「刷新」：保留当前标签页、「我的内容」当前分段与
+// 明细的展开状态，其余状态清空后按需重拉。
 func (a *app) reloadProfile() {
 	ps := a.profile
 	if ps == nil {
 		return
 	}
-	tab, txOpen := ps.tab, ps.txOpen
+	tab, content, txOpen := ps.tab, ps.contentKind, ps.txOpen
 	*a.profile = *newProfileState()
-	a.profile.tab, a.profile.txOpen = tab, txOpen
+	a.profile.tab, a.profile.contentKind, a.profile.txOpen = tab, content, txOpen
 	a.ensureProfileLoaded()
 }

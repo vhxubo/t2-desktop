@@ -8,8 +8,9 @@ import (
 
 // richRow 是最新评论 / 动态专用的行：比通用标题+副标题+元信息多了作者、
 // 被回复人、父评论引用、正文摘要与表情表态 / 打赏汇总。字段都来自 comments.go
-// 的归一结果，普通榜单行不会走到这里。
-func (a *app) richRow(c *ui.Context, it Item) {
+// 的归一结果，普通榜单行不会走到这里。open 决定点击后怎么打开这一行
+// （「我的」窗口会先收起自己）。
+func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 	t := c.Theme()
 	x := it.Extra
 	if x == nil {
@@ -107,9 +108,7 @@ func (a *app) richRow(c *ui.Context, it Item) {
 	})
 
 	// 评论行点开的是它所属的帖子，并记住这条评论以便定位/高亮。
-	if it.ShortID != "" {
-		row.OnClick(func() { a.openDetail(it) })
-	} else if it.URL != "" {
-		row.OnClick(func() { a.srv.OpenURL(it.URL) })
+	if it.ShortID != "" || it.URL != "" {
+		row.OnClick(func() { open(it) })
 	}
 }

@@ -39,14 +39,9 @@ func TestTabEndpointsMatchContract(t *testing.T) {
 		"https://2libra.com/api/v1/comments/latest?limit=50",
 		"https://2libra.com/api/v1/topics?page=1&limit=50&node_id=" + communityNodeID,
 		"https://2libra.com/api/v1/me/follows/timeline?page=1&limit=50",
-		"https://2libra.com/api/v1/me/favorites?page=1&limit=50",
-		"https://2libra.com/api/v1/me/bookmarks?page=1&limit=50",
-		"https://2libra.com/api/v1/me/topics",
-		"https://2libra.com/api/v1/me/collections",
 		"https://2libra.com/api/v1/me/notifications?page=1&limit=50",
-		"https://2libra.com/api/v1/me/coins/balance",
 	}
-	if len(tabSpecs) != len(want) || len(tabLabels()) != 13 {
+	if len(tabSpecs) != len(want) || len(tabLabels()) != 8 {
 		t.Fatalf("tab 数量不对：%d", len(tabSpecs))
 	}
 	if len(tabIcons) != len(tabSpecs) {
@@ -73,7 +68,7 @@ func TestTabEndpointsMatchContract(t *testing.T) {
 		{2, "https://2libra.com/api/v1/topics/hot?page=2&period=7d"},
 		{3, "https://2libra.com/api/v1/topics/latest?page=2"},
 		{6, "https://2libra.com/api/v1/me/follows/timeline?limit=50&page=2"},
-		{11, "https://2libra.com/api/v1/me/notifications?limit=50&page=2"},
+		{7, "https://2libra.com/api/v1/me/notifications?limit=50&page=2"},
 	}
 	for _, c := range cases {
 		if got := endpoint(apiBaseURL, tabSpecs[c.i], 2); got != c.want {
@@ -83,17 +78,17 @@ func TestTabEndpointsMatchContract(t *testing.T) {
 	if tabSpecs[4].Paging != pagingIgnored || tabSpecs[4].ListKey != "items" {
 		t.Errorf("最新评论必须用 items 且不翻页：%+v", tabSpecs[4])
 	}
-	if tabSpecs[7].ListKey != "posts" || tabSpecs[8].ListKey != "items" {
-		t.Errorf("收藏/书签的列表字段不符合约定")
+	if tabSpecs[7].Kind != kindNotification || tabSpecs[7].ListKey != "list" {
+		t.Errorf("通知的列表字段是 list：%+v", tabSpecs[7])
 	}
-	if tabSpecs[10].ListKey != "" || tabSpecs[10].Paging != pagingOff {
-		t.Errorf("我的合集响应是数组且不分页")
-	}
-	if tabSpecs[11].Kind != kindNotification || tabSpecs[11].ListKey != "list" {
-		t.Errorf("通知的列表字段是 list：%+v", tabSpecs[11])
-	}
-	if tabSpecs[12].Kind != kindCoin || !tabSpecs[12].NeedsAuth || tabSpecs[12].Paging != pagingOff {
-		t.Errorf("金币页应聚合加载且需要登录：%+v", tabSpecs[12])
+	// 收藏 / 书签 / 我的帖子 / 我的合集与金币页都不在侧边栏：前四类在「我的」
+	// 窗口的「我的内容」里，金币页整页在「我的」窗口的「金币」里。
+	for i, s := range tabSpecs {
+		switch s.Path {
+		case "/v1/me/favorites", "/v1/me/bookmarks", "/v1/me/topics",
+			"/v1/me/collections", "/v1/me/coins/balance":
+			t.Errorf("tab %d（%s）不该还留在侧边栏里", i, s.Label)
+		}
 	}
 }
 
@@ -164,7 +159,7 @@ func TestDecodePageListFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(envelopeJSON(`[{"id":"c1","name":"我的收藏夹","topic_count":9}]`)), &env3); err != nil {
 		t.Fatal(err)
 	}
-	res, err = decodePage(env3.D, tabSpecs[10], 1)
+	res, err = decodePage(env3.D, profileContentSpecs[profileContentCollections], 1)
 	if err != nil || len(res.Items) != 1 || res.Items[0].Title != "我的收藏夹" {
 		t.Fatalf("合集数组解析失败：%v %+v", err, res.Items)
 	}
@@ -177,7 +172,7 @@ func TestDecodePageListFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(envelopeJSON(`{"topics":[`+post+`]}`)), &env4); err != nil {
 		t.Fatal(err)
 	}
-	res, err = decodePage(env4.D, tabSpecs[9], 1)
+	res, err = decodePage(env4.D, profileContentSpecs[profileContentTopics], 1)
 	if err != nil || len(res.Items) != 1 {
 		t.Fatalf("auto 列表解析失败：%v %+v", err, res.Items)
 	}
@@ -353,10 +348,10 @@ func TestNativeView(t *testing.T) {
 	if a.tab != 2 {
 		t.Errorf("点击 tab 后选中 %d，期望 2", a.tab)
 	}
-	if err := tt.Click("收藏"); err != nil {
+	if err := tt.Click("动态"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("「收藏」需要登录") {
+	if !tt.HasText("「动态」需要登录") {
 		t.Errorf("私人 tab 未显示登录引导：%q", tt.Texts())
 	}
 	// 授权弹窗盖在整页上，先取消它再点标题栏。

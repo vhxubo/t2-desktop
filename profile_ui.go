@@ -9,8 +9,8 @@ import (
 )
 
 // 「我的」窗口：点击标题栏上登录账号的头像打开。它和通知、设置一样是独立
-// 窗口，而不是主窗口里的一层遮罩——四块内容（资产、帖子、回复、权限）都要
-// 滚动和分页，塞进主窗口的弹窗里只会互相挤。
+// 窗口，而不是主窗口里的一层遮罩——四块内容（概览、我的内容、回复、权限）
+// 都要滚动和分页，塞进主窗口的弹窗里只会互相挤。
 //
 // 数据、状态与请求在 profile.go；这里只负责窗口的开关与界面。
 
@@ -178,26 +178,36 @@ func (a *app) profileWindowView(c *ui.Context) {
 		a.profileHeader(c, ps)
 		ui.Divider(c)
 
-		// 四个标签页：内容各占满剩余高度，自己滚动。
+		// 标签页：内容各占满剩余高度，自己滚动。
 		ui.Row(c).FillWidth().Padding(6, 12).Children(func() {
 			ui.Tabs(c, &ps.tab, profileTabLabels...)
 		})
 		ui.Divider(c)
 
-		ui.Column(c).Grow(1).MinHeight(0).Padding(12, 16).Children(func() {
-			switch ps.tab {
-			case profileTabTopics:
-				a.profileTopicsBody(c, ps)
-			case profileTabReplies:
-				a.profileRepliesBody(c, ps)
-			case profileTabAccount:
-				a.profileAccountBody(c, ps)
-			default:
-				a.profileOverviewBody(c, ps)
-			}
-		})
+		// 金币整页自己也带标题与内边距，放在这里时不再套一层内边距。
+		if ps.tab == profileTabCoins {
+			ui.Column(c).Grow(1).MinHeight(0).Children(func() {
+				a.coinsBody(c)
+			})
+		} else {
+			ui.Column(c).Grow(1).MinHeight(0).Padding(12, 16).Children(func() {
+				switch ps.tab {
+				case profileTabContent:
+					a.profileContentBody(c, ps)
+				case profileTabReplies:
+					a.profileRepliesBody(c, ps)
+				case profileTabAccount:
+					a.profileAccountBody(c, ps)
+				default:
+					a.profileOverviewBody(c, ps)
+				}
+			})
+		}
 	})
 	a.ensureProfileLoaded()
+	// 缺权限时也摆出同一个全局授权弹窗：从本窗口发起的请求失败后，用户就
+	// 在这个窗口里看到原因与「前往授权」。
+	a.authDialog(c)
 }
 
 // profileTitleName 是窗口标题栏上的账号名：优先昵称，其次用户名。
@@ -303,7 +313,7 @@ func (a *app) profileBalanceCard(c *ui.Context, ps *profileState) {
 }
 
 // profileTxSection 是金币明细的快捷入口：默认收起，展开后列出最近几条变动
-// （签到收益、发帖消耗、打赏等），再给一个去金币页看全部流水的出口。
+// （签到收益、发帖消耗、打赏等），再给一个切到「金币」页看全部流水的出口。
 func (a *app) profileTxSection(c *ui.Context, ps *profileState) {
 	t := c.Theme()
 	settingsSection(c, "金币明细", func() {
@@ -319,10 +329,8 @@ func (a *app) profileTxSection(c *ui.Context, ps *profileState) {
 				}
 			})
 			ui.Spacer(c).Grow(1)
-			a.smallAction(c, "全部流水", false, func() {
-				a.gotoTab(coinTabIndex())
-				a.closeProfileWindow()
-			})
+			// 「全部流水」就在同一个窗口里切到「金币」页，不用回主窗口。
+			a.smallAction(c, "全部流水", false, func() { ps.tab = profileTabCoins })
 		})
 		if !ps.txOpen {
 			return
@@ -390,8 +398,8 @@ func (a *app) profileStatsSection(c *ui.Context, ps *profileState) {
 			profileStatChip(c, "关注", profileCountText(ps.infoLoaded, u.Following))
 			profileStatChip(c, "主页访问", profileCountText(ps.infoLoaded, u.HomeView))
 			profileStatChip(c, "等级", profileCountText(ps.infoLoaded && u.Level > 0, u.Level))
-			if ps.topicLoaded {
-				profileStatChip(c, "帖子", fmt.Sprintf("%d", len(ps.topics)))
+			if topics := &ps.content[profileContentTopics]; topics.loaded {
+				profileStatChip(c, "帖子", fmt.Sprintf("%d", len(topics.items)))
 			}
 			if ps.replyLoaded {
 				profileStatChip(c, "回复", fmt.Sprintf("%d", ps.replyTotal))
@@ -430,90 +438,121 @@ func (a *app) profileAuthEntry(c *ui.Context, ps *profileState) {
 }
 
 /* ------------------------------------------------------------------
-   Tab 2：我的帖子
+   Tab 2：我的内容（帖子 / 收藏 / 书签 / 合集）
 ---------------------------------------------------------------- */
 
-func (a *app) profileTopicsBody(c *ui.Context, ps *profileState) {
+// profileContentUnits 是「共 N <单位>」里的单位，与四个分段一一对应。
+var profileContentUnits = []string{"篇", "条", "条", "个"}
+
+// profileContentEmpty 是各分段没有内容时的两行说明。
+var profileContentEmpty = [][2]string{
+	{"还没有发布过帖子。", "需要发帖请到站点完成。"},
+	{"还没有收藏过帖子。", "在站点收藏的帖子会出现在这里。"},
+	{"还没有加过书签。", "在站点给评论加的书签会出现在这里。"},
+	{"还没有创建合集。", "合集可以在站点创建与管理。"},
+}
+
+func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
 	t := c.Theme()
-	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "我的帖子").FontSize(13).Bold()
-		if ps.topicLoaded {
-			ui.Textf(c, "共 %d 篇", len(ps.topics)).FontSize(11).TextColor(t.TextMuted)
-		}
+	kind := ps.contentKind
+	if kind < 0 || kind >= profileContentCount {
+		kind, ps.contentKind = profileContentTopics, profileContentTopics
+	}
+	st := &ps.content[kind]
+	spec := profileContentSpecs[kind]
+
+	// 分段切换：帖子 / 收藏 / 书签 / 合集。每段各有一份列表状态，已经拉过的
+	// 保留着，来回切换不会重新请求。
+	ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
+		ui.Tabs(c, &ps.contentKind, profileContentLabels...)
 		ui.Spacer(c).Grow(1)
-		a.smallAction(c, "刷新", ps.topicLoading, func() { a.loadProfileTopics() })
+		if st.loaded {
+			ui.Textf(c, "共 %d %s", profileContentTotal(st), profileContentUnits[kind]).
+				FontSize(11).TextColor(t.TextMuted)
+		}
+		a.smallAction(c, "刷新", st.loading, func() { a.reloadProfileContent(kind) })
 	})
 
 	switch {
-	case ps.topicLoading && len(ps.topics) == 0:
+	case st.loading && len(st.items) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
 			ui.Spinner(c).Size(24, 24)
-			ui.Text(c, "正在加载我的帖子…").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "正在加载"+profileContentLabels[kind]+"…").
+				FontSize(12).TextColor(t.TextMuted)
 		})
 		return
-	case ps.topicErr != "":
+	case st.err != "":
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(10).Children(func() {
 			ui.Text(c, "加载失败").FontSize(14).Bold()
-			ui.Text(c, ps.topicErr).FontSize(12).TextColor(t.Danger).MaxLines(3)
+			ui.Text(c, st.err).FontSize(12).TextColor(t.Danger).MaxLines(3)
 			if ui.Button(c, "重试").Clicked() {
-				a.loadProfileTopics()
+				a.loadProfileContent(kind, 1)
 			}
 		})
 		return
-	case len(ps.topics) == 0:
+	case len(st.items) == 0:
+		empty := profileContentEmpty[kind]
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(6).Children(func() {
-			ui.Text(c, "还没有发布过帖子。").FontSize(13).TextColor(t.TextMuted)
-			ui.Text(c, "需要发帖请到站点完成。").FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, empty[0]).FontSize(13).TextColor(t.TextMuted)
+			ui.Text(c, empty[1]).FontSize(11).TextColor(t.TextMuted)
 		})
 		return
 	}
 
-	items := ps.topics
-	ps.topicList.Key = func(i int) any {
+	items := st.items
+	st.list.Key = func(i int) any {
 		if i >= 0 && i < len(items) {
 			return items[i].Key
 		}
 		return i
 	}
-	ui.List(c, &ps.topicList, len(items), func(i int) {
-		a.profileTopicRow(c, items[i])
+	ui.List(c, &st.list, len(items), func(i int) {
+		a.profileContentRow(c, items[i])
 	}).Grow(1).MinHeight(0).Gap(8)
+	if spec.Paging == pagingPages {
+		a.profileMoreContent(c, kind, st)
+	}
 }
 
-func (a *app) profileTopicRow(c *ui.Context, it Item) {
+// profileContentTotal 是「共 N」的数字：优先用服务端给的总数，没给时退回
+// 已经拉到的条数，不编一个 0。
+func profileContentTotal(st *tabState) int {
+	if st.total > 0 {
+		return st.total
+	}
+	return len(st.items)
+}
+
+// profileContentRow 和主窗口的列表行用同一套画法：收藏是帖子、书签是评论，
+// 书签因此会走评论的富行；点开后由 openProfileItem 在主窗口打开正文。
+func (a *app) profileContentRow(c *ui.Context, it Item) {
+	a.rowWith(c, it, a.openProfileItem)
+}
+
+// profileMoreContent 是分页列表底部的续拉行：还有下一页时给按钮，续拉失败
+// 时给出原因并可重试，已有内容保持不动。
+func (a *app) profileMoreContent(c *ui.Context, kind int, st *tabState) {
 	t := c.Theme()
-	row := ui.ButtonBase(c).FillWidth().Padding(10, 12).Radius(10).
-		Background(t.Background).Border(1, t.Border)
-	if row.Hovered() {
-		row.Background(t.SurfaceHover)
-	}
-	row.Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-			ui.Text(c, it.Title).FontSize(13).Bold().MaxLines(2)
-			if meta := profileTopicMeta(it); meta != "" {
-				ui.Text(c, meta).FontSize(11).TextColor(t.TextMuted).SingleLine()
-			}
+	switch {
+	case st.moreErr != "":
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "加载更多失败："+st.moreErr).FontSize(11).
+				TextColor(t.Danger).MaxLines(2).Grow(1)
+			a.smallAction(c, "重试", false, func() { a.loadProfileContent(kind, st.page) })
 		})
-	})
-	if it.ShortID != "" {
-		row.Tooltip("打开正文")
-		row.OnClick(func() { a.openProfileDetail(it) })
-	} else if it.URL != "" {
-		row.OnClick(func() { a.openExternal(it.URL) })
+	case st.loading && len(st.items) > 0:
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Spinner(c).Size(14, 14)
+			ui.Text(c, "正在加载更多…").FontSize(11).TextColor(t.TextMuted)
+		})
+	case !st.noMore && (st.totalPages == 0 || st.page < st.totalPages):
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			if ui.Button(c, "加载更多").Clicked() {
+				a.loadProfileContent(kind, st.page+1)
+			}
+			ui.Spacer(c).Grow(1)
+		})
 	}
-}
-
-// profileTopicMeta 是帖子行的次行：发布时间 + 回复 / 浏览等元信息。时间在
-// Item 里是 SubtitleSuffix（形如「 · 2 天前」），这里去掉前导分隔符。
-func profileTopicMeta(it Item) string {
-	parts := make([]string, 0, 2)
-	if when := strings.TrimPrefix(it.SubtitleSuffix, " · "); when != "" {
-		parts = append(parts, when)
-	}
-	if it.Meta != "" {
-		parts = append(parts, it.Meta)
-	}
-	return strings.Join(parts, " · ")
 }
 
 /* ------------------------------------------------------------------
@@ -743,6 +782,17 @@ func profileFollowText(known bool, followers, following int) string {
    打开正文与切换主窗口
 ---------------------------------------------------------------- */
 
+// openProfileItem 是「我的」窗口里列表行的打开动作：站内帖子 / 评论回主窗口
+// 正文（本窗口留着，读完还能接着看），其余交给系统浏览器。
+func (a *app) openProfileItem(it Item) {
+	switch {
+	case it.ShortID != "":
+		a.openProfileDetail(it)
+	case it.URL != "":
+		a.openExternal(it.URL)
+	}
+}
+
 // openProfileDetail 从「我的」窗口打开一篇帖子或一条回复：把主窗口带到前台并
 // 换到详情页，「我的」窗口本身留着不关 —— 读完后还能回到原来的标签页。
 // 评论行会带上 CommentID，正文里据此定位楼层。
@@ -754,18 +804,4 @@ func (a *app) openProfileDetail(it Item) {
 	a.detailStack = nil
 	a.openDetail(it)
 	a.showMainWindow()
-}
-
-// gotoTab 把主窗口切到侧边栏的某一页（金币页、我的帖子等），并清掉详情页。
-func (a *app) gotoTab(i int) {
-	if i < 0 || i >= len(tabSpecs) {
-		return
-	}
-	a.tab = i
-	a.lastTab = i
-	a.navSel = tabID(i)
-	a.pageName = "list"
-	a.detail = nil
-	a.detailStack = nil
-	a.status = ""
 }

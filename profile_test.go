@@ -16,11 +16,32 @@ import (
    端点契约与解析
 ----------------------------------------------------------------- */
 
-// 「我的」窗口里的两个列表必须打到文档里的端点，且第 1 页参数原样保留。
+// 「我的」窗口里的列表必须打到文档里的端点，且第 1 页参数原样保留。
 func TestProfileEndpointsMatchContract(t *testing.T) {
-	if got, want := endpoint(apiBaseURL, profileTopicsSpec(), 1),
-		"https://2libra.com/api/v1/me/topics"; got != want {
-		t.Errorf("我的帖子 URL = %s，期望 %s", got, want)
+	cases := []struct {
+		kind int
+		want string
+	}{
+		{profileContentTopics, "https://2libra.com/api/v1/me/topics"},
+		{profileContentFavorites, "https://2libra.com/api/v1/me/favorites?page=1&limit=50"},
+		{profileContentBookmarks, "https://2libra.com/api/v1/me/bookmarks?page=1&limit=50"},
+		{profileContentCollections, "https://2libra.com/api/v1/me/collections"},
+	}
+	for _, c := range cases {
+		if got := endpoint(apiBaseURL, profileContentSpecs[c.kind], 1); got != c.want {
+			t.Errorf("%s URL = %s，期望 %s", profileContentLabels[c.kind], got, c.want)
+		}
+	}
+	// 收藏 / 书签按页；帖子 / 合集整页返回。
+	for _, c := range cases {
+		spec := profileContentSpecs[c.kind]
+		wantPaging := pagingPages
+		if c.kind == profileContentTopics || c.kind == profileContentCollections {
+			wantPaging = pagingOff
+		}
+		if spec.Paging != wantPaging || !spec.NeedsAuth {
+			t.Errorf("%s 的分页 / 登录约定不对：%+v", c.want, spec)
+		}
 	}
 	if got, want := endpoint(apiBaseURL, profileRepliesSpec("jimmy", 1), 1),
 		"https://2libra.com/api/v1/users/jimmy/replies?page=1&limit=20"; got != want {
@@ -140,8 +161,9 @@ func profileWindowApp(t *testing.T) *app {
 		{ID: "c1", Reason: "checkin", Amount: 5, CreatedAt: "2026-11-12T02:00:00Z"},
 		{ID: "c2", Reason: "post", Amount: -2, RelateTitle: "一篇帖子", CreatedAt: "2026-11-11T02:00:00Z"},
 	}
-	ps.topicLoaded = true
-	ps.topics = []Item{
+	topics := &ps.content[profileContentTopics]
+	topics.loaded = true
+	topics.items = []Item{
 		{Key: "T1", ShortID: "T1", Title: "第一篇帖子", SubtitleSuffix: " · 2 天前", Meta: "3 回复 · 10 浏览"},
 		{Key: "T2", ShortID: "T2", Title: "第二篇帖子", SubtitleSuffix: " · 5 天前", Meta: "1 回复"},
 	}
@@ -162,7 +184,7 @@ func TestProfileWindowView(t *testing.T) {
 	for _, want := range []string{
 		"我的", "吉米",
 		"用户 ID: #123456", "注册 2024-02-01",
-		"概览与资产", "我的帖子", "我的回复", "权限与账号",
+		"概览与资产", "金币", "我的内容", "我的回复", "权限与账号",
 		"1,280 金币", "今日已签到 · 连续 5 天",
 		"金币明细", "展开最近记录", "全部流水",
 		"最近统计", "粉丝", "关注", "主页访问", "等级",
@@ -176,6 +198,42 @@ func TestProfileWindowView(t *testing.T) {
 	for _, label := range []string{"最小化", "关闭"} {
 		if _, ok := tt.Find(label); !ok {
 			t.Errorf("「我的」窗口缺少「%s」按钮：%q", label, tt.Texts())
+		}
+	}
+	// 五个标签页都待在窗口宽度之内。
+	for _, label := range profileTabLabels {
+		r, ok := tt.Find(label)
+		if !ok {
+			t.Fatalf("缺少标签页 %q：%q", label, tt.Texts())
+		}
+		if r.X+r.W > profileWindowWidth {
+			t.Errorf("标签页 %q 的 x=%.0f 宽 %.0f，超出 %d 宽的窗口",
+				label, r.X, r.W, profileWindowWidth)
+		}
+	}
+}
+
+// 「金币」页就是原来的金币整页：概览里的「全部流水」直接切到这一页，不再回
+// 主窗口侧边栏。
+func TestProfileCoinsTab(t *testing.T) {
+	a := profileWindowApp(t)
+	cs := a.coins
+	cs.baseLoaded, cs.balance, cs.balanceOK = true, 1280, true
+	cs.todayLoaded = true
+	cs.sign = coinSignStatus{Known: true, Signed: true, Streak: 5}
+	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
+	tt.Frame()
+	if err := tt.Click("全部流水"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.profile.tab != profileTabCoins {
+		t.Fatalf("点「全部流水」后没有切到金币页：tab=%d", a.profile.tab)
+	}
+	for _, want := range []string{"当前余额", "1,280 金币", "今日获得", "今日明细",
+		"今日已签到 · 连续 5 天", "今日", "历史", "统计", "排行"} {
+		if !tt.HasText(want) {
+			t.Errorf("金币页缺少 %q：%q", want, tt.Texts())
 		}
 	}
 }
@@ -202,19 +260,80 @@ func TestProfileCoinTransactionsExpand(t *testing.T) {
 	}
 }
 
+// 「我的内容」一页里有四个分段：帖子 / 收藏 / 书签 / 合集，切到哪段显示
+// 哪段的内容。这四类原先占着侧边栏，现在都收进这里。
+func TestProfileContentSegments(t *testing.T) {
+	if len(profileContentSpecs) != profileContentCount ||
+		len(profileContentLabels) != profileContentCount ||
+		len(profileContentUnits) != profileContentCount ||
+		len(profileContentEmpty) != profileContentCount {
+		t.Fatalf("「我的内容」的分段表长度不一致：specs=%d labels=%d units=%d empty=%d",
+			len(profileContentSpecs), len(profileContentLabels),
+			len(profileContentUnits), len(profileContentEmpty))
+	}
+	a := profileWindowApp(t)
+	ps := a.profile
+
+	favorites := &ps.content[profileContentFavorites]
+	favorites.loaded = true
+	favorites.items = []Item{{Key: "F1", ShortID: "F1", Title: "收藏的帖子"}}
+	bookmarks := &ps.content[profileContentBookmarks]
+	bookmarks.loaded = true
+	bookmarks.items = []Item{{Key: "B1", ShortID: "T9", CommentID: "B1", Title: "书签里的评论",
+		Extra: &rowExtra{Excerpt: "书签里的评论", Author: "jimmy"}}}
+	collections := &ps.content[profileContentCollections]
+	collections.loaded = true
+	collections.items = []Item{{Key: "C1", Title: "我的收藏夹", Subtitle: "合集", Meta: "9 个帖子"}}
+
+	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
+	tt.Frame()
+	if err := tt.Click("我的内容"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("第一篇帖子") {
+		t.Errorf("默认分段应是帖子：%q", tt.Texts())
+	}
+	// 四个分段都要待在窗口宽度之内，不能挤到窗口外面。
+	for _, label := range append(append([]string{}, profileContentLabels...), "刷新") {
+		r, ok := tt.Find(label)
+		if !ok {
+			t.Fatalf("「我的内容」缺少 %q：%q", label, tt.Texts())
+		}
+		if r.X+r.W > profileWindowWidth {
+			t.Errorf("%q 的 x=%.0f 宽 %.0f，超出 %d 宽的窗口",
+				label, r.X, r.W, profileWindowWidth)
+		}
+	}
+
+	for _, c := range []struct{ segment, want string }{
+		{"收藏", "收藏的帖子"},
+		{"书签", "书签里的评论"},
+		{"合集", "我的收藏夹"},
+	} {
+		if err := tt.Click(c.segment); err != nil {
+			t.Fatalf("切到 %s 失败：%v", c.segment, err)
+		}
+		tt.Frame()
+		if !tt.HasText(c.want) {
+			t.Errorf("%s 分段里看不到 %q：%q", c.segment, c.want, tt.Texts())
+		}
+	}
+}
+
 // 四个标签页都能切，各自显示自己的内容。
 func TestProfileTabs(t *testing.T) {
 	a := profileWindowApp(t)
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
 
-	if err := tt.Click("我的帖子"); err != nil {
+	if err := tt.Click("我的内容"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	for _, want := range []string{"共 2 篇", "第一篇帖子", "第二篇帖子"} {
+	for _, want := range []string{"共 2 篇", "第一篇帖子", "第二篇帖子", "帖子", "收藏", "书签", "合集"} {
 		if !tt.HasText(want) {
-			t.Errorf("我的帖子页缺少 %q：%q", want, tt.Texts())
+			t.Errorf("我的内容页缺少 %q：%q", want, tt.Texts())
 		}
 	}
 
@@ -240,6 +359,20 @@ func TestProfileTabs(t *testing.T) {
 	}
 }
 
+// 从「我的」窗口发起的请求缺权限时，全局授权弹窗也出现在这个窗口里：
+// 用户不用切回主窗口才知道为什么列表是空的。
+func TestProfileShowsAuthDialog(t *testing.T) {
+	a := profileWindowApp(t)
+	a.demandAuthorization(scopeNeed([]string{"read:me"}), nil)
+	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
+	tt.Frame()
+	for _, want := range []string{"需要授权", "缺少的权限范围：read:me", "前往授权", "取消"} {
+		if !tt.HasText(want) {
+			t.Errorf("「我的」窗口里的授权弹窗缺少 %q：%q", want, tt.Texts())
+		}
+	}
+}
+
 // 没有 scope 的旧令牌也要说明白，而不是显示一片空白。
 func TestProfileAccountTabWithoutScope(t *testing.T) {
 	a := profileWindowApp(t)
@@ -257,7 +390,7 @@ func TestProfileAccountTabWithoutScope(t *testing.T) {
 // 点帖子行回到主窗口的正文页；「我的」窗口留在原地不关。
 func TestProfileTopicOpensDetail(t *testing.T) {
 	a := profileWindowApp(t)
-	a.profile.tab = profileTabTopics
+	a.profile.tab = profileTabContent
 	a.setProfileWindowShown(true)
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
@@ -327,8 +460,12 @@ func TestHeaderAvatarOpensProfile(t *testing.T) {
 func TestProfileResetOnLogout(t *testing.T) {
 	a := profileWindowApp(t)
 	a.auth.Logout()
-	if a.profile == nil || a.profile.infoLoaded || len(a.profile.topics) > 0 {
-		t.Errorf("退出登录后「我的」状态没有清空：%+v", a.profile)
+	ps := a.profile
+	if ps == nil {
+		t.Fatal("退出登录后「我的」状态被删掉了")
+	}
+	if ps.infoLoaded || len(ps.content[profileContentTopics].items) > 0 {
+		t.Errorf("退出登录后「我的」状态没有清空：%+v", ps)
 	}
 }
 

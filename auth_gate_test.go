@@ -160,7 +160,7 @@ func TestMissingScopeRetriesOriginalCallAfterCallback(t *testing.T) {
 			_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{"access_token":"NEW","refresh_token":"R","token_type":"Bearer","expires_in":3600,"scope":"read profile read:me write:comment write:vote"}}`)
 		case "/api/oauth/me", "/api/v1/me/summary":
 			_, _ = fmt.Fprint(w, `{"c":0,"d":{"username":"jimmy"}}`)
-		case "/api/v1/me/favorites":
+		case "/api/v1/me/follows/timeline":
 			favoritesCalls.Add(1)
 			if r.Header.Get("Authorization") != "Bearer NEW" {
 				w.WriteHeader(http.StatusForbidden)
@@ -168,7 +168,7 @@ func TestMissingScopeRetriesOriginalCallAfterCallback(t *testing.T) {
 				return
 			}
 			sawNewToken.Store(true)
-			_, _ = fmt.Fprint(w, envelopeJSON(`{"posts":[{"id":"f1","short_id":"REPLAY1","title":"授权后重新加载的内容","author":{"username":"jimmy"}}],"total":1,"page":1,"limit":50,"total_pages":1}`))
+			_, _ = fmt.Fprint(w, envelopeJSON(`{"items":[{"id":"f1","short_id":"REPLAY1","title":"授权后重新加载的内容","author":{"username":"jimmy"}}],"total":1,"page":1,"limit":50,"total_pages":1}`))
 		default:
 			t.Errorf("意外路径 %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -188,13 +188,13 @@ func TestMissingScopeRetriesOriginalCallAfterCallback(t *testing.T) {
 
 	idx := -1
 	for i, s := range tabSpecs {
-		if s.Label == "收藏" {
+		if s.Label == "动态" {
 			idx = i
 			break
 		}
 	}
 	if idx < 0 {
-		t.Fatal("找不到收藏 tab")
+		t.Fatal("找不到动态 tab")
 	}
 	a.tab = idx
 	a.navSel = tabID(idx)
@@ -256,7 +256,7 @@ func TestMissingScopeRetriesOriginalCallAfterCallback(t *testing.T) {
 		t.Errorf("重跑完成后授权状态应清空：%+v", a.authGate)
 	}
 	if got := favoritesCalls.Load(); got != 2 {
-		t.Errorf("收藏请求次数 = %d，期望首次 403 + 重跑 1 次", got)
+		t.Errorf("动态请求次数 = %d，期望首次 403 + 重跑 1 次", got)
 	}
 }
 
@@ -264,14 +264,14 @@ func TestMissingScopeRetriesOriginalCallAfterCallback(t *testing.T) {
 func TestPrivateTabClickAsksForLogin(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1100, 760)
-	if err := tt.Click("收藏"); err != nil {
+	if err := tt.Click("动态"); err != nil {
 		t.Fatal(err)
 	}
 	if !a.authGate.open {
 		t.Fatal("点私有 tab 没有打开全局授权弹窗")
 	}
 	tt.Frame()
-	for _, want := range []string{"需要登录", "「收藏」需要登录 2Libra 后才能查看。", "前往授权", "取消"} {
+	for _, want := range []string{"需要登录", "「动态」需要登录 2Libra 后才能查看。", "前往授权", "取消"} {
 		if !tt.HasText(want) {
 			t.Errorf("登录弹窗缺少 %q：%q", want, tt.Texts())
 		}

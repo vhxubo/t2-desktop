@@ -10,9 +10,9 @@ import (
 // 与账号入口都得待在这条带子里，不能溢到右侧内容区。
 const sidebarWidth = 150
 
-// 设置入口在主页左侧的导航栏里，三档外观紧挨在它下面，登录 / 退出登录再往
-// 下：这三样都不在标题栏里了，标题栏只留品牌、铃铛和登录后的头像昵称。
-func TestSidebarFooterHoldsSettingsThemesAndAccount(t *testing.T) {
+// 设置入口在主页左侧的导航栏里，三档外观在它上面，登录 / 退出登录再往下：
+// 这三样都不在标题栏里了，标题栏只留品牌、铃铛和登录后的头像昵称。
+func TestSidebarFooterHoldsThemesSettingsAndAccount(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
@@ -40,10 +40,11 @@ func TestSidebarFooterHoldsSettingsThemesAndAccount(t *testing.T) {
 			t.Errorf("%q 的 x=%.0f 宽 %.0f，超出 %d 宽的侧边栏", label, r.X, r.W, sidebarWidth)
 		}
 	}
+	// 外观在设置上面：先看到三档图标，再往下才是「设置」。
 	for _, label := range []string{"外观：跟随系统", "外观：浅色", "外观：深色"} {
 		r, _ := tt.Find(label)
-		if r.Y <= set.Y {
-			t.Errorf("%q 的 y=%.0f，应在设置入口（y=%.0f）下方", label, r.Y, set.Y)
+		if r.Y >= set.Y {
+			t.Errorf("%q 的 y=%.0f，应在设置入口（y=%.0f）上方", label, r.Y, set.Y)
 		}
 		if r.Y >= login.Y {
 			t.Errorf("%q 的 y=%.0f，应在账号入口（y=%.0f）上方", label, r.Y, login.Y)
@@ -57,6 +58,22 @@ func TestSidebarFooterHoldsSettingsThemesAndAccount(t *testing.T) {
 	}
 	if !opened {
 		t.Error("点侧边栏的「设置」没有打开设置窗口")
+	}
+}
+
+// 收藏 / 书签 / 我的帖子 / 我的合集 / 金币 不再占侧边栏的位置：前四类都收进
+// 了「我的」窗口的「我的内容」一页，金币整页收进了「金币」一页。
+func TestSidebarHasNoMyContentEntries(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	for _, label := range []string{"收藏", "书签", "我的帖子", "我的合集"} {
+		if _, ok := tt.Find(label); ok {
+			t.Errorf("侧边栏不该再有 %q：%q", label, tt.Texts())
+		}
+	}
+	if _, ok := tt.Find("金币"); ok {
+		t.Errorf("侧边栏不该再有金币入口：%q", tt.Texts())
 	}
 }
 

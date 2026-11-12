@@ -26,7 +26,7 @@ const (
 type pagingMode uint8
 
 const (
-	pagingOff     pagingMode = iota // 我的帖子 / 我的合集：不分页
+	pagingOff     pagingMode = iota // 不分页：金币页、我的帖子 / 合集等整页返回
 	pagingPages                     // 第 2 页起带 page
 	pagingIgnored                   // 最新评论：服务端忽略 page，不做翻页
 )
@@ -39,7 +39,6 @@ const (
 	kindCollection
 	kindTimeline     // 动态：同一份响应里混有帖子与评论
 	kindNotification // 通知：行渲染与交互都独立
-	kindCoin         // 金币：聚合多个只读端点，页面自己加载
 )
 
 // tabSpec is the exact contract from the API table: path, page-1 query,
@@ -62,17 +61,14 @@ var tabSpecs = []tabSpec{
 	{"最新评论", "/v1/comments/latest", "limit=50", "items", false, pagingIgnored, kindComment},
 	{"社区讨论", "/v1/topics", "page=1&limit=50&node_id=" + communityNodeID, "posts", false, pagingPages, kindTopic},
 	{"动态", "/v1/me/follows/timeline", "page=1&limit=50", "items", true, pagingPages, kindTimeline},
-	{"收藏", "/v1/me/favorites", "page=1&limit=50", "posts", true, pagingPages, kindTopic},
-	{"书签", "/v1/me/bookmarks", "page=1&limit=50", "items", true, pagingPages, kindComment},
-	{"我的帖子", "/v1/me/topics", "", "auto", true, pagingOff, kindTopic},
-	{"我的合集", "/v1/me/collections", "", "", true, pagingOff, kindCollection},
+	// 收藏 / 书签 / 我的帖子 / 我的合集不在侧边栏：它们是「我的」窗口里的
+	// 四类内容，端点见 profile.go 的 profileContentSpecs。
 	// 通知走开放 API 的消息列表；字段名是 list（不是 items），筛选另带
 	// type / unread_only，由 notificationQuery 生成。它不再是侧边栏页面：
 	// 入口是标题栏铃铛打开的弹窗，保留这一项是为了复用通用加载与分页。
 	{"通知", notificationsPath, notificationsQuery(notificationFilterAll), "list", true, pagingPages, kindNotification},
-	// 金币页聚合多个只读端点，Path 只作为契约测试里的代表地址；实际加载
-	// 由 coinState 统一调度，不走通用 fetch。
-	{"金币", "/v1/me/coins/balance", "", "", true, pagingOff, kindCoin},
+	// 金币页聚合多个只读端点，不再是侧边栏页面：它整页搬进了「我的」窗口，
+	// 入口见 profileTabCoins；加载由 coinState 统一调度，不走通用 fetch。
 }
 
 func tabLabels() []string {

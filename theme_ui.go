@@ -12,9 +12,9 @@ var (
 	darkThemeIcon   = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></svg>`))
 )
 
-// themeButtons 在主页侧边栏底部直接摆出三档外观：跟随系统、浅色、深色。
-// 外观只有三种，点一下就切换，没必要再开一层弹窗；当前档用强调色标出，
-// 其余档悬停变亮，一眼能看出现在用的是哪种。
+// themeButtons 在主页侧边栏底部、设置入口上方直接摆出三档外观：跟随系统、
+// 浅色、深色。外观只有三种，点一下就切换，没必要再开一层弹窗；当前档用强调
+// 色标出，其余档悬停变亮，一眼能看出现在用的是哪种。
 func (a *app) themeButtons(c *ui.Context) {
 	ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
 		a.themeButton(c, themeFollowSystem, systemThemeIcon, "跟随系统")

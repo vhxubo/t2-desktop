@@ -15,8 +15,9 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 金币页的数据层。全部是只读端点，与 api-economy.md 的「金币查询 / 签到 /
-// 榜单」一一对应；标「需开通」的端点失败时只降级展示，不参与授权弹窗。
+// 金币页的数据层。这一页整页在「我的」窗口里（profileTabCoins）。全部是
+// 只读端点，与 api-economy.md 的「金币查询 / 签到 / 榜单」一一对应；标
+// 「需开通」的端点失败时只降级展示，不参与授权弹窗。
 //
 //	GET /v1/me/coins/balance             余额
 //	GET /v1/me/coins/transactions        金币流水（分页 + 日期过滤，无 limit）
@@ -227,15 +228,6 @@ type coinState struct {
 
 func newCoinState() *coinState {
 	return &coinState{breakdownType: "income"}
-}
-
-func coinTabIndex() int {
-	for i, s := range tabSpecs {
-		if s.Kind == kindCoin {
-			return i
-		}
-	}
-	return -1
 }
 
 // ---- 响应解析 ----
