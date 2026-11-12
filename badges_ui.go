@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/egoist/mygo/ui/markdown"
 )
 
 // authorBadges 在昵称后画佩戴中的社区徽章图标。徽章小图由服务端给出，
@@ -49,5 +48,5 @@ func (a *app) authorBadges(c *ui.Context, badges []badgeInfo) {
 // 引用、代码、链接与配图），字号小一号；:code: 内置表情 / 社区图标与正文
 // 一样换成行内表情图片，而不是 [说明] 文字。
 func (a *app) commentText(c *ui.Context, text string, emojis map[string]emojiInfo) ui.Element {
-	return markdown.View(c, replaceEmoji(text, emojis, true), a.commentMd).FillWidth()
+	return a.markdownView(c, replaceEmoji(text, emojis, true), a.commentMd)
 }

@@ -147,6 +147,76 @@ func TestDecodeReplies(t *testing.T) {
 	}
 }
 
+// 线上 API 与 api-read.md 的示例字段名并不完全一致：投票在顶层 d.vote，
+// 表态是 reactions_summary，置顶评论是 pinned_comments。这里按真实响应
+// 的形状断言，避免示例字段能过测试、真实帖子却渲染不出来。
+func TestDecodeLiveFieldNames(t *testing.T) {
+	topic, err := decodeTopic([]byte(`{
+		"short_id":"LIVE001","title":"线上字段","content":"x",
+		"vote":{"title":"选哪个","voting_finished":true,"max_choices":1,
+			"options":[{"text":"A","vote_count":2},{"text":"B","vote_count":1}]}
+	}`), "LIVE001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if topic.Vote == nil || topic.Vote.Title != "选哪个" || !topic.Vote.Finished ||
+		len(topic.Vote.Options) != 2 || topic.Vote.Options[0].Votes != 2 {
+		t.Errorf("顶层 vote 没有解析：%+v", topic.Vote)
+	}
+
+	pg := decodeReplies([]byte(`{
+		"items":[{"id":"c1","content":"评论","floor":1,
+			"author":{"username":"dannyng"},
+			"reactions_summary":[{"emoji":"👍","count":3}]}],
+		"pinned_comments":[{"id":"p1","content":"置顶公告",
+			"author":{"username":"mod"}}],
+		"total":2,"page":1,"limit":30,"total_pages":1}`))
+	if len(pg.Items) != 1 || pg.Items[0].Reactions != "👍3" {
+		t.Errorf("reactions_summary 没有解析：%+v", pg.Items)
+	}
+	if len(pg.Pinned) != 1 || !pg.Pinned[0].Pinned || pg.Pinned[0].Content != "置顶公告" {
+		t.Errorf("pinned_comments 没有解析：%+v", pg.Pinned)
+	}
+}
+
+// 新评论按视图落位：楼中楼进父评论的子树，顶层与扁平时间序接在已加载
+// 评论之后，不能插到列表最顶端。
+func TestInsertReplyPlacement(t *testing.T) {
+	base := []replyItem{
+		{ID: "p1", Pinned: true},
+		{ID: "c1", Floor: 1},
+		{ID: "c1a", Floor: 2, Depth: 1},
+		{ID: "c1b", Floor: 3, Depth: 2},
+		{ID: "c2", Floor: 4},
+	}
+	nested, at := insertReply(append([]replyItem(nil), base...), replyItem{ID: "new"}, "c1", false)
+	want := []string{"p1", "c1", "c1a", "c1b", "new", "c2"}
+	if at != 4 || len(nested) != len(want) {
+		t.Fatalf("楼中楼落位 %d / %d：%+v", at, len(nested), nested)
+	}
+	for i, id := range want {
+		if nested[i].ID != id {
+			t.Errorf("楼中楼顺序 [%d] = %s，期望 %s：%+v", i, nested[i].ID, id, nested)
+		}
+	}
+	if nested[4].Depth != 1 {
+		t.Errorf("楼中楼深度 = %d，期望 1", nested[4].Depth)
+	}
+
+	top, at := insertReply(append([]replyItem(nil), base...), replyItem{ID: "top"}, "", false)
+	if at != len(base) || top[len(top)-1].ID != "top" {
+		t.Errorf("顶层评论应接在末尾：at=%d %+v", at, top)
+	}
+	flat, at := insertReply(append([]replyItem(nil), base...), replyItem{ID: "f"}, "", true)
+	if at != len(base) || flat[len(flat)-1].ID != "f" {
+		t.Errorf("扁平时间序应接在末尾：at=%d %+v", at, flat)
+	}
+	orphan, at := insertReply(append([]replyItem(nil), base...), replyItem{ID: "o"}, "missing", false)
+	if at != len(base) || orphan[len(orphan)-1].ID != "o" {
+		t.Errorf("父评论缺失时应保留新评论：at=%d %+v", at, orphan)
+	}
+}
+
 func TestEmojiMapAndRendering(t *testing.T) {
 	m := decodeEmojis([]byte(detailEmojisJSON))
 	if len(m) != 2 || m[":sigh:"].ImgURL != "https://r2.2libra.com/emojis/sigh.png" {
@@ -944,5 +1014,9 @@ func TestReplyComposerSends(t *testing.T) {
 	}
 	if len(a.detail.replyList) != len(flattenReplies(pg))+1 {
 		t.Errorf("新评论未插入列表：%d", len(a.detail.replyList))
+	}
+	// 顶层评论应接在已加载列表末尾（而不是插到置顶和第 1 楼前面）。
+	if last := a.detail.replyList[len(a.detail.replyList)-1]; last.ID != "new1" {
+		t.Errorf("新评论没有接到列表末尾：%+v", a.detail.replyList)
 	}
 }

@@ -501,7 +501,7 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 	if strings.TrimSpace(p.Content) == "" {
 		ui.Text(c, "（正文为空）").TextColor(t.TextMuted)
 	} else {
-		markdown.View(c, replaceEmoji(p.Content, emojis, true), a.md).FillWidth()
+		a.markdownView(c, replaceEmoji(p.Content, emojis, true), a.md)
 	}
 	for i, ps := range p.Postscripts {
 		ui.Divider(c)
@@ -511,7 +511,7 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 		}
 		ui.Text(c, label).FontSize(13).Bold()
 		postEmojis := mergeEmojiMaps(a.emojis, p.Emojis, ps.Emojis)
-		markdown.View(c, replaceEmoji(ps.Content, postEmojis, true), a.md).FillWidth()
+		a.markdownView(c, replaceEmoji(ps.Content, postEmojis, true), a.md)
 	}
 	if v := p.Vote; v != nil {
 		ui.Divider(c)
@@ -924,7 +924,11 @@ func (a *app) submitReply() {
 			d.replyToID = ""
 			d.replyToFloor = 0
 			d.composerIdle = true // 发送后折回一行，把空间还给评论列表
-			d.replyList = append([]replyItem{created}, d.replyList...)
+			// 按当前视图放到正确的位置：楼中楼落在父评论的子树后面，
+			// 顶层与扁平时间序接在已加载评论之后，而不是插到最顶端。
+			var at int
+			d.replyList, at = insertReply(d.replyList, created, parentID, d.flat)
+			d.list.ScrollTo(at, ui.End)
 			d.replyTotal++
 			if a.onReplyPosted != nil {
 				a.onReplyPosted(created, nil)

@@ -318,7 +318,9 @@ func (r *articleRenderer) inlines(c *ui.Context, in []parser.Inline, from, to in
 		case parser.Text:
 			r.addText(n.Text, st)
 		case parser.SoftBreak:
-			r.addText(" ", st)
+			// 源文在交给 Markdown 前已经按「一个回车换行」改写成硬换行
+			// （见 markdown_breaks.go）；这里兜底同样显示为换行。
+			r.addText("\n", st)
 		case parser.LineBreak:
 			r.addText("\n", st)
 		case parser.Code:

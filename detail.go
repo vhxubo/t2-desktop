@@ -194,7 +194,11 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 	}
 	t.Emojis = decodeEmojiURLs(o["emojis"])
 	t.Postscripts = decodePostscripts(o["postscripts"])
-	if extra := o.sub("extra"); extra != nil {
+	// 线上 API 把投票放在 d.vote（顶层）；早期文档示例写在 d.extra.vote。
+	// 两处都认，避免投票块在真实帖子上去世。
+	if vote := o.sub("vote"); vote != nil {
+		t.Vote = decodeVote(vote)
+	} else if extra := o.sub("extra"); extra != nil {
 		if vote := extra.sub("vote"); vote != nil {
 			t.Vote = decodeVote(vote)
 		}
@@ -267,7 +271,12 @@ func decodeReplies(d json.RawMessage) replyPage {
 	for _, raw := range rawArray(o["items"]) {
 		out.Items = append(out.Items, decodeReply(raw, 0))
 	}
-	for _, raw := range rawArray(o["pinned"]) {
+	// 线上 API 用 pinned_comments；pinned 是旧文档 / 示例里的名字。
+	pinned := rawArray(o["pinned_comments"])
+	if len(pinned) == 0 {
+		pinned = rawArray(o["pinned"])
+	}
+	for _, raw := range pinned {
 		r := decodeReply(raw, 0)
 		r.Pinned = true
 		out.Pinned = append(out.Pinned, r)
@@ -310,7 +319,11 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 		// 规则去掉 Markdown 标记，避免引用里冒出 ** / > 之类符号。
 		r.ParentSummary = truncate(commentExcerpt(p.str("content")), 60)
 	}
-	r.Reactions = reactionSummary(o["reactions"])
+	// 线上 API 的字段是 reactions_summary；reactions 是旧文档 / 示例里的名字。
+	r.Reactions = reactionSummary(o["reactions_summary"])
+	if r.Reactions == "" {
+		r.Reactions = reactionSummary(o["reactions"])
+	}
 	if depth < 8 { // guard against pathological nesting
 		for _, child := range rawArray(o["children"]) {
 			r.Children = append(r.Children, decodeReply(child, depth+1))
@@ -380,6 +393,35 @@ func reactionSummary(raw json.RawMessage) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// insertReply 把刚发布成功的评论放进当前列表，返回它落在的行号。顶层评论
+// 与扁平时间序都排在已经显示出来的评论之后；楼层视图里的楼中楼插到父评论
+// 的整棵子树后面，而不是跳到列表最顶端。更后面的页仍会按楼层顺序接上。
+func insertReply(list []replyItem, created replyItem, parentID string, flat bool) ([]replyItem, int) {
+	if flat || parentID == "" {
+		return append(list, created), len(list)
+	}
+	parent := -1
+	for i := range list {
+		if list[i].ID == parentID {
+			parent = i
+			break
+		}
+	}
+	if parent < 0 {
+		// 父评论不在已加载的页里：至少不要丢掉刚发的评论。
+		return append(list, created), len(list)
+	}
+	created.Depth = list[parent].Depth + 1
+	end := parent + 1
+	for end < len(list) && list[end].Depth > list[parent].Depth {
+		end++
+	}
+	list = append(list, replyItem{})
+	copy(list[end+1:], list[end:])
+	list[end] = created
+	return list, end
 }
 
 // flattenReplies shows pinned floors first, then top-level floors followed
