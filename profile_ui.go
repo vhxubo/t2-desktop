@@ -184,25 +184,18 @@ func (a *app) profileWindowView(c *ui.Context) {
 		})
 		ui.Divider(c)
 
-		// 金币整页自己也带标题与内边距，放在这里时不再套一层内边距。
-		if ps.tab == profileTabCoins {
-			ui.Column(c).Grow(1).MinHeight(0).Children(func() {
-				a.coinsBody(c)
-			})
-		} else {
-			ui.Column(c).Grow(1).MinHeight(0).Padding(12, 16).Children(func() {
-				switch ps.tab {
-				case profileTabContent:
-					a.profileContentBody(c, ps)
-				case profileTabReplies:
-					a.profileRepliesBody(c, ps)
-				case profileTabAccount:
-					a.profileAccountBody(c, ps)
-				default:
-					a.profileOverviewBody(c, ps)
-				}
-			})
-		}
+		ui.Column(c).Grow(1).MinHeight(0).Padding(12, 16).Children(func() {
+			switch ps.tab {
+			case profileTabContent:
+				a.profileContentBody(c, ps)
+			case profileTabReplies:
+				a.profileRepliesBody(c, ps)
+			case profileTabAccount:
+				a.profileAccountBody(c, ps)
+			default:
+				a.profileOverviewBody(c, ps)
+			}
+		})
 	})
 	a.ensureProfileLoaded()
 	// 缺权限时也摆出同一个全局授权弹窗：从本窗口发起的请求失败后，用户就
@@ -329,8 +322,13 @@ func (a *app) profileTxSection(c *ui.Context, ps *profileState) {
 				}
 			})
 			ui.Spacer(c).Grow(1)
-			// 「全部流水」就在同一个窗口里切到「金币」页，不用回主窗口。
-			a.smallAction(c, "全部流水", false, func() { ps.tab = profileTabCoins })
+			// 「全部流水」打开独立的金币窗口，并直接落在「历史」一页。
+			a.smallAction(c, "全部流水", false, func() {
+				if a.coins != nil {
+					a.coins.view = coinViewHistory
+				}
+				a.showCoins()
+			})
 		})
 		if !ps.txOpen {
 			return

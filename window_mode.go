@@ -161,6 +161,7 @@ func (a *app) hideMainWindowToTray() {
 	a.closeNotificationWindow()
 	a.closeSettingsWindow()
 	a.closeProfileWindow()
+	a.closeCoinWindow()
 	a.closeComposeWindow()
 	a.closeUserCardWindow()
 }

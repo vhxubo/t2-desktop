@@ -362,6 +362,9 @@ func (a *app) onBecameActive() {
 	}
 	a.refreshUnread()
 	a.reloadNotificationTab()
+	// 在站点上签到、打赏后金币会变，而这类操作不会发通知：窗口回到前台时
+	// 顺手把标题栏的金币数校准一次，定时器不在也补上。
+	a.startCoinTagWatch()
 }
 
 // markNotificationRead marks one message read: the row's 「已读」 button.

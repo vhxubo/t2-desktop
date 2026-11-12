@@ -67,8 +67,8 @@ var tabSpecs = []tabSpec{
 	// type / unread_only，由 notificationQuery 生成。它不再是侧边栏页面：
 	// 入口是标题栏铃铛打开的弹窗，保留这一项是为了复用通用加载与分页。
 	{"通知", notificationsPath, notificationsQuery(notificationFilterAll), "list", true, pagingPages, kindNotification},
-	// 金币页聚合多个只读端点，不再是侧边栏页面：它整页搬进了「我的」窗口，
-	// 入口见 profileTabCoins；加载由 coinState 统一调度，不走通用 fetch。
+	// 金币页聚合多个只读端点，不再是侧边栏页面：它是独立的金币窗口，入口
+	// 见 coins_window.go；加载由 coinState 统一调度，不走通用 fetch。
 }
 
 func tabLabels() []string {

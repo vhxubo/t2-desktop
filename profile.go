@@ -16,15 +16,16 @@ import (
 // 「我的」窗口的数据层与界面状态。窗口本身在 profile_ui.go：它是独立窗口
 // （和通知、设置一样），入口是标题栏上登录账号的头像。
 //
-// 五个标签页对应这几组只读端点：
+// 四个标签页对应这几组只读端点：
 //
 //	概览与资产  GET /v1/me/coins/balance、/v1/me/sign、/v1/me/coins/transactions
-//	金币        /v1/me/coins/*、/v1/me/sign 与 /v1/coins/ranking（见 coins.go）
 //	我的内容    GET /v1/me/topics、/v1/me/favorites、/v1/me/bookmarks、/v1/me/collections
 //	我的回复    GET /v1/users/:userName/replies
 //	权限与账号  GET /v1/users/:userName + 令牌里的 scope
 //
-// 「金币」整页原先占着主窗口侧边栏的一格，现在是这里的一页。
+// 金币页原先在这里占一个标签页，如今是独立的金币窗口（见 coins_window.go），
+// 入口是标题栏上登录账号左侧的金币数。概览里仍保留余额卡片与「全部流水」
+// 的快捷入口，点「全部流水」打开金币窗口的「历史」一页。
 //
 // 「我的内容」一页里有四个分段：帖子、收藏、书签、合集。这四类原先占着主
 // 窗口的侧边栏，现在只在这里出现。
@@ -45,16 +46,15 @@ const (
 	profileTxShown = 6
 )
 
-// 弹窗里的标签页。金币整页也在这里：它原先占着主窗口侧边栏的一格。
+// 弹窗里的标签页。金币页已经独立成金币窗口，不在这里。
 const (
 	profileTabOverview = iota
-	profileTabCoins
 	profileTabContent
 	profileTabReplies
 	profileTabAccount
 )
 
-var profileTabLabels = []string{"概览与资产", "金币", "我的内容", "我的回复", "权限与账号"}
+var profileTabLabels = []string{"概览与资产", "我的内容", "我的回复", "权限与账号"}
 
 // 「我的内容」里的四个分段。
 const (
@@ -347,9 +347,6 @@ func (a *app) ensureProfileLoaded() {
 		if ps.txOpen && !ps.txLoaded && !ps.txLoading {
 			a.loadProfileTransactions()
 		}
-	case profileTabCoins:
-		// 金币页自己调度余额、今日、流水、统计与排行各自的加载。
-		a.ensureCoinsLoaded()
 	case profileTabContent:
 		st := &ps.content[ps.contentKind]
 		if !st.loaded && !st.loading && !st.authWait {

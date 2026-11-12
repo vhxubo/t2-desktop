@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -289,13 +290,12 @@ func TestCoinCoreScopeErrorOpensAuthGate(t *testing.T) {
 	}
 }
 
-func TestCoinTabRendersBalanceTodayHistoryStatsRanking(t *testing.T) {
+func TestCoinWindowRendersBalanceTodayHistoryStatsRanking(t *testing.T) {
 	a := testApp(t)
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer", Username: "jimmy"}); err != nil {
 		t.Fatal(err)
 	}
-	// 金币整页在「我的」窗口里，不再占侧边栏。
-	a.profile.tab = profileTabCoins
+	// 金币页是独立的金币窗口，既不在「我的」窗口里，也不占侧边栏。
 	cs := a.coins
 	cs.baseLoaded, cs.baseLoading = true, false
 	cs.balance, cs.balanceOK, cs.rank, cs.rankOK = 1234, true, 3, true
@@ -321,7 +321,7 @@ func TestCoinTabRendersBalanceTodayHistoryStatsRanking(t *testing.T) {
 		{Rank: 2, Username: "jimmy", Balance: 99},
 	}
 
-	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
+	tt := ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
 	for _, want := range []string{"金币", "1,234 金币", "今日获得", "+5 金币", "今日已签到 · 连续 5 天", "签到", "今日明细"} {
 		if !tt.HasText(want) {
 			t.Fatalf("金币首页缺少 %q：%q", want, tt.Texts())
@@ -392,9 +392,8 @@ func TestCoinPageHasNoWriteActions(t *testing.T) {
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
 		t.Fatal(err)
 	}
-	a.profile.tab = profileTabCoins
 	a.coins.baseLoaded, a.coins.todayLoaded, a.coins.sign = true, true, coinSignStatus{Known: true, Signed: false}
-	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
+	tt := ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
 	for _, forbidden := range []string{"签到", "签到领金币", "开盲盒", "打赏"} {
 		// 「签到」作为状态文案可以出现，但界面上不应有签到按钮；
 		// 这里只检查会导致金币变化的动作文案。
@@ -404,5 +403,178 @@ func TestCoinPageHasNoWriteActions(t *testing.T) {
 		if tt.HasText(forbidden) {
 			t.Errorf("金币页不该出现写操作入口 %q：%q", forbidden, tt.Texts())
 		}
+	}
+	// 金币窗口自带标题栏与窗口按钮，和通知 / 设置窗口一致。
+	for _, label := range []string{"最小化", "关闭"} {
+		if _, ok := tt.Find(label); !ok {
+			t.Errorf("金币窗口缺少「%s」按钮：%q", label, tt.Texts())
+		}
+	}
+}
+
+// 千分位分隔符是标题栏金币数与金币窗口共用的写法。
+func TestCoinThousandsGroupsDigits(t *testing.T) {
+	cases := map[int]string{
+		0: "0", 7: "7", 999: "999", 1000: "1,000",
+		1234567: "1,234,567", -1234: "-1,234",
+	}
+	for n, want := range cases {
+		if got := coinThousands(n); got != want {
+			t.Errorf("coinThousands(%d) = %q，期望 %q", n, got, want)
+		}
+	}
+}
+
+// 标题栏金币数只给登录用户看：未登录时那个位置什么都不画，登录后显示
+// 💰 + 千分位余额，并且排在账号标识的左边，点一下打开金币窗口。
+func TestCoinTagShownOnlyForLoggedInUser(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	if tt.HasText("💰") || tt.HasText("金币余额") {
+		t.Fatalf("未登录时不该出现金币数：%q", tt.Texts())
+	}
+
+	if err := a.auth.storeToken(tokenData{
+		AccessToken: "tok", TokenType: "Bearer", Username: "jimmy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.onAuthChanged(nil)
+	// 无头测试不发真实请求，直接摆出一份余额。
+	a.coins.balance, a.coins.balanceOK = 1234567, true
+
+	tt = ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	if !tt.HasText("💰") || !tt.HasText("1,234,567") {
+		t.Fatalf("登录后标题栏没有金币数：%q", tt.Texts())
+	}
+	coinR, ok := tt.Find("金币余额")
+	if !ok {
+		t.Fatalf("金币数没有可访问名：%q", tt.Texts())
+	}
+	userR, ok := tt.Find("jimmy")
+	if !ok {
+		t.Fatalf("标题栏没有账号标识：%q", tt.Texts())
+	}
+	if coinR.X >= userR.X {
+		t.Errorf("金币数应在账号标识左侧：金币 x=%.0f，账号 x=%.0f", coinR.X, userR.X)
+	}
+	iconR, ok := tt.Find("💰")
+	if !ok {
+		t.Fatalf("金币数缺少 💰 图标：%q", tt.Texts())
+	}
+	amountR, ok := tt.Find("1,234,567")
+	if !ok {
+		t.Fatalf("找不到千分位余额：%q", tt.Texts())
+	}
+	if iconR.X >= amountR.X {
+		t.Errorf("💰 图标应在金额左侧：图标 x=%.0f，金额 x=%.0f", iconR.X, amountR.X)
+	}
+
+	opened := 0
+	a.onCoinsOpen = func() { opened++ }
+	if err := tt.Click("金币余额"); err != nil {
+		t.Fatalf("点击金币数失败：%v", err)
+	}
+	if opened != 1 {
+		t.Errorf("点金币数没有打开金币窗口：opened=%d", opened)
+	}
+	if a.coinWin != nil {
+		t.Error("headless 测试里不该创建金币窗口")
+	}
+}
+
+// 登录后立即读一次余额，之后按间隔刷新；退出登录时停掉，不再发请求。
+func TestCoinTagPeriodicRefresh(t *testing.T) {
+	var hits atomic.Int32
+	var balance atomic.Int64
+	balance.Store(42)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/me/coins/balance" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer tok" {
+			t.Errorf("余额请求缺少令牌：%q", got)
+		}
+		hits.Add(1)
+		_, _ = io.WriteString(w, envelopeJSON(fmt.Sprintf(`{"coins":%d}`, balance.Load())))
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	a.autoLoad = true
+	a.client.Base = srv.URL + "/api"
+	if err := a.auth.storeToken(tokenData{
+		AccessToken: "tok", TokenType: "Bearer", Username: "jimmy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	old := coinTagRefreshEvery
+	coinTagRefreshEvery = 20 * time.Millisecond
+	defer func() {
+		coinTagRefreshEvery = old
+		a.stopCoinTagWatch()
+	}()
+
+	a.startCoinTagWatch()
+	waitCoin(t, "登录后读取金币数", func() bool {
+		return a.coins.balanceOK && a.coins.balance == 42
+	})
+
+	// 服务端余额变了：不用手动刷新，定时器到点后标题栏与金币窗口共用
+	// 的数字自己跟上。
+	balance.Store(1234)
+	waitCoin(t, "定时刷新金币数", func() bool { return a.coins.balance == 1234 })
+	if hits.Load() < 2 {
+		t.Errorf("应至少请求 2 次余额，实际 %d", hits.Load())
+	}
+
+	a.stopCoinTagWatch()
+	// 让停掉前已经在路上的那一次请求落完，再确认之后不再发请求。
+	time.Sleep(60 * time.Millisecond)
+	before := hits.Load()
+	time.Sleep(80 * time.Millisecond)
+	if got := hits.Load(); got != before {
+		t.Errorf("停掉定时器后仍在刷新：%d → %d", before, got)
+	}
+}
+
+// 金币窗口缩到最小尺寸时，视图切换、签到状态与刷新都还在窗口里。
+func TestCoinWindowMinimumSize(t *testing.T) {
+	a := testApp(t)
+	if err := a.auth.storeToken(tokenData{
+		AccessToken: "tok", TokenType: "Bearer", Username: "jimmy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.coins.baseLoaded, a.coins.balance, a.coins.balanceOK = true, 1234, true
+	a.coins.sign = coinSignStatus{Known: true, Signed: true, Streak: 5}
+	a.coins.todayLoaded = true
+	tt := ui.NewTester(a.coinWindowView, coinWinMinWidth, coinWinMinHeight)
+	tt.Frame()
+	for _, label := range []string{"今日", "历史", "统计", "排行", "刷新"} {
+		r, ok := tt.Find(label)
+		if !ok {
+			t.Errorf("最小窗口下缺少 %q：%q", label, tt.Texts())
+			continue
+		}
+		if r.X < 0 || r.X+r.W > coinWinMinWidth {
+			t.Errorf("%q 超出 %d 宽的窗口：x=%.0f 宽 %.0f",
+				label, coinWinMinWidth, r.X, r.W)
+		}
+	}
+}
+
+// 未登录时点金币入口先弹全局授权窗，金币窗口本身不打开。
+func TestCoinWindowNeedsLogin(t *testing.T) {
+	a := testApp(t)
+	a.showCoinWindow()
+	if !a.authGate.open {
+		t.Error("未登录时应弹出授权弹窗")
+	}
+	if a.coinWin != nil {
+		t.Error("未登录时不该打开金币窗口")
 	}
 }

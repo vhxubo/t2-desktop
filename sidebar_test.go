@@ -62,7 +62,7 @@ func TestSidebarFooterHoldsThemesSettingsAndAccount(t *testing.T) {
 }
 
 // 收藏 / 书签 / 我的帖子 / 我的合集 / 金币 不再占侧边栏的位置：前四类都收进
-// 了「我的」窗口的「我的内容」一页，金币整页收进了「金币」一页。
+// 了「我的」窗口的「我的内容」一页，金币页是独立的金币窗口。
 func TestSidebarHasNoMyContentEntries(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1100, 760)

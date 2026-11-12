@@ -68,10 +68,11 @@ type app struct {
 	// updates 表示更新插件已安装（main 里 mygo.Use 之后置 true）。无头
 	// 测试不装插件，点「检查更新」只走测试钩子，不会碰 updater 的主循环。
 	updates bool
-	// onSettingsOpen / onUpdateCheck 是测试钩子：无窗口时用来确认按钮确实
-	// 接上了动作。生产为 nil。
+	// onSettingsOpen / onUpdateCheck / onCoinsOpen 是测试钩子：无窗口时用来
+	// 确认按钮确实接上了动作。生产为 nil。
 	onSettingsOpen func()
 	onUpdateCheck  func()
+	onCoinsOpen    func()
 
 	tab     int
 	lastTab int
@@ -111,8 +112,20 @@ type app struct {
 	authGate authGate
 
 	// coins 是金币页的聚合状态：余额、今日明细、流水、统计与排行各自独立
-	// 加载，某个高级接口未开通时只降级那一块。
+	// 加载，某个高级接口未开通时只降级那一块。标题栏的金币数也读这里的
+	// balance，两处显示始终是同一个数字。
 	coins *coinState
+	// coinWin 是金币窗口：金币页从「我的」窗口里独立出来，成为一个独立的
+	// mygo 窗口。入口是标题栏上登录账号左侧的金币数（见 coins_window.go）。
+	// coinShown 表示窗口此刻是否在屏幕上，金币数据此高亮。都只在主线程读写。
+	coinWin   *mygo.Window
+	coinShown bool
+	// coinTagTimer / coinTagGen 维护标题栏金币数的定时刷新；coinTagSeq 与
+	// coinTagLoading 让过期的余额请求结果被丢弃。都只在主线程读写。
+	coinTagTimer   *time.Timer
+	coinTagGen     uint64
+	coinTagSeq     uint64
+	coinTagLoading bool
 
 	detail       *detailState
 	detailStack  []*detailState // 正文内联跳转的返回栈
@@ -277,12 +290,13 @@ func (a *app) publish(fn func()) {
 	}
 	a.win.Update(func() {
 		fn()
-		// 主窗口、通知窗口、设置窗口、「我的」窗口与发帖窗口读的是同一份状态：
-		// 改完之后另外几个窗口也要重建，否则它们显示的仍是上一帧的未读数、
-		// 代理状态、缓存大小或账号资料。
+		// 主窗口、通知窗口、设置窗口、「我的」窗口、金币窗口与发帖窗口读的是
+		// 同一份状态：改完之后另外几个窗口也要重建，否则它们显示的仍是上一帧
+		// 的未读数、代理状态、缓存大小或账号资料。
 		a.redrawNotificationWindow()
 		a.redrawSettingsWindow()
 		a.redrawProfileWindow()
+		a.redrawCoinWindow()
 		a.redrawComposeWindow()
 		a.redrawUserCardWindow()
 	})
@@ -475,6 +489,9 @@ func (a *app) onAuthChanged(err error) {
 	if a.auth.loggedIn() {
 		a.refreshUnread()
 		a.startNotificationWatch()
+		// 标题栏的金币数在登录后立即读一次，之后按间隔刷新；读取结果同时
+		// 写回金币窗口共用的状态。
+		a.startCoinTagWatch()
 	} else {
 		a.stopNotificationWatch()
 		// 通知窗口只展示当前账号的消息：退出后立即关掉，别留一屏上一个
@@ -482,6 +499,9 @@ func (a *app) onAuthChanged(err error) {
 		a.closeNotificationWindow()
 		// 「我的」窗口展示的是当前账号的资料与资产，同样随退出关掉。
 		a.closeProfileWindow()
+		// 金币窗口与标题栏金币数也只属于当前账号：停掉定时刷新并关掉窗口。
+		a.stopCoinTagWatch()
+		a.closeCoinWindow()
 		// 发帖窗口里的草稿属于上一个账号，退出后一并关掉并丢弃。
 		a.closeComposeWindow()
 		a.compose = nil
@@ -680,6 +700,9 @@ func (a *app) titleBar(c *ui.Context) {
 			// 通知铃铛：未读数值跟在铃铛右边，点开独立窗口（不再是侧边栏页面）。
 			a.notificationBell(c)
 			if a.auth.loggedIn() {
+				// 金币数与账号标识只给登录用户看。金币数在账号左侧：💰 + 千分位
+				// 余额，点开独立的金币窗口。
+				a.coinTag(c)
 				// 头像 + 昵称整体可点，点开「我的」窗口；标题栏不写「已登录」，
 				// 也不放退出按钮：那几个字和按钮都挪到了侧边栏底部。
 				a.profileTag(c, a.auth.username())
@@ -1138,12 +1161,15 @@ func main() {
 			TitleBarStyle:     mygo.TitleBarHidden, // 隐藏原生标题栏
 			HideWindowButtons: true,                // 连系统按钮也隐藏，完全自绘最小化/最大化/关闭
 		})
-		// 主窗口关掉时把通知与设置窗口一起关掉：没有主窗口的它们都是孤岛，
-		// 而且应用的最后一个窗口关闭时进程就该退出。
+		// 主窗口关掉时把通知、设置、我的、金币等附属窗口一起关掉：没有主
+		// 窗口的它们都是孤岛，而且应用的最后一个窗口关闭时进程就该退出。
 		a.win.OnClosed(func() {
+			// 主窗口没了，标题栏的金币数也不用再刷新。
+			a.stopCoinTagWatch()
 			a.closeNotificationWindow()
 			a.closeSettingsWindow()
 			a.closeProfileWindow()
+			a.closeCoinWindow()
 			a.closeComposeWindow()
 		})
 		// 关闭按钮（自绘标题栏、Alt+F4、任务栏右键都一样）先问设置：默认
@@ -1155,6 +1181,8 @@ func main() {
 		if a.auth.loggedIn() {
 			a.refreshUnread()
 			a.startNotificationWatch()
+			// 登录过的老会话启动时就先把金币数读出来，之后定时刷新。
+			a.startCoinTagWatch()
 			// 令牌里已经缓存了用户名与头像地址；这里再校准一次，老会话
 			// 也能补上头像，并在加载完成后刷新标题栏。
 			a.ensureAvatar()

@@ -184,7 +184,7 @@ func TestProfileWindowView(t *testing.T) {
 	for _, want := range []string{
 		"我的", "吉米",
 		"用户 ID: #123456", "注册 2024-02-01",
-		"概览与资产", "金币", "我的内容", "我的回复", "权限与账号",
+		"概览与资产", "我的内容", "我的回复", "权限与账号",
 		"1,280 金币", "今日已签到 · 连续 5 天",
 		"金币明细", "展开最近记录", "全部流水",
 		"最近统计", "粉丝", "关注", "主页访问", "等级",
@@ -200,7 +200,7 @@ func TestProfileWindowView(t *testing.T) {
 			t.Errorf("「我的」窗口缺少「%s」按钮：%q", label, tt.Texts())
 		}
 	}
-	// 五个标签页都待在窗口宽度之内。
+	// 四个标签页都待在窗口宽度之内。
 	for _, label := range profileTabLabels {
 		r, ok := tt.Find(label)
 		if !ok {
@@ -213,28 +213,27 @@ func TestProfileWindowView(t *testing.T) {
 	}
 }
 
-// 「金币」页就是原来的金币整页：概览里的「全部流水」直接切到这一页，不再回
-// 主窗口侧边栏。
-func TestProfileCoinsTab(t *testing.T) {
+// 金币页已经独立成金币窗口：概览里的「全部流水」不再切换「我的」窗口里的
+// 标签页，而是打开金币窗口并直接落在「历史」一页。
+func TestProfileAllTransactionsOpensCoinWindow(t *testing.T) {
 	a := profileWindowApp(t)
-	cs := a.coins
-	cs.baseLoaded, cs.balance, cs.balanceOK = true, 1280, true
-	cs.todayLoaded = true
-	cs.sign = coinSignStatus{Known: true, Signed: true, Streak: 5}
+	opened := 0
+	a.onCoinsOpen = func() { opened++ }
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
 	if err := tt.Click("全部流水"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if a.profile.tab != profileTabCoins {
-		t.Fatalf("点「全部流水」后没有切到金币页：tab=%d", a.profile.tab)
+	if opened != 1 {
+		t.Fatalf("点「全部流水」后没有打开金币窗口：opened=%d", opened)
 	}
-	for _, want := range []string{"当前余额", "1,280 金币", "今日获得", "今日明细",
-		"今日已签到 · 连续 5 天", "今日", "历史", "统计", "排行"} {
-		if !tt.HasText(want) {
-			t.Errorf("金币页缺少 %q：%q", want, tt.Texts())
-		}
+	if a.coins.view != coinViewHistory {
+		t.Errorf("「全部流水」应落在金币窗口的历史页：view=%d", a.coins.view)
+	}
+	// 「我的」窗口本身不切换标签页，仍然停在概览。
+	if a.profile.tab != profileTabOverview {
+		t.Errorf("打开金币窗口不该切走「我的」的标签页：tab=%d", a.profile.tab)
 	}
 }
 

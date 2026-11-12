@@ -82,7 +82,7 @@ func TestTabEndpointsMatchContract(t *testing.T) {
 		t.Errorf("通知的列表字段是 list：%+v", tabSpecs[7])
 	}
 	// 收藏 / 书签 / 我的帖子 / 我的合集与金币页都不在侧边栏：前四类在「我的」
-	// 窗口的「我的内容」里，金币页整页在「我的」窗口的「金币」里。
+	// 窗口的「我的内容」里，金币页是独立的金币窗口。
 	for i, s := range tabSpecs {
 		switch s.Path {
 		case "/v1/me/favorites", "/v1/me/bookmarks", "/v1/me/topics",

@@ -11,9 +11,10 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 金币页界面：顶部是余额 / 今日获得 / 签到状态，下面按「今日、历史、统计、
-// 排行」切换。所有操作都是只读的，界面上不提供签到、开盲盒、打赏等会改变
-// 金币的按钮；需要这些操作时引导用户去站点。
+// 金币窗口的界面：标题栏下面是余额 / 今日获得 / 签到状态，再按「今日、历史、
+// 统计、排行」切换。窗口本身在 coins_window.go；这里只画窗口里的内容，且所有
+// 操作都是只读的，界面上不提供签到、开盲盒、打赏等会改变金币的按钮；需要这些
+// 操作时引导用户去站点。
 
 const (
 	coinViewToday = iota
@@ -29,28 +30,18 @@ func (a *app) coinsBody(c *ui.Context) {
 	if cs == nil {
 		return
 	}
-	t := c.Theme()
-
+	// 窗口标题栏已经写着「金币」与余额，这里不再重复一个大标题：第一行
+	// 只放视图切换、签到状态与刷新。
 	ui.Column(c).Fill().MinHeight(0).Children(func() {
-		ui.Row(c).FillWidth().Padding(10, 14, 6, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "金币").FontSize(16).Bold()
-			if cs.balanceOK {
-				ui.Text(c, coinThousands(cs.balance)+" 金币").FontSize(12).TextColor(t.TextMuted)
-			}
-			if cs.rankOK {
-				ui.Textf(c, "· 站内第 %d 名", cs.rank).FontSize(11).TextColor(t.TextMuted)
-			}
+		ui.Row(c).FillWidth().Padding(10, 14, 8, 14).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Segmented(c, &cs.view, coinViewLabels...).Label("金币视图")
 			ui.Spacer(c).Grow(1)
+			a.coinSignLine(c, cs)
 			busy := cs.baseLoading || cs.todayLoading || cs.historyLoading ||
 				cs.dailyLoading || cs.breakdownLoading || cs.rankingLoading
 			a.smallAction(c, "刷新", busy, func() { a.reloadCoins() })
 		})
 		ui.Divider(c)
-		ui.Row(c).FillWidth().Padding(8, 14, 6, 14).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Segmented(c, &cs.view, coinViewLabels...).Label("金币视图")
-			ui.Spacer(c).Grow(1)
-			a.coinSignLine(c, cs)
-		})
 		a.coinBalanceCard(c, cs)
 		a.coinCoreError(c, cs)
 		switch cs.view {
@@ -683,7 +674,7 @@ func (a *app) coinToggleChip(c *ui.Context, label string, active bool, onClick f
 
 func (a *app) ensureCoinsLoaded() {
 	cs := a.coins
-	if cs == nil || !a.auth.loggedIn() {
+	if cs == nil || !a.autoLoad || !a.auth.loggedIn() {
 		return
 	}
 	a.ensureCoinBase()
