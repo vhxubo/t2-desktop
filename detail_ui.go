@@ -690,7 +690,26 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 				floor = fmt.Sprintf("%d 楼", r.LocatedFloor)
 			}
 			if floor != "" {
-				ui.Text(c, floor).FontSize(11).TextColor(t.TextMuted)
+				// 楼层号也是评论的永久链接：点一下用系统浏览器打开站点上的
+				// 这条评论，复制分享都从那里走。
+				href := ""
+				if a.detail != nil {
+					href = replyPermalink(a.detail.topic, a.detail.fallbackURL, r)
+				}
+				if href != "" {
+					link := ui.Button(c, floor).Background(ui.Transparent).
+						Border(0, t.Border).TextColor(t.TextMuted).
+						FontSize(11).Padding(0, 0).Radius(4)
+					if link.Hovered() {
+						link.TextColor(t.Accent)
+					}
+					link.Tooltip("在浏览器打开这条评论")
+					if link.Clicked() {
+						a.openExternal(href)
+					}
+				} else {
+					ui.Text(c, floor).FontSize(11).TextColor(t.TextMuted)
+				}
 			}
 			// 评论作者统一由 userTag 渲染：头像跟着 12px 的昵称大小走，
 			// 头部行固定 18 高时头像恰好与昵称齐平。

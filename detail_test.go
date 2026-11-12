@@ -934,6 +934,44 @@ func TestParentJumpScrollsToParent(t *testing.T) {
 	}
 }
 
+// 评论永久链接按楼层/扁平视图和分页位置拼：楼层视图 /post/ 带 p，
+// 嵌套回复 /post-flat/ 按 flat_floor 算 p。
+func TestReplyPermalink(t *testing.T) {
+	topic := &topicDetail{URL: "https://2libra.com/post/work/X"}
+	cases := []struct {
+		name string
+		r    replyItem
+		want string
+	}{
+		{"第一页", replyItem{ID: "c1", Floor: 1},
+			"https://2libra.com/post/work/X?commentId=c1"},
+		{"第二页", replyItem{ID: "c2", Floor: 31},
+			"https://2libra.com/post/work/X?commentId=c2&p=2"},
+		{"嵌套回复", replyItem{ID: "c3", FlatFloor: 61, ParentID: "c1"},
+			"https://2libra.com/post-flat/work/X?commentId=c3&p=3"},
+		{"没有 id", replyItem{Floor: 1}, ""},
+	}
+	for _, c := range cases {
+		if got := replyPermalink(topic, "", c.r); got != c.want {
+			t.Errorf("%s：链接 = %q，期望 %q", c.name, got, c.want)
+		}
+	}
+}
+
+// 点楼层号在系统浏览器里打开这条评论。
+func TestFloorLabelOpensComment(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	if err := tt.Click("1 楼"); err != nil {
+		t.Fatalf("点击楼层号失败：%v（%q）", err, tt.Texts())
+	}
+	got := tt.OpenedURLs()
+	want := "https://2libra.com/post/work/a1b2c3d4?commentId=c1"
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("楼层号打开的链接 = %v，期望 [%s]", got, want)
+	}
+}
+
 // 从评论列表点进来时，目标评论常常不在第 1 页：首屏没找到要自动续拉
 // 后面的页，直到找到目标并定位，而不是只显示第 1 页就说「来自评论定位」。
 func TestCommentFocusLoadsLaterPages(t *testing.T) {
