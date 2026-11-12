@@ -255,6 +255,9 @@ func TestPandoraOpenAndRerollContract(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("开盒成功后没有发出金币变动事件")
 	}
+	if !a.pandora.entryKnown || a.pandora.entryStatus.Box.EventName != "金币雨" {
+		t.Errorf("开盒后首页入口没有拿到事件名：%+v", a.pandora.entryStatus)
+	}
 
 	// 第二次抽奖：重抽。
 	a.rerollPandoraBox()
@@ -272,6 +275,9 @@ func TestPandoraOpenAndRerollContract(t *testing.T) {
 	}
 	if name := a.pandora.status.Box.EventName; name != "头像翻转" {
 		t.Errorf("重抽后的事件 = %q，期望 头像翻转", name)
+	}
+	if !a.pandora.entryKnown || a.pandora.entryStatus.Box.EventName != "头像翻转" {
+		t.Errorf("重抽后首页入口没有换成新事件名：%+v", a.pandora.entryStatus)
 	}
 	if got := a.pandora.status.drawsUsed(); got != 2 {
 		t.Errorf("重抽后今日抽奖 %d/2，期望 2/2", got)
@@ -520,6 +526,7 @@ func TestCoinWindowPandoraRowOpensWindow(t *testing.T) {
 }
 
 func TestPandoraTitleBarEntry(t *testing.T) {
+	freezePandoraNow(t)
 	a := pandoraTestApp(t, false)
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
@@ -541,12 +548,93 @@ func TestPandoraTitleBarEntry(t *testing.T) {
 		t.Error("headless 测试里不该创建潘多拉窗口")
 	}
 
+	// 抽中事件后，标题栏直接显示事件名；悬浮说明写具体效果。
+	a.pandora = &pandoraState{
+		entryKnown: true,
+		entryStatus: pandoraStatus{
+			Known: true, FlagsKnown: true, HasBox: true, OpenedToday: true,
+			BoxKnown: true,
+			Box: pandoraBox{
+				InstanceID: "b1", EventName: "金币雨",
+				EventTitle: "小小金币雨，获得 67 金币。", Rarity: "bronze",
+				RerollUsed: 0, RerollLimit: 1, CountersKnown: true,
+				RerollDeadlineAt: "2026-11-12T15:00:00.000Z",
+				ExpireAt:         "2026-11-12T16:05:46.604Z",
+			},
+		},
+	}
+	tt = ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	if !tt.HasText("金币雨") {
+		t.Fatalf("抽中事件后首页没有直接显示事件名：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("潘多拉"); !ok {
+		t.Errorf("标题栏入口丢失了可访问名：%q", tt.Texts())
+	}
+	if name := pandoraEntryName(a.pandora); name != "金币雨" {
+		t.Errorf("入口显示名 = %q，期望事件名 金币雨", name)
+	}
+	if hint := pandoraEntryHint(a.pandora); !strings.Contains(hint, "金币雨") ||
+		!strings.Contains(hint, "小小金币雨，获得 67 金币。") {
+		t.Errorf("悬浮说明没有具体效果：%q", hint)
+	}
+
+	// 事件过期后不再顶替入口名，退回「潘多拉」。
+	a.pandora.entryStatus.Box.ExpireAt = "2026-11-12T11:00:00.000Z"
+	if name := pandoraEntryName(a.pandora); name != "潘多拉" {
+		t.Errorf("事件过期后入口显示 %q，期望 潘多拉", name)
+	}
+
 	// 未登录时不画入口。
 	b := testApp(t)
 	tt = ui.NewTester(b.view, 1080, 720)
 	tt.Frame()
 	if tt.HasText("潘多拉") {
 		t.Errorf("未登录时不该出现潘多拉入口：%q", tt.Texts())
+	}
+}
+
+// 登录 / 启动时静默读一次今日状态：首页标题栏不用先打开潘多拉窗口就能
+// 显示抽中的事件名；失败不弹授权。
+func TestPandoraEntryLoadsOnLogin(t *testing.T) {
+	freezePandoraNow(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/pandora/today" {
+			_, _ = io.WriteString(w, envelopeJSON(`{
+				"has_box":true,"can_open":false,"opened_today":true,
+				"next_open_at":"2026-11-12T16:00:00.000Z",
+				"box":{"box_instance_id":"b1","event_name":"金币雨",
+					"event_title":"小小金币雨，获得 67 金币。","rarity":"bronze",
+					"rolled_value":67,"reroll_used":0,"reroll_limit":1,
+					"reroll_deadline_at":"2026-11-12T15:00:00.000Z",
+					"expire_at":"2026-11-12T16:05:46.604Z"}}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	a := pandoraTestApp(t, true)
+	a.client.Base = srv.URL + "/api"
+	a.client.HTTP = srv.Client()
+	a.loadPandoraEntry()
+	waitPandora(t, "首页入口的今日状态", func() bool {
+		return a.pandora != nil && a.pandora.entryKnown
+	})
+	if a.pandora.loaded {
+		t.Error("静默读取不应该把潘多拉窗口标成已加载")
+	}
+	if a.authGate.open {
+		t.Error("静默读取失败 / 成功都不该弹授权")
+	}
+	a.autoLoad = false
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	if !tt.HasText("金币雨") {
+		t.Fatalf("首页没有直接显示潘多拉事件名：%q", tt.Texts())
+	}
+	if hint := pandoraEntryHint(a.pandora); !strings.Contains(hint, "小小金币雨，获得 67 金币。") {
+		t.Errorf("首页悬浮说明没有具体效果：%q", hint)
 	}
 }
 

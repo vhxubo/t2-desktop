@@ -551,6 +551,9 @@ func (a *app) onAuthChanged(err error) {
 		// 标题栏的金币数在登录后立即读一次，之后按间隔刷新；读取结果同时
 		// 写回金币窗口共用的状态。
 		a.startCoinTagWatch()
+		// 潘多拉入口也静默读一次今日状态：首页标题栏要能直接显示抽中的
+		// 事件名，不必先打开潘多拉窗口。
+		a.loadPandoraEntry()
 	} else {
 		a.stopNotificationWatch()
 		// 通知窗口只展示当前账号的消息：退出后立即关掉，别留一屏上一个
@@ -1302,6 +1305,8 @@ func main() {
 			a.startNotificationWatch()
 			// 登录过的老会话启动时就先把金币数读出来，之后定时刷新。
 			a.startCoinTagWatch()
+			// 首页标题栏的潘多拉事件名也来自这一份静默读取。
+			a.loadPandoraEntry()
 			// 令牌里已经缓存了用户名与头像地址；这里再校准一次，老会话
 			// 也能补上头像，并在加载完成后刷新标题栏。
 			a.ensureAvatar()

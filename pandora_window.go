@@ -117,11 +117,11 @@ func (a *app) redrawPandoraWindow() {
 	}
 }
 
-// pandoraReady 回答标题栏入口要不要亮出「可抽」角标。窗口状态优先；窗口
-// 还没打开过时，用金币窗口顺带读到的今日状态兜底。
+// pandoraReady 回答标题栏入口要不要亮出「可抽」角标。窗口状态优先，其次
+// 是启动时静默读到的入口状态；两者都没有时用金币窗口顺带读到的状态兜底。
 func (a *app) pandoraReady() bool {
-	if st := a.pandora; st != nil && st.loaded {
-		return st.status.readyToDraw(pandoraNow())
+	if status, ok := pandoraDisplayStatus(a.pandora); ok {
+		return status.readyToDraw(pandoraNow())
 	}
 	if cs := a.coins; cs != nil && cs.pandoraSeen {
 		return cs.pandora.CanOpen
@@ -129,9 +129,9 @@ func (a *app) pandoraReady() bool {
 	return false
 }
 
-// pandoraTag 是主窗口标题栏上的潘多拉入口：礼物盒 + 「潘多拉」文字，登录后
-// 常驻，未登录不画。它是动作而不是页面，不参与侧边栏导航；窗口开着时用
-// 强调色与浅底标出来。今天还能抽时右侧加一个「可抽」小角标。
+// pandoraTag 是主窗口标题栏上的潘多拉入口：礼物盒 + 名字，登录后常驻，
+// 未登录不画。抽中事件后名字直接换成事件名（例如「金币雨」），悬浮说明
+// 里写具体效果；今天还能抽时右侧加一个「可抽」小角标。窗口开着时高亮。
 func (a *app) pandoraTag(c *ui.Context) {
 	t := c.Theme()
 	open := a.pandoraWindowVisible()
@@ -148,7 +148,8 @@ func (a *app) pandoraTag(c *ui.Context) {
 	}
 	b.Children(func() {
 		ui.Icon(c, pandoraIcon).Size(14, 14).TextColor(ink)
-		ui.Text(c, "潘多拉").FontSize(12).Bold().SingleLine().TextColor(ink)
+		ui.Text(c, pandoraEntryName(a.pandora)).FontSize(12).Bold().
+			SingleLine().TextColor(ink)
 		if a.pandoraReady() {
 			ui.Box(c).Height(14).Padding(0, 4).Radius(999).Center().
 				Background(t.Danger).Children(func() {
@@ -157,21 +158,7 @@ func (a *app) pandoraTag(c *ui.Context) {
 			})
 		}
 	})
-	hint := "打开潘多拉盲盒"
-	if st := a.pandora; st != nil && st.loaded {
-		if summary := pandoraBoxSummary(st.status.Box); st.status.BoxKnown && summary != "" {
-			hint += "；本次结果：" + summary
-		}
-	}
-	if a.pandoraReady() {
-		hint = "潘多拉盲盒：今天还能抽一次"
-	} else if st := a.pandora; st != nil && st.loaded && st.status.OpenedToday {
-		hint = "潘多拉盲盒：今天的抽奖已完成"
-		if summary := pandoraBoxSummary(st.status.Box); st.status.BoxKnown && summary != "" {
-			hint += "；本次结果：" + summary
-		}
-	}
-	b.Label("潘多拉").Tooltip(hint).OnClick(a.showPandora)
+	b.Label("潘多拉").Tooltip(pandoraEntryHint(a.pandora)).OnClick(a.showPandora)
 }
 
 /* ------------------------------------------------------------------
