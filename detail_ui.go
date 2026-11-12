@@ -53,11 +53,11 @@ type detailState struct {
 	follow followState
 
 	// composer: write a comment (optionally as a nested reply to replyToID).
+	// 发送失败的原因不落在页面上，用主窗口的 toast 说明（见 submitReply）。
 	draft        string
 	replyToID    string
 	replyToFloor int
 	posting      bool
-	postErr      string
 	// composerField is the input's identity across builds: its committed
 	// focus decides whether the composer rests at one line or unfolds.
 	composerField ui.Handle
@@ -600,10 +600,6 @@ func (a *app) topicAuthorBlock(c *ui.Context, d *detailState) {
 			ui.Spacer(c).Grow(1)
 			a.followButton(c, d)
 		})
-		if d.follow.err != "" {
-			ui.Text(c, d.follow.err).FontSize(11).TextColor(t.Danger).
-				MaxLines(2).Padding(0, 14)
-		}
 	})
 }
 
@@ -1054,14 +1050,14 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 			}
 		})
 	})
-	if d.postErr != "" {
-		ui.Text(c, d.postErr).FontSize(11).TextColor(t.Danger).MaxLines(2)
-	}
 }
 
 // submitReply posts the draft through the Client. On success it clears the
 // box, inserts the created comment where the current view expects it and
 // scrolls to it, so the author sees it immediately in floor order.
+//
+// 发送失败（含校验不通过）只在窗口底部弹一条 toast：输入框保持原样、可以
+// 直接改，页面上不留一行红字。
 func (a *app) submitReply() {
 	d := a.detail
 	if d == nil || d.posting {
@@ -1069,15 +1065,15 @@ func (a *app) submitReply() {
 	}
 	content := strings.TrimSpace(d.draft)
 	if content == "" {
-		d.postErr = "评论内容不能为空"
+		a.toast(toastMain, "评论内容不能为空")
 		return
 	}
 	if !a.auth.loggedIn() {
-		d.postErr = "请先登录后再评论"
+		a.toast(toastMain, "请先登录后再评论")
 		return
 	}
 	if d.topic != nil && d.topic.CommentsClosed {
-		d.postErr = "该帖子已关闭评论"
+		a.toast(toastMain, "该帖子已关闭评论")
 		return
 	}
 	parentID := d.replyToID
@@ -1087,7 +1083,6 @@ func (a *app) submitReply() {
 		parentSummary = truncate(commentExcerpt(d.replyList[at].Content), 60)
 	}
 	d.posting = true
-	d.postErr = ""
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	go func() {
 		defer cancel()
@@ -1105,7 +1100,7 @@ func (a *app) submitReply() {
 						a.submitReply()
 					}
 				})
-				d.postErr = friendlyError(err)
+				a.toast(toastMain, friendlyError(err))
 				if a.onReplyPosted != nil {
 					a.onReplyPosted(replyItem{}, err)
 				}

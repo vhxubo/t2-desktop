@@ -14,12 +14,11 @@ func (a *app) reloadProxyDraft() {
 	a.proxyUser = cfg.Username
 	a.proxyPass = cfg.Password
 	a.proxyNoProxy = cfg.NoProxy
-	a.proxyMsg = ""
-	a.proxyMsgErr = false
 }
 
 // proxySettingsSection 是设置窗口里的「网络代理」一块。它原来是一个弹窗；
 // 现在和检查更新、图片缓存放在同一个设置窗口里，改完保存即生效，不关窗口。
+// 保存与重新检测的结果用窗口内 toast 报告，面板里不留提示文字。
 func (a *app) proxySettingsSection(c *ui.Context) {
 	t := c.Theme()
 	_, status := a.proxy.Snapshot()
@@ -28,11 +27,8 @@ func (a *app) proxySettingsSection(c *ui.Context) {
 		ui.Text(c, "API、通知长连接、图片与登录请求都使用这里的代理。").
 			FontSize(12).TextColor(t.TextMuted).MaxLines(2)
 
-		if ui.Segmented(c, &a.proxyMode, "跟随系统", "手动代理", "直连").
-			Label("代理模式").FillWidth().Changed() {
-			a.proxyMsg = ""
-			a.proxyMsgErr = false
-		}
+		ui.Segmented(c, &a.proxyMode, "跟随系统", "手动代理", "直连").
+			Label("代理模式").FillWidth()
 
 		switch a.proxyMode {
 		case proxyManual:
@@ -45,21 +41,11 @@ func (a *app) proxySettingsSection(c *ui.Context) {
 				FontSize(12).TextColor(t.TextMuted).MaxLines(3)
 			if ui.Button(c, "重新检测").Clicked() {
 				a.proxy.Reload()
-				a.proxyMsg = "已重新检测系统代理"
-				a.proxyMsgErr = false
+				a.toast(toastSettings, "已重新检测系统代理")
 			}
 		}
 
 		ui.Text(c, "当前生效："+status).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
-
-		if a.proxyMsg != "" {
-			msg := ui.Text(c, a.proxyMsg).FontSize(12).MaxLines(3)
-			if a.proxyMsgErr {
-				msg.TextColor(t.Danger)
-			} else {
-				msg.TextColor(t.Success)
-			}
-		}
 
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Spacer(c).Grow(1)
@@ -86,7 +72,8 @@ func (a *app) manualProxyFields(c *ui.Context) {
 }
 
 // saveProxySettings 校验、落盘并立即生效。成功后不关窗口：让用户看到
-// 「当前生效」已经变成新地址，确认后再关闭设置。
+// 「当前生效」已经变成新地址，确认后再关闭设置。地址不合法时同样不关窗口，
+// 用 toast 说明原因，草稿原样留在输入框里等用户改。
 func (a *app) saveProxySettings() {
 	cfg := proxyConfig{
 		Mode:     a.proxyMode,
@@ -96,12 +83,10 @@ func (a *app) saveProxySettings() {
 		NoProxy:  a.proxyNoProxy,
 	}
 	if err := a.proxy.Save(cfg); err != nil {
-		a.proxyMsg = err.Error()
-		a.proxyMsgErr = true
+		a.toast(toastSettings, err.Error())
 		return
 	}
-	a.proxyMsg = "已保存，新请求立即生效"
-	a.proxyMsgErr = false
+	a.toast(toastSettings, "已保存，新请求立即生效")
 	// 通知长连接按建立时的代理走；重启一次才会换到新线路。
 	if a.auth.loggedIn() {
 		a.stopNotificationWatch()

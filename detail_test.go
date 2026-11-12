@@ -1235,11 +1235,13 @@ func TestReplyComposerLoggedIn(t *testing.T) {
 		t.Error("点回复后应聚焦输入框")
 	}
 	// 空内容直接调用 submitReply 走同步校验、不发起请求（UI 上此时按钮已禁用，
-	// 点击不会触发，这里绕过按钮验证守卫逻辑本身）。
+	// 点击不会触发，这里绕过按钮验证守卫逻辑本身）。校验不通过只在窗口底部
+	// 弹一条 toast，页面上不留一行红字。
 	a.detail.draft = ""
 	a.submitReply()
-	if !strings.Contains(a.detail.postErr, "不能为空") {
-		t.Errorf("空内容应被校验拦截：%q", a.detail.postErr)
+	tt.Frame()
+	if !tt.HasText("评论内容不能为空") {
+		t.Errorf("空内容应被校验拦截并提示：%q", tt.Texts())
 	}
 }
 

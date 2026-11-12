@@ -106,6 +106,8 @@ func (a *app) settingsWindowView(c *ui.Context) {
 	a.applyTheme(c)
 	t := c.Theme()
 	c.Root().Background(t.Background)
+	// 保存代理、清理缓存的结果以 toast 显示在这个窗口里。
+	a.drainToasts(c, a.claimsToasts(toastSettings))
 	// Esc 直接关掉设置窗口，和系统偏好设置的直觉一致。
 	c.OnShortcut(0, ui.KeyEscape, a.closeSettingsWindow)
 
@@ -169,35 +171,33 @@ func (a *app) updateSettingsSection(c *ui.Context) {
 
 // cacheStatus 是设置窗口「图片缓存」一块的显示状态。统计与清理在后台跑，
 // 结果通过 publish 回到主线程；字段加锁，因为无窗口测试里 publish 可能在
-// 统计协程里直接执行。
+// 统计协程里直接执行。进行中的操作用 progress 说明；结果（成功或失败）改用
+// 窗口内 toast 报告，面板里不再留一行结论文字。
 type cacheStatus struct {
-	mu      sync.Mutex
-	gen     uint64 // 只采用最新一次统计的结果
-	stats   imageCacheStats
-	scanned bool // 是否已经统计过一次
-	busy    bool // 统计或清理正在进行
-	msg     string
-	msgErr  bool
+	mu       sync.Mutex
+	gen      uint64 // 只采用最新一次统计的结果
+	stats    imageCacheStats
+	scanned  bool // 是否已经统计过一次
+	busy     bool // 统计或清理正在进行
+	progress string
 }
 
 // cacheStatusSnapshot 是渲染时读到的一份拷贝，避免持锁绘制。
 type cacheStatusSnapshot struct {
-	Stats   imageCacheStats
-	Scanned bool
-	Busy    bool
-	Msg     string
-	MsgErr  bool
+	Stats    imageCacheStats
+	Scanned  bool
+	Busy     bool
+	Progress string
 }
 
 func (s *cacheStatus) snapshot() cacheStatusSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cacheStatusSnapshot{
-		Stats:   s.stats,
-		Scanned: s.scanned,
-		Busy:    s.busy,
-		Msg:     s.msg,
-		MsgErr:  s.msgErr,
+		Stats:    s.stats,
+		Scanned:  s.scanned,
+		Busy:     s.busy,
+		Progress: s.progress,
 	}
 }
 
@@ -207,8 +207,7 @@ func (a *app) startCacheStats() {
 	a.cacheStatus.gen++
 	gen := a.cacheStatus.gen
 	a.cacheStatus.busy = true
-	a.cacheStatus.msg = ""
-	a.cacheStatus.msgErr = false
+	a.cacheStatus.progress = ""
 	a.cacheStatus.mu.Unlock()
 
 	go func() {
@@ -226,7 +225,7 @@ func (a *app) startCacheStats() {
 }
 
 // clearImageCache 清空全部图片缓存：内存与磁盘一起清，下一次浏览时头像、
-// 表情与配图都会重新下载。清理完成后刷新大小并给出提示。
+// 表情与配图都会重新下载。清理完成后刷新大小，结果用 toast 说明。
 func (a *app) clearImageCache() {
 	a.cacheStatus.mu.Lock()
 	if a.cacheStatus.busy {
@@ -236,31 +235,33 @@ func (a *app) clearImageCache() {
 	a.cacheStatus.gen++
 	gen := a.cacheStatus.gen
 	a.cacheStatus.busy = true
-	a.cacheStatus.msg = "正在清理…"
-	a.cacheStatus.msgErr = false
+	a.cacheStatus.progress = "正在清理…"
 	a.cacheStatus.mu.Unlock()
 
 	go func() {
 		freed, err := a.images.clear()
 		a.publish(func() {
+			result := ""
 			a.cacheStatus.mu.Lock()
 			if gen == a.cacheStatus.gen {
 				a.cacheStatus.busy = false
 				a.cacheStatus.scanned = true
 				a.cacheStatus.stats = imageCacheStats{}
-				if err != nil {
-					a.cacheStatus.msg = "清理缓存失败：" + err.Error()
-					a.cacheStatus.msgErr = true
-				} else if freed.TotalFiles() == 0 {
-					a.cacheStatus.msg = "缓存已经是空的"
-					a.cacheStatus.msgErr = false
-				} else {
-					a.cacheStatus.msg = fmt.Sprintf("已清理 %s（%d 个文件）",
+				a.cacheStatus.progress = ""
+				switch {
+				case err != nil:
+					result = "清理缓存失败：" + err.Error()
+				case freed.TotalFiles() == 0:
+					result = "缓存已经是空的"
+				default:
+					result = fmt.Sprintf("已清理 %s（%d 个文件）",
 						formatBytes(freed.TotalBytes()), freed.TotalFiles())
-					a.cacheStatus.msgErr = false
 				}
 			}
 			a.cacheStatus.mu.Unlock()
+			if result != "" {
+				a.toast(toastSettings, result)
+			}
 		})
 	}()
 }
@@ -315,13 +316,12 @@ func (a *app) imageCacheSection(c *ui.Context) {
 			ui.Spacer(c).Grow(1)
 		})
 
-		if s.Msg != "" {
-			msg := ui.Text(c, s.Msg).FontSize(12).MaxLines(2)
-			if s.MsgErr {
-				msg.TextColor(t.Danger)
-			} else {
-				msg.TextColor(t.Success)
-			}
+		// 结果走 toast，这里只说明正在做什么：进度是当前状态，不是结论。
+		if s.Progress != "" {
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				ui.Spinner(c).Size(12, 12)
+				ui.Text(c, s.Progress).FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+			})
 		}
 	})
 }

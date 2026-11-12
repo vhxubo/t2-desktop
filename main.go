@@ -32,12 +32,11 @@ type tabState struct {
 	authWait bool
 	gen      uint64
 
-	// 通知（弹窗）专用：分段筛选、正在提交已读的 id、勾选批量与操作错误。
+	// 通知（弹窗）专用：分段筛选、正在提交已读的 id 与勾选批量。
 	filter     int
 	reading    map[string]bool
 	selected   map[string]bool
 	markingAll bool
-	actionErr  string
 }
 
 // app holds only data and widget state. Never store ui.Element or *Context:
@@ -51,15 +50,13 @@ type app struct {
 	srv      ui.Services
 	autoLoad bool
 
-	// 设置窗口里的代理草稿与提示。保存前只改这些字段，不影响正在使用的
-	// transport；点「保存」才写入 proxy.json 并立即切换。
+	// 设置窗口里的代理草稿。保存前只改这些字段，不影响正在使用的 transport；
+	// 点「保存」才写入 proxy.json 并立即切换。保存结果见 toasts.go 的 toast。
 	proxyMode    int
 	proxyURL     string
 	proxyUser    string
 	proxyPass    string
 	proxyNoProxy string
-	proxyMsg     string
-	proxyMsgErr  bool
 
 	// settingsWin 是设置窗口：代理、检查更新与图片缓存都收在这一个窗口里，
 	// 不再是标题栏上的两个按钮。入口在主页侧边栏底部，见 sidebarFooter
@@ -103,8 +100,9 @@ type app struct {
 	readingFor    string
 	readingLoaded bool
 	readingList   ui.ListState
-	// offlineMsg 是设置窗口里「离线缓存」一块的最近一次操作提示。
-	offlineMsg string
+	// toasts 是等着显示的窗口内提示（见 toasts.go）：操作结果先排队，等到
+	// 对应窗口下一次重建时再交给 c.Toast。只在 UI 线程读写。
+	toasts []toastNote
 	// schemeWarn 是「系统没有把回调协议关联到本应用」的说明，仅在这种情况下
 	// 非空：它决定了浏览器授权后能不能自动跳回，得让用户在登录页看见。
 	schemeWarn string
@@ -493,6 +491,8 @@ func (a *app) view(c *ui.Context) {
 	t := c.Theme()
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
+	// 操作结果以 toast 显示：主窗口、登录页与详情页都走这里。
+	a.drainToasts(c, a.mainClaimsToasts)
 
 	switch a.pageName {
 	case "login":

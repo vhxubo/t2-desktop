@@ -263,10 +263,6 @@ func (a *app) userCardActions(c *ui.Context, cs *userCardState) {
 			TextColor(t.Text).Clicked() {
 			a.openExternal(userSiteURL(cs.username))
 		}
-		if cs.follow.err != "" {
-			ui.Text(c, cs.follow.err).FontSize(11).TextColor(t.Danger).
-				MaxLines(2).Grow(1)
-		}
 	})
 }
 

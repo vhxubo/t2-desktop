@@ -210,6 +210,8 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 	// 窗口自己的那份。
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
+	// 标记已读等操作的结果以 toast 显示在这个窗口里。
+	a.drainToasts(c, a.claimsToasts(toastNotifications))
 	// Esc 收起窗口而不是退出：消息中心随时可以再打开。
 	c.OnShortcut(0, ui.KeyEscape, a.hideNotificationWindow)
 
@@ -264,9 +266,6 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 			})
 			ui.Divider(c)
 
-			if st.actionErr != "" {
-				ui.Text(c, st.actionErr).FontSize(11).TextColor(t.Danger).MaxLines(2)
-			}
 			a.notificationsList(c, st)
 		})
 	})
@@ -430,7 +429,6 @@ func (a *app) setNotificationFilter(filter int) {
 	st.noMore = false
 	st.err = ""
 	st.moreErr = ""
-	st.actionErr = ""
 	st.page = 1
 	st.list.ScrollTo(0, ui.Start)
 	a.load(idx, 1)
@@ -450,7 +448,6 @@ func (a *app) reloadNotifications() {
 	st.selected = nil
 	st.err = ""
 	st.moreErr = ""
-	st.actionErr = ""
 	st.noMore = false
 	st.list.ScrollTo(0, ui.Start)
 	a.load(idx, 1)

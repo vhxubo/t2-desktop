@@ -421,7 +421,6 @@ func (a *app) markNotificationsRead(ids []string) {
 	for _, id := range pending {
 		st.reading[id] = true
 	}
-	st.actionErr = ""
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -435,7 +434,7 @@ func (a *app) markNotificationsRead(ids []string) {
 				// 一次，已读状态照样落账。
 				batch := append([]string(nil), pending...)
 				a.handleAuthError(err, func() { a.markNotificationsRead(batch) })
-				st.actionErr = "标记已读失败：" + friendlyError(err)
+				a.toast(toastNotifications, "标记已读失败："+friendlyError(err))
 				return
 			}
 			a.applyNotificationRead(st, pending)
@@ -496,7 +495,6 @@ func (a *app) markAllNotificationsRead() {
 		return
 	}
 	st.markingAll = true
-	st.actionErr = ""
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -505,7 +503,7 @@ func (a *app) markAllNotificationsRead() {
 			st.markingAll = false
 			if err != nil {
 				a.handleAuthError(err, func() { a.markAllNotificationsRead() })
-				st.actionErr = "全部已读失败：" + friendlyError(err)
+				a.toast(toastNotifications, "全部已读失败："+friendlyError(err))
 				return
 			}
 			st.selected = nil
