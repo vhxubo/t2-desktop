@@ -44,6 +44,9 @@ func TestDecodeInteractionFields(t *testing.T) {
 	if topic.FavoritedCount != 3 {
 		t.Errorf("收藏数 = %d，期望 3", topic.FavoritedCount)
 	}
+	if !topic.FavoriteCountKnown {
+		t.Error("响应里有 favorited_count，收藏数应标记为已知")
+	}
 	if topic.NodeID != "node-1" {
 		t.Errorf("节点 uuid = %q，期望 node-1", topic.NodeID)
 	}
@@ -357,6 +360,18 @@ func TestDetailFavoriteButton(t *testing.T) {
 	if dy := favorite.Y - author.Y; dy > 20 || dy < -20 {
 		t.Errorf("收藏按钮应与作者信息在同一行：收藏 %+v / 作者 %+v", favorite, author)
 	}
+	// 详情响应里的 favorited_count 跟着收藏按钮展示；数字在「收藏」右侧、
+	// 同一行，不能变成按钮外的一行统计。
+	count, ok := tt.Find("3")
+	if !ok {
+		t.Fatalf("收藏按钮没有显示收藏数：%q", tt.Texts())
+	}
+	if count.X <= favorite.X {
+		t.Errorf("收藏数应在收藏按钮文案右侧：收藏数 %+v / 收藏 %+v", count, favorite)
+	}
+	if dy := count.Y - favorite.Y; dy > 10 || dy < -10 {
+		t.Errorf("收藏数应与收藏按钮同一行：收藏数 %+v / 收藏 %+v", count, favorite)
+	}
 	if err := tt.Click("收藏"); err != nil {
 		t.Fatalf("点击收藏失败：%v", err)
 	}
@@ -376,6 +391,26 @@ func TestDetailFavoriteButton(t *testing.T) {
 	}
 	if !tt.HasText("已收藏") {
 		t.Errorf("收藏后按钮没有显示「已收藏」：%q", tt.Texts())
+	}
+	// 乐观更新：收藏成功，收藏数从 3 变成 4；取消收藏后回到 3。
+	if _, ok := tt.Find("4"); !ok {
+		t.Errorf("收藏后收藏数没有加一：%q", tt.Texts())
+	}
+	if err := tt.Click("取消收藏"); err != nil {
+		t.Fatalf("点击取消收藏失败：%v", err)
+	}
+	if err := waitInteract(t, done); err != nil {
+		t.Fatalf("取消收藏失败：%v", err)
+	}
+	tt.Frame()
+	mu.Lock()
+	got = append([]string(nil), calls...)
+	mu.Unlock()
+	if len(got) != 2 || got[1] != "DELETE /v1/topics/AB12/favorite" {
+		t.Errorf("请求 = %v", got)
+	}
+	if _, ok := tt.Find("3"); !ok {
+		t.Errorf("取消收藏后收藏数没有减回去：%q", tt.Texts())
 	}
 }
 
@@ -515,6 +550,9 @@ func TestReactionActionTogglesEmoji(t *testing.T) {
 	a.detail = &detailState{shortID: "AB12", topic: &topic}
 	done := make(chan error, 1)
 	a.onInteractDone = func(err error) { done <- err }
+	// 表态会改变金币：成功后必须发出全局金币刷新事件。
+	events := make(chan coinEvent, 1)
+	a.onCoinsChanged = func(event coinEvent) { events <- event }
 	a.openReactionPopup(a.detail, reactionTopic)
 
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -524,6 +562,14 @@ func TestReactionActionTogglesEmoji(t *testing.T) {
 	}
 	if err := waitInteract(t, done); err != nil {
 		t.Fatalf("表态失败：%v", err)
+	}
+	select {
+	case event := <-events:
+		if event != coinEventReaction {
+			t.Errorf("表态事件 = %q，期望 %q", event, coinEventReaction)
+		}
+	default:
+		t.Error("表态成功后没有发出金币刷新事件")
 	}
 	mu.Lock()
 	got := append([]string(nil), calls...)
@@ -566,6 +612,9 @@ func TestRewardSubmitsFromDialog(t *testing.T) {
 	a.detail = &detailState{shortID: "AB12", topic: &topic}
 	done := make(chan error, 1)
 	a.onInteractDone = func(err error) { done <- err }
+	// 打赏会扣金币：成功后必须发出全局金币刷新事件。
+	events := make(chan coinEvent, 1)
+	a.onCoinsChanged = func(event coinEvent) { events <- event }
 	a.openRewardPopup(a.detail, reactionTopic)
 
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -575,6 +624,14 @@ func TestRewardSubmitsFromDialog(t *testing.T) {
 	}
 	if err := waitInteract(t, done); err != nil {
 		t.Fatalf("打赏失败：%v", err)
+	}
+	select {
+	case event := <-events:
+		if event != coinEventReward {
+			t.Errorf("打赏事件 = %q，期望 %q", event, coinEventReward)
+		}
+	default:
+		t.Error("打赏成功后没有发出金币刷新事件")
 	}
 	body := <-got
 	if body["type"] != "post" || body["post_id"] != "AB12" {

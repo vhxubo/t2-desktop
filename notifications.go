@@ -277,6 +277,7 @@ type notificationView struct {
 	Tone         string
 	ActorName    string
 	ActorAvatar  string
+	ActorBadges  []badgeInfo
 	ActorIsAlias bool
 	Action       string
 	TargetTitle  string
@@ -378,6 +379,9 @@ func notificationViewOf(n *notification) notificationView {
 		v.ActorAvatar = payload.str("alias_avatar_url")
 	case kind != "reaction":
 		v.ActorAvatar = authorAvatar(n.FromUser)
+		// 徽章只能用消息里已经带的 equipped_badges；没有就不显示，
+		// 不为补徽章单独请求用户资料。
+		v.ActorBadges = decodeBadges(n.FromUser)
 	}
 
 	v.Action = notificationAction(kind, payload)
@@ -618,6 +622,7 @@ func notificationTargetURL(n *notification, p object, actor string) string {
 type notificationReactionUser struct {
 	Name   string
 	Avatar string
+	Badges []badgeInfo
 }
 
 // notificationReactionGroup 是一种表情的聚合：数量与点名（最多 3 个）的用户。
@@ -655,6 +660,7 @@ func notificationReactionGroups(p object) []notificationReactionGroup {
 			users[emoji] = append(users[emoji], notificationReactionUser{
 				Name:   u,
 				Avatar: authorAvatar(r),
+				Badges: decodeBadges(r),
 			})
 		}
 	}

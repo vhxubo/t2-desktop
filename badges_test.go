@@ -137,3 +137,124 @@ func TestAuthorBadgeIconsRender(t *testing.T) {
 		t.Error("徽章图标没有画到界面上")
 	}
 }
+
+// 同一个 equipped_badges 解码器要覆盖所有已经带徽章的用户对象：最新评论、
+// 通知操作者 / 表态人、金币排行与流水、搜索用户、列表行作者。全部只读响应
+// 里的字段，不额外请求。
+func TestDecodeBadgesFromEveryUserObject(t *testing.T) {
+	const yearStreak = `{"badge":{"name":"全勤","icon_url":"https://r2.2libra.com/badge/svg/year_streak.svg"}}`
+	comment := mustObject(t, `{
+		"id":"c1","content":"评论",
+		"author":{"username":"jimmy","equipped_badges":[`+yearStreak+`]},
+		"parent":{"id":"p1","content":"父评论","author":{"username":"alice","equipped_badges":[{`+
+		`"badge":{"name":"混沌","icon_url":"https://r2.2libra.com/badge/svg/chaos.svg"}}]}}
+	}`)
+	ci := decodeCommentItem(comment)
+	if len(ci.Badges) != 1 || ci.Badges[0].Name != "全勤" {
+		t.Errorf("最新评论作者徽章错误：%+v", ci.Badges)
+	}
+	if len(ci.ParentBadges) != 1 || ci.ParentBadges[0].Name != "混沌" {
+		t.Errorf("父评论作者徽章错误：%+v", ci.ParentBadges)
+	}
+	row := commentItemFrom(comment)
+	if row.Extra == nil || len(row.Extra.AuthorBadges) != 1 ||
+		len(row.Extra.ReplyToBadges) != 1 {
+		t.Errorf("评论行没有带上作者与父评论徽章：%+v", row.Extra)
+	}
+
+	n := decodeNotification([]byte(`{"id":"n1","type":"reply","from_user":{` +
+		`"username":"jimmy","equipped_badges":[` + yearStreak + `]},"payload":{}}`))
+	if n == nil {
+		t.Fatal("通知没有解析出来")
+	}
+	if v := notificationViewOf(n); len(v.ActorBadges) != 1 || v.ActorBadges[0].Name != "全勤" {
+		t.Errorf("通知操作者徽章错误：%+v", v.ActorBadges)
+	}
+
+	groups := notificationReactionGroups(mustObject(t, `{"relations":[{`+
+		`"emoji":"👍","username":"jimmy","equipped_badges":[`+yearStreak+`]}]}`))
+	if len(groups) != 1 || len(groups[0].Users) != 1 ||
+		len(groups[0].Users[0].Badges) != 1 {
+		t.Errorf("表态用户徽章错误：%+v", groups)
+	}
+
+	ranks := decodeCoinRanking([]byte(`[{"username":"jimmy","balance":10,"equipped_badges":[` + yearStreak + `]}]`))
+	if len(ranks) != 1 || len(ranks[0].Badges) != 1 || ranks[0].Badges[0].Name != "全勤" {
+		t.Errorf("金币排行徽章错误：%+v", ranks)
+	}
+
+	tx := decodeCoinTransaction([]byte(`{"id":"t","reason":"reward","from_user":{` +
+		`"username":"jimmy","equipped_badges":[` + yearStreak + `]}}`))
+	if len(tx.FromBadges) != 1 || tx.FromBadges[0].Name != "全勤" {
+		t.Errorf("金币流水来源用户徽章错误：%+v", tx.FromBadges)
+	}
+
+	users := decodeSearch(searchUsers, []byte(`[{"username":"jimmy","equipped_badges":[`+yearStreak+`]}]`), 1)
+	if len(users.hits) != 1 || len(users.hits[0].badges) != 1 {
+		t.Errorf("搜索用户徽章错误：%+v", users.hits)
+	}
+
+	item := itemFrom([]byte(`{"short_id":"S1","title":"标题","author":{`+
+		`"username":"jimmy","equipped_badges":[`+yearStreak+`]}}`), kindTopic)
+	if len(item.AuthorBadges) != 1 || item.AuthorBadges[0].Name != "全勤" {
+		t.Errorf("列表行作者徽章错误：%+v", item.AuthorBadges)
+	}
+}
+
+// 通用用户标识自己负责画徽章：数据里有才画，没有就保持原来的「头像 + 昵称」。
+func TestUserTagRendersOnlyProvidedBadges(t *testing.T) {
+	a := testApp(t)
+	icon := "https://r2.2libra.com/badge/svg/year_streak.svg"
+	// 真实徽章源图是 512×512 的位图；这里用同尺寸，防止图片按固有宽度
+	// 把整行撑开（曾经出现过徽章占 328px 宽的问题）。
+	a.images.put(icon, solidBitmap(512, 512, marker))
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Gap(10).Padding(10).Children(func() {
+			a.userTag(c, userTagSpec{
+				Name: "jimmy", Size: 12, Bold: true,
+				Badges: []badgeInfo{{Name: "全勤", IconURL: icon}},
+			})
+			a.userTag(c, userTagSpec{Name: "dannyng", Size: 12, Bold: true})
+		})
+	}, 400, 160)
+	tt.Frame()
+	if !tt.HasText("全勤") {
+		t.Errorf("userTag 没有画出已拿到的徽章：%q", tt.Texts())
+	}
+	if !tt.HasText("jimmy") || !tt.HasText("dannyng") {
+		t.Errorf("徽章影响了昵称渲染：%q", tt.Texts())
+	}
+	badge, ok := tt.Find("全勤")
+	if !ok {
+		t.Fatalf("找不到徽章图片：%q", tt.Texts())
+	}
+	if badge.W > 16 || badge.H > 16 {
+		t.Errorf("徽章占位 %.1f×%.1f，应紧贴昵称并限制在 15×15 左右", badge.W, badge.H)
+	}
+	// 只有 jimmy 带徽章；dannyng 没有数据，不应凭空多出图标。
+	if n := countMarker(tt.Image()); n == 0 {
+		t.Error("userTag 的徽章图标没有画出来")
+	}
+}
+
+// 最新评论列表行也走统一的徽章渲染：解码到 author.equipped_badges 后，
+// 列表里应当出现徽章名称。
+func TestLatestCommentRowShowsAuthorBadges(t *testing.T) {
+	a := testApp(t)
+	const icon = "https://r2.2libra.com/badge/svg/go_scout_ahead.svg"
+	a.images.put(icon, solidBitmap(22, 15, marker))
+	it := itemFrom([]byte(`{"id":"c1","content":"评论","author":{`+
+		`"username":"2Libre","equipped_badges":[{"badge":{"name":"前排打手",`+
+		`"icon_url":"`+icon+`"}}]},"post":{"short_id":"S1","title":"帖子"}}`), kindComment)
+	a.tab = 4
+	a.tabs[4].loaded = true
+	a.tabs[4].items = []Item{it}
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if !tt.HasText("前排打手") {
+		t.Errorf("最新评论行没有显示作者徽章：%q", tt.Texts())
+	}
+	if !tt.HasText("@2Libre") {
+		t.Errorf("最新评论行的作者没有渲染：%q", tt.Texts())
+	}
+}

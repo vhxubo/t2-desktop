@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -301,6 +303,43 @@ func (a *app) prefetchImage(raw string, cat imageCategory) {
 	go a.loadImageEntry(raw, cat)
 }
 
+// embeddedRasterPattern 找 SVG 里内嵌的位图（2Libra 的小徽章图标就是这种
+// 形式：一个 22×22 的 SVG，内容只是一张 512×512 PNG 的 base64）。
+var embeddedRasterPattern = regexp.MustCompile(`data:image/(?:png|jpe?g|gif|webp);base64,([A-Za-z0-9+/=\s]+)`)
+
+// decodeImageData 解码一张图片。MyGo 的 SVG 渲染器不支持 pattern / 内嵌图片，
+// 而站内徽章小图正是「SVG 包一张位图」：直接交给 ui.DecodeImage 会得到一张
+// 尺寸正确但什么都没有的 SVG。这里先把内嵌位图抽出来解码，抽不到再按普通
+// SVG / 位图处理（天气图标就是普通矢量 SVG）。
+func decodeImageData(raw string, data []byte) (ui.ImageSource, error) {
+	if strings.Contains(raw, "/badge/svg/") || strings.Contains(raw, "/weather/svg/") {
+		if src := embeddedRasterImage(data); src != nil {
+			return src, nil
+		}
+	}
+	return ui.DecodeImage(data)
+}
+
+// embeddedRasterImage 解码 SVG 里第一张内嵌位图。没有内嵌位图或 base64 坏了
+// 时返回 nil，让调用方回退到 ui.DecodeImage。
+func embeddedRasterImage(data []byte) ui.ImageSource {
+	m := embeddedRasterPattern.FindSubmatch(data)
+	if len(m) < 2 {
+		return nil
+	}
+	// base64 可能被 SVG 里的换行拆开：去掉所有空白再解。
+	encoded := strings.Join(strings.Fields(string(m[1])), "")
+	raster, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil
+	}
+	src, err := ui.DecodeImage(raster)
+	if err != nil {
+		return nil
+	}
+	return src
+}
+
 // loadImageEntry 先看磁盘缓存，没有再下载，解好后通知 UI 重绘。
 func (a *app) loadImageEntry(raw string, cat imageCategory) {
 	e := a.images.get(raw)
@@ -309,7 +348,7 @@ func (a *app) loadImageEntry(raw string, cat imageCategory) {
 	}
 	gen := a.images.generation()
 	if data, ok := a.images.readDisk(raw, cat); ok {
-		if src, err := ui.DecodeImage(data); err == nil {
+		if src, err := decodeImageData(raw, data); err == nil {
 			e.set(src)
 			a.publish(func() {})
 			return
@@ -322,7 +361,7 @@ func (a *app) loadImageEntry(raw string, cat imageCategory) {
 		log.Printf("图片加载失败：%v", err)
 		return
 	}
-	src, err := ui.DecodeImage(data)
+	src, err := decodeImageData(raw, data)
 	if err != nil {
 		e.set(nil)
 		log.Printf("图片加载失败：%v", err)
@@ -352,7 +391,7 @@ func (a *app) loadImageNow(raw string, cat imageCategory) (ui.ImageSource, error
 			return nil, err
 		}
 	}
-	src, err := ui.DecodeImage(data)
+	src, err := decodeImageData(raw, data)
 	if err != nil {
 		if cached {
 			a.images.forgetDisk(raw, cat)

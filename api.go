@@ -112,6 +112,7 @@ type Item struct {
 	// 画头像。Subtitle 仍是完整文本，供测试与无障碍读取，不参与渲染。
 	Author         string
 	AuthorAvatar   string
+	AuthorBadges   []badgeInfo
 	SubtitlePrefix string
 	SubtitleSuffix string
 	// Extra 是最新评论 / 动态行的富展示字段；普通榜单行为 nil。
@@ -696,11 +697,13 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 	}
 	username := "匿名"
 	avatarURL := ""
+	var authorBadges []badgeInfo
 	if author != nil {
 		if name := author.str("username", "name", "nickname"); name != "" {
 			username = name
 		}
 		avatarURL = authorAvatar(author)
+		authorBadges = decodeBadges(author)
 	}
 	nodeName := ""
 	nodeSlug := ""
@@ -758,6 +761,7 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 			// 合集行本来就不展示匿名作者：只有真有昵称时才拆出作者段。
 			it.Author = username
 			it.AuthorAvatar = avatarURL
+			it.AuthorBadges = authorBadges
 			it.SubtitlePrefix = "合集 · "
 			if when != "" {
 				it.SubtitleSuffix = " · " + when
@@ -791,6 +795,7 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 		parts = append(parts, username)
 		it.Author = username
 		it.AuthorAvatar = avatarURL
+		it.AuthorBadges = authorBadges
 		if when != "" {
 			parts = append(parts, when)
 			it.SubtitleSuffix = " · " + when
@@ -815,7 +820,7 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 		it.URL = topicURL(shortID, nodeSlug)
 		// 动态流会带正文、表情表态与打赏；普通榜单没有这些字段，
 		// topicExtra 返回 nil，行还是原来的紧凑样式。
-		it.Extra = topicExtra(o, username, avatarURL, nodeName, when)
+		it.Extra = topicExtra(o, username, avatarURL, authorBadges, nodeName, when)
 	}
 	return it
 }

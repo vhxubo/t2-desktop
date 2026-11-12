@@ -240,6 +240,9 @@ func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 				if u.IsPro {
 					ui.Text(c, "PRO").FontSize(10).TextColor(t.Accent)
 				}
+				// 本人资料头也展示佩戴中的徽章；数据来自已经拉到的
+				// GET /v1/users/:name，不再为徽章单独请求。
+				a.authorBadges(c, u.Badges)
 			})
 			line := profileIdentityLine(u)
 			if ps.infoErr != "" {

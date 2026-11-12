@@ -514,6 +514,7 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 						Size:     13,
 						Bold:     true,
 						MaxLines: 2,
+						Badges:   v.ActorBadges,
 					})
 				} else {
 					ui.Text(c, v.Action).FontSize(13).Bold().MaxLines(2)
@@ -565,6 +566,7 @@ func (a *app) notificationReactionLine(c *ui.Context, groups []notificationReact
 					Label:  "@" + u.Name,
 					Size:   11,
 					Color:  t.TextMuted,
+					Badges: u.Badges,
 				})
 			}
 			ui.Text(c, "）").FontSize(11).TextColor(t.TextMuted)

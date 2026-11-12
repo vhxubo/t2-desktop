@@ -6,12 +6,16 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// authorBadges 在昵称后画佩戴中的社区徽章图标。徽章小图由服务端给出，
-// 固有尺寸 22×15，用在用户名旁的 ≤32px 槽位；佩戴「忽冷忽热」时服务端
+// authorBadges 在通用的用户标识里画佩戴中的社区徽章图标。徽章小图由服务端
+// 给出，固有尺寸约 22×22，用在用户名旁的 ≤32px 槽位；佩戴「忽冷忽热」时服务端
 // 还会带天气，网页用天气图标 + 温度代替徽章图标，这里保持一致。
 //
-// 图片和表情一样是站点固定给出的小图，走全局图片缓存的长效那一类，加载
-// 完成后 publish 重绘。最多展示两个，避免评论区头部被撑宽。
+// 数据只来自已经收到的用户对象（author.equipped_badges 等）：没有就什么都不
+// 画，绝不为了补徽章单独请求用户资料或徽章墙。图片和表情一样是站点固定给出
+// 的小图，走全局图片缓存的长效那一类；2Libra 的徽章小图是「SVG 包一张位图」，
+// 图片缓存会先把内嵌位图抽出来再解码，加载完成后 publish 重绘。高度固定 15，
+// 宽度按原图比例，正方形徽章不会被拉成 22×15。最多展示两个，避免评论区头部
+// 被撑宽。
 func (a *app) authorBadges(c *ui.Context, badges []badgeInfo) {
 	if len(badges) == 0 {
 		return
@@ -34,7 +38,7 @@ func (a *app) authorBadges(c *ui.Context, badges []badgeInfo) {
 		if src == nil {
 			continue
 		}
-		img := ui.Image(c, src).Height(15).AspectRatio(22.0 / 15.0)
+		img := ui.Image(c, src).Size(15, 15).Fit(ui.Contain)
 		if b.Name != "" {
 			img.Label(b.Name).Tooltip(b.Name)
 		}

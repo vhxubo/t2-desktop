@@ -686,12 +686,14 @@ func (a *app) topicAuthorLine(c *ui.Context, d *detailState) {
 		// 作者身份在左侧自己的区域里换行，窄窗口也不会把收藏挤出这一行。
 		ui.Row(c).Grow(1).MinWidth(0).Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
 			if strings.TrimSpace(p.Author) != "" {
-				a.userTag(c, userTagSpec{Name: p.Author, Avatar: p.Avatar, Size: 13, Bold: true})
+				a.userTag(c, userTagSpec{
+					Name: p.Author, Avatar: p.Avatar, Size: 13, Bold: true,
+					Badges: p.Badges,
+				})
 			}
 			if p.AuthorLevel > 0 {
 				ui.Textf(c, "Lv.%d", p.AuthorLevel).FontSize(10).TextColor(t.TextMuted)
 			}
-			a.authorBadges(c, p.Badges)
 		})
 		// 收藏是帖子级的动作，贴在这条元信息行的最右侧。
 		a.favoriteButton(c, d)
@@ -904,8 +906,8 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 				Avatar: r.Avatar,
 				Size:   12,
 				Bold:   true,
+				Badges: r.Badges,
 			})
-			a.authorBadges(c, r.Badges)
 			if r.CreatedAt != "" {
 				ui.Text(c, relativeTime(r.CreatedAt)).FontSize(11).TextColor(t.TextMuted)
 			}
@@ -1068,7 +1070,10 @@ func replyParentLabel(r replyItem) string {
 // 点一下滚到父评论并把高亮移到它身上，方便顺着对话往上读。
 func (a *app) parentJump(c *ui.Context, label, parentID string, at int) {
 	t := c.Theme()
-	b := ui.ButtonBase(c).Padding(0, 0).Background(ui.Transparent)
+	// ButtonBase 默认把子元素居中；这条引用是正文的一部分，必须和下面的
+	// 评论正文左对齐。光靠 Column 的拉伸只会让按钮变宽，里面的文字仍然
+	// 居中，所以显式从行首开始排。
+	b := ui.ButtonBase(c).Padding(0, 0).Background(ui.Transparent).Justify(ui.Start)
 	color := t.TextMuted
 	if b.Hovered() {
 		color = t.Accent
@@ -1325,6 +1330,8 @@ func (a *app) submitReply() {
 			d.list.ScrollTo(at, ui.End)
 			d.replyTotal++
 			a.prefetchAvatars(created.Avatar)
+			// 评论会扣金币：发出全局金币刷新事件，标题栏与金币窗口一起更新。
+			a.coinsChanged(coinEventReply)
 			if a.onReplyPosted != nil {
 				a.onReplyPosted(created, nil)
 			}

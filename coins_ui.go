@@ -13,8 +13,9 @@ import (
 
 // 金币窗口的界面：标题栏下面是余额 / 今日获得 / 签到状态，再按「今日、历史、
 // 统计、排行」切换。窗口本身在 coins_window.go；这里只画窗口里的内容。
-// 唯一会改变金币的操作是签到（POST /v1/me/sign）：余额卡片里有一颗签到
-// 按钮，结果以 toast 报告；开盲盒、打赏等其它写操作仍然引导用户去站点。
+// 金币窗口里的写操作只有签到（POST /v1/me/sign）：余额卡片里有一颗签到
+// 按钮，结果以 toast 报告。发帖、回复、表态与打赏在各自的页面里，成功后发出
+// 金币变动事件（见 coin_events.go），本页已经加载过的块会一起刷新。
 
 const (
 	coinViewToday = iota
@@ -214,7 +215,10 @@ func (a *app) signInNow() {
 				text += fmt.Sprintf(" · 连续 %d 天", next.Streak)
 			}
 			a.toast(toastCoins, text)
-			// 余额、排名与今日明细都跟着签到变了：重新读一遍，不自行加减金币。
+			// 余额、排名与今日明细都跟着签到变了：先发全局金币刷新事件，
+			// 把已经打开过的流水、统计与排行一起重拉，再补拉 base 与今日
+			// 明细——它们不必先加载过，签到本身已经证明这两块变了。
+			a.coinsChanged(coinEventSign)
 			a.reloadCoinBase()
 			a.reloadCoinToday()
 		})
@@ -510,6 +514,7 @@ func (a *app) coinRankRow(c *ui.Context, e coinRankEntry) {
 			Avatar: e.AvatarURL,
 			Size:   13,
 			Bold:   true,
+			Badges: e.Badges,
 		})
 		if e.IsPro {
 			ui.Text(c, "PRO").FontSize(9).TextColor(t.Accent)
@@ -583,6 +588,7 @@ func (a *app) coinTransactionRow(c *ui.Context, tx coinTransaction, today bool) 
 								Label:  "@" + user,
 								Size:   12,
 								Color:  t.TextMuted,
+								Badges: tx.FromBadges,
 							})
 							if after != "" {
 								ui.Text(c, after).FontSize(12).TextColor(t.TextMuted)

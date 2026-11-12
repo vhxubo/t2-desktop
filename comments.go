@@ -26,8 +26,10 @@ const siteCommentPageSize = 30
 type rowExtra struct {
 	Author        string
 	AuthorAvatar  string // 作者头像地址；统一用户标识据此在昵称旁画头像
+	AuthorBadges  []badgeInfo
 	ReplyTo       string
 	ReplyToAvatar string // 被回复人的头像地址（通常同父评论作者）
+	ReplyToBadges []badgeInfo
 	Excerpt       string
 	Quote         string
 	NodeLabel     string
@@ -48,6 +50,7 @@ type commentItem struct {
 	Excerpt       string
 	Author        string
 	Avatar        string
+	Badges        []badgeInfo
 	CreatedAt     string
 	Floor         int
 	FlatFloor     int
@@ -56,6 +59,7 @@ type commentItem struct {
 	ParentID      string
 	ParentAuthor  string
 	ParentAvatar  string
+	ParentBadges  []badgeInfo
 	ParentContent string
 	ParentExcerpt string
 	ParentDeleted bool
@@ -177,11 +181,13 @@ func decodeCommentItem(o object) commentItem {
 	if a := src.sub("author", "user"); a != nil {
 		c.Author = authorName(a)
 		c.Avatar = authorAvatar(a)
+		c.Badges = decodeBadges(a)
 	}
 	if c.Author == "" {
 		if a := o.sub("author", "user"); a != nil {
 			c.Author = authorName(a)
 			c.Avatar = authorAvatar(a)
+			c.Badges = decodeBadges(a)
 		}
 	}
 	if c.Author == "" {
@@ -214,8 +220,11 @@ func decodeCommentItem(o object) commentItem {
 	}
 	if parent != nil {
 		c.ParentID = parent.str("id")
-		c.ParentAuthor = authorName(parent.sub("author"))
-		c.ParentAvatar = authorAvatar(parent.sub("author"))
+		if a := parent.sub("author"); a != nil {
+			c.ParentAuthor = authorName(a)
+			c.ParentAvatar = authorAvatar(a)
+			c.ParentBadges = decodeBadges(a)
+		}
 		c.ParentContent = parent.str("content")
 		c.ParentDeleted = parent.flag("is_deleted")
 	}
@@ -350,17 +359,22 @@ func commentItemFrom(o object) Item {
 	meta = append(meta, c.nodeLabel())
 	it.Meta = strings.Join(meta, " · ")
 
-	// 被回复人通常就是父评论作者；只有两者对得上时才借它的头像，否则
-	// 统一用户标识会退回昵称首字母，不张冠李戴。
+	// 被回复人通常就是父评论作者；只有两者对得上时才借它的头像与徽章，
+	// 否则统一用户标识会退回昵称首字母，不张冠李戴。徽章同样只从已经
+	// 拿到的父评论对象里取，不单独请求。
 	replyAvatar := ""
+	replyBadges := []badgeInfo(nil)
 	if c.ReplyTo != "" && c.ReplyTo == c.ParentAuthor {
 		replyAvatar = c.ParentAvatar
+		replyBadges = c.ParentBadges
 	}
 	it.Extra = &rowExtra{
 		Author:        c.Author,
 		AuthorAvatar:  c.Avatar,
+		AuthorBadges:  c.Badges,
 		ReplyTo:       c.ReplyTo,
 		ReplyToAvatar: replyAvatar,
+		ReplyToBadges: replyBadges,
 		Excerpt:       title,
 		Quote:         c.quote(),
 		NodeLabel:     c.nodeLabel(),
@@ -434,7 +448,7 @@ func rewardsTotal(o object) int {
 
 // topicExtra 给动态流里的帖子补上正文摘要与互动数据；普通榜单没有 content，
 // 因此不会多出这一层展示。
-func topicExtra(o object, author, avatar, nodeName, when string) *rowExtra {
+func topicExtra(o object, author, avatar string, badges []badgeInfo, nodeName, when string) *rowExtra {
 	content := commentContent(o)
 	reactions := reactionTextFrom(o)
 	rewards := rewardsTotal(o)
@@ -444,6 +458,7 @@ func topicExtra(o object, author, avatar, nodeName, when string) *rowExtra {
 	return &rowExtra{
 		Author:       author,
 		AuthorAvatar: avatar,
+		AuthorBadges: badges,
 		Excerpt:      truncate(commentExcerpt(content), 240),
 		NodeLabel:    nodeName,
 		When:         when,

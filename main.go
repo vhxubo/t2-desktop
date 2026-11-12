@@ -127,11 +127,17 @@ type app struct {
 	coinWin   *mygo.Window
 	coinShown bool
 	// coinTagTimer / coinTagGen 维护标题栏金币数的定时刷新；coinTagSeq 与
-	// coinTagLoading 让过期的余额请求结果被丢弃。都只在主线程读写。
+	// coinTagLoading 让过期的余额请求结果被丢弃，coinTagPending 记下刷新期间
+	// 又收到的金币变动事件，等这次请求回来再补一次。都只在主线程读写。
 	coinTagTimer   *time.Timer
 	coinTagGen     uint64
 	coinTagSeq     uint64
 	coinTagLoading bool
+	coinTagPending bool
+	// coinRefreshTimer / coinRefreshGen 是金币变动全局事件（见 coin_events.go）
+	// 的合并刷新：短期内多次事件只发一轮请求。都只在主线程读写。
+	coinRefreshTimer *time.Timer
+	coinRefreshGen   uint64
 
 	detail       *detailState
 	detailStack  []*detailState // 正文内联跳转的返回栈
@@ -237,6 +243,9 @@ type app struct {
 	onSearchDone func(query string, err error)
 	// onInteractDone 是收藏 / 表态完成（成功或失败）后的测试钩子，原因同上。
 	onInteractDone func(err error)
+	// onCoinsChanged 是金币变动全局事件的测试钩子：headless 测试没有窗口，
+	// 靠它确认各写操作确实发出了刷新事件。生产为 nil。
+	onCoinsChanged func(event coinEvent)
 	// onNodesLoaded 是节点表刷新完成（成功或失败）后的测试钩子，原因同上。
 	onNodesLoaded func(err error)
 }
@@ -957,6 +966,7 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 						Avatar: it.AuthorAvatar,
 						Size:   11,
 						Color:  t.TextMuted,
+						Badges: it.AuthorBadges,
 					})
 					if it.SubtitleSuffix != "" {
 						ui.Text(c, it.SubtitleSuffix).FontSize(11).

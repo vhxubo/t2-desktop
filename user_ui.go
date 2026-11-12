@@ -39,9 +39,10 @@ func userAvatarSize(fontSize float32) float32 {
 	return size
 }
 
-// userTagSpec 描述一处「头像 + 昵称」。Name 是昵称，也是头像占位与无障碍
-// 名称的来源；Label 是可选的显示文本（例如「@jimmy」），空时直接显示昵称。
-// Size 是昵称字号，头像尺寸由它换算。
+// userTagSpec 描述一处「头像 + 昵称 + 佩戴徽章」。Name 是昵称，也是头像占位
+// 与无障碍名称的来源；Label 是可选的显示文本（例如「@jimmy」），空时直接
+// 显示昵称。Size 是昵称字号，头像尺寸由它换算。Badges 只能来自已经拿到的
+// 用户对象（author.equipped_badges）；没有就是空，不为了补徽章单独请求。
 type userTagSpec struct {
 	Name     string
 	Avatar   string
@@ -50,14 +51,15 @@ type userTagSpec struct {
 	Bold     bool
 	Color    ui.Color
 	MaxLines int
+	Badges   []badgeInfo
 	// Click 覆盖点击行为。默认点开这个用户的资料卡（见 user_card.go）；
 	// 标题栏的账号区传自己的动作，点它打开「我的」而不是资料卡。
 	Click func()
 }
 
-// userTag 画一个带头像的用户标识。Color 为零值（透明）时沿用主题正文色；
-// MaxLines 为 0 / 1 时单行显示，更大时按指定行数折行（通知标题这类较长的
-// 句子仍能换行）。
+// userTag 画一个带头像与佩戴徽章的用户标识。Color 为零值（透明）时沿用主题
+// 正文色；MaxLines 为 0 / 1 时单行显示，更大时按指定行数折行（通知标题这类
+// 较长的句子仍能换行）。徽章只画 u.Badges 里已有的，绝不在这里补请求。
 //
 // 整块可点：OnClick 会把这一行标成可点击元素，它是最内层的可交互元素，所以
 // 点昵称打开资料卡时不会连带触发外面那一行（列表行、通知卡片）的点击。
@@ -77,24 +79,34 @@ func (a *app) userTag(c *ui.Context, u userTagSpec) ui.Element {
 	if gap < 4 {
 		gap = 4
 	}
-	row := ui.Row(c).Gap(gap).AlignItems(ui.Center).Cursor(ui.CursorPointer)
+	// 头像与昵称之间保留原来的呼吸感；徽章单独成组，紧贴昵称（2px），
+	// 不给徽章左右留大块空白。
+	row := ui.Row(c).Gap(2).AlignItems(ui.Center).Cursor(ui.CursorPointer)
 	row.Children(func() {
-		avatarView(c, u.Name, a.avatarBitmap(u.Avatar), avatar)
-		label := u.Label
-		if label == "" {
-			label = u.Name
-		}
-		text := ui.Text(c, label).FontSize(size)
-		if u.MaxLines > 1 {
-			text.MaxLines(u.MaxLines)
-		} else {
-			text.SingleLine()
-		}
-		if u.Bold {
-			text.Bold()
-		}
-		if u.Color != ui.Transparent {
-			text.TextColor(u.Color)
+		ui.Row(c).Gap(gap).AlignItems(ui.Center).Children(func() {
+			avatarView(c, u.Name, a.avatarBitmap(u.Avatar), avatar)
+			label := u.Label
+			if label == "" {
+				label = u.Name
+			}
+			text := ui.Text(c, label).FontSize(size)
+			if u.MaxLines > 1 {
+				text.MaxLines(u.MaxLines)
+			} else {
+				text.SingleLine()
+			}
+			if u.Bold {
+				text.Bold()
+			}
+			if u.Color != ui.Transparent {
+				text.TextColor(u.Color)
+			}
+		})
+		// 徽章跟着昵称，数据来自响应里的 equipped_badges，没拿到就什么都不画。
+		if len(u.Badges) > 0 {
+			ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
+				a.authorBadges(c, u.Badges)
+			})
 		}
 	})
 	click := u.Click

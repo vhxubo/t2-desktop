@@ -200,7 +200,7 @@ func (a *app) scheduleCoinTagRefresh() {
 }
 
 // stopCoinTagWatch 停掉定时刷新：退出登录、主窗口关闭时调用。seq 自增让还在
-// 路上的请求结果直接被丢弃。
+// 路上的请求结果直接被丢弃；金币变动事件排着的合并刷新也一并丢掉。
 func (a *app) stopCoinTagWatch() {
 	a.coinTagGen++
 	if a.coinTagTimer != nil {
@@ -209,17 +209,27 @@ func (a *app) stopCoinTagWatch() {
 	}
 	a.coinTagSeq++
 	a.coinTagLoading = false
+	a.coinTagPending = false
+	a.stopCoinRefresh()
 }
 
 // refreshCoinTagBalance 只拉余额接口：标题栏不需要排名、签到与盲盒。结果写回
 // 金币页共用的 a.coins，这样标题栏与金币窗口的数字始终一致；失败时保留上次
 // 的值，标题栏不自作主张显示错误。
+//
+// 请求在途时收到的刷新（定时器、金币变动事件）先记在 coinTagPending 里，等
+// 这次结果回来再补一次：正在路上的请求可能是在这次变动之前发出的，不能直接
+// 把后来的那次刷新丢掉。
 func (a *app) refreshCoinTagBalance() {
 	if !a.autoLoad || !a.auth.loggedIn() {
 		return
 	}
 	cs := a.coins
-	if cs == nil || a.coinTagLoading {
+	if cs == nil {
+		return
+	}
+	if a.coinTagLoading {
+		a.coinTagPending = true
 		return
 	}
 	a.coinTagLoading = true
@@ -234,6 +244,8 @@ func (a *app) refreshCoinTagBalance() {
 				return
 			}
 			a.coinTagLoading = false
+			pending := a.coinTagPending
+			a.coinTagPending = false
 			if a.coins != cs || !a.auth.loggedIn() {
 				return
 			}
@@ -246,6 +258,10 @@ func (a *app) refreshCoinTagBalance() {
 				return
 			}
 			cs.balance, cs.balanceOK = balance, true
+			if pending {
+				// 刷新期间又收到了金币变动：用刚刚拿到的结果之外再校准一次。
+				a.refreshCoinTagBalance()
+			}
 		})
 	}()
 }

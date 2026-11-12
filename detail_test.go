@@ -116,6 +116,9 @@ func TestDecodeTopic(t *testing.T) {
 	if p.CommentsClosed {
 		t.Error("comments_closed 不应为 true")
 	}
+	if p.FavoriteCountKnown {
+		t.Error("响应里没有 favorited_count 时不应把收藏数当成已知的 0")
+	}
 	if len(p.Reactions) != 2 || p.Reactions[0].Emoji != "👍" || p.Reactions[0].Count != 8 ||
 		!p.Reactions[0].Mine || p.Reactions[1].Mine {
 		t.Errorf("帖子表情表态解析错误：%+v", p.Reactions)
@@ -750,6 +753,44 @@ func TestNestedReplyIsNotCountedAsFloor(t *testing.T) {
 	for _, unwanted := range []string{"3 楼", "4 楼", "回复 0 楼"} {
 		if tt.HasText(unwanted) {
 			t.Errorf("楼中楼不应显示 %q：%q", unwanted, tt.Texts())
+		}
+	}
+}
+
+// 楼中楼上方的「回复 N 楼 / 回复某人」是正文的一部分，必须和同一行的评论
+// 正文左对齐。父评论已经在列表里时这条引用是可点的按钮，而 ButtonBase 默认
+// 居中；只把按钮拉宽不会把文字带到行首，多级回复会明显缩进去一截。
+func TestNestedReplyParentLabelLeftAligned(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.detail.replyList = []replyItem{
+		{ID: "c2", Author: "alice", Floor: 2, Content: "第二楼"},
+		{ID: "c2a", Author: "bob", FlatFloor: 3, ParentID: "c2", ParentFloor: 2,
+			ParentAuthor: "alice", ParentSummary: "第二楼", Content: "楼中楼"},
+		{ID: "c2a1", Author: "carol", FlatFloor: 4, ParentID: "c2a",
+			ParentAuthor: "bob", ParentSummary: "楼中楼", Content: "回复楼中楼"},
+	}
+	a.detail.replyTotal = len(a.detail.replyList)
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	cases := []struct{ label, content string }{
+		{"回复 2 楼：第二楼", "楼中楼"},
+		{"回复 bob：楼中楼", "回复楼中楼"},
+	}
+	for _, c := range cases {
+		label, ok := tt.Find(c.label)
+		if !ok {
+			t.Fatalf("找不到被回复文案 %q：%q", c.label, tt.Texts())
+		}
+		content, ok := tt.Find(c.content)
+		if !ok {
+			t.Fatalf("找不到评论正文 %q：%q", c.content, tt.Texts())
+		}
+		if dy := label.Y - content.Y; dy > 30 || dy < -30 {
+			t.Errorf("%q 应在 %q 上方：label=%+v content=%+v", c.label, c.content, label, content)
+		}
+		if label.X > content.X+0.5 || label.X < content.X-0.5 {
+			t.Errorf("%q 没有和正文左对齐：label.X=%.1f content.X=%.1f",
+				c.label, label.X, content.X)
 		}
 	}
 }
@@ -1559,6 +1600,9 @@ func TestReplyComposerSends(t *testing.T) {
 	a.detail.draft = "测试评论"
 	done := make(chan struct{})
 	a.onReplyPosted = func(replyItem, error) { close(done) }
+	// 评论会扣金币：成功后必须发出全局金币刷新事件。
+	events := make(chan coinEvent, 1)
+	a.onCoinsChanged = func(event coinEvent) { events <- event }
 	tt := ui.NewTester(a.view, 1100, 760)
 	if !tt.HasText("发送") {
 		t.Fatal("登录态下没有发送按钮")
@@ -1569,6 +1613,14 @@ func TestReplyComposerSends(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("发送回调超时")
+	}
+	select {
+	case event := <-events:
+		if event != coinEventReply {
+			t.Errorf("评论事件 = %q，期望 %q", event, coinEventReply)
+		}
+	default:
+		t.Error("评论成功后没有发出金币刷新事件")
 	}
 	mu.Lock()
 	defer mu.Unlock()

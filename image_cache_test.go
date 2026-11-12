@@ -1,6 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -239,5 +244,45 @@ func TestImageCacheCategoriesUseSeparateDirectories(t *testing.T) {
 	}
 	if !strings.HasPrefix(formatBytes(1536), "1.5 KB") {
 		t.Errorf("formatBytes(1536) = %q", formatBytes(1536))
+	}
+}
+
+// 2Libra 的徽章小图是「22×22 SVG 里放一张 base64 位图」。MyGo 的 SVG 渲染器
+// 不支持 pattern / 内嵌图片，直接解码会得到空白；缓存必须先抽出内嵌位图。
+func TestBadgeSVGDecodesEmbeddedRaster(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 3, 2))
+	img.SetRGBA(1, 1, color.RGBA{R: 255, A: 255})
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, img); err != nil {
+		t.Fatal(err)
+	}
+	enc := base64.StdEncoding.EncodeToString(pngBuf.Bytes())
+	svg := []byte(`<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<rect width="22" height="22" fill="url(#p)"/>
+<defs><pattern id="p" width="1" height="1"><use xlink:href="#i"/></pattern>
+<image id="i" width="512" height="512" xlink:href="data:image/png;base64,` + enc + `"/></defs></svg>`)
+
+	src, err := decodeImageData("https://r2.2libra.com/badge/svg/test.svg", svg)
+	if err != nil {
+		t.Fatalf("徽章 SVG 解码失败：%v", err)
+	}
+	bmp, ok := src.(*ui.Bitmap)
+	if !ok {
+		t.Fatalf("徽章 SVG 没有解出内嵌位图，得到 %T", src)
+	}
+	if w, h := bmp.Size(); w != 3 || h != 2 {
+		t.Errorf("内嵌位图尺寸 = %dx%d，期望 3x2", w, h)
+	}
+}
+
+// 没有内嵌位图的普通 SVG（天气图标、站内线性图标）仍按 SVG 解码。
+func TestPlainSVGStillDecodes(t *testing.T) {
+	svg := []byte(`<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg"><path d="M0 0h22v22H0z"/></svg>`)
+	src, err := decodeImageData("https://r2.2libra.com/weather/svg/fog.svg", svg)
+	if err != nil {
+		t.Fatalf("普通 SVG 解码失败：%v", err)
+	}
+	if _, ok := src.(*ui.SVG); !ok {
+		t.Fatalf("普通 SVG 变成了 %T", src)
 	}
 }

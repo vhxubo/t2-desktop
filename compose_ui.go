@@ -732,6 +732,9 @@ func (a *app) submitCompose() {
 			if a.autoLoad {
 				a.reloadCurrent()
 			}
+			// 发帖会扣金币（随帖的金币池、兑换码红包也都算在这一笔里）：
+			// 发出全局金币刷新事件，标题栏与金币窗口一起更新。
+			a.coinsChanged(coinEventPost)
 			if a.onPostPublished != nil {
 				a.onPostPublished(created, nil)
 			}

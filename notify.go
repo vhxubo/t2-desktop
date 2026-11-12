@@ -247,7 +247,14 @@ func (a *app) pollNotifications() {
 				a.notifBaseline = true
 				return
 			}
-			if len(fresh) == 0 || !a.nativeNotify {
+			if len(fresh) == 0 {
+				return
+			}
+			// 新消息里可能就有金币变动（收到表态、收到打赏、评论被置顶、内容
+			// 检定等），emit 一次全局金币刷新；合并窗口会把同一批消息收敛成
+			// 一次请求。
+			a.coinsChanged(coinEventIncoming)
+			if !a.nativeNotify {
 				return
 			}
 			// 一次事件最多弹 3 条，避免同一批消息刷屏。
@@ -362,9 +369,13 @@ func (a *app) onBecameActive() {
 	}
 	a.refreshUnread()
 	a.reloadNotificationTab()
-	// 在站点上签到、打赏后金币会变，而这类操作不会发通知：窗口回到前台时
-	// 顺手把标题栏的金币数校准一次，定时器不在也补上。
+	// 在站点上签到、打赏、开盲盒、兑换后金币会变，而这类操作不会发通知：
+	// 窗口回到前台时先把标题栏的金币数校准一次，定时器不在也补上；金币
+	// 窗口的数据已经加载过的话，一并走全局金币刷新事件。
 	a.startCoinTagWatch()
+	if a.coinPageLoaded() {
+		a.coinsChanged(coinEventForeground)
+	}
 }
 
 // markNotificationRead marks one message read: the row's 「已读」 button.

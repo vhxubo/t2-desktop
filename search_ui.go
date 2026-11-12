@@ -289,6 +289,7 @@ func (a *app) searchRow(c *ui.Context, st *searchState, hit searchHit) {
 					Avatar: hit.avatar,
 					Size:   14,
 					Bold:   true,
+					Badges: hit.badges,
 				})
 				ui.Text(c, "用户").FontSize(11).TextColor(t.TextMuted).SingleLine()
 			case searchNodes:

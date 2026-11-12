@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -19,14 +20,15 @@ import (
 const readingHistoryLimit = 200
 
 type readingRecord struct {
-	ShortID   string    `json:"short_id"`
-	Title     string    `json:"title,omitempty"`
-	Author    string    `json:"author,omitempty"`
-	Avatar    string    `json:"avatar,omitempty"`
-	Node      string    `json:"node,omitempty"`
-	URL       string    `json:"url,omitempty"`
-	CommentID string    `json:"comment_id,omitempty"`
-	OpenedAt  time.Time `json:"opened_at"`
+	ShortID   string      `json:"short_id"`
+	Title     string      `json:"title,omitempty"`
+	Author    string      `json:"author,omitempty"`
+	Avatar    string      `json:"avatar,omitempty"`
+	Badges    []badgeInfo `json:"badges,omitempty"`
+	Node      string      `json:"node,omitempty"`
+	URL       string      `json:"url,omitempty"`
+	CommentID string      `json:"comment_id,omitempty"`
+	OpenedAt  time.Time   `json:"opened_at"`
 }
 
 type readingHistoryData struct {
@@ -99,6 +101,7 @@ func (a *app) recordReading(it Item, topic *topicDetail) {
 		Title:     it.Title,
 		Author:    it.Author,
 		Avatar:    it.AuthorAvatar,
+		Badges:    it.AuthorBadges,
 		Node:      nodeFromSubtitlePrefix(it.SubtitlePrefix),
 		URL:       it.URL,
 		CommentID: it.CommentID,
@@ -117,6 +120,9 @@ func (a *app) recordReading(it Item, topic *topicDetail) {
 		}
 		if rec.Avatar == "" {
 			rec.Avatar = old.Avatar
+		}
+		if len(rec.Badges) == 0 {
+			rec.Badges = old.Badges
 		}
 		if rec.Node == "" {
 			rec.Node = old.Node
@@ -154,7 +160,7 @@ func (a *app) updateReadingTopic(shortID string, topic *topicDetail) {
 			continue
 		}
 		next := readingRecordFromTopic(a.reading[i], topic)
-		if next == a.reading[i] {
+		if reflect.DeepEqual(next, a.reading[i]) {
 			return
 		}
 		a.reading[i] = next
@@ -172,6 +178,9 @@ func readingRecordFromTopic(rec readingRecord, topic *topicDetail) readingRecord
 	}
 	if topic.Avatar != "" {
 		rec.Avatar = topic.Avatar
+	}
+	if len(topic.Badges) > 0 {
+		rec.Badges = topic.Badges
 	}
 	if topic.NodeName != "" {
 		rec.Node = topic.NodeName
@@ -208,6 +217,7 @@ func (a *app) readingItem(r readingRecord) Item {
 		it.URL = topicURL(r.ShortID, "")
 	}
 	it.AuthorAvatar = r.Avatar
+	it.AuthorBadges = r.Badges
 	when := readingTimeText(r.OpenedAt)
 	parts := []string{}
 	if r.Node != "" {

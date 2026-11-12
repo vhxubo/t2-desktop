@@ -65,9 +65,12 @@ type topicDetail struct {
 	Vote                     *voteBlock
 	// 收藏状态：favorited 只在带令牌时有意义。字段缺失时 FavoriteKnown 为
 	// false，按钮按未收藏展示，点一下以服务端结果为准。
-	Favorited      bool
-	FavoriteKnown  bool
-	FavoritedCount int
+	Favorited     bool
+	FavoriteKnown bool
+	// FavoritedCount 是这篇帖子的收藏数。FavoriteCountKnown 区分「确实 0 人
+	// 收藏」和「响应里没有这个字段」：后者不该在按钮旁边凭空写一个 0。
+	FavoritedCount     int
+	FavoriteCountKnown bool
 	// Reactions 是帖子收到的表情表态汇总；Rewards 是打赏合计与打赏者。
 	Reactions []reactionStat
 	Rewards   rewardStat
@@ -250,7 +253,10 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 		t.FavoriteKnown = true
 		t.Favorited = o.flag("favorited", "is_favorited")
 	}
-	t.FavoritedCount = o.num("favorited_count")
+	if o.has("favorited_count") {
+		t.FavoriteCountKnown = true
+		t.FavoritedCount = o.num("favorited_count")
+	}
 	for _, raw := range rawArray(o["tags"]) {
 		tag := asObject(raw)
 		if tag == nil {

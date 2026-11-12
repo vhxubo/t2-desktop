@@ -42,6 +42,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 					Label:  "@" + author,
 					Size:   12,
 					Bold:   true,
+					Badges: x.AuthorBadges,
 				})
 				if comment {
 					if x.ReplyTo != "" {
@@ -52,6 +53,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 							Label:  "@" + x.ReplyTo,
 							Size:   12,
 							Bold:   true,
+							Badges: x.ReplyToBadges,
 						})
 					} else {
 						ui.Text(c, "评论了帖子").FontSize(12).TextColor(t.TextMuted)

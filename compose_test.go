@@ -246,8 +246,19 @@ func TestComposePublishSendsDocumentedPayload(t *testing.T) {
 		}
 		done.Done()
 	}
+	// 发帖会扣金币：成功后必须发出全局金币刷新事件。
+	events := make(chan coinEvent, 1)
+	a.onCoinsChanged = func(event coinEvent) { events <- event }
 	a.submitCompose()
 	done.Wait()
+	select {
+	case event := <-events:
+		if event != coinEventPost {
+			t.Errorf("发帖事件 = %q，期望 %q", event, coinEventPost)
+		}
+	default:
+		t.Error("发帖成功后没有发出金币刷新事件")
+	}
 
 	if gotPath != "/v1/topics" || gotAuth != "Bearer test-token" || gotKey == "" {
 		t.Fatalf("路径 / 鉴权 / 幂等键不对：%q %q %q", gotPath, gotAuth, gotKey)

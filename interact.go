@@ -375,6 +375,19 @@ func (a *app) toggleFavorite(d *detailState) {
 	}
 	desired := !(d.fav.known && d.fav.favorited)
 	before := d.fav
+	// 当前正文对象：请求期间可能刷新出一个新的 topic，失败回滚时不能把
+	// 那份新响应的收藏数改成这个旧值。
+	topic := d.topic
+	countBefore := topic.FavoritedCount
+	// 界面先乐观更新：收藏状态翻过去，收藏数跟着加减。服务端没有下发收藏数
+	// 时不显示、也不猜一个数字。
+	if topic.FavoriteCountKnown {
+		if desired {
+			topic.FavoritedCount++
+		} else if topic.FavoritedCount > 0 {
+			topic.FavoritedCount--
+		}
+	}
 	d.fav.favorited = desired
 	d.fav.known = true
 	d.fav.busy = true
@@ -401,6 +414,9 @@ func (a *app) toggleFavorite(d *detailState) {
 			}
 			if err != nil {
 				d.fav = before
+				if d.topic == topic {
+					d.topic.FavoritedCount = countBefore
+				}
 				if a.handleAuthError(err, func() { a.toggleFavorite(d) }) {
 					a.notifyInteractDone(err)
 					return
@@ -629,6 +645,9 @@ func (a *app) toggleReaction(d *detailState, target, emoji string) {
 			} else {
 				a.toast(toastMain, "已取消表情 "+emoji)
 			}
+			// 表态会改变金币：发送表情扣币，撤销也可能有返还。统一走全局
+			// 金币刷新事件，标题栏与金币窗口一起跟上。
+			a.coinsChanged(coinEventReaction)
 			a.notifyInteractDone(nil)
 		})
 	}()
@@ -668,6 +687,10 @@ func (a *app) favoriteButton(c *ui.Context, d *detailState) {
 	}
 	if d.fav.busy {
 		tip = "正在提交…"
+	} else if d.topic.FavoriteCountKnown {
+		// 收藏数是详情响应里的字段，放在按钮里跟着状态一起变；悬停说明把
+		// 「几人收藏」讲清楚，光一个数字不至于被读成别的东西。
+		tip += fmt.Sprintf("（%d 人收藏）", d.topic.FavoritedCount)
 	}
 	b := ui.Button(c, "").
 		Background(ui.Transparent).
@@ -701,6 +724,12 @@ func (a *app) favoriteButton(c *ui.Context, d *detailState) {
 		}
 		ui.Icon(c, icon).Size(14, 14).TextColor(ink)
 		ui.Text(c, text).FontSize(11).TextColor(ink).SingleLine()
+		if d.topic.FavoriteCountKnown {
+			// 数字比状态文案再小一号、用弱化色：它是数量，不是按钮的第二个
+			// 状态词，长起来也不会让「已收藏」看起来像动作。
+			ui.Textf(c, "%d", d.topic.FavoritedCount).FontSize(10).
+				TextColor(t.TextMuted).SingleLine()
+		}
 	})
 	b.Label(label).Tooltip(tip)
 	if !d.fav.busy {
@@ -1178,8 +1207,9 @@ func (a *app) submitReward(d *detailState, target string) {
 			// 收起打赏气泡，让用户看到刚记上的总数。
 			d.react.rewardOpen = false
 			d.react.rewardErr = ""
-			// 余额变了：标题栏与金币窗口共用同一份余额状态，刷新一次。
-			a.refreshCoinTagBalance()
+			// 余额变了：标题栏与金币窗口共用同一份余额状态，走全局金币
+			// 刷新事件，已经加载过的流水、统计与排行也一起重拉。
+			a.coinsChanged(coinEventReward)
 			a.notifyInteractDone(nil)
 		})
 	}()

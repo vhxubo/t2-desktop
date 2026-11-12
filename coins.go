@@ -31,9 +31,11 @@ import (
 //	GET  /v1/coins/ranking                 金币排行榜（需开通）
 //	GET  /v1/pandora/today                 今日盲盒状态（需开通，只读）
 //
-// 签到是唯一实现的写操作：它没有请求体、没有幂等键，今日重复签到由服务端
-// 以 409 conflict 拒绝。开盲盒、打赏、竞猜、兑换、解锁等其它会改变金币的
-// 操作仍然不做，界面上也不提供入口。
+// 签到是金币窗口里唯一的写操作：它没有请求体、没有幂等键，今日重复签到由
+// 服务端以 409 conflict 拒绝。开盲盒、竞猜、兑换、解锁等其它会改变金币的
+// 操作仍然不做，界面上也不提供入口；发帖、回复、表态与打赏在各自的页面里，
+// 成功后统一发出金币变动事件（见 coin_events.go），本页已经加载过的数据会
+// 跟着刷新。
 const (
 	coinBalancePath        = "/v1/me/coins/balance"
 	coinBalanceRankingPath = "/v1/me/coins/balance-with-ranking"
@@ -109,6 +111,7 @@ type coinTransaction struct {
 	Emoji         string
 	FromUser      string
 	FromAvatar    string // 打赏人等来源用户的头像地址
+	FromBadges    []badgeInfo
 	IsAlias       bool
 	CheckData     object
 }
@@ -151,6 +154,7 @@ type coinRankEntry struct {
 	Balance   int
 	IsPro     bool
 	AvatarURL string
+	Badges    []badgeInfo
 }
 
 type coinPandoraStatus struct {
@@ -319,6 +323,7 @@ func decodeCoinTransaction(raw json.RawMessage) coinTransaction {
 	if from := o.sub("from_user", "fromUser", "user", "actor"); from != nil {
 		tx.FromUser = from.str("username", "name", "nickname")
 		tx.FromAvatar = authorAvatar(from)
+		tx.FromBadges = decodeBadges(from)
 	}
 	return tx
 }
@@ -555,6 +560,7 @@ func decodeCoinRanking(d json.RawMessage) []coinRankEntry {
 			Username:  o.str("username", "name"),
 			IsPro:     o.flag("is_pro", "isPro"),
 			AvatarURL: o.str("avatar_url", "avatarUrl"),
+			Badges:    decodeBadges(o),
 		}
 		if e.Rank <= 0 {
 			e.Rank = i + 1
