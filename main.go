@@ -564,11 +564,11 @@ func (a *app) view(c *ui.Context) {
 				a.sidebarFooter(c)
 			})
 			ui.Divider(c)
-			// 右侧内容区：正文列表（无限滚动，无底部状态栏）。发帖入口是
-			// 浮在内容区右下角的 FAB，绝对定位，不占列表的高度。
+			// 右侧内容区：正文列表（无限滚动，无底部状态栏）。右下角浮着
+			// 一列 FAB（返回顶部 / 刷新 / 发帖），绝对定位，不占列表的高度。
 			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
 				a.body(c)
-				a.composeFab(c)
+				a.listFabs(c)
 			})
 		})
 	})

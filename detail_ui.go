@@ -40,6 +40,9 @@ type detailState struct {
 	replyGen              uint64
 	flat                  bool
 	list                  ui.ListState
+	// bodyScroll 是左栏正文的滚动偏移：TrackScroll 记下来，供「返回顶部」
+	// 判断正文是不是已经滚离顶部、以及把它直接写回 0 回顶。
+	bodyScroll ui.ScrollState
 
 	// 从评论列表点进来时要定位到具体某条评论。目标常常不落在第 1 页
 	// （扁平序按 flat_floor 排），所以首屏没找到时自动续拉后面的页，
@@ -382,6 +385,23 @@ func (a *app) loadReplies(page int) {
 	}()
 }
 
+// refreshDetail 是详情页「刷新」：重新拉当前帖子的正文与第一页评论。
+// 旧内容在请求回来之前保持显示（loadTopic / loadReplies 只在成功时替换），
+// 所以在长帖里点刷新不会先把正文闪成空白。评论回到第 1 页，续拉从那里
+// 重新开始；失败仍走离线那条路（正文来自本地缓存时在顶部说明）。
+func (a *app) refreshDetail() {
+	d := a.detail
+	if d == nil || d.topicLoading || d.replyLoading {
+		return
+	}
+	d.topicErr = ""
+	d.replyErr = ""
+	d.replyMoreErr = ""
+	d.replyNoMore = false
+	a.loadTopic()
+	a.loadReplies(1)
+}
+
 // /v1/emojis changes very rarely: one request per app run is enough, as the
 // docs recommend. A failure leaves the short codes verbatim.
 func (a *app) ensureEmojis() {
@@ -474,7 +494,8 @@ func (a *app) detailView(c *ui.Context) {
 				// 正文可滚动（Grow(1) 吃满左栏剩余高度，MinHeight(0) 允许
 				// 它收缩到比正文内容更矮，正文在框内滚动，底栏不被顶出）；
 				// 底部固定作者头像 + 昵称 + 分类（节点）+ 标签，不随正文滚动。
-				ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Padding(14, 18).Gap(10).Children(func() {
+				ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Padding(14, 18).Gap(10).
+					TrackScroll(&d.bodyScroll).Children(func() {
 					a.topicBody(c, d)
 				})
 				a.topicAuthorBlock(c, d)
@@ -483,6 +504,8 @@ func (a *app) detailView(c *ui.Context) {
 			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
 				a.replyPane(c, d)
 			})
+			// 右下角浮着刷新 / 返回顶部：绝对定位，不占两栏的宽度。
+			a.detailFabs(c, d)
 		})
 		// 数据来源声明 + 可点击的原文链接占满整个窗口底部，放在最底部，
 		// 正文加载完成（d.topic 非空）时才出现。
@@ -916,7 +939,9 @@ func (a *app) replyAction(c *ui.Context, label string, onClick func()) {
 func (a *app) replyComposer(c *ui.Context, d *detailState) {
 	t := c.Theme()
 	ui.Divider(c)
-	ui.Column(c).FillWidth().Padding(6, 10).Gap(4).Children(func() {
+	// 右边留出 FAB 那一列的位置：刷新 / 返回顶部浮在右下角，输入框与
+	// 「发送」不能伸到它们下面，否则点发送会点到按钮。
+	ui.Column(c).FillWidth().Padding(6, fabColumnInset, 6, 10).Gap(4).Children(func() {
 		if d.replyToID != "" {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				who := "评论"

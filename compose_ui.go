@@ -115,15 +115,16 @@ func (a *app) redrawComposeWindow() {
    主页的悬浮入口
 ---------------------------------------------------------------- */
 
-// composeFab 是主页右下角的悬浮发帖按钮（FAB）。它绝对定位在内容区之上，
-// 不参与列表布局，也不随列表滚动；公开 tab 与私人 tab 都能用（未登录时点
-// 它先走授权）。图标 + 文案一起显示，任何窗口宽度下都能看出这是「发帖」。
+// composeFab 是主页右下角那一列悬浮按钮里的「发帖」：主操作，放在最下面。
+// 位置由 listFabs 的竖列给（见 fabs.go），这里只管长什么样；公开 tab 与
+// 私人 tab 都能用（未登录时点它先走授权）。图标 + 文案一起显示，任何窗口
+// 宽度下都能看出这是「发帖」。
 func (a *app) composeFab(c *ui.Context) {
 	t := c.Theme()
 	// 边框始终占 1 DIP：只在悬停时加边框会让按钮在鼠标移入时变大一点，
 	// 位置来回跳。悬停只换边框颜色。
 	ring := t.Accent
-	b := ui.Box(c).Absolute().Right(24).Bottom(24).Padding(10, 16).Radius(999).
+	b := ui.Box(c).Padding(10, 16).Radius(999).
 		Background(t.Accent).Border(1, ring).AlignItems(ui.Center)
 	if b.Hovered() {
 		b.Border(1, t.Text)
