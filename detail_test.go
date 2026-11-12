@@ -344,11 +344,18 @@ func TestClickOpensDetailView(t *testing.T) {
 	for _, want := range []string{
 		"正文与评论的测试帖", "jimmy", "列表项一", "选哪个", "补充一点",
 		"置顶公告", "第一楼", "楼中楼", "dannyng", "该评论已删除",
-		"内容来自 2Libra 用户", "评论 · 4 条", "切到扁平时间序",
+		"内容来自 2Libra 用户",
 	} {
 		if !view.HasText(want) {
 			t.Errorf("详情页没有显示 %q：%q", want, view.Texts())
 		}
+	}
+	// 评论数（图标 + 数值）与视图切换（图标按钮）现在贴在写评论旁边。
+	if _, ok := view.Find("评论数"); !ok {
+		t.Errorf("详情页没有评论数按钮：%q", view.Texts())
+	}
+	if _, ok := view.Find("切到扁平时间序"); !ok {
+		t.Errorf("详情页没有视图切换按钮：%q", view.Texts())
 	}
 	if !view.HasText("版权归原作者所有") {
 		t.Error("缺少版权与原文链接声明")
@@ -359,7 +366,7 @@ func TestClickOpensDetailView(t *testing.T) {
 	if !a.detail.flat {
 		t.Error("flat 视图未切换")
 	}
-	if err := view.Click("✕ 关闭"); err != nil {
+	if err := view.Click("关闭详情"); err != nil {
 		t.Errorf("返回列表失败：%v", err)
 	}
 	if a.pageName != "list" || a.detail != nil {
@@ -388,8 +395,11 @@ func TestClickCommentOpensParentTopic(t *testing.T) {
 		t.Errorf("原文链接应定位到评论：%s", d.originURL())
 	}
 	view := ui.NewTester(a.view, 1100, 760)
-	if !view.HasText("来自评论定位") || !view.HasText("切到楼层视图") {
+	if !view.HasText("来自评论定位") {
 		t.Errorf("缺少评论定位提示：%q", view.Texts())
+	}
+	if _, ok := view.Find("切到楼层视图"); !ok {
+		t.Errorf("详情页没有视图切换按钮：%q", view.Texts())
 	}
 	a.closeDetail()
 	if a.detail != nil || a.pageName != "list" {
@@ -622,9 +632,9 @@ func TestReplyComposerCollapsesUnlessSelected(t *testing.T) {
 
 	// 失焦后保持折叠；再次选中重新展开
 	blur := func() {
-		r, ok := tt.Find("刷新")
+		r, ok := tt.Find("评论数")
 		if !ok {
-			t.Fatal("找不到刷新按钮，无法移开焦点")
+			t.Fatal("找不到评论数按钮，无法移开焦点")
 		}
 		tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
 		tt.Frame()
@@ -666,6 +676,40 @@ func detailAppWithReplies(t *testing.T) *app {
 	return a
 }
 
+// 悬浮评论行时右上角的「回复」按钮出现，但整条评论的高度保持不变，
+// 不应发生上下跳动：头部行与底部链接行都固定高度占位。
+func TestReplyButtonNoLayoutShift(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+
+	// 未悬浮时，以第二条评论「楼中楼」的纵向位置作为对照基准。
+	base, ok := tt.Find("楼中楼")
+	if !ok {
+		t.Fatal("找不到第二条评论用于对照")
+	}
+	yBase := base.Y
+
+	// 悬浮第一条评论（"1 楼"），触发右上角「回复」按钮出现。
+	row1, ok := tt.Find("1 楼")
+	if !ok {
+		t.Fatal("找不到第一条评论用于悬浮")
+	}
+	tt.Move(row1.X+row1.W/2, row1.Y+row1.H/2)
+	tt.Frame()
+
+	if _, ok := tt.Find("回复"); !ok {
+		t.Fatal("悬浮后没有出现回复入口")
+	}
+	after, ok := tt.Find("楼中楼")
+	if !ok {
+		t.Fatal("悬浮后第二条评论消失")
+	}
+	dy := after.Y - yBase
+	if dy > 1 || dy < -1 {
+		t.Errorf("悬浮出现回复按钮后整条评论高度变化，发生跳动：Y %.1f -> %.1f (Δ%v)", yBase, after.Y, dy)
+	}
+}
+
 // 单页评论不展示分页控件（第 N 页 / 上一页 / 下一页），保持界面清爽。
 func TestReplyPaginationHiddenOnSinglePage(t *testing.T) {
 	a := detailAppWithReplies(t)
@@ -679,21 +723,29 @@ func TestReplyPaginationHiddenOnSinglePage(t *testing.T) {
 	}
 }
 
-// 多页评论展示分页控件，且未到末页时「下一页」可点。
-func TestReplyPaginationShownOnMultiPage(t *testing.T) {
+// 多页评论用无限滚动续拉：不再显示页码 / 上一页 / 下一页，而是由
+// replyCanLoadMore 控制滚到底时是否还能继续加载。
+func TestReplyInfiniteScrollCanLoadMore(t *testing.T) {
 	a := detailAppWithReplies(t)
 	a.detail.replyTotalPages = 2
 	a.detail.replyPage = 1
 	tt := ui.NewTester(a.view, 1100, 760)
-	for _, want := range []string{"第 1 页 / 共 2 页", "上一页", "下一页"} {
-		if !tt.HasText(want) {
-			t.Errorf("多页评论应显示分页控件 %q：%q", want, tt.Texts())
+	for _, hide := range []string{"第 1 页 / 共 2 页", "上一页", "下一页"} {
+		if tt.HasText(hide) {
+			t.Errorf("无限滚动不应显示分页控件 %q：%q", hide, tt.Texts())
 		}
 	}
-	// 未到末页：下一页不被禁用。HasText 命中后无法读禁用态，这里至少确认
-	// 按钮存在；禁用逻辑由 replyPane 的 Disabled 守卫保证。
-	if a.detail.replyLoading {
-		t.Error("默认不应处于加载中")
+	if !replyCanLoadMore(a.detail) {
+		t.Error("第 1 / 2 页应允许继续加载")
+	}
+	a.detail.replyPage = 2
+	if replyCanLoadMore(a.detail) {
+		t.Error("最后一页不应继续加载")
+	}
+	a.detail.replyPage = 1
+	a.detail.replyNoMore = true
+	if replyCanLoadMore(a.detail) {
+		t.Error("空页兜底标记后不应继续加载")
 	}
 }
 

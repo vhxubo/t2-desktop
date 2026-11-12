@@ -361,6 +361,79 @@ func TestNativeView(t *testing.T) {
 
 // The packaged app must declare the same id as the Go code, and register
 // its custom scheme so the OS can hand the callback URL back to the app.
+// 续拉失败时不能把已经加载出来的列表换成整页错误：列表保持不动，只在
+// 底部提示失败原因并给出「重试」。
+func TestLoadMoreFailureKeepsRows(t *testing.T) {
+	a := loadMoreApp(t)
+	a.tabs[0].moreErr = "服务端错误（500），请稍后重试"
+	tt := ui.NewTester(a.view, 1100, 760)
+	for _, want := range []string{"列表项一", "列表项二", "加载更多失败", "重试"} {
+		if !tt.HasText(want) {
+			t.Errorf("续拉失败时缺少 %q：%q", want, tt.Texts())
+		}
+	}
+}
+
+// 续拉进行中，列表仍可见，底部显示进度而不是空白页。
+func TestLoadMoreShowsProgress(t *testing.T) {
+	a := loadMoreApp(t)
+	a.tabs[0].loading = true
+	tt := ui.NewTester(a.view, 1100, 760)
+	for _, want := range []string{"列表项一", "正在加载更多…"} {
+		if !tt.HasText(want) {
+			t.Errorf("续拉进度缺少 %q：%q", want, tt.Texts())
+		}
+	}
+}
+
+// 点「重试」按失败那一页续拉，新内容接在已有列表之后，原有行不丢。
+func TestLoadMoreRetryAppendsPage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{
+			"posts":[{"id":"new-1","short_id":"NEW001","title":"续拉的新内容",
+				"author":{"username":"jimmy"}}],
+			"total":3,"page":2,"limit":50,"total_pages":2}}`)
+	}))
+	defer srv.Close()
+
+	a := loadMoreApp(t)
+	a.client.Base = srv.URL + "/api"
+	a.client.HTTP = srv.Client()
+	a.tabs[0].moreErr = "服务端错误（500），请稍后重试"
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	if err := tt.Click("重试"); err != nil {
+		t.Fatalf("点击重试失败：%v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !tt.HasText("续拉的新内容") {
+		if time.Now().After(deadline) {
+			t.Fatalf("重试后没有加载出第 2 页：%q", tt.Texts())
+		}
+		tt.Frame()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !tt.HasText("列表项一") || !tt.HasText("列表项二") {
+		t.Errorf("续拉后原有行丢失：%q", tt.Texts())
+	}
+}
+
+// loadMoreApp 造一个已有第 1 页、正在/曾经续拉第 2 页的首页 tab。
+func loadMoreApp(t *testing.T) *app {
+	t.Helper()
+	a := testApp(t)
+	st := a.tabs[0]
+	st.items = []Item{
+		{Key: "a", Title: "列表项一"},
+		{Key: "b", Title: "列表项二"},
+	}
+	st.loaded = true
+	st.total = 3
+	st.page = 2
+	st.totalPages = 2
+	return a
+}
+
 func TestAppConfigDeclaresNativeScheme(t *testing.T) {
 	b, err := os.ReadFile("mygo.json")
 	if err != nil {

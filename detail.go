@@ -44,6 +44,8 @@ func (c *Client) apiURL(pathQuery string) string {
 type topicDetail struct {
 	ShortID, Title, Content, Type string
 	Author                        string
+	Avatar                        string // 作者头像 URL，正文底部左下角展示
+	Badges                        []badgeInfo
 	AuthorLevel                   int
 	NodeName, NodeSlug            string
 	CreatedAt, UpdatedAt          string
@@ -52,11 +54,28 @@ type topicDetail struct {
 	Tags                          []string
 	Postscripts                   []postscript
 	Vote                          *voteBlock
-	URL                           string // 原文链接，展示内容时必须保留
+	// Emojis 是这篇帖子自己的短码 → 图片映射；社区自定义图标会出现在
+	// 这里，值可能是 /emojis/xxx.png 这样的相对地址。
+	Emojis map[string]string
+	URL    string // 原文链接，展示内容时必须保留
 }
 
 type postscript struct {
 	Content, CreatedAt string
+	Emojis             map[string]string
+}
+
+// badgeInfo 是用户佩戴的社区徽章；icon_url 是 22×15 的小图，直接用于
+// 昵称旁。佩戴「忽冷忽热」时服务端还会带 weather，网页会用天气图标和
+// 温度代替徽章图标。
+type badgeInfo struct {
+	Name, IconURL string
+	Weather       *weatherInfo
+}
+
+type weatherInfo struct {
+	SymbolCode  string
+	Temperature float64
 }
 
 type voteBlock struct {
@@ -79,6 +98,8 @@ type replyItem struct {
 	ParentFloor                    int
 	ParentSummary                  string
 	Reactions                      string
+	Emojis                         map[string]string
+	Badges                         []badgeInfo
 	Deleted, Pinned                bool
 	Depth                          int
 	Children                       []replyItem
@@ -154,6 +175,8 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 			t.Author = name
 		}
 		t.AuthorLevel = a.num("level")
+		t.Avatar = authorAvatar(a)
+		t.Badges = decodeBadges(a)
 	}
 	if n := o.sub("node"); n != nil {
 		t.NodeName = n.str("name")
@@ -169,6 +192,7 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 			t.Tags = append(t.Tags, name)
 		}
 	}
+	t.Emojis = decodeEmojiURLs(o["emojis"])
 	t.Postscripts = decodePostscripts(o["postscripts"])
 	if extra := o.sub("extra"); extra != nil {
 		if vote := extra.sub("vote"); vote != nil {
@@ -199,7 +223,11 @@ func decodePostscripts(raw json.RawMessage) []postscript {
 		if content == "" {
 			continue
 		}
-		out = append(out, postscript{Content: content, CreatedAt: o.str("created_at")})
+		out = append(out, postscript{
+			Content:   content,
+			CreatedAt: o.str("created_at"),
+			Emojis:    decodeEmojiURLs(o["emojis"]),
+		})
 	}
 	return out
 }
@@ -267,12 +295,14 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 		FlatFloor:    o.num("flat_floor"),
 		LocatedFloor: o.num("located_floor"),
 		Deleted:      o.flag("is_deleted"),
+		Emojis:       decodeEmojiURLs(o["emojis"]),
 		Depth:        depth,
 	}
 	if a := o.sub("author"); a != nil {
 		if name := a.str("username"); name != "" {
 			r.Author = name
 		}
+		r.Badges = decodeBadges(a)
 	}
 	if p := o.sub("parent"); p != nil {
 		r.ParentFloor = p.num("floor")
@@ -285,6 +315,45 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 		}
 	}
 	return r
+}
+
+// decodeBadges reads a user object's equipped_badges. A badge may carry
+// weather info: the web shows a weather glyph and the temperature in place
+// of the badge icon then.
+func decodeBadges(a object) []badgeInfo {
+	var out []badgeInfo
+	for _, raw := range rawArray(a["equipped_badges"]) {
+		item := asObject(raw)
+		if item == nil {
+			continue
+		}
+		badge := item.sub("badge")
+		if badge == nil {
+			continue
+		}
+		b := badgeInfo{
+			Name:    badge.str("name"),
+			IconURL: badge.str("icon_url", "icon_url_large"),
+		}
+		if w := item.sub("weather"); w != nil {
+			wi := &weatherInfo{SymbolCode: w.str("symbol_code")}
+			if rawTemp, ok := w["temperature"]; ok {
+				_ = json.Unmarshal(rawTemp, &wi.Temperature)
+			}
+			if wi.SymbolCode != "" {
+				b.Weather = wi
+			}
+		}
+		if b.IconURL == "" && b.Weather == nil {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+func weatherIconURL(symbol string) string {
+	return "https://r2.2libra.com/weather/svg/" + url.PathEscape(symbol) + ".svg"
 }
 
 func reactionSummary(raw json.RawMessage) string {
@@ -375,6 +444,72 @@ func decodeEmojis(d json.RawMessage) map[string]emojiInfo {
 		if e.Code != "" && e.ImgURL != "" {
 			out[e.Code] = e
 		}
+	}
+	return out
+}
+
+// decodeEmojiURLs reads a post / reply's own short code → image map. The
+// server may send relative paths ("/emojis/x.png?size=medium"); the web
+// resolves them against the media origin.
+func decodeEmojiURLs(raw json.RawMessage) map[string]string {
+	o := asObject(raw)
+	if o == nil {
+		return nil
+	}
+	var out map[string]string
+	for code, v := range o {
+		if code == "" {
+			continue
+		}
+		var u string
+		if json.Unmarshal(v, &u) != nil || u == "" {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string)
+		}
+		out[code] = resolveEmojiURL(u)
+	}
+	return out
+}
+
+func resolveEmojiURL(u string) string {
+	switch {
+	case strings.HasPrefix(u, "https://"), strings.HasPrefix(u, "http://"):
+		return u
+	case strings.HasPrefix(u, "//"):
+		return "https:" + u
+	case strings.HasPrefix(u, "/"):
+		return "https://r2.2libra.com" + u
+	}
+	return u
+}
+
+// mergeEmojiMaps overlays a post's / reply's own icon map on the global
+// one. Codes the global table lacks (community icons) get their own entry;
+// known codes keep their human name but use the local image address.
+func mergeEmojiMaps(base map[string]emojiInfo, extra ...map[string]string) map[string]emojiInfo {
+	out := make(map[string]emojiInfo, len(base)+8)
+	for code, e := range base {
+		out[code] = e
+	}
+	changed := false
+	for _, m := range extra {
+		for code, u := range m {
+			if code == "" || u == "" {
+				continue
+			}
+			e, ok := out[code]
+			if !ok {
+				e = emojiInfo{Code: code, Name: strings.Trim(code, ":")}
+			}
+			e.ImgURL = resolveEmojiURL(u)
+			out[code] = e
+			changed = true
+		}
+	}
+	if !changed {
+		return base
 	}
 	return out
 }

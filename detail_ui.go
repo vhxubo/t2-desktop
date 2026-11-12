@@ -29,9 +29,16 @@ type detailState struct {
 	replyLoaded           bool
 	replyPage, replyTotal int
 	replyTotalPages       int
+	replyNoMore           bool // 评论已到底（空页 / 无新增），停止无限滚动续拉
 	replyGen              uint64
 	flat                  bool
 	list                  ui.ListState
+
+	// 正文作者头像：topic 加载后按 URL 取一次位图，回 UI 线程缓存，
+	// 头像块（左下角）画首字母占位直到位图到达（或消失）。
+	topicAvatar        *ui.Bitmap
+	topicAvatarURL     string
+	topicAvatarLoading bool
 
 	// composer: write a comment (optionally as a nested reply to replyToID).
 	draft        string
@@ -65,6 +72,9 @@ func newMarkdownOptions(a *app) *markdown.Options {
 		LoadImage: func(u string) (ui.ImageSource, error) {
 			return a.loadImage(u)
 		},
+		// Markdown 默认只画整段图片，段落内的配图与 :code: 表情会只剩
+		// [说明]；这类段落改由 article_render.go 接管。
+		Block:    a.articleBlock,
 		WrapCode: true,
 	}
 }
@@ -171,6 +181,35 @@ func (a *app) ensureAvatar() {
 	}()
 }
 
+// ensureTopicAvatar loads the post author's avatar once per URL, off the UI
+// thread, and publishes the bitmap back; the bottom-left author block draws
+// the nickname's initial until it arrives (or when the topic has no picture).
+func (a *app) ensureTopicAvatar(d *detailState) {
+	if !a.autoLoad || d.topicAvatarLoading {
+		return // headless tests never touch the network
+	}
+	if d.topic == nil {
+		return
+	}
+	u := d.topic.Avatar
+	if u == "" || (u == d.topicAvatarURL && d.topicAvatar != nil) {
+		return
+	}
+	d.topicAvatarURL = u
+	d.topicAvatarLoading = true
+	go func() {
+		bmp, err := a.loadBitmap(u)
+		a.publish(func() {
+			d.topicAvatarLoading = false
+			if err != nil {
+				log.Printf("正文作者头像加载失败：%v", err)
+				return
+			}
+			d.topicAvatar = bmp
+		})
+	}()
+}
+
 func (a *app) openDetail(it Item) {
 	if it.ShortID == "" {
 		return
@@ -212,16 +251,6 @@ func (a *app) closeDetail() {
 	a.pageName = "list"
 }
 
-func (a *app) reloadDetail() {
-	d := a.detail
-	if d == nil {
-		return
-	}
-	d.topicErr, d.replyErr = "", ""
-	a.loadTopic()
-	a.loadReplies(1)
-}
-
 func (a *app) loadTopic() {
 	d := a.detail
 	if d == nil || d.topicLoading || !a.autoLoad {
@@ -246,6 +275,7 @@ func (a *app) loadTopic() {
 				return
 			}
 			d.topic = &topic
+			a.ensureTopicAvatar(d)
 		})
 	}()
 }
@@ -279,17 +309,22 @@ func (a *app) loadReplies(page int) {
 			if page == 1 {
 				d.replyList = rows
 				d.list.ScrollTo(0, ui.Start)
+				d.replyNoMore = len(rows) == 0
 			} else {
 				seen := make(map[string]bool, len(d.replyList))
 				for _, r := range d.replyList {
 					seen[r.ID] = true
 				}
+				added := 0
 				for _, r := range rows {
 					if !seen[r.ID] {
 						d.replyList = append(d.replyList, r)
 						seen[r.ID] = true
+						added++
 					}
 				}
+				// 服务端返回空页或没有新增条目：标记到底，避免无限加载。
+				d.replyNoMore = added == 0
 			}
 			d.replyTotal = res.Total
 			d.replyTotalPages = res.TotalPages
@@ -345,7 +380,7 @@ func (a *app) detailView(c *ui.Context) {
 		})
 		return
 	}
-	ui.Column(c).Fill().Children(func() {
+	ui.Column(c).Grow(1).FillWidth().Children(func() {
 		ui.Row(c).Padding(10, 14).Gap(8).AlignItems(ui.Center).Children(func() {
 			label := "帖子 " + d.shortID
 			if d.topic != nil && d.topic.Title != "" {
@@ -358,41 +393,48 @@ func (a *app) detailView(c *ui.Context) {
 			if n := len(a.detailStack); n > 0 {
 				ui.Textf(c, "内联浏览 %d 层", n).FontSize(11).TextColor(t.TextMuted)
 			}
-			if ui.Button(c, "浏览器打开").Clicked() {
-				a.openExternal(d.originURL())
-			}
-			if ui.Button(c, "刷新").Clicked() {
-				a.reloadDetail()
-			}
-			// 关闭挪到右上角（原左上角的返回），内联浏览时仍先退一层再回列表。
-			if ui.Button(c, "✕ 关闭").Clicked() {
+			// 右上角纯图标关闭，无边框、无填充；内联浏览时仍先退一层再回列表。
+			closeBtn := ui.Button(c, "").
+				Background(ui.Transparent).
+				Border(0, t.Border).
+				TextColor(t.Text).
+				FontSize(14).
+				Padding(6, 6).
+				Radius(6)
+			closeBtn.Children(func() {
+				ui.Icon(c, closeIcon).Size(18, 18)
+			})
+			closeBtn.Label("关闭详情")
+			if closeBtn.Clicked() {
 				a.closeDetail()
 			}
 		})
 		ui.Divider(c)
-		ui.Row(c).Grow(1).FillWidth().Children(func() {
+		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Children(func() {
 			// 正文与评论各占一半：两栏 Grow(1) 均分剩余宽度，MinWidth(0)
 			// 防止长代码/图片把某一栏撑宽；中间用 1px 分隔线而非会吃
 			// 宽度的 Spacer（Spacer 默认 Grow(1)，会留下空白带）。
 			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
-				ui.Scroll(c).Fill().Padding(14, 18).Gap(10).Children(func() {
-					a.topicPane(c, d)
+				// 正文可滚动（Grow(1) 吃满左栏剩余高度，MinHeight(0) 允许
+				// 它收缩到比正文内容更矮，正文在框内滚动，底栏不被顶出）；
+				// 底部固定作者头像 + 昵称 + 分类（节点）+ 标签，不随正文滚动。
+				ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Padding(14, 18).Gap(10).Children(func() {
+					a.topicBody(c, d)
 				})
+				a.topicAuthorBlock(c, d)
 			})
 			ui.Divider(c)
 			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
 				a.replyPane(c, d)
 			})
 		})
-		ui.Divider(c)
-		ui.Row(c).Padding(6, 14).Children(func() {
-			ui.Text(c, "内容来自 2Libra 用户，版权归原作者所有。原文链接："+d.originURL()).
-				FontSize(10).TextColor(t.TextMuted).MaxLines(2)
-		})
+		// 数据来源声明 + 可点击的原文链接占满整个窗口底部，放在最底部，
+		// 正文加载完成（d.topic 非空）时才出现。
+		a.topicSourceFooter(c, d)
 	})
 }
 
-func (a *app) topicPane(c *ui.Context, d *detailState) {
+func (a *app) topicBody(c *ui.Context, d *detailState) {
 	t := c.Theme()
 	if d.topicLoading && d.topic == nil {
 		ui.Spinner(c).Size(24, 24)
@@ -412,21 +454,13 @@ func (a *app) topicPane(c *ui.Context, d *detailState) {
 		ui.Text(c, "暂无正文").TextColor(t.TextMuted)
 		return
 	}
-	meta := []string{p.Author}
+	// 顶部只保留帖子级元信息（等级 / 置顶 / 评论已关闭）。时间、浏览、回复数
+	// 不再展示；作者头像 + 昵称、分类（节点）与标签收敛到左栏底部的固定块
+	// （topicAuthorBlock），数据来源 + 原文链接收敛到窗口最底部的固定栏
+	// （topicSourceFooter），避免顶部信息过载。
+	var meta []string
 	if p.AuthorLevel > 0 {
 		meta = append(meta, fmt.Sprintf("Lv.%d", p.AuthorLevel))
-	}
-	if p.NodeName != "" {
-		meta = append(meta, p.NodeName)
-	}
-	if p.CreatedAt != "" {
-		meta = append(meta, relativeTime(p.CreatedAt))
-	}
-	if p.Views > 0 {
-		meta = append(meta, fmt.Sprintf("%d 浏览", p.Views))
-	}
-	if p.CommentCount > 0 {
-		meta = append(meta, fmt.Sprintf("%d 回复", p.CommentCount))
 	}
 	if p.IsPinned {
 		meta = append(meta, "置顶")
@@ -434,15 +468,17 @@ func (a *app) topicPane(c *ui.Context, d *detailState) {
 	if p.CommentsClosed {
 		meta = append(meta, "评论已关闭")
 	}
-	ui.Text(c, strings.Join(meta, " · ")).FontSize(12).TextColor(t.TextMuted)
-	if len(p.Tags) > 0 {
-		ui.Text(c, "#"+strings.Join(p.Tags, "  #")).FontSize(11).TextColor(t.TextMuted)
+	if len(meta) > 0 {
+		ui.Text(c, strings.Join(meta, " · ")).FontSize(12).TextColor(t.TextMuted)
 	}
-	ui.Divider(c)
+	// 元信息行与正文之间不再画分隔线：这条线在正文顶端显得像多余的一条，
+	// 没有元信息时更只剩一条孤线。间距由 Scroll 的 Gap 承担。
+	// 帖子自己的 emojis 可能包含社区自定义图标；并到全局表情表后一起渲染。
+	emojis := mergeEmojiMaps(a.emojis, p.Emojis)
 	if strings.TrimSpace(p.Content) == "" {
 		ui.Text(c, "（正文为空）").TextColor(t.TextMuted)
 	} else {
-		markdown.View(c, replaceEmoji(p.Content, a.emojis, true), a.md).FillWidth()
+		markdown.View(c, replaceEmoji(p.Content, emojis, true), a.md).FillWidth()
 	}
 	for i, ps := range p.Postscripts {
 		ui.Divider(c)
@@ -451,7 +487,8 @@ func (a *app) topicPane(c *ui.Context, d *detailState) {
 			label += " · " + relativeTime(ps.CreatedAt)
 		}
 		ui.Text(c, label).FontSize(13).Bold()
-		markdown.View(c, replaceEmoji(ps.Content, a.emojis, true), a.md).FillWidth()
+		postEmojis := mergeEmojiMaps(a.emojis, p.Emojis, ps.Emojis)
+		markdown.View(c, replaceEmoji(ps.Content, postEmojis, true), a.md).FillWidth()
 	}
 	if v := p.Vote; v != nil {
 		ui.Divider(c)
@@ -466,26 +503,57 @@ func (a *app) topicPane(c *ui.Context, d *detailState) {
 			}
 		})
 	}
+}
+
+// topicAuthorBlock 是左栏底部的固定块，不随正文滚动：头像 + 昵称 + 分类（节点），
+// 昵称下方放标签。正文加载完成（d.topic 非空）时才出现。
+func (a *app) topicAuthorBlock(c *ui.Context, d *detailState) {
+	p := d.topic
+	if p == nil {
+		return
+	}
+	t := c.Theme()
 	ui.Divider(c)
+	ui.Row(c).Padding(10, 14).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Avatar(c, p.Author, d.topicAvatar).Size(32, 32)
+		ui.Column(c).Gap(2).Children(func() {
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, p.Author).FontSize(14).Bold()
+				a.authorBadges(c, p.Badges)
+				if p.NodeName != "" {
+					ui.Text(c, p.NodeName).FontSize(12).TextColor(t.TextMuted)
+				}
+			})
+			if len(p.Tags) > 0 {
+				ui.Text(c, "#"+strings.Join(p.Tags, "  #")).FontSize(11).TextColor(t.TextMuted)
+			}
+		})
+	})
+}
+
+// topicSourceFooter 占满整个窗口底部，放在最底部：数据来源声明 + 可点击原文
+// 链接（点一下用系统浏览器打开）。正文加载完成（d.topic 非空）时才出现。
+func (a *app) topicSourceFooter(c *ui.Context, d *detailState) {
+	p := d.topic
+	if p == nil {
+		return
+	}
+	t := c.Theme()
+	ui.Divider(c)
+	ui.Row(c).Padding(6, 14).Gap(4).AlignItems(ui.Center).Wrap().Children(func() {
+		ui.Text(c, "内容来自 2Libra 用户，版权归原作者所有。").FontSize(10).TextColor(t.TextMuted)
+		ui.Text(c, "原文链接：").FontSize(10).TextColor(t.TextMuted)
+		link := ui.Button(c, truncate(d.originURL(), 60)).
+			Background(ui.Transparent).Border(0, t.Border).
+			TextColor(t.Accent).FontSize(10).Padding(0, 2)
+		if link.Clicked() {
+			a.openExternal(d.originURL())
+		}
+	})
 }
 
 func (a *app) replyPane(c *ui.Context, d *detailState) {
 	t := c.Theme()
-	ui.Row(c).Padding(10, 12).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Textf(c, "评论 · %d 条", d.replyTotal).FontSize(14).Bold()
-		ui.Spacer(c).Grow(1)
-		view := "切到扁平时间序"
-		if d.flat {
-			view = "切到楼层视图"
-		}
-		if ui.Button(c, view).Disabled(d.replyLoading).Clicked() {
-			d.flat = !d.flat
-			d.replyList = nil
-			d.replyLoaded = false
-			a.loadReplies(1)
-		}
-	})
-	ui.Divider(c)
 	switch {
 	case d.replyLoading && len(d.replyList) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
@@ -515,29 +583,22 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 		ui.List(c, &d.list, len(rows), func(i int) {
 			a.replyRow(c, rows[i], d.focusID)
 		}).Grow(1).MinHeight(0).Padding(6, 12).Gap(10)
-	}
-	// 只有多页时才展示分页：单页或没有评论时不显示分页控件，保持界面清爽。
-	// 评论区的分隔线由 replyComposer 自身提供，因此单页时不必额外画一条。
-	if d.replyTotalPages > 1 {
-		ui.Divider(c)
-		ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).Children(func() {
-			page := d.replyPage
-			if page < 1 {
-				page = 1
-			}
-			ui.Textf(c, "第 %d 页 / 共 %d 页", page, d.replyTotalPages).
-				FontSize(11).TextColor(t.TextMuted).Grow(1)
-			if ui.Button(c, "上一页").Disabled(page <= 1 || d.replyLoading).Clicked() {
-				a.loadReplies(page - 1)
-			}
-			// 进入此分支必为 replyTotalPages > 1，故无需再判断 == 0。
-			hasMore := d.replyLoaded && !d.replyLoading && page < d.replyTotalPages
-			if ui.Button(c, "下一页").Disabled(!hasMore).Clicked() {
-				a.loadReplies(page + 1)
-			}
-		})
+		// 无限滚动：滚到底且还有下一页时自动加载更多，移除原来的页码与上下页按钮。
+		// 与首页 / 通知列表保持一致：AtEnd 触发、replyNoMore 兜底停止。
+		if replyCanLoadMore(d) && len(d.replyList) > 0 && d.list.AtEnd() {
+			a.loadReplies(d.replyPage + 1)
+		}
 	}
 	a.replyComposer(c, d)
+}
+
+// replyCanLoadMore 汇报是否还能（且应）续拉下一页评论：已加载、未在读、未到底、
+// 且仍有下一页。totalPages 缺失（为 0）时按空页去重兜底，继续尝试续拉。
+func replyCanLoadMore(d *detailState) bool {
+	if !d.replyLoaded || d.replyLoading || d.replyNoMore {
+		return false
+	}
+	return d.replyTotalPages == 0 || d.replyPage < d.replyTotalPages
 }
 
 func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
@@ -559,7 +620,9 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 	// 评论已关闭时整条都不能回复；已删除的评论同样不提供回复入口。
 	closed := a.detail != nil && a.detail.topic != nil && a.detail.topic.CommentsClosed
 	row.Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		// 头部行固定高度，给右上角的「回复」按钮预留空间：悬浮时按钮出现
+		// 也不会把整条评论撑高，避免显示时上下跳动。
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Height(18).Children(func() {
 			floor := ""
 			switch {
 			case r.Pinned:
@@ -575,6 +638,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 				ui.Text(c, floor).FontSize(11).TextColor(t.TextMuted)
 			}
 			ui.Text(c, r.Author).FontSize(12).Bold()
+			a.authorBadges(c, r.Badges)
 			if r.CreatedAt != "" {
 				ui.Text(c, relativeTime(r.CreatedAt)).FontSize(11).TextColor(t.TextMuted)
 			}
@@ -608,16 +672,21 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 		if strings.TrimSpace(content) == "" {
 			content = "（无内容）"
 		}
-		ui.Text(c, replaceEmoji(content, a.emojis, false)).FontSize(13)
+		a.commentText(c, content, mergeEmojiMaps(a.emojis, r.Emojis))
 		// 评论里的应用内链接是次级操作：仅悬浮整条评论时出现，保持默认
-		// 状态的清爽；回复入口已常驻右上角，这里不再重复。
-		if !r.Deleted && hovered {
+		// 状态的清爽；回复入口已常驻右上角，这里不再重复。其所在行固定
+		// 高度占位，出现时同样不会撑高整条评论。
+		if !r.Deleted {
 			if links := inAppTopicLinks(r.Content); len(links) > 0 {
-				ui.Row(c).Gap(6).Wrap().Children(func() {
-					for _, link := range links {
-						target := link
-						a.replyAction(c, "在应用内打开 "+target.ShortID, func() {
-							a.handleLink(target.URL)
+				ui.Row(c).Height(18).AlignItems(ui.Center).Children(func() {
+					if hovered {
+						ui.Row(c).Gap(6).Wrap().Children(func() {
+							for _, link := range links {
+								target := link
+								a.replyAction(c, "在应用内打开 "+target.ShortID, func() {
+									a.handleLink(target.URL)
+								})
+							}
 						})
 					}
 				})
@@ -649,7 +718,7 @@ func (a *app) replyAction(c *ui.Context, label string, onClick func()) {
 func (a *app) replyComposer(c *ui.Context, d *detailState) {
 	t := c.Theme()
 	ui.Divider(c)
-	ui.Column(c).FillWidth().Padding(8, 12).Gap(6).Children(func() {
+	ui.Column(c).FillWidth().Padding(6, 10).Gap(4).Children(func() {
 		if d.replyToID != "" {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				who := "评论"
@@ -693,16 +762,21 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	if focused {
 		border = t.Accent // 编辑中的输入框给一圈强调色，明确「已选中」
 	}
-	ui.Column(c).FillWidth().Padding(vpad, 8).Radius(10).
-		Background(t.Background).Border(1, border).Children(func() {
+	// 未输入时不占满：折叠态让输入框只裹住内容，聚焦 / 有内容 / 回复某楼才撑满整行。
+	box := ui.Column(c).Padding(vpad, 8).Radius(10).
+		Background(t.Background).Border(1, border)
+	if expanded {
+		box = box.FillWidth()
+	}
+	box.Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.End).Children(func() {
 			// 多行文本区即 Markdown 编辑器：透明背景、去边框，融入外层输入框。
-			// MinHeight(0) 覆盖 TextArea 默认的 80 高下限，折叠时才能只占一行。
+			// 未输入时不 Grow，只留约 200 宽的输入框；展开时才撑满整行。
 			area := ui.TextArea(c, &d.draft).Label("写评论").
-				Grow(1).MinHeight(0).Background(ui.Transparent).
+				MinHeight(0).Background(ui.Transparent).
 				Border(0, t.Border).Bind(&d.composerField)
 			if expanded {
-				area.Lines(4, 10).
+				area.Grow(1).Lines(4, 10).
 					Placeholder("说点什么…（支持 Markdown 与表情短码 :smile:）")
 			} else {
 				area.Lines(1, 8).Placeholder("写评论…")
@@ -720,6 +794,48 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				if send.Clicked() {
 					a.submitReply()
 				}
+			}
+			// 评论数（图标 + 数值）与视图切换（图标）贴着发送按钮右侧，同一行展示。
+			cnt := ui.Button(c, "").
+				Background(ui.Transparent).
+				Border(0, t.Border).
+				TextColor(t.TextMuted).
+				FontSize(12).
+				Padding(2, 4).
+				Radius(6)
+			cnt.Children(func() {
+				ui.Icon(c, commentBubbleIcon).Size(16, 16)
+				ui.Textf(c, "%d", d.replyTotal).FontSize(12)
+			})
+			cnt.Label("评论数")
+			if cnt.Clicked() {
+				d.list.ScrollTo(0, ui.Start)
+			}
+			// 视图切换：图标表示将要切到的视图，点一下在楼层 / 扁平时间序间切换。
+			target := flatViewIcon
+			viewLabel := "切到扁平时间序"
+			if d.flat {
+				target = floorViewIcon
+				viewLabel = "切到楼层视图"
+			}
+			tg := ui.Button(c, "").
+				Background(ui.Transparent).
+				Border(0, t.Border).
+				TextColor(t.Accent).
+				FontSize(12).
+				Padding(2, 4).
+				Radius(6).
+				Disabled(d.replyLoading)
+			tg.Children(func() {
+				ui.Icon(c, target).Size(16, 16)
+			})
+			tg.Label(viewLabel)
+			if tg.Clicked() {
+				d.flat = !d.flat
+				d.replyList = nil
+				d.replyLoaded = false
+				d.replyNoMore = false
+				a.loadReplies(1)
 			}
 		})
 	})

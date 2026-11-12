@@ -22,7 +22,10 @@ type tabState struct {
 	loading    bool
 	noMore     bool // 分页已到底（空页 / 无新增），用于无限滚动停止
 	err        string
-	gen        uint64
+	// moreErr 是「续拉下一页」失败的原因：首屏已经有内容时，续拉失败不能
+	// 把整页换成错误页，只在新内容该出现的位置提示并可重试。
+	moreErr string
+	gen     uint64
 
 	// 通知 tab 专用：分段筛选、正在提交已读的 id、勾选批量与操作错误。
 	filter     int
@@ -68,7 +71,10 @@ type app struct {
 	emojis       map[string]emojiInfo
 	emojiLoading bool
 	emojiTried   bool
-	md           *markdown.Options
+	// articleImages 缓存正文图片（表情与配图）的下载结果，键是图片地址。
+	// 只在 UI 线程读写；后台下载完成后通过 publish 回填。
+	articleImages map[string]*articleImageEntry
+	md            *markdown.Options
 
 	// 通知 / 消息中心：未读数、SSE 长连接与原生通知。
 	unread        int
@@ -163,6 +169,7 @@ func (a *app) load(idx, page int) {
 	}
 	st.loading = true
 	st.err = ""
+	st.moreErr = ""
 	st.page = page
 	a.reqSeq++
 	gen := a.reqSeq
@@ -177,12 +184,16 @@ func (a *app) load(idx, page int) {
 			}
 			st.loading = false
 			if err != nil {
-				st.err = friendlyError(err)
 				if page == 1 {
+					st.err = friendlyError(err)
 					st.items = nil
+				} else {
+					// 已有内容时续拉失败：保留当前列表，在列表底部提示。
+					st.moreErr = friendlyError(err)
 				}
 				return
 			}
+			st.moreErr = ""
 			if page == 1 {
 				st.items = res.Items
 				st.list.ScrollTo(0, ui.Start)
@@ -237,6 +248,7 @@ func (a *app) reloadCurrent() {
 	st.loaded = false
 	st.items = nil
 	st.err = ""
+	st.moreErr = ""
 	st.noMore = false
 	st.list.ScrollTo(0, ui.Start)
 	a.load(a.tab, 1)
@@ -594,16 +606,41 @@ func (a *app) body(c *ui.Context) {
 	ui.List(c, &st.list, len(items), func(i int) {
 		a.row(c, items[i])
 	}).Grow(1).Padding(8, 16).Gap(14)
+	a.loadMoreFooter(c, st.moreErr, st.loading, func() {
+		a.load(a.tab, st.page)
+	})
 	// 无限滚动：滚动到列表底部且还有下一页时，自动加载更多，不再依赖
 	// 页码按钮。「我的帖子 / 我的合集」不分页、最新评论服务端忽略 page，
-	// 因此只对 pagingPages 的 tab 触发。
-	if spec.Paging == pagingPages && st.loaded && !st.loading && !st.noMore &&
-		len(st.items) > 0 && st.list.AtEnd() {
+	// 因此只对 pagingPages 的 tab 触发。续拉失败后停在提示上，等用户点
+	// 「重试」，否则每次重建都会再发一次注定失败的请求。
+	if spec.Paging == pagingPages && st.loaded && !st.loading && st.moreErr == "" &&
+		!st.noMore && len(st.items) > 0 && st.list.AtEnd() {
 		hasMore := st.totalPages == 0 || st.page < st.totalPages
 		if hasMore {
 			a.load(a.tab, st.page+1)
 		}
 	}
+}
+
+// loadMoreFooter 是无限滚动列表底部的续拉状态行：加载中显示进度，失败时
+// 给出原因与「重试」。已有内容时，续拉失败只出现在这里，列表本身保持不动。
+func (a *app) loadMoreFooter(c *ui.Context, errText string, loading bool, retry func()) {
+	if errText == "" && !loading {
+		return
+	}
+	t := c.Theme()
+	ui.Row(c).FillWidth().Padding(8, 16).Gap(8).AlignItems(ui.Center).Children(func() {
+		if errText != "" {
+			ui.Text(c, "加载更多失败："+errText).FontSize(11).
+				TextColor(t.Danger).MaxLines(2).Grow(1)
+			if ui.Button(c, "重试").Clicked() {
+				retry()
+			}
+			return
+		}
+		ui.Spinner(c).Size(14, 14)
+		ui.Text(c, "正在加载更多…").FontSize(11).TextColor(t.TextMuted)
+	})
 }
 
 func (a *app) row(c *ui.Context, it Item) {

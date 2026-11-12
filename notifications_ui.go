@@ -114,8 +114,13 @@ func (a *app) notificationsBody(c *ui.Context, st *tabState) {
 		ui.List(c, &st.list, len(items), func(i int) {
 			a.notificationRow(c, items[i])
 		}).Grow(1).Padding(8, 14).Gap(10)
-		// 无限滚动：滚到底且还有下一页时自动加载。
-		if st.loaded && !st.loading && !st.noMore && len(st.items) > 0 && st.list.AtEnd() {
+		a.loadMoreFooter(c, st.moreErr, st.loading, func() {
+			a.load(notificationTabIndex(), st.page)
+		})
+		// 无限滚动：滚到底且还有下一页时自动加载。续拉失败后停在提示上，
+		// 等用户点「重试」，避免每次重建都重发同一个失败的请求。
+		if st.loaded && !st.loading && st.moreErr == "" && !st.noMore &&
+			len(st.items) > 0 && st.list.AtEnd() {
 			hasMore := st.totalPages == 0 || st.page < st.totalPages
 			if hasMore {
 				a.load(notificationTabIndex(), st.page+1)
@@ -184,6 +189,7 @@ func (a *app) setNotificationFilter(filter int) {
 	st.loading = false
 	st.noMore = false
 	st.err = ""
+	st.moreErr = ""
 	st.actionErr = ""
 	st.page = 1
 	st.list.ScrollTo(0, ui.Start)
@@ -203,6 +209,7 @@ func (a *app) reloadNotifications() {
 	st.items = nil
 	st.selected = nil
 	st.err = ""
+	st.moreErr = ""
 	st.actionErr = ""
 	st.noMore = false
 	st.list.ScrollTo(0, ui.Start)
