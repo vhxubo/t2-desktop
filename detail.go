@@ -288,7 +288,7 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 	}
 	r := replyItem{
 		ID:           o.str("id"),
-		Content:      o.str("content"),
+		Content:      o.str("content"), // raw markdown, rendered by the UI
 		Author:       "匿名",
 		CreatedAt:    o.str("created_at"),
 		Floor:        o.num("floor"),
