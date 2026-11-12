@@ -103,6 +103,9 @@ func (c *Client) streamHTTPClient() *http.Client {
 	}
 	// 普通 Client 带 20s 超时，对流式读取会在 20 秒后掐断连接，所以这里
 	// 单独用一个没有整体超时的客户端；空闲由下面的 idle timer 兜底。
+	if c.Proxy != nil {
+		return c.Proxy.Client(0)
+	}
 	return &http.Client{}
 }
 

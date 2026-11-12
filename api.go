@@ -39,6 +39,7 @@ const (
 	kindCollection
 	kindTimeline     // 动态：同一份响应里混有帖子与评论
 	kindNotification // 通知：行渲染与交互都独立
+	kindCoin         // 金币：聚合多个只读端点，页面自己加载
 )
 
 // tabSpec is the exact contract from the API table: path, page-1 query,
@@ -66,8 +67,12 @@ var tabSpecs = []tabSpec{
 	{"我的帖子", "/v1/me/topics", "", "auto", true, pagingOff, kindTopic},
 	{"我的合集", "/v1/me/collections", "", "", true, pagingOff, kindCollection},
 	// 通知走开放 API 的消息列表；字段名是 list（不是 items），筛选另带
-	// type / unread_only，由 notificationQuery 生成。
+	// type / unread_only，由 notificationQuery 生成。它不再是侧边栏页面：
+	// 入口是标题栏铃铛打开的弹窗，保留这一项是为了复用通用加载与分页。
 	{"通知", notificationsPath, notificationsQuery(notificationFilterAll), "list", true, pagingPages, kindNotification},
+	// 金币页聚合多个只读端点，Path 只作为契约测试里的代表地址；实际加载
+	// 由 coinState 统一调度，不走通用 fetch。
+	{"金币", "/v1/me/coins/balance", "", "", true, pagingOff, kindCoin},
 }
 
 func tabLabels() []string {
@@ -106,6 +111,13 @@ type Item struct {
 	URL       string // 站外原文链接，保留作者署名与来源时使用
 	ShortID   string // 帖子对外 ID；非空才可以在应用内打开详情
 	CommentID string // 从评论列表进入时，要定位的评论 uuid
+	// Author / AuthorAvatar / SubtitlePrefix / SubtitleSuffix 把「节点 · 昵称 ·
+	// 时间」这类副标题里的昵称拆出来，交给统一的用户标识组件，在昵称旁
+	// 画头像。Subtitle 仍是完整文本，供测试与无障碍读取，不参与渲染。
+	Author         string
+	AuthorAvatar   string
+	SubtitlePrefix string
+	SubtitleSuffix string
 	// Extra 是最新评论 / 动态行的富展示字段；普通榜单行为 nil。
 	Extra *rowExtra
 	// Notif 是通知行归一后的消息；只有通知 tab 的行非 nil。
@@ -199,6 +211,10 @@ type Client struct {
 	UA     string
 	bearer func() string // test seam
 
+	// Proxy 提供全应用共享的 transport：普通请求和 SSE 长连接都从这里
+	// 拿客户端，代理规则因此只需维护一份。测试可直接覆盖 HTTP / StreamHTTP。
+	Proxy *proxyManager
+
 	// StreamHTTP is used only by the notification SSE connection. A client
 	// with an overall Timeout would cut the stream; nil falls back to HTTP
 	// (tests) and then to a client without a timeout.
@@ -230,6 +246,9 @@ func (c *Client) accessToken() string {
 func (c *Client) httpClient() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
+	}
+	if c.Proxy != nil {
+		return c.Proxy.Client(20 * time.Second)
 	}
 	return &http.Client{Timeout: 20 * time.Second}
 }
@@ -330,6 +349,18 @@ func (c *Client) getJSON(ctx context.Context, u, token string) (json.RawMessage,
 // is required (201 for resource creation, 200 for other writes); anything
 // else becomes an apiError carrying code/required_scope/retry_after.
 func (c *Client) postJSON(ctx context.Context, u, token, idempotencyKey string, payload any) (json.RawMessage, error) {
+	return c.writeJSON(ctx, http.MethodPost, u, token, idempotencyKey, payload)
+}
+
+// deleteJSON sends one DELETE without a body through the same write path.
+// Endpoints such as unfollow answer with the usual envelope and no payload.
+func (c *Client) deleteJSON(ctx context.Context, u, token string) (json.RawMessage, error) {
+	return c.writeJSON(ctx, http.MethodDelete, u, token, "", nil)
+}
+
+// writeJSON is the shared implementation of the write methods. A nil payload
+// sends no body (and no Content-Type), which some endpoints require.
+func (c *Client) writeJSON(ctx context.Context, method, u, token, idempotencyKey string, payload any) (json.RawMessage, error) {
 	var empty json.RawMessage
 	var reqBody io.Reader
 	hasBody := payload != nil
@@ -340,7 +371,7 @@ func (c *Client) postJSON(ctx context.Context, u, token, idempotencyKey string, 
 		}
 		reqBody = bytes.NewReader(buf)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, u, reqBody)
 	if err != nil {
 		return empty, err
 	}
@@ -649,10 +680,12 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 		postNode = post.sub("node", "parent_node")
 	}
 	username := "匿名"
+	avatarURL := ""
 	if author != nil {
 		if name := author.str("username", "name", "nickname"); name != "" {
 			username = name
 		}
+		avatarURL = authorAvatar(author)
 	}
 	nodeName := ""
 	nodeSlug := ""
@@ -696,6 +729,13 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 		parts := []string{"合集"}
 		if username != "" && username != "匿名" {
 			parts = append(parts, username)
+			// 合集行本来就不展示匿名作者：只有真有昵称时才拆出作者段。
+			it.Author = username
+			it.AuthorAvatar = avatarURL
+			it.SubtitlePrefix = "合集 · "
+			if when != "" {
+				it.SubtitleSuffix = " · " + when
+			}
 		}
 		if when != "" {
 			parts = append(parts, when)
@@ -720,10 +760,14 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 		parts := []string{}
 		if nodeName != "" {
 			parts = append(parts, nodeName)
+			it.SubtitlePrefix = nodeName + " · "
 		}
 		parts = append(parts, username)
+		it.Author = username
+		it.AuthorAvatar = avatarURL
 		if when != "" {
 			parts = append(parts, when)
+			it.SubtitleSuffix = " · " + when
 		}
 		it.Subtitle = strings.Join(parts, " · ")
 		meta := []string{}
@@ -743,7 +787,7 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 		it.URL = topicURL(shortID, nodeSlug)
 		// 动态流会带正文、表情表态与打赏；普通榜单没有这些字段，
 		// topicExtra 返回 nil，行还是原来的紧凑样式。
-		it.Extra = topicExtra(o, username, nodeName, when)
+		it.Extra = topicExtra(o, username, avatarURL, nodeName, when)
 	}
 	return it
 }

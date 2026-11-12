@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/updater"
+	updatenative "github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
 )
@@ -25,7 +27,11 @@ type tabState struct {
 	// moreErr 是「续拉下一页」失败的原因：首屏已经有内容时，续拉失败不能
 	// 把整页换成错误页，只在新内容该出现的位置提示并可重试。
 	moreErr string
-	gen     uint64
+	// authWait 表示首屏失败是在等全局授权把缺失的权限补上。等待期间
+	// ensureLoaded 不再重发同一个注定 403 的请求；授权成功后的重跑或用户点
+	// 「重试」会清掉它。
+	authWait bool
+	gen      uint64
 
 	// 通知 tab 专用：分段筛选、正在提交已读的 id、勾选批量与操作错误。
 	filter     int
@@ -39,10 +45,23 @@ type tabState struct {
 // background work publishes results through Window.Update.
 type app struct {
 	auth     *AuthManager
+	proxy    *proxyManager
+	theme    *themeManager
 	client   *Client
 	win      *mygo.Window
 	srv      ui.Services
 	autoLoad bool
+
+	// 代理配置面板的草稿与提示。保存前只改这些字段，不影响正在使用的
+	// transport；点「保存」才写入 proxy.json 并立即切换。
+	proxyOpen    bool
+	proxyMode    int
+	proxyURL     string
+	proxyUser    string
+	proxyPass    string
+	proxyNoProxy string
+	proxyMsg     string
+	proxyMsgErr  bool
 
 	tab     int
 	lastTab int
@@ -57,14 +76,20 @@ type app struct {
 	// 登录：点「登录」直接打开浏览器，loginPending 表示正在等系统跳回；
 	// 只有失败或用户主动粘贴回调时才进入 login 页。
 	loginPending bool
-	// 头像位图与来源地址：登录完成后按 token 里缓存的地址异步加载一次，
-	// 标题栏先显示姓名首字母，图片到了再替换。
-	avatar        *ui.Bitmap
-	avatarURL     string
-	avatarLoading bool
+	// avatars 按头像地址缓存位图（见 user_ui.go）：登录账号、帖子作者、
+	// 评论作者与通知操作者共用同一份缓存，同一个地址只下载一次。下载完成
+	// 前 userTag 先画昵称首字母。
+	avatars avatarCache
 	// schemeWarn 是「系统没有把回调协议关联到本应用」的说明，仅在这种情况下
 	// 非空：它决定了浏览器授权后能不能自动跳回，得让用户在登录页看见。
 	schemeWarn string
+	// authGate 是全局授权弹窗：任何缺少权限的调用都收敛到这里，授权成功后
+	// 重跑被中断的调用。
+	authGate authGate
+
+	// coins 是金币页的聚合状态：余额、今日明细、流水、统计与排行各自独立
+	// 加载，某个高级接口未开通时只降级那一块。
+	coins *coinState
 
 	detail       *detailState
 	detailStack  []*detailState // 正文内联跳转的返回栈
@@ -86,6 +111,9 @@ type app struct {
 	unread        int
 	unreadLoading bool
 	unreadGen     uint64
+	// notifOpen 是通知弹窗是否打开。通知不再占用侧边栏的页面，入口是标题栏
+	// 上的铃铛与它旁边的未读数值（见 notificationBell / notificationsDialog）。
+	notifOpen     bool
 	streamLive    bool
 	watchCancel   context.CancelFunc
 	watchGen      uint64
@@ -109,6 +137,10 @@ type app struct {
 	// onNotificationsRead 是「按条已读」落账后的测试钩子：headless 测试没有
 	// 窗口，publish 在请求协程里直接执行，靠它把结果同步回测试。
 	onNotificationsRead func(ids []string)
+	// onAuthPrompt / onAuthReplay 是全局授权弹窗的测试钩子：弹窗打开与授权
+	// 成功后重跑被中断的调用时触发。生产为 nil。
+	onAuthPrompt func()
+	onAuthReplay func()
 }
 
 // tabID / tabFromID 把 tab 序号与侧边栏条目的 id 互相映射。
@@ -126,15 +158,22 @@ func tabFromID(id string) (int, bool) {
 }
 
 func newApp(dir string) *app {
-	auth := newAuthManager(dir)
+	if dir == "" {
+		dir = configDir()
+	}
+	proxy := newProxyManager(dir)
+	auth := newAuthManagerAt(dir, proxy)
 	a := &app{
 		auth:         auth,
-		client:       &Client{Auth: auth},
+		proxy:        proxy,
+		theme:        newThemeManager(dir),
+		client:       &Client{Auth: auth, Proxy: proxy},
 		tabs:         make([]*tabState, len(tabSpecs)),
 		lastTab:      -1,
 		navSel:       tabID(0),
 		pageName:     "list",
 		nativeNotify: true,
+		coins:        newCoinState(),
 	}
 	for i := range a.tabs {
 		a.tabs[i] = &tabState{}
@@ -163,6 +202,12 @@ func (a *app) load(idx, page int) {
 	}
 	st := a.tabs[idx]
 	spec := tabSpecs[idx]
+	// 金币页不是单列表端点：授权成功后的重跑也要走聚合加载，而不是把余额
+	// 响应当成列表来解析。
+	if spec.Kind == kindCoin {
+		a.reloadCoins()
+		return
+	}
 	if spec.Kind == kindNotification {
 		// 分段筛选直接改接口参数，不额外请求参数名。
 		spec.Query = notificationsQuery(st.filter)
@@ -170,6 +215,7 @@ func (a *app) load(idx, page int) {
 	if st.loading {
 		return
 	}
+	st.authWait = false
 	if spec.NeedsAuth && !a.auth.loggedIn() {
 		st.err = "需要登录后才能查看「" + spec.Label + "」"
 		return
@@ -191,6 +237,11 @@ func (a *app) load(idx, page int) {
 			}
 			st.loading = false
 			if err != nil {
+				// 首页因授权失败时，弹窗负责去补权限；把这一页标成等待授权，
+				// 避免每帧重建都再发一次注定失败的请求。
+				if a.handleAuthError(err, func() { a.load(idx, page) }) {
+					st.authWait = true
+				}
 				if page == 1 {
 					st.err = friendlyError(err)
 					st.items = nil
@@ -226,6 +277,9 @@ func (a *app) load(idx, page int) {
 			st.totalPages = res.TotalPages
 			st.page = page
 			st.loaded = true
+			// 列表行里的作者、被回复人与通知操作者都要带头像：数据到了就
+			// 先预取，渲染时只读缓存，不在每帧里发请求。
+			a.prefetchItemAvatars(res.Items)
 		})
 	}()
 }
@@ -236,9 +290,13 @@ func (a *app) ensureLoaded() {
 	if !a.autoLoad {
 		return
 	}
-	st := a.tabs[a.tab]
 	spec := tabSpecs[a.tab]
-	if st.loading || st.loaded {
+	if spec.Kind == kindCoin {
+		a.ensureCoinsLoaded()
+		return
+	}
+	st := a.tabs[a.tab]
+	if st.loading || st.loaded || st.authWait {
 		return
 	}
 	if spec.NeedsAuth && !a.auth.loggedIn() {
@@ -248,10 +306,15 @@ func (a *app) ensureLoaded() {
 }
 
 func (a *app) reloadCurrent() {
+	if tabSpecs[a.tab].Kind == kindCoin {
+		a.reloadCoins()
+		return
+	}
 	st := a.tabs[a.tab]
 	if st.loading {
 		return
 	}
+	st.authWait = false
 	st.loaded = false
 	st.items = nil
 	st.err = ""
@@ -268,7 +331,9 @@ func (a *app) onAuthChanged(err error) {
 		a.loginMsg = friendlyError(err)
 		a.status = a.loginMsg
 		// 失败时才把回退页摆出来：那里有「重新打开浏览器」和粘贴回调链接，
-		// 正常授权成功不进这一页。
+		// 正常授权成功不进这一页。授权弹窗先让位，待重跑调用保留：用户在
+		// 回退页重新授权成功后，它们照样会继续。
+		a.authGate.open = false
 		a.pageName = "login"
 	case a.auth.loggedIn():
 		a.loginMsg = "已登录"
@@ -287,13 +352,21 @@ func (a *app) onAuthChanged(err error) {
 		// 退出登录也会走 onChange(nil)：不能把它当成一次登录成功。
 		a.loginMsg = "已退出登录"
 		a.status = ""
-		a.avatar, a.avatarURL, a.avatarLoading = nil, "", false
+		// 之前没等到授权的调用不再属于当前会话。
+		a.authGate = authGate{}
 	}
 	// 私人 tab 的缓存与登录态绑定，一律丢弃后按需重新拉取。
 	for i, s := range tabSpecs {
 		if s.NeedsAuth {
 			a.tabs[i] = &tabState{}
 		}
+	}
+	// 金币页同样绑定当前会话；授权补上的 read:economy 也从这个空状态重新
+	// 发起请求，不会沿用授权前的空结果。
+	a.coins = newCoinState()
+	// 授权状态变了，之前因缺权限停住的 tab 可以重新拉取。
+	for _, st := range a.tabs {
+		st.authWait = false
 	}
 	if !a.auth.loggedIn() && tabSpecs[a.tab].NeedsAuth {
 		a.tab = 0
@@ -305,6 +378,9 @@ func (a *app) onAuthChanged(err error) {
 		a.startNotificationWatch()
 	} else {
 		a.stopNotificationWatch()
+		// 通知弹窗只展示当前账号的消息：退出后立即收起，别留一屏上一个
+		// 账号的内容。
+		a.notifOpen = false
 		a.unread = 0
 		a.unreadLoading = false
 		a.notifSeen = nil
@@ -313,26 +389,18 @@ func (a *app) onAuthChanged(err error) {
 		a.noticeTargets = nil
 	}
 	a.ensureLoaded()
-}
-
-// homeTheme 是全应用使用的浅色主题（首页、登录页、详情页一致）：纯白背景
-// （页面、侧边栏与自绘标题栏均白）+ 指定边框色 oklab(0.21 0.00164224
-// -0.00577088 / 0.1)（即 oklch(0.21 0.006 285.885) 的 10% 不透明版本），
-// 其余文字/强调色沿用浅色主题，保证整体可读且风格统一。视觉结构由半透明
-// oklch 边框与分隔线承担，呈现干净的卡片式列表。
-func homeTheme() *ui.Theme {
-	th := ui.LightTheme()
-	th.Background = ui.Hex("#ffffff")
-	th.Surface = ui.Hex("#ffffff")
-	th.Border = ui.Oklch(0.21, 0.006, 285.885).Alpha(0.1)
-	return th
+	// 授权成功后，把因为缺权限被打断的调用照原样重跑。放在 ensureLoaded
+	// 之后：两者都只会真正发出一次请求（load 自己会去重）。
+	if err == nil && a.auth.loggedIn() {
+		a.replayAuthorizedCalls()
+	}
 }
 
 func (a *app) view(c *ui.Context) {
-	// 整个应用统一使用白色主题（首页、登录页、详情页一致）。SetTheme 只
-	// 作用于当前帧，每帧从系统主题重置，所以要在建树前先定主题、再取
-	// 根背景：否则深色系统主题下根背景会是深色，与页面白底之间露出缝。
-	c.SetTheme(homeTheme())
+	// 外观按「跟随系统 / 浅色 / 深色」逐帧决定。SetTheme 只作用于当前帧，
+	// 每帧从系统主题重置，所以要在建树前先定主题、再取根背景：否则跟随时
+	// 根背景还是旧主题的底色，会在页面边缘露出一圈不协调的颜色。
+	a.applyTheme(c)
 	t := c.Theme()
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
@@ -340,9 +408,11 @@ func (a *app) view(c *ui.Context) {
 	switch a.pageName {
 	case "login":
 		a.loginView(c)
+		a.dialogs(c)
 		return
 	case "detail":
 		a.detailView(c)
+		a.dialogs(c)
 		return
 	}
 
@@ -363,17 +433,9 @@ func (a *app) view(c *ui.Context) {
 							ui.SidebarItem(c, tabID(i), tabIcons[i], s.Label)
 						}
 					})
-					// 「我的」单独成组：需登录后才能查看的功能
+					// 「我的」单独成组：需登录后才能查看的功能。通知不在这里：
+					// 它已经从页面改成标题栏铃铛打开的弹窗。
 					ui.SidebarSection(c, "我的", nil, func() {
-						// 通知排在最前：未读消息是最常用的入口，角标显示未读数。
-						if idx := notificationTabIndex(); idx >= 0 {
-							item := ui.SidebarItem(c, tabID(idx), tabIcons[idx], tabSpecs[idx].Label)
-							if a.unread > 0 {
-								item.Children(func() {
-									ui.Badge(c, strconv.Itoa(a.unread))
-								})
-							}
-						}
 						for i, s := range tabSpecs {
 							if !s.NeedsAuth || s.Kind == kindNotification {
 								continue
@@ -386,14 +448,18 @@ func (a *app) view(c *ui.Context) {
 				if sb.Changed() {
 					if i, ok := tabFromID(a.navSel); ok && i != a.tab {
 						a.tab = i
+						// 点上「我的」里的页面而没登录：统一弹授权窗，登录成功
+						// 后自动把这一页拉出来，不用再点一次。
+						if spec := tabSpecs[i]; spec.NeedsAuth && !a.auth.loggedIn() {
+							idx := i
+							a.requestLogin("「"+spec.Label+"」需要登录 2Libra 后才能查看。",
+								func() { a.load(idx, 1) })
+						}
 					}
 				}
 				if a.tab != a.lastTab {
 					a.lastTab = a.tab
 					a.status = ""
-					if tabSpecs[a.tab].Kind == kindNotification {
-						a.refreshUnread()
-					}
 				}
 			})
 			ui.Divider(c)
@@ -404,6 +470,15 @@ func (a *app) view(c *ui.Context) {
 		})
 	})
 	a.ensureLoaded()
+	a.dialogs(c)
+}
+
+// dialogs 画出代理设置、通知与全局授权弹窗。列表页、登录回退页与详情页
+// 共用，放在内容之后叠在最上层。
+func (a *app) dialogs(c *ui.Context) {
+	a.proxyDialog(c)
+	a.notificationsDialog(c)
+	a.authDialog(c)
 }
 
 // 自绘标题栏的尺寸。32 DIP 是 Windows 标题栏的常规高度，窗口按钮 46×32
@@ -417,8 +492,8 @@ const (
 // 品牌与账号状态，右侧是最小化 / 最大化·还原 / 关闭按钮；系统标题栏与
 // 系统按钮已由 TitleBarHidden + HideWindowButtons 隐藏。
 //
-// 配色全部取自当前主题：整个应用是白色主题，标题栏因此与页面同色，不再
-// 是一条突兀的灰带，深色系统主题下也不会出现浅色条压着深色页面。
+// 配色全部取自当前主题：标题栏与页面同色，不出现一条突兀的灰带；跟随
+// 系统切到深色时，标题栏也随之变深，不会出现浅色条压着深色页面。
 func (a *app) titleBar(c *ui.Context) {
 	t := c.Theme()
 	// bar 是系统窗口按钮占用的区域，HideWindowButtons 下为零。保留这段
@@ -435,6 +510,13 @@ func (a *app) titleBar(c *ui.Context) {
 			AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "T2 Desktop").FontSize(13).Bold().SingleLine().TextColor(t.Text)
 			ui.Spacer(c).Grow(1)
+			// 手动检查更新：后台每天也会自动检查一次，这里给想立即确认版本的人
+			// 一个入口；开发构建没有更新源时，更新窗口会说明原因。
+			a.titleTextButton(c, "检查更新", updater.CheckForUpdates)
+			a.themeButtons(c)
+			a.titleTextButton(c, "代理", func() { a.openProxyDialog() })
+			// 通知铃铛：未读数值跟在铃铛右边，点开独立弹窗（不再是侧边栏页面）。
+			a.notificationBell(c)
 			a.accountBar(c)
 		})
 		// 右段：自绘窗口控制按钮（最小化 / 最大化·还原 / 关闭），紧贴右上角。
@@ -479,14 +561,18 @@ func (a *app) accountBar(c *ui.Context) {
 		a.titleTextButton(c, "取消", func() { a.cancelLogin() })
 	case a.auth.loggedIn():
 		name := a.auth.username()
-		if name != "" {
-			ui.Avatar(c, name, a.avatar).Size(20, 20)
+		if name == "" {
+			ui.Text(c, "已登录").FontSize(12).TextColor(t.TextMuted).SingleLine()
+		} else {
+			// 头像是跟着昵称字号走的：标题栏 12px 的账号名配 18px 头像。
+			a.userTag(c, userTagSpec{
+				Name:   name,
+				Avatar: a.auth.avatarURL(),
+				Label:  "已登录 · " + name,
+				Size:   12,
+				Color:  t.TextMuted,
+			})
 		}
-		who := "已登录"
-		if name != "" {
-			who += " · " + name
-		}
-		ui.Text(c, who).FontSize(12).TextColor(t.TextMuted).SingleLine()
 		a.titleTextButton(c, "退出", func() { a.auth.Logout() })
 	default:
 		ui.Text(c, "未登录 · 匿名可读").FontSize(12).TextColor(t.TextMuted).SingleLine()
@@ -565,14 +651,16 @@ func (a *app) body(c *ui.Context) {
 			ui.Text(c, "「"+spec.Label+"」需要登录").FontSize(17).Bold()
 			ui.Text(c, "该端点要求 read:me / profile 权限，登录后才会发起请求。").TextColor(t.TextMuted)
 			if ui.PrimaryButton(c, "去登录").Clicked() {
-				a.startLogin()
+				idx := a.tab
+				a.requestLogin("「"+spec.Label+"」需要登录 2Libra 后才能查看。",
+					func() { a.load(idx, 1) })
 			}
 		})
 		return
 	}
-	// 通知有独立的头部、分段筛选与已读操作，整块交给它自己渲染。
-	if spec.Kind == kindNotification {
-		a.notificationsBody(c, st)
+	// 金币页聚合多个只读端点，自己管理余额、今日、流水、统计与排行。
+	if spec.Kind == kindCoin {
+		a.coinsBody(c)
 		return
 	}
 	if st.loading && len(st.items) == 0 {
@@ -589,9 +677,11 @@ func (a *app) body(c *ui.Context) {
 			if ui.Button(c, "重试").Clicked() {
 				a.reloadCurrent()
 			}
-			if strings.Contains(st.err, "登录") {
-				if ui.Button(c, "去登录").Clicked() {
-					a.startLogin()
+			if strings.Contains(st.err, "登录") || strings.Contains(st.err, "授权") {
+				if ui.Button(c, "去授权").Clicked() {
+					idx := a.tab
+					a.requestLogin("登录并授权后才能继续查看「"+spec.Label+"」。",
+						func() { a.load(idx, 1) })
 				}
 			}
 		})
@@ -665,7 +755,28 @@ func (a *app) row(c *ui.Context, it Item) {
 	row.Children(func() {
 		ui.Column(c).Grow(1).Gap(4).Children(func() {
 			ui.Text(c, it.Title).FontSize(14).Bold().MaxLines(2)
-			if it.Subtitle != "" {
+			// 副标题里的作者用统一用户标识渲染：头像跟着 11px 的昵称走，
+			// 同时保留「节点 · 昵称 · 时间」的原有顺序；节点名或时间太长时
+			// 允许折行，不把右侧的元信息挤出去。
+			switch {
+			case it.Author != "":
+				ui.Row(c).MinWidth(0).AlignItems(ui.Center).Wrap().Children(func() {
+					if it.SubtitlePrefix != "" {
+						ui.Text(c, it.SubtitlePrefix).FontSize(11).
+							TextColor(t.TextMuted).SingleLine()
+					}
+					a.userTag(c, userTagSpec{
+						Name:   it.Author,
+						Avatar: it.AuthorAvatar,
+						Size:   11,
+						Color:  t.TextMuted,
+					})
+					if it.SubtitleSuffix != "" {
+						ui.Text(c, it.SubtitleSuffix).FontSize(11).
+							TextColor(t.TextMuted).SingleLine()
+					}
+				})
+			case it.Subtitle != "":
 				ui.Text(c, it.Subtitle).FontSize(11).TextColor(t.TextMuted).SingleLine()
 			}
 		})
@@ -691,12 +802,23 @@ func (a *app) loginView(c *ui.Context) {
 	ui.Column(c).Fill().Padding(20, 24).Gap(12).Children(func() {
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			if ui.Button(c, "← 返回").Clicked() {
+				// 从授权弹窗的「粘贴回调」来到这一页时，离开就等于放弃这次
+				// 授权：把待重跑调用一起丢掉，避免以后突然执行过期操作。
+				if a.hasPendingAuthorization() {
+					a.cancelAuthGate("已取消授权")
+				}
 				a.pageName = "list"
 			}
 			ui.Text(c, "登录 2Libra").FontSize(18).Bold()
 			ui.Spacer(c).Grow(1)
 			if name := a.auth.username(); name != "" {
-				ui.Text(c, "当前："+name).FontSize(12).TextColor(t.TextMuted)
+				a.userTag(c, userTagSpec{
+					Name:   name,
+					Avatar: a.auth.avatarURL(),
+					Label:  "当前：" + name,
+					Size:   12,
+					Color:  t.TextMuted,
+				})
 				if ui.Button(c, "退出登录").Clicked() {
 					a.auth.Logout()
 				}
@@ -709,8 +831,11 @@ func (a *app) loginView(c *ui.Context) {
 		if a.loginMsg != "" {
 			ui.Text(c, a.loginMsg).TextColor(t.TextMuted).MaxLines(4)
 		}
+		if a.hasPendingAuthorization() {
+			ui.Text(c, "完成这次授权后会自动继续刚才被中断的操作。").FontSize(12).TextColor(t.TextMuted)
+		}
 		if ui.PrimaryButton(c, "打开浏览器授权").Clicked() {
-			a.startLogin()
+			a.startLoginWithScopes(a.pendingAuthScopes())
 		}
 		ui.Text(c, "浏览器没有自动跳回？把地址栏里的完整链接粘贴到这里，完成同一次授权：").
 			FontSize(12).TextColor(t.TextMuted)
@@ -767,9 +892,15 @@ func (a *app) handleCallbackURL(raw string) {
 // startLogin 打开系统浏览器并进入等待状态：不回登录页、不需要第二次点击，
 // 系统回调（或用户粘贴的回调链接）完成授权后自行登录。
 func (a *app) startLogin() {
-	authorizeURL, err := a.auth.Begin(context.Background())
+	a.startLoginWithScopes(nil)
+}
+
+// startLoginWithScopes 是上面那条流程的唯一实现：额外 scope 来自全局授权
+// 弹窗登记的缺失权限，普通登录传 nil 只申请默认范围。
+func (a *app) startLoginWithScopes(scopes []string) {
+	authorizeURL, err := a.auth.BeginScopes(context.Background(), scopes)
 	if err != nil {
-		a.loginMsg = err.Error()
+		a.cancelAuthGate("无法开始授权：" + err.Error())
 		a.pageName = "login"
 		return
 	}
@@ -780,9 +911,14 @@ func (a *app) startLogin() {
 }
 
 // cancelLogin 放弃本次授权：AuthManager 丢掉 PKCE 会话，界面回到未登录。
+// 如果这次授权是为被中断的调用发起的，那些调用也一并丢弃。
 func (a *app) cancelLogin() {
 	a.auth.Cancel()
 	a.loginPending = false
+	if a.hasPendingAuthorization() {
+		a.cancelAuthGate("已取消授权")
+		return
+	}
 	a.loginMsg = "已取消登录"
 	a.status = a.loginMsg
 }
@@ -790,6 +926,14 @@ func (a *app) cancelLogin() {
 func main() {
 	a := newApp("")
 	a.autoLoad = true
+	// 自动更新：更新包来自 github.com/vhxubo/t2-desktop 的 release，由
+	// mygo build 用 mygo.json 里 updates.publicKey 对应的私钥签名。native
+	// 更新窗口不需要 WebView，与本应用的原生 UI 一致：启动后检查一次，之后
+	// 每天一次，也在「检查更新」被点击时立即检查。
+	mygo.Use(updatenative.Plugin)
+	// 先按保存的外观模式设置原生外观，让启动首帧、原生更新/通知窗口与
+	// theme.json 一致；自绘界面仍由 view 每帧设置。
+	mygo.Theme.SetSource(themeSource(a.theme.Mode()))
 	// 深链回调先注册，再取单实例锁：浏览器跳回时系统拉起的是一个新进程，
 	// 它把命令行转给第一个实例，转发可能早于下面几行执行。mygo 的
 	// OnOpenURL 只在投递那一刻有监听者时才送达，注册晚了链接就被丢掉。

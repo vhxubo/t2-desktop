@@ -29,7 +29,7 @@ func testApp(t *testing.T) *app {
 	return a
 }
 
-// The 12 tabs must hit exactly the documented endpoints and page-1 queries.
+// The tabs must hit exactly the documented endpoints and page-1 queries.
 func TestTabEndpointsMatchContract(t *testing.T) {
 	want := []string{
 		"https://2libra.com/api/v1/topics?page=1&limit=50&parent_slug=All&sort=value",
@@ -44,9 +44,13 @@ func TestTabEndpointsMatchContract(t *testing.T) {
 		"https://2libra.com/api/v1/me/topics",
 		"https://2libra.com/api/v1/me/collections",
 		"https://2libra.com/api/v1/me/notifications?page=1&limit=50",
+		"https://2libra.com/api/v1/me/coins/balance",
 	}
-	if len(tabSpecs) != len(want) || len(tabLabels()) != 12 {
+	if len(tabSpecs) != len(want) || len(tabLabels()) != 13 {
 		t.Fatalf("tab 数量不对：%d", len(tabSpecs))
+	}
+	if len(tabIcons) != len(tabSpecs) {
+		t.Fatalf("tabIcons 与 tabSpecs 数量不一致：%d / %d", len(tabIcons), len(tabSpecs))
 	}
 	for i, s := range tabSpecs {
 		if got := endpoint(apiBaseURL, s, 1); got != want[i] {
@@ -87,6 +91,9 @@ func TestTabEndpointsMatchContract(t *testing.T) {
 	}
 	if tabSpecs[11].Kind != kindNotification || tabSpecs[11].ListKey != "list" {
 		t.Errorf("通知的列表字段是 list：%+v", tabSpecs[11])
+	}
+	if tabSpecs[12].Kind != kindCoin || !tabSpecs[12].NeedsAuth || tabSpecs[12].Paging != pagingOff {
+		t.Errorf("金币页应聚合加载且需要登录：%+v", tabSpecs[12])
 	}
 }
 
@@ -519,7 +526,7 @@ func TestHardcodedClientIDIgnoresLegacyConfig(t *testing.T) {
 		q.Get("redirect_uri") != defaultRedirectURI {
 		t.Errorf("授权参数被旧配置或环境变量改写：%v", q)
 	}
-	if defaultScopes != "read profile read:me write:comment" {
+	if defaultScopes != "read profile read:me write:comment read:economy" {
 		t.Errorf("scope 常量被改动：%s", defaultScopes)
 	}
 

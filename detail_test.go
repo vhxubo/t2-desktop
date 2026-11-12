@@ -28,6 +28,9 @@ const detailTopicJSON = `{
   "author":{"id":"u1","username":"jimmy","avatar_url":"https://r2.2libra.com/avatars/x.jpg","level":4},
   "node":{"id":"n1","slug":"work","name":"职场"},
   "tags":[{"name":"职场"},{"name":"讨论"}],
+  "reactions_summary":[{"emoji":"👍","count":8},{"emoji":"❤️","count":6}],
+  "my_reactions":["👍"],
+  "rewards":[{"amount":200,"user":{"username":"Jimmy"}},{"amount":100,"user":{"username":"alice"}}],
   "postscripts":[{"content":"补充一点 :collector:","created_at":"2026-11-01T10:00:00.000Z"}],
   "extra":{"vote":{"title":"选哪个","voting_finished":false,"max_choices":1,
     "options":[{"id":"o1","text":"A","vote_count":5},{"id":"o2","text":"B","vote_count":3}]}},
@@ -38,6 +41,7 @@ const detailRepliesJSON = `{
   "items":[
     {"id":"c1","content":"第一楼 :feel_wronged:","floor":1,"created_at":"2026-11-01T10:00:00.000Z",
      "author":{"id":"u2","username":"dannyng"},"reactions":[{"emoji":"👍","count":2,"mine":false}],
+     "my_reactions":["👍"],"rewards":[{"amount":100,"user":{"username":"jimmy"}}],
      "children":[{"id":"c1a","content":"楼中楼","floor":2,
        "parent":{"id":"c1","content":"第一楼 :sigh:","floor":1},"author":{"username":"alice"}}]},
     {"id":"c2","content":"第二楼","floor":3,"is_deleted":true,"author":null,
@@ -100,6 +104,14 @@ func TestDecodeTopic(t *testing.T) {
 	if p.CommentsClosed {
 		t.Error("comments_closed 不应为 true")
 	}
+	if len(p.Reactions) != 2 || p.Reactions[0].Emoji != "👍" || p.Reactions[0].Count != 8 ||
+		!p.Reactions[0].Mine || p.Reactions[1].Mine {
+		t.Errorf("帖子表情表态解析错误：%+v", p.Reactions)
+	}
+	if p.Rewards.Total != 300 || p.Rewards.Count != 2 || len(p.Rewards.Users) != 2 ||
+		p.Rewards.Users[0] != "Jimmy" {
+		t.Errorf("帖子打赏解析错误：%+v", p.Rewards)
+	}
 
 	// 匿名帖 author 为 null，不能 panic，也不能留空昵称。
 	anon := `{"short_id":"ANON","title":"匿名","content":"x","author":null,"node":null}`
@@ -124,9 +136,16 @@ func TestDecodeReplies(t *testing.T) {
 		t.Fatalf("items/pinned 数量错误：%+v", res)
 	}
 	first := res.Items[0]
-	if first.ID != "c1" || first.Author != "dannyng" || first.Floor != 1 ||
-		first.Reactions != "👍2" || first.Content == "" {
+	if first.ID != "c1" || first.Author != "dannyng" || first.Floor != 1 || first.Content == "" {
 		t.Errorf("第一条评论错误：%+v", first)
+	}
+	if len(first.Reactions) != 1 ||
+		first.Reactions[0] != (reactionStat{Emoji: "👍", Count: 2, Mine: true}) {
+		t.Errorf("评论表情表态解析错误：%+v", first.Reactions)
+	}
+	if first.Rewards.Total != 100 || first.Rewards.Count != 1 ||
+		len(first.Rewards.Users) != 1 || first.Rewards.Users[0] != "jimmy" {
+		t.Errorf("评论打赏解析错误：%+v", first.Rewards)
 	}
 	if len(first.Children) != 1 || first.Children[0].Depth != 1 ||
 		first.Children[0].Author != "alice" {
@@ -134,6 +153,9 @@ func TestDecodeReplies(t *testing.T) {
 	}
 	if first.Children[0].ParentSummary != "第一楼" {
 		t.Errorf("parent 摘要里的表情短码未清理：%q", first.Children[0].ParentSummary)
+	}
+	if first.Children[0].ParentID != "c1" {
+		t.Errorf("父评论 uuid 未解析：%q", first.Children[0].ParentID)
 	}
 	if !res.Items[1].Deleted || res.Items[1].Author != "匿名" {
 		t.Errorf("已删除 / 无 author 的评论处理错误：%+v", res.Items[1])
@@ -171,11 +193,47 @@ func TestDecodeLiveFieldNames(t *testing.T) {
 		"pinned_comments":[{"id":"p1","content":"置顶公告",
 			"author":{"username":"mod"}}],
 		"total":2,"page":1,"limit":30,"total_pages":1}`))
-	if len(pg.Items) != 1 || pg.Items[0].Reactions != "👍3" {
+	if len(pg.Items) != 1 || len(pg.Items[0].Reactions) != 1 ||
+		pg.Items[0].Reactions[0] != (reactionStat{Emoji: "👍", Count: 3}) {
 		t.Errorf("reactions_summary 没有解析：%+v", pg.Items)
 	}
 	if len(pg.Pinned) != 1 || !pg.Pinned[0].Pinned || pg.Pinned[0].Content != "置顶公告" {
 		t.Errorf("pinned_comments 没有解析：%+v", pg.Pinned)
+	}
+}
+
+// 表情表态与打赏的解析要兼容文档与线上两种写法：reactions_summary /
+// reactions、my_reactions（字符串数组或对象数组）和单条记录里的 mine；
+// 打赏按金额合计，0 元记录不计数，同一个人只留一个昵称。
+func TestDecodeReactionsAndRewards(t *testing.T) {
+	topic, err := decodeTopic([]byte(`{
+		"short_id":"SOCIAL1","title":"互动","content":"x",
+		"reactions":[{"emoji":"👍","count":2,"mine":true},{"emoji":"🎉","count":1}],
+		"my_reactions":[{"emoji":"🎉"},{"emoji":"🔥"}],
+		"rewards":[{"amount":30,"user":{"username":"alice"}},
+			{"amount":"20","user":{"username":"bob"}},
+			{"amount":0,"user":{"username":"zero"}}]
+	}`), "SOCIAL1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(topic.Reactions) != 3 || !topic.Reactions[0].Mine || !topic.Reactions[1].Mine ||
+		!topic.Reactions[2].Mine || topic.Reactions[2].Emoji != "🔥" ||
+		topic.Reactions[2].Count != 0 {
+		t.Errorf("reactions / my_reactions 的「我」状态解析错误：%+v", topic.Reactions)
+	}
+	if topic.Rewards.Total != 50 || topic.Rewards.Count != 2 ||
+		strings.Join(topic.Rewards.Users, ",") != "alice,bob" {
+		t.Errorf("打赏解析错误：%+v", topic.Rewards)
+	}
+
+	// 没有互动字段时是零值，界面据此不占位。
+	bare, err := decodeTopic([]byte(`{"short_id":"BARE","title":"无互动","content":"x"}`), "BARE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bare.Reactions) != 0 || bare.Rewards.Total != 0 || bare.Rewards.Count != 0 {
+		t.Errorf("无互动时应为零值：%+v / %+v", bare.Reactions, bare.Rewards)
 	}
 }
 
@@ -441,6 +499,64 @@ func TestClickOpensDetailView(t *testing.T) {
 	}
 	if a.pageName != "list" || a.detail != nil {
 		t.Errorf("返回后状态不对：%s %+v", a.pageName, a.detail)
+	}
+}
+
+// 详情页要把帖子与评论的表情表态、打赏状态都展示出来：帖子在正文末尾的
+// 左栏，评论在正文下方，因此同一个窗口里两边的数值不会互相顶掉。
+func TestDetailShowsReactionsAndRewards(t *testing.T) {
+	a := testApp(t)
+	a.openDetail(Item{ShortID: "JBYGf2A", URL: "https://2libra.com/post/work/JBYGf2A"})
+	topic, err := decodeTopic([]byte(detailTopicJSON), "JBYGf2A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.detail.topic = &topic
+	pg := decodeReplies([]byte(detailRepliesJSON))
+	a.detail.replyList = flattenReplies(pg)
+	a.detail.replyTotal = pg.Total
+	a.detail.replyLoaded = true
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	left, ok := tt.Find("300") // 帖子打赏合计
+	if !ok {
+		t.Fatalf("帖子打赏状态没有显示：%q", tt.Texts())
+	}
+	right, ok := tt.Find("100") // 评论打赏
+	if !ok {
+		t.Fatalf("评论打赏状态没有显示：%q", tt.Texts())
+	}
+	if left.X >= right.X {
+		t.Errorf("帖子打赏应位于左栏、评论打赏位于右栏：%+v / %+v", left, right)
+	}
+	for _, want := range []string{"👍", "❤️", "8", "6", "💰", "我"} {
+		if !tt.HasText(want) {
+			t.Errorf("详情页缺少表情 / 打赏标签 %q：%q", want, tt.Texts())
+		}
+	}
+	// 自己已表态的 👍 标签整块高亮并带「我」字；颜色由 socialBadges 的
+	// 单元逻辑保证，这里确认可读的标记确实在界面上。
+	if len(topic.Reactions) != 2 || !topic.Reactions[0].Mine {
+		t.Errorf("帖子表情状态解析错误：%+v", topic.Reactions)
+	}
+	if _, ok := tt.Find("我"); !ok {
+		t.Errorf("自己的表态没有显著标出：%q", tt.Texts())
+	}
+	// 自己的 👍 标签整块带强调色底，别人只表过的 ❤️ 仍是普通表面色：
+	// 在表情左侧的标签内边距上取色，两处必须不同。
+	mineEmoji, ok := tt.Find("👍")
+	if !ok {
+		t.Fatal("找不到自己的表态标签")
+	}
+	otherEmoji, ok := tt.Find("❤️")
+	if !ok {
+		t.Fatal("找不到其他人的表态标签")
+	}
+	im := tt.Image()
+	mineBG := im.RGBAAt(int(mineEmoji.X)-3, int(mineEmoji.Y+mineEmoji.H/2))
+	otherBG := im.RGBAAt(int(otherEmoji.X)-3, int(otherEmoji.Y+otherEmoji.H/2))
+	if mineBG == otherBG {
+		t.Errorf("自己的表态没有单独高亮：mine=%v other=%v", mineBG, otherBG)
 	}
 }
 
@@ -777,6 +893,156 @@ func TestReplyButtonNoLayoutShift(t *testing.T) {
 	dy := after.Y - yBase
 	if dy > 1 || dy < -1 {
 		t.Errorf("悬浮出现回复按钮后整条评论高度变化，发生跳动：Y %.1f -> %.1f (Δ%v)", yBase, after.Y, dy)
+	}
+}
+
+// 点「回复 N 楼：…」跳到父评论：长列表滚到底后点最后一条评论里的父楼
+// 引用，列表回到顶部并把高亮移到父评论上。
+func TestParentJumpScrollsToParent(t *testing.T) {
+	a := detailAppWithReplies(t)
+	rows := make([]replyItem, 0, 60)
+	for i := 0; i < 60; i++ {
+		rows = append(rows, replyItem{
+			ID: fmt.Sprintf("c%d", i), Author: "u", Floor: i + 1,
+			Content: fmt.Sprintf("第%d条评论", i+1),
+		})
+	}
+	rows[59].ParentID = "c0"
+	rows[59].ParentFloor = 1
+	rows[59].ParentSummary = "第一条评论"
+	a.detail.replyList = rows
+	a.detail.replyTotal = len(rows)
+	a.detail.replyLoaded = true
+	a.detail.list.ScrollTo(59, ui.End)
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	if !tt.HasText("第60条评论") {
+		t.Fatalf("滚动到底部后看不到最后一条评论：%q", tt.Texts())
+	}
+	if tt.HasText("第5条评论") {
+		t.Fatalf("开始时列表已经显示顶部评论，无法验证跳转：%q", tt.Texts())
+	}
+	if err := tt.Click("回复 1 楼：第一条评论"); err != nil {
+		t.Fatalf("点击父楼引用失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if !tt.HasText("第5条评论") {
+		t.Errorf("点击父楼引用后没有滚到父评论：%q", tt.Texts())
+	}
+	if a.detail.focusID != "c0" {
+		t.Errorf("父评论没有被高亮：focusID=%q", a.detail.focusID)
+	}
+}
+
+// 从评论列表点进来时，目标评论常常不在第 1 页：首屏没找到要自动续拉
+// 后面的页，直到找到目标并定位，而不是只显示第 1 页就说「来自评论定位」。
+func TestCommentFocusLoadsLaterPages(t *testing.T) {
+	var mu sync.Mutex
+	var pages []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		mu.Lock()
+		pages = append(pages, page)
+		mu.Unlock()
+		if page == "2" {
+			_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{"items":[
+				{"id":"goal","content":"目标评论","floor":40,"author":{"username":"late"}}],
+				"total":40,"page":2,"limit":30,"total_pages":2}}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{"items":[
+			{"id":"c1","content":"第一页评论","floor":1,"author":{"username":"first"}}],
+			"total":40,"page":1,"limit":30,"total_pages":2}}`)
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	a.autoLoad = true
+	a.client.Base = srv.URL + "/api"
+	a.client.HTTP = srv.Client()
+	a.detail = &detailState{
+		shortID: "X", focusID: "goal", focusPending: true, flat: true, replyPage: 1,
+	}
+	a.loadReplies(1)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for replyIndexByID(a.detail.replyList, "goal") < 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("没有自动续拉到目标评论：%+v", a.detail.replyList)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if a.detail.focusPending || a.detail.focusMiss {
+		t.Errorf("找到目标后定位状态不对：pending=%v miss=%v", a.detail.focusPending, a.detail.focusMiss)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(pages) != 2 || pages[0] != "1" || pages[1] != "2" {
+		t.Errorf("续拉页码不对：%v", pages)
+	}
+}
+
+// 目标评论不在这篇帖子里（或已删除）时，续拉完最后一页就停下并提示，
+// 不能一直自动翻页。
+func TestCommentFocusMissingStops(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{"items":[
+			{"id":"c1","content":"第一页评论","floor":1,"author":{"username":"first"}}],
+			"total":1,"page":1,"limit":30,"total_pages":1}}`)
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	a.autoLoad = true
+	a.client.Base = srv.URL + "/api"
+	a.client.HTTP = srv.Client()
+	a.detail = &detailState{
+		shortID: "X", focusID: "gone", focusPending: true, flat: true, replyPage: 1,
+	}
+	a.loadReplies(1)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for a.detail.focusPending {
+		if time.Now().After(deadline) {
+			t.Fatal("目标不存在时没有停止定位")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !a.detail.focusMiss {
+		t.Error("目标不存在时应标记未找到")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 1 {
+		t.Errorf("不该继续请求后面的页：%d 次", requests)
+	}
+}
+
+// Esc 与右上角关闭同义：没有内联层级时回到列表。
+func TestEscapeClosesDetail(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if a.pageName != "list" || a.detail != nil {
+		t.Errorf("Esc 没有关闭详情：page=%s detail=%v", a.pageName, a.detail)
+	}
+}
+
+// 内联浏览时 Esc 先退一层，与关闭按钮的返回栈行为一致。
+func TestEscapePopsInlineDetail(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.openDetail(Item{ShortID: "SECOND", URL: "https://2libra.com/post/work/SECOND"})
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if a.pageName != "detail" || a.detail == nil || a.detail.shortID != "JBYGf2A" {
+		t.Errorf("Esc 没有退回上一层：page=%s detail=%+v", a.pageName, a.detail)
 	}
 }
 

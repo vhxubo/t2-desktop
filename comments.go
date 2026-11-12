@@ -24,18 +24,20 @@ const siteCommentPageSize = 30
 // rowExtra 是帖子 / 评论行里比 Title/Subtitle/Meta 更细的展示字段。
 // 只有最新评论、动态这类带正文的端点会填它，普通榜单行保持 nil。
 type rowExtra struct {
-	Author      string
-	ReplyTo     string
-	Excerpt     string
-	Quote       string
-	NodeLabel   string
-	PostTitle   string
-	When        string
-	Floor       int
-	ReplyCount  int
-	RewardTotal int
-	Deleted     bool
-	Reactions   string
+	Author        string
+	AuthorAvatar  string // 作者头像地址；统一用户标识据此在昵称旁画头像
+	ReplyTo       string
+	ReplyToAvatar string // 被回复人的头像地址（通常同父评论作者）
+	Excerpt       string
+	Quote         string
+	NodeLabel     string
+	PostTitle     string
+	When          string
+	Floor         int
+	ReplyCount    int
+	RewardTotal   int
+	Deleted       bool
+	Reactions     string
 }
 
 // commentItem 是一条归一后的评论。字段对齐参考扩展的 LatestComment：
@@ -53,6 +55,7 @@ type commentItem struct {
 	ReplyTo       string
 	ParentID      string
 	ParentAuthor  string
+	ParentAvatar  string
 	ParentContent string
 	ParentExcerpt string
 	ParentDeleted bool
@@ -212,6 +215,7 @@ func decodeCommentItem(o object) commentItem {
 	if parent != nil {
 		c.ParentID = parent.str("id")
 		c.ParentAuthor = authorName(parent.sub("author"))
+		c.ParentAvatar = authorAvatar(parent.sub("author"))
 		c.ParentContent = parent.str("content")
 		c.ParentDeleted = parent.flag("is_deleted")
 	}
@@ -346,19 +350,27 @@ func commentItemFrom(o object) Item {
 	meta = append(meta, c.nodeLabel())
 	it.Meta = strings.Join(meta, " · ")
 
+	// 被回复人通常就是父评论作者；只有两者对得上时才借它的头像，否则
+	// 统一用户标识会退回昵称首字母，不张冠李戴。
+	replyAvatar := ""
+	if c.ReplyTo != "" && c.ReplyTo == c.ParentAuthor {
+		replyAvatar = c.ParentAvatar
+	}
 	it.Extra = &rowExtra{
-		Author:      c.Author,
-		ReplyTo:     c.ReplyTo,
-		Excerpt:     title,
-		Quote:       c.quote(),
-		NodeLabel:   c.nodeLabel(),
-		PostTitle:   c.PostTitle,
-		When:        relativeTime(c.CreatedAt),
-		Floor:       c.effectiveFloor(),
-		ReplyCount:  c.PostReplyCount,
-		RewardTotal: c.Rewards,
-		Deleted:     c.Deleted,
-		Reactions:   c.Reactions,
+		Author:        c.Author,
+		AuthorAvatar:  c.Avatar,
+		ReplyTo:       c.ReplyTo,
+		ReplyToAvatar: replyAvatar,
+		Excerpt:       title,
+		Quote:         c.quote(),
+		NodeLabel:     c.nodeLabel(),
+		PostTitle:     c.PostTitle,
+		When:          relativeTime(c.CreatedAt),
+		Floor:         c.effectiveFloor(),
+		ReplyCount:    c.PostReplyCount,
+		RewardTotal:   c.Rewards,
+		Deleted:       c.Deleted,
+		Reactions:     c.Reactions,
 	}
 	if it.Key == "" {
 		it.Key = c.PostShortID
@@ -422,7 +434,7 @@ func rewardsTotal(o object) int {
 
 // topicExtra 给动态流里的帖子补上正文摘要与互动数据；普通榜单没有 content，
 // 因此不会多出这一层展示。
-func topicExtra(o object, author, nodeName, when string) *rowExtra {
+func topicExtra(o object, author, avatar, nodeName, when string) *rowExtra {
 	content := commentContent(o)
 	reactions := reactionTextFrom(o)
 	rewards := rewardsTotal(o)
@@ -430,11 +442,12 @@ func topicExtra(o object, author, nodeName, when string) *rowExtra {
 		return nil
 	}
 	return &rowExtra{
-		Author:      author,
-		Excerpt:     truncate(commentExcerpt(content), 240),
-		NodeLabel:   nodeName,
-		When:        when,
-		Reactions:   reactions,
-		RewardTotal: rewards,
+		Author:       author,
+		AuthorAvatar: avatar,
+		Excerpt:      truncate(commentExcerpt(content), 240),
+		NodeLabel:    nodeName,
+		When:         when,
+		Reactions:    reactions,
+		RewardTotal:  rewards,
 	}
 }

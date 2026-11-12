@@ -29,7 +29,7 @@ const (
 	appIdentifier      = "com.vhxubo.t2-desktop"
 	defaultRedirectURI = appIdentifier + ":/callback"
 	clientID           = "e471281af4d84ecfae77c39f94bcf372"
-	defaultScopes      = "read profile read:me write:comment"
+	defaultScopes      = "read profile read:me write:comment read:economy"
 
 	// Some platforms normalise :/callback into ://callback before handing
 	// the URL to the app. This is the same native callback, not a second
@@ -148,10 +148,16 @@ func newAuthManager(dir string) *AuthManager {
 	if dir == "" {
 		dir = configDir()
 	}
+	return newAuthManagerAt(dir, newProxyManager(dir))
+}
+
+// newAuthManagerAt 复用调用方已经建好的代理管理器，保证 OAuth 与 API 请求
+// 走同一份代理配置和同一个连接池。
+func newAuthManagerAt(dir string, proxy *proxyManager) *AuthManager {
 	m := &AuthManager{
 		dir:     dir,
 		apiBase: apiBaseURL,
-		http:    &http.Client{Timeout: 20 * time.Second},
+		http:    proxy.Client(20 * time.Second),
 	}
 	// client_id and scope are compile-time constants now. A settings.json
 	// left behind by an older build is ignored entirely.
@@ -295,16 +301,43 @@ func isCallbackLink(raw string) bool {
 	return base == defaultRedirectURI || base == alternateCallbackURI
 }
 
-func (m *AuthManager) authorizeURL(p *pendingLogin) string {
+func (m *AuthManager) authorizeURL(p *pendingLogin, scope string) string {
 	v := url.Values{}
 	v.Set("client_id", clientID)
 	v.Set("redirect_uri", defaultRedirectURI)
 	v.Set("response_type", "code")
-	v.Set("scope", defaultScopes)
+	v.Set("scope", scope)
 	v.Set("state", p.state)
 	v.Set("code_challenge", p.challenge)
 	v.Set("code_challenge_method", "S256")
 	return m.webBase() + "/oauth/authorize?" + v.Encode()
+}
+
+// mergeScopes unions the default scopes with the ones a failed call asked for,
+// keeping first-seen order. A server 403 can name a scope this build never
+// requested (a revoked `write:comment`, a newer endpoint's scope); the next
+// authorization must ask for it explicitly or the browser page cannot grant it.
+func mergeScopes(extra []string) string {
+	seen := make(map[string]struct{}, len(extra)+4)
+	merged := make([]string, 0, len(extra)+4)
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		merged = append(merged, s)
+	}
+	for _, s := range strings.Fields(defaultScopes) {
+		add(s)
+	}
+	for _, s := range extra {
+		add(s)
+	}
+	return strings.Join(merged, " ")
 }
 
 // Begin creates the PKCE pair and returns the authorize URL. Nothing is
@@ -312,6 +345,13 @@ func (m *AuthManager) authorizeURL(p *pendingLogin) string {
 // registered scheme. A goroutine waits for the callback, exchanges the
 // code and reports the outcome via onChange.
 func (m *AuthManager) Begin(ctx context.Context) (string, error) {
+	return m.BeginScopes(ctx, nil)
+}
+
+// BeginScopes is Begin with additional scopes on top of defaultScopes. The
+// global authorization prompt uses it to ask for exactly the range the refused
+// call needs.
+func (m *AuthManager) BeginScopes(ctx context.Context, extraScopes []string) (string, error) {
 	// A second click on 「登录」 supersedes the previous attempt: its PKCE
 	// pair is thrown away so a late callback cannot complete a flow the
 	// user already replaced.
@@ -329,7 +369,7 @@ func (m *AuthManager) Begin(ctx context.Context) (string, error) {
 	m.pending = p
 	m.mu.Unlock()
 	go m.awaitLogin(ctx, p)
-	return m.authorizeURL(p), nil
+	return m.authorizeURL(p, mergeScopes(extraScopes)), nil
 }
 
 // cancelPending drops the in-flight authorization, if any. Its goroutine

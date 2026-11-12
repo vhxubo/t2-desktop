@@ -285,7 +285,10 @@ type notificationView struct {
 	Detail       string
 	DetailTone   string
 	Meta         []string
-	Reactions    string
+	// Reactions 是聚合表态的纯文本（原生通知用）；ReactionGroups 是同一条
+	// 数据的结构化形式，界面据此在点名的用户名旁画头像。
+	Reactions      string
+	ReactionGroups []notificationReactionGroup
 }
 
 var notificationTypeLabels = map[string]string{
@@ -385,7 +388,8 @@ func notificationViewOf(n *notification) notificationView {
 	v.Detail, v.DetailTone = notificationDetail(kind, payload)
 	v.Meta = notificationMeta(kind, payload)
 	if kind == "reaction" {
-		v.Reactions = notificationReactions(payload)
+		v.ReactionGroups = notificationReactionGroups(payload)
+		v.Reactions = notificationReactionText(v.ReactionGroups)
 	}
 	return v
 }
@@ -609,11 +613,25 @@ func notificationTargetURL(n *notification, p object, actor string) string {
 	return siteBaseURL + "/notifications"
 }
 
-// notificationReactions summarises payload.reactions (emoji → count) and
-// attaches the usernames found in payload.relations.
-func notificationReactions(p object) string {
+// notificationReactionUser 是聚合表态里点名的一个用户；头像地址可能为空，
+// 界面会退回昵称首字母。
+type notificationReactionUser struct {
+	Name   string
+	Avatar string
+}
+
+// notificationReactionGroup 是一种表情的聚合：数量与点名（最多 3 个）的用户。
+type notificationReactionGroup struct {
+	Emoji string
+	Count int
+	Users []notificationReactionUser
+}
+
+// notificationReactionGroups 把 payload.relations（逐条表态，可能带头像）与
+// payload.reactions（服务端计数）汇总成分表情的聚合视图。
+func notificationReactionGroups(p object) []notificationReactionGroup {
 	counts := map[string]int{}
-	users := map[string][]string{}
+	users := map[string][]notificationReactionUser{}
 	var order []string
 
 	addOrder := func(emoji string) {
@@ -633,8 +651,11 @@ func notificationReactions(p object) string {
 		}
 		addOrder(emoji)
 		counts[emoji]++
-		if u := r.str("username"); u != "" && !containsString(users[emoji], u) {
-			users[emoji] = append(users[emoji], u)
+		if u := r.str("username"); u != "" && !hasReactionUser(users[emoji], u) {
+			users[emoji] = append(users[emoji], notificationReactionUser{
+				Name:   u,
+				Avatar: authorAvatar(r),
+			})
 		}
 	}
 	if ro := p.sub("reactions"); ro != nil {
@@ -651,28 +672,41 @@ func notificationReactions(p object) string {
 	}
 
 	sort.Strings(order)
-	var parts []string
+	out := make([]notificationReactionGroup, 0, len(order))
 	for _, emoji := range order {
 		count := counts[emoji]
 		if count <= 0 {
 			continue
 		}
-		part := emoji + strconv.Itoa(count)
-		if names := users[emoji]; len(names) > 0 {
-			shown := names
-			if len(shown) > 3 {
-				shown = shown[:3]
+		shown := users[emoji]
+		if len(shown) > 3 {
+			shown = shown[:3]
+		}
+		out = append(out, notificationReactionGroup{Emoji: emoji, Count: count, Users: shown})
+	}
+	return out
+}
+
+// notificationReactionText 是聚合表态的纯文本形式，原生通知与兼容读取用。
+func notificationReactionText(groups []notificationReactionGroup) string {
+	parts := make([]string, 0, len(groups))
+	for _, g := range groups {
+		part := g.Emoji + strconv.Itoa(g.Count)
+		if len(g.Users) > 0 {
+			names := make([]string, len(g.Users))
+			for i, u := range g.Users {
+				names[i] = u.Name
 			}
-			part += "（@" + strings.Join(shown, "、@") + "）"
+			part += "（@" + strings.Join(names, "、@") + "）"
 		}
 		parts = append(parts, part)
 	}
 	return strings.Join(parts, " · ")
 }
 
-func containsString(list []string, want string) bool {
-	for _, v := range list {
-		if v == want {
+func hasReactionUser(users []notificationReactionUser, name string) bool {
+	for _, u := range users {
+		if u.Name == name {
 			return true
 		}
 	}

@@ -242,7 +242,8 @@ func TestNotificationViewReplyTarget(t *testing.T) {
 func TestNotificationViewReactionAggregates(t *testing.T) {
 	n := decodeNotificationObject(mustObject(t, `{
 		"id":"n2","type":"reaction","payload":{"reactionType":"comment","related_id":"c9",
-			"relations":[{"emoji":"👍","username":"a"},{"emoji":"👍","username":"b"}],
+			"relations":[{"emoji":"👍","username":"a","avatar_url":"https://r2.2libra.com/a.png"},
+				{"emoji":"👍","username":"b"}],
 			"reactions":{"👍":3}}
 	}`))
 	v := notificationViewOf(n)
@@ -254,6 +255,14 @@ func TestNotificationViewReactionAggregates(t *testing.T) {
 	}
 	if v.Reactions != "👍3（@a、@b）" {
 		t.Errorf("表态汇总 = %q", v.Reactions)
+	}
+	// 界面用结构化视图给点名的用户画头像：relations 里带头像地址时一并保留。
+	if len(v.ReactionGroups) != 1 || v.ReactionGroups[0].Emoji != "👍" ||
+		v.ReactionGroups[0].Count != 3 || len(v.ReactionGroups[0].Users) != 2 ||
+		v.ReactionGroups[0].Users[0].Name != "a" ||
+		v.ReactionGroups[0].Users[0].Avatar != "https://r2.2libra.com/a.png" ||
+		v.ReactionGroups[0].Users[1].Name != "b" {
+		t.Errorf("表态聚合视图 = %+v", v.ReactionGroups)
 	}
 	// related_id 是评论 id，但没有帖子 short_id 可拼：回到消息中心而不是
 	// 拼出一个打不开的链接。
@@ -352,10 +361,7 @@ func notificationApp(t *testing.T, srv *httptest.Server) (*app, *tabState) {
 	// 让 refreshUnread 直接返回：测试只关心已读落账，不额外拉未读数。
 	a.unreadLoading = true
 	a.unread = 2
-	idx := notificationTabIndex()
-	a.tab = idx
-	a.navSel = tabID(idx)
-	st := a.tabs[idx]
+	st := a.tabs[notificationTabIndex()]
 	st.loaded = true
 	st.total = 3
 	st.items = []Item{
@@ -484,18 +490,75 @@ func TestMarkNotificationReadCoalesces(t *testing.T) {
 }
 
 /* ------------------------------------------------------------------
-   界面：筛选、计数按钮与勾选框
+   界面：标题栏铃铛、筛选、计数按钮与勾选框
 ------------------------------------------------------------------ */
 
-func TestNotificationTabView(t *testing.T) {
+// 通知是标题栏铃铛打开的独立弹窗：侧边栏不再有「通知」入口，未读数值
+// 直接画在铃铛右边，列表与已读操作都在弹窗里。
+func TestNotificationBellOpensDialog(t *testing.T) {
+	a := notificationDialogApp(t)
+
+	tt := ui.NewTester(a.view, 1200, 800)
+	tt.Frame()
+	bell, ok := tt.Find("通知（2 条未读）")
+	if !ok {
+		t.Fatalf("标题栏没有带未读数的铃铛：%q", tt.Texts())
+	}
+	if bell.Y < 0 || bell.Y+bell.H > titleBarHeight || bell.H == 0 {
+		t.Errorf("铃铛没有落在标题栏里：%v", bell)
+	}
+	if !tt.HasText("2") {
+		t.Errorf("铃铛旁没有未读数值：%q", tt.Texts())
+	}
+	for _, text := range tt.Texts() {
+		if text == "通知" {
+			t.Errorf("侧边栏仍把「通知」当成页面入口：%q", tt.Texts())
+			break
+		}
+	}
+	if a.notifOpen {
+		t.Fatal("弹窗不该在点击铃铛前打开")
+	}
+	if err := tt.Click("通知（2 条未读）"); err != nil {
+		t.Fatalf("点击铃铛失败：%v", err)
+	}
+	tt.Frame()
+	if !a.notifOpen {
+		t.Fatal("点击铃铛没有打开通知弹窗")
+	}
+
+	for _, want := range []string{
+		"通知", "2 条未读",
+		"全部已读", "已读本页 1", "已读选中 1",
+		"@dannyng 提到了你", "这条是提及",
+		"全部", "未读", "回复", "提及", "表态", "打赏",
+		"原生通知不可用",
+	} {
+		if !tt.HasText(want) {
+			t.Errorf("通知弹窗缺少文案 %q：%q", want, tt.Texts())
+		}
+	}
+
+	// 弹窗有自己的关闭按钮；点窗外或 Esc 同样收起（Modal 的默认行为）。
+	if err := tt.Click("关闭通知"); err != nil {
+		t.Fatalf("点击关闭通知失败：%v", err)
+	}
+	tt.Frame()
+	if a.notifOpen {
+		t.Error("「关闭通知」没有收起弹窗")
+	}
+}
+
+// 弹窗里的列表与操作在没有真实窗口时也能渲染出全部文案（数据层测试与
+// 界面测试共用同一份状态）。
+func notificationDialogApp(t *testing.T) *app {
+	t.Helper()
 	a := newApp(t.TempDir())
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
 		t.Fatal(err)
 	}
-	a.tab = notificationTabIndex()
-	a.navSel = tabID(a.tab)
 	a.unread = 2
-	st := a.tabs[a.tab]
+	st := a.tabs[notificationTabIndex()]
 	st.loaded = true
 	st.total = 2
 	st.items = []Item{
@@ -507,31 +570,91 @@ func TestNotificationTabView(t *testing.T) {
 		{Key: "n2", Notif: &notification{ID: "n2", Type: "reply", IsRead: true}},
 	}
 	st.selected = map[string]bool{"n1": true}
+	return a
+}
 
-	tt := ui.NewTester(a.view, 1200, 800)
-	for _, want := range []string{
-		"通知", "2 条未读",
-		"全部已读", "已读本页 1", "已读选中 1",
-		"@dannyng 提到了你", "这条是提及",
-		"全部", "未读", "回复", "提及", "表态", "打赏",
-	} {
-		if !tt.HasText(want) {
-			t.Errorf("通知页缺少文案 %q：%q", want, tt.Texts())
-		}
+// 未登录时不发请求：点铃铛先弹全局授权窗，弹窗本身不打开（通知需要 read:me）。
+func TestNotificationBellNeedsLogin(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if err := tt.Click("通知"); err != nil {
+		t.Fatalf("点击铃铛失败：%v", err)
 	}
-	if !tt.HasText("原生通知不可用") {
-		t.Errorf("headless 下应提示原生通知不可用：%q", tt.Texts())
+	tt.Frame()
+	if a.notifOpen {
+		t.Error("未登录时不该打开通知弹窗")
+	}
+	if !a.authGate.open {
+		t.Error("未登录点铃铛应弹出授权弹窗")
+	}
+	if !tt.HasText("登录 2Libra 后才能查看「通知」。") {
+		t.Errorf("授权弹窗没有说明原因：%q", tt.Texts())
 	}
 }
 
-// 未登录时不发请求，只显示登录引导（通知 tab 需要 read:me）。
-func TestNotificationTabNeedsLogin(t *testing.T) {
-	a := testApp(t)
-	a.tab = notificationTabIndex()
-	a.navSel = tabID(a.tab)
+// Esc 与「关闭通知」同义：弹窗收起，回到正在浏览的页面。
+func TestNotificationDialogDismissesOnEscape(t *testing.T) {
+	a := notificationDialogApp(t)
+	a.notifOpen = true
+	tt := ui.NewTester(a.view, 1200, 800)
+	tt.Frame()
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if a.notifOpen {
+		t.Error("Esc 没有收起通知弹窗")
+	}
+}
+
+// 打开一条消息后弹窗自动收起；指向站点页面的消息交给系统浏览器，不留在
+// 弹窗上面。
+func TestNotificationTargetOpensAndClosesDialog(t *testing.T) {
+	a := newApp(t.TempDir())
+	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	a.notifOpen = true
+	st := a.tabs[notificationTabIndex()]
+	st.loaded = true
+	st.items = []Item{{Key: "f1", Notif: &notification{
+		ID: "f1", Type: "follow", IsRead: true,
+		Payload: mustObject(t, `{"followerUsername":"bob"}`),
+	}}}
 	tt := ui.NewTester(a.view, 1100, 760)
-	if !tt.HasText("「通知」需要登录") {
-		t.Errorf("通知 tab 没有登录引导：%q", tt.Texts())
+	tt.Frame()
+	if err := tt.Click("@bob 关注了你"); err != nil {
+		t.Fatalf("点击消息行失败：%v", err)
+	}
+	tt.Frame()
+	if a.notifOpen {
+		t.Error("打开目标后应收起通知弹窗")
+	}
+	urls := tt.OpenedURLs()
+	if len(urls) == 0 || urls[0] != "https://2libra.com/user/bob/about" {
+		t.Errorf("消息目标没有交给系统浏览器：%v", urls)
+	}
+}
+
+// 窗口再小，弹窗也要完整落在窗口里，列表在面板内滚动。
+func TestNotificationDialogFitsSmallWindow(t *testing.T) {
+	a := notificationDialogApp(t)
+	a.notifOpen = true
+	tt := ui.NewTester(a.view, 760, 520)
+	tt.Frame()
+	tt.Frame()
+	closeR, ok := tt.Find("关闭通知")
+	if !ok {
+		t.Fatalf("小窗口里找不到关闭按钮：%q", tt.Texts())
+	}
+	if closeR.X < 0 || closeR.X+closeR.W > 760 {
+		t.Errorf("弹窗横向超出窗口：%v", closeR)
+	}
+	row, ok := tt.Find("这条是提及")
+	if !ok {
+		t.Fatalf("小窗口里没有消息行：%q", tt.Texts())
+	}
+	if row.Y < 0 || row.Y+row.H > 520 {
+		t.Errorf("消息行超出窗口：%v", row)
 	}
 }
 

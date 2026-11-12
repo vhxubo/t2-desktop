@@ -30,11 +30,25 @@ func (a *app) richRow(c *ui.Context, it Item) {
 				if author == "" {
 					author = "匿名"
 				}
-				ui.Text(c, "@"+author).FontSize(12).Bold()
+				// 作者与被回复人都是用户名：统一走 userTag，头像跟着 12px
+				// 的昵称走，和评论头部保持一致。
+				a.userTag(c, userTagSpec{
+					Name:   author,
+					Avatar: x.AuthorAvatar,
+					Label:  "@" + author,
+					Size:   12,
+					Bold:   true,
+				})
 				if comment {
 					if x.ReplyTo != "" {
 						ui.Text(c, "回复").FontSize(12).TextColor(t.TextMuted)
-						ui.Text(c, "@"+x.ReplyTo).FontSize(12).Bold()
+						a.userTag(c, userTagSpec{
+							Name:   x.ReplyTo,
+							Avatar: x.ReplyToAvatar,
+							Label:  "@" + x.ReplyTo,
+							Size:   12,
+							Bold:   true,
+						})
 					} else {
 						ui.Text(c, "评论了帖子").FontSize(12).TextColor(t.TextMuted)
 					}

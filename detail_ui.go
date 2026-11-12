@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -37,11 +36,16 @@ type detailState struct {
 	flat                  bool
 	list                  ui.ListState
 
-	// 正文作者头像：topic 加载后按 URL 取一次位图，回 UI 线程缓存，
-	// 头像块（左下角）画首字母占位直到位图到达（或消失）。
-	topicAvatar        *ui.Bitmap
-	topicAvatarURL     string
-	topicAvatarLoading bool
+	// 从评论列表点进来时要定位到具体某条评论。目标常常不落在第 1 页
+	// （扁平序按 flat_floor 排），所以首屏没找到时自动续拉后面的页，
+	// focusTries 限制最多拉多少页，focusMiss 在找完还没有时置位。
+	focusPending bool
+	focusTries   int
+	focusMiss    bool
+
+	// follow 是左下角作者块里关注按钮的状态：作者 uuid、是否已关注、
+	// 在途请求与错误。只在 UI 线程读写，见 follow.go。
+	follow followState
 
 	// composer: write a comment (optionally as a nested reply to replyToID).
 	draft        string
@@ -69,6 +73,10 @@ func (d *detailState) originURL() string {
 
 // commentFontSize 是评论正文的字号：比帖子正文小一号，评论区读起来更紧凑。
 const commentFontSize float32 = 13
+
+// replyLocateMaxPages 是从评论列表点进来、首屏没找到目标评论时最多自动
+// 续拉的页数：30 条一页，20 页足够覆盖绝大多数帖子，又不会无限请求。
+const replyLocateMaxPages = 20
 
 // newMarkdownOptions 造一套 Markdown 渲染选项。size 是这类视图的基准字号，
 // 0 表示跟随主题（帖子正文）；评论区传 commentFontSize，标题、代码、列表
@@ -169,59 +177,10 @@ func (a *app) fetchImage(raw string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 }
 
-// ensureAvatar loads the signed-in account's avatar once per URL, off the UI
-// thread, and publishes the bitmap back; the title bar draws initials until
-// it arrives (or when the profile has no picture).
+// ensureAvatar 预取当前登录账号的头像。userTag 在标题栏和登录页读同一份
+// 头像缓存；图片没到之前先画昵称首字母。
 func (a *app) ensureAvatar() {
-	if !a.autoLoad || a.avatarLoading {
-		return // headless tests never touch the network
-	}
-	u := a.auth.avatarURL()
-	if u == "" || (u == a.avatarURL && a.avatar != nil) {
-		return
-	}
-	a.avatarURL = u
-	a.avatarLoading = true
-	go func() {
-		bmp, err := a.loadBitmap(u)
-		a.publish(func() {
-			a.avatarLoading = false
-			if err != nil {
-				log.Printf("头像加载失败：%v", err)
-				return
-			}
-			a.avatar = bmp
-		})
-	}()
-}
-
-// ensureTopicAvatar loads the post author's avatar once per URL, off the UI
-// thread, and publishes the bitmap back; the bottom-left author block draws
-// the nickname's initial until it arrives (or when the topic has no picture).
-func (a *app) ensureTopicAvatar(d *detailState) {
-	if !a.autoLoad || d.topicAvatarLoading {
-		return // headless tests never touch the network
-	}
-	if d.topic == nil {
-		return
-	}
-	u := d.topic.Avatar
-	if u == "" || (u == d.topicAvatarURL && d.topicAvatar != nil) {
-		return
-	}
-	d.topicAvatarURL = u
-	d.topicAvatarLoading = true
-	go func() {
-		bmp, err := a.loadBitmap(u)
-		a.publish(func() {
-			d.topicAvatarLoading = false
-			if err != nil {
-				log.Printf("正文作者头像加载失败：%v", err)
-				return
-			}
-			d.topicAvatar = bmp
-		})
-	}()
+	a.prefetchAvatars(a.auth.avatarURL())
 }
 
 func (a *app) openDetail(it Item) {
@@ -239,11 +198,12 @@ func (a *app) openDetail(it Item) {
 		a.detailStack = nil
 	}
 	a.detail = &detailState{
-		shortID:     it.ShortID,
-		focusID:     it.CommentID,
-		fallbackURL: it.URL,
-		replyPage:   1,
-		flat:        it.CommentID != "", // 从评论列表进来用扁平序，更容易找到那层楼
+		shortID:      it.ShortID,
+		focusID:      it.CommentID,
+		focusPending: it.CommentID != "",
+		fallbackURL:  it.URL,
+		replyPage:    1,
+		flat:         it.CommentID != "", // 从评论列表进来用扁平序，更容易找到那层楼
 	}
 	a.pageName = "detail"
 	a.status = ""
@@ -285,11 +245,27 @@ func (a *app) loadTopic() {
 			}
 			d.topicLoading = false
 			if err != nil {
+				a.handleAuthError(err, func() {
+					if a.detail == d {
+						a.loadTopic()
+					}
+				})
 				d.topicErr = friendlyError(err)
 				return
 			}
 			d.topic = &topic
-			a.ensureTopicAvatar(d)
+			a.prefetchAvatars(topic.Avatar)
+			// 主题详情带作者的 uuid；关注状态若已随作者对象下发就直接用，
+			// 否则标记为待读取，登录后由 ensureFollowState 读用户主页补齐。
+			d.follow.userID = topic.AuthorID
+			d.follow.need = !topic.FollowingKnown
+			if topic.FollowingKnown {
+				d.follow.following = topic.Following
+				d.follow.known = true
+				d.follow.viewer = a.auth.username()
+			}
+			a.prefetchAvatars(topic.Avatar)
+			a.ensureFollowState(d)
 		})
 	}()
 }
@@ -317,6 +293,13 @@ func (a *app) loadReplies(page int) {
 			}
 			d.replyLoading = false
 			if err != nil {
+				// 缺权限时不只把错误画在页面上：全局授权弹窗会带用户去补权限，
+				// 回调成功后重发这一页。
+				a.handleAuthError(err, func() {
+					if a.detail == d {
+						a.loadReplies(page)
+					}
+				})
 				if page > 1 && len(d.replyList) > 0 {
 					// 已经有评论时续拉失败：保留列表，在底部提示并可重试。
 					d.replyMoreErr = friendlyError(err)
@@ -351,14 +334,28 @@ func (a *app) loadReplies(page int) {
 			d.replyTotalPages = res.TotalPages
 			d.replyPage = page
 			d.replyLoaded = true
-			// 只定位首屏：续拉后面的页时再跳回被定位的评论，会把用户
-			// 刚滚到的位置猛地拽走。
-			if page == 1 && d.focusID != "" {
-				for i, r := range d.replyList {
-					if r.ID == d.focusID {
-						d.list.ScrollTo(i, ui.Start)
-						break
-					}
+			// 评论作者头像随评论一起预取，列表行第一帧就能画（没到则先画
+			// 昵称首字母）。
+			a.prefetchReplyAvatars(rows)
+			// 定位目标评论：找到就滚过去。目标不在首屏时继续自动续拉，
+			// 直到找到、到底或用完预算；用户手动续拉时 focusPending 已
+			// 经清掉，不会把用户刚滚到的位置拽走。
+			at := -1
+			if d.focusID != "" {
+				at = replyIndexByID(d.replyList, d.focusID)
+			}
+			if at >= 0 {
+				d.list.ScrollTo(at, ui.Start)
+				d.focusPending = false
+				d.focusMiss = false
+			} else if d.focusPending {
+				hasMore := d.replyTotalPages == 0 || page < d.replyTotalPages
+				if d.focusTries < replyLocateMaxPages && hasMore && !d.replyNoMore {
+					d.focusTries++
+					a.loadReplies(page + 1)
+				} else {
+					d.focusPending = false
+					d.focusMiss = true
 				}
 			}
 		})
@@ -380,6 +377,11 @@ func (a *app) ensureEmojis() {
 			a.emojiLoading = false
 			a.emojiTried = true
 			if err != nil {
+				// 表情表也可能因权限被拒；授权成功后允许重试一次。
+				a.handleAuthError(err, func() {
+					a.emojiTried = false
+					a.ensureEmojis()
+				})
 				a.status = "表情表加载失败，正文短码原样显示"
 				return
 			}
@@ -389,8 +391,10 @@ func (a *app) ensureEmojis() {
 }
 
 func (a *app) detailView(c *ui.Context) {
-	c.SetTheme(homeTheme())
+	// 主题已由 view 按外观模式设好，这里直接取用，避免重复解析。
 	t := c.Theme()
+	// Esc 与右上角关闭同义：内联浏览时先退一层，再回到列表。
+	c.OnShortcut(0, ui.KeyEscape, func() { a.closeDetail() })
 	a.titleBar(c)
 	ui.Divider(c)
 	d := a.detail
@@ -411,7 +415,11 @@ func (a *app) detailView(c *ui.Context) {
 			}
 			ui.Text(c, truncate(label, 42)).FontSize(15).Bold().SingleLine().Grow(1)
 			if d.focusID != "" {
-				ui.Text(c, "来自评论定位").FontSize(11).TextColor(t.TextMuted)
+				label, color := "来自评论定位", t.TextMuted
+				if d.focusMiss {
+					label, color = "未找到该评论", t.Danger
+				}
+				ui.Text(c, label).FontSize(11).TextColor(color)
 			}
 			if n := len(a.detailStack); n > 0 {
 				ui.Textf(c, "内联浏览 %d 层", n).FontSize(11).TextColor(t.TextMuted)
@@ -526,10 +534,16 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 			}
 		})
 	}
+	// 正文末尾的互动状态：表情表态与打赏汇总；没有互动时不画分隔线。
+	if len(p.Reactions) > 0 || p.Rewards.Total > 0 {
+		ui.Divider(c)
+		a.socialBadges(c, p.Reactions, p.Rewards)
+	}
 }
 
 // topicAuthorBlock 是左栏底部的固定块，不随正文滚动：头像 + 昵称 + 分类（节点），
-// 昵称下方放标签。正文加载完成（d.topic 非空）时才出现。
+// 昵称下方放标签。正文加载完成（d.topic 非空）时才出现；头像与昵称由
+// 统一的 userTag 渲染，14px 昵称配 21px 头像。
 func (a *app) topicAuthorBlock(c *ui.Context, d *detailState) {
 	p := d.topic
 	if p == nil {
@@ -537,20 +551,34 @@ func (a *app) topicAuthorBlock(c *ui.Context, d *detailState) {
 	}
 	t := c.Theme()
 	ui.Divider(c)
-	ui.Row(c).Padding(10, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Avatar(c, p.Author, d.topicAvatar).Size(32, 32)
-		ui.Column(c).Gap(2).Children(func() {
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, p.Author).FontSize(14).Bold()
-				a.authorBadges(c, p.Badges)
-				if p.NodeName != "" {
-					ui.Text(c, p.NodeName).FontSize(12).TextColor(t.TextMuted)
+	ui.Column(c).FillWidth().Children(func() {
+		ui.Row(c).Padding(10, 14).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Gap(2).Children(func() {
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					a.userTag(c, userTagSpec{
+						Name:   p.Author,
+						Avatar: p.Avatar,
+						Size:   14,
+						Bold:   true,
+					})
+					a.authorBadges(c, p.Badges)
+					if p.NodeName != "" {
+						ui.Text(c, p.NodeName).FontSize(12).TextColor(t.TextMuted)
+					}
+				})
+				if len(p.Tags) > 0 {
+					ui.Text(c, "#"+strings.Join(p.Tags, "  #")).FontSize(11).TextColor(t.TextMuted)
 				}
 			})
-			if len(p.Tags) > 0 {
-				ui.Text(c, "#"+strings.Join(p.Tags, "  #")).FontSize(11).TextColor(t.TextMuted)
-			}
+			// 关注按钮固定在作者块右端，与头像同一条基线；昵称再长也不会
+			// 把按钮挤出可视区。
+			ui.Spacer(c).Grow(1)
+			a.followButton(c, d)
 		})
+		if d.follow.err != "" {
+			ui.Text(c, d.follow.err).FontSize(11).TextColor(t.Danger).
+				MaxLines(2).Padding(0, 14)
+		}
 	})
 }
 
@@ -664,15 +692,19 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 			if floor != "" {
 				ui.Text(c, floor).FontSize(11).TextColor(t.TextMuted)
 			}
-			ui.Text(c, r.Author).FontSize(12).Bold()
+			// 评论作者统一由 userTag 渲染：头像跟着 12px 的昵称大小走，
+			// 头部行固定 18 高时头像恰好与昵称齐平。
+			a.userTag(c, userTagSpec{
+				Name:   r.Author,
+				Avatar: r.Avatar,
+				Size:   12,
+				Bold:   true,
+			})
 			a.authorBadges(c, r.Badges)
 			if r.CreatedAt != "" {
 				ui.Text(c, relativeTime(r.CreatedAt)).FontSize(11).TextColor(t.TextMuted)
 			}
 			ui.Spacer(c).Grow(1)
-			if r.Reactions != "" {
-				ui.Text(c, r.Reactions).FontSize(11).TextColor(t.TextMuted)
-			}
 			// 回复入口以文字形式放在每条评论的右上角，悬浮整条评论时才
 			// 出现，保持默认列表的清爽；已删除 / 评论已关闭的楼层不提供
 			// 该入口。点一下就展开并聚焦输入框，点完就能写。
@@ -689,8 +721,17 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 			}
 		})
 		if r.ParentSummary != "" || r.ParentFloor > 0 {
-			ui.Textf(c, "回复 %d 楼：%s", r.ParentFloor, r.ParentSummary).
-				FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+			label := fmt.Sprintf("回复 %d 楼：%s", r.ParentFloor, r.ParentSummary)
+			at := -1
+			if a.detail != nil {
+				at = replyIndexByID(a.detail.replyList, r.ParentID)
+			}
+			if at >= 0 {
+				// 父评论还在已加载的列表里：点一下跳过去并高亮它。
+				a.parentJump(c, label, r.ParentID, at)
+			} else {
+				ui.Text(c, label).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+			}
 		}
 		content := r.Content
 		if r.Deleted {
@@ -700,6 +741,9 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 			content = "（无内容）"
 		}
 		a.commentText(c, content, mergeEmojiMaps(a.emojis, r.Emojis))
+		// 表情表态与打赏状态放在正文下方，始终可见：不挤占右上角的「回复」
+		// 入口，也不会在悬浮时把按钮顶出评论栏。
+		a.socialBadges(c, r.Reactions, r.Rewards)
 		// 评论里的应用内链接是次级操作：仅悬浮整条评论时出现，保持默认
 		// 状态的清爽；回复入口已常驻右上角，这里不再重复。其所在行固定
 		// 高度占位，出现时同样不会撑高整条评论。
@@ -720,6 +764,93 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 			}
 		}
 	})
+}
+
+// parentJump 是「回复 N 楼：…」的可点击版本：父评论已经在列表里时，
+// 点一下滚到父评论并把高亮移到它身上，方便顺着对话往上读。
+func (a *app) parentJump(c *ui.Context, label, parentID string, at int) {
+	t := c.Theme()
+	b := ui.ButtonBase(c).Padding(0, 0).Background(ui.Transparent)
+	color := t.TextMuted
+	if b.Hovered() {
+		color = t.Accent
+	}
+	b.Children(func() {
+		ui.Text(c, label).FontSize(11).TextColor(color).MaxLines(2)
+	})
+	b.Tooltip("跳到被回复的评论")
+	if b.Clicked() && a.detail != nil {
+		a.detail.focusID = parentID
+		a.detail.focusPending = false
+		a.detail.focusMiss = false
+		a.detail.list.ScrollTo(at, ui.Start)
+	}
+}
+
+// socialBadges 展示一条内容的表情表态与打赏状态：每种表情一枚小标签，
+// 数量跟在后面；自己已表态的那枚整块用强调色标出并跟一个「我」字，
+// 悬停也会说明「你已表态」。打赏只显示金币合计，悬停给出次数与打赏者。
+// 没有互动时不占位。
+func (a *app) socialBadges(c *ui.Context, reactions []reactionStat, rewards rewardStat) {
+	t := c.Theme()
+	if len(reactions) == 0 && rewards.Total <= 0 {
+		return
+	}
+	ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+		for _, r := range reactions {
+			bg, border, countColor := t.Surface, t.Border, t.TextMuted
+			if r.Mine {
+				// 自己已表态的那枚整块换成强调色：浅色底 + 强调色描边 + 数字
+				// 同色，再跟一个「我」字，扫一眼就能认出来。
+				bg, border, countColor = t.Accent.Alpha(0.12), t.Accent, t.Accent
+			}
+			chip := ui.Row(c).Padding(1, 7).Radius(999).Gap(4).
+				Background(bg).Border(1, border).AlignItems(ui.Center)
+			chip.Tooltip(reactionBadgeTip(r))
+			chip.Children(func() {
+				ui.Text(c, r.Emoji).FontSize(12)
+				if r.Count > 0 {
+					ui.Textf(c, "%d", r.Count).FontSize(11).TextColor(countColor)
+				}
+				if r.Mine {
+					ui.Text(c, "我").FontSize(10).Bold().TextColor(t.Accent)
+				}
+			})
+		}
+		if rewards.Total > 0 {
+			chip := ui.Row(c).Padding(1, 7).Radius(999).Gap(4).
+				Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center)
+			chip.Tooltip(rewardBadgeTip(rewards))
+			chip.Children(func() {
+				ui.Text(c, "💰").FontSize(11)
+				ui.Textf(c, "%d", rewards.Total).FontSize(11).TextColor(t.Warning)
+			})
+		}
+	})
+}
+
+// reactionBadgeTip 是表情标签的悬停说明：人数 + 我是否也选过。
+func reactionBadgeTip(r reactionStat) string {
+	tip := r.Emoji
+	if r.Count > 0 {
+		tip = fmt.Sprintf("%s 有 %d 人表态", r.Emoji, r.Count)
+	}
+	if r.Mine {
+		tip += "，你已表态"
+	}
+	return tip
+}
+
+// rewardBadgeTip 是打赏标签的悬停说明：总额、笔数与打赏者。
+func rewardBadgeTip(r rewardStat) string {
+	tip := fmt.Sprintf("累计打赏 %d 金币", r.Total)
+	if r.Count > 1 {
+		tip = fmt.Sprintf("%d 笔打赏，共 %d 金币", r.Count, r.Total)
+	}
+	if len(r.Users) > 0 {
+		tip += "：" + strings.Join(r.Users, "、")
+	}
+	return tip
 }
 
 // replyAction 渲染一个纯文字按钮：透明背景 + 强调色文字，无填充、无边框，
@@ -814,7 +945,15 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 			// 未登录时把框内动作换成「登录后评论」；否则为集成在框内的发送按钮。
 			if !a.auth.loggedIn() {
 				if ui.Button(c, "登录后评论").Clicked() {
-					a.startLogin()
+					var replay func()
+					if strings.TrimSpace(d.draft) != "" {
+						replay = func() {
+							if a.detail == d {
+								a.submitReply()
+							}
+						}
+					}
+					a.requestLogin("登录后才能发表评论。", replay)
 				}
 			} else {
 				send := ui.PrimaryButton(c, "发送").Disabled(sendDisabled)
@@ -863,6 +1002,10 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				d.replyLoaded = false
 				d.replyNoMore = false
 				d.replyMoreErr = ""
+				// 换了视图重新找一次被定位的评论：楼层/扁平的分页位置不同。
+				d.focusPending = d.focusID != ""
+				d.focusTries = 0
+				d.focusMiss = false
 				a.loadReplies(1)
 			}
 		})
@@ -906,6 +1049,13 @@ func (a *app) submitReply() {
 			}
 			d.posting = false
 			if err != nil {
+				// 缺 write:comment 时先补授权，回调成功后按同样的内容与父评论
+				// 重发一次，用户不用重新输入。
+				a.handleAuthError(err, func() {
+					if a.detail == d {
+						a.submitReply()
+					}
+				})
 				d.postErr = friendlyError(err)
 				if a.onReplyPosted != nil {
 					a.onReplyPosted(replyItem{}, err)
@@ -915,6 +1065,9 @@ func (a *app) submitReply() {
 			if created.Author == "" || created.Author == "匿名" {
 				if u := a.auth.username(); u != "" {
 					created.Author = u
+					if created.Avatar == "" {
+						created.Avatar = a.auth.avatarURL()
+					}
 				}
 			}
 			if created.Floor == 0 && created.FlatFloor > 0 {
@@ -930,6 +1083,7 @@ func (a *app) submitReply() {
 			d.replyList, at = insertReply(d.replyList, created, parentID, d.flat)
 			d.list.ScrollTo(at, ui.End)
 			d.replyTotal++
+			a.prefetchAvatars(created.Avatar)
 			if a.onReplyPosted != nil {
 				a.onReplyPosted(created, nil)
 			}

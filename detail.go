@@ -44,20 +44,45 @@ func (c *Client) apiURL(pathQuery string) string {
 type topicDetail struct {
 	ShortID, Title, Content, Type string
 	Author                        string
+	AuthorID                      string // 作者 uuid，关注 / 取关路径需要
 	Avatar                        string // 作者头像 URL，正文底部左下角展示
 	Badges                        []badgeInfo
 	AuthorLevel                   int
-	NodeName, NodeSlug            string
-	CreatedAt, UpdatedAt          string
-	Views, CommentCount           int
-	IsPinned, CommentsClosed      bool
-	Tags                          []string
-	Postscripts                   []postscript
-	Vote                          *voteBlock
+	// Following / FollowingKnown 是作者对象里可选的 is_following。线上详情
+	// 目前不带这个字段，关注状态改由 GET /v1/users/:userName 补齐；这里
+	// 仍然解析，字段一旦下发就不必多发一次请求。
+	Following                bool
+	FollowingKnown           bool
+	NodeName, NodeSlug       string
+	CreatedAt, UpdatedAt     string
+	Views, CommentCount      int
+	IsPinned, CommentsClosed bool
+	Tags                     []string
+	Postscripts              []postscript
+	Vote                     *voteBlock
+	// Reactions 是帖子收到的表情表态汇总；Rewards 是打赏合计与打赏者。
+	Reactions []reactionStat
+	Rewards   rewardStat
 	// Emojis 是这篇帖子自己的短码 → 图片映射；社区自定义图标会出现在
 	// 这里，值可能是 /emojis/xxx.png 这样的相对地址。
 	Emojis map[string]string
 	URL    string // 原文链接，展示内容时必须保留
+}
+
+// reactionStat 是一种表情的聚合表态：谁、多少人、我是否也选了它。
+// 线上字段名是 reactions_summary，my_reactions 单独给出我选过的表情。
+type reactionStat struct {
+	Emoji string
+	Count int
+	Mine  bool
+}
+
+// rewardStat 是一条内容收到的打赏汇总：金额合计、打赏次数（按记录数）与
+// 打赏者昵称；同一个人多次打赏只记一次昵称。
+type rewardStat struct {
+	Total int
+	Count int
+	Users []string
 }
 
 type postscript struct {
@@ -94,10 +119,14 @@ type voteOption struct {
 // display with Depth, so the UI needs no recursive layout.
 type replyItem struct {
 	ID, Content, Author, CreatedAt string
+	// Avatar 是评论作者的头像地址；统一用户标识据此在昵称旁画头像。
+	Avatar                         string
 	Floor, FlatFloor, LocatedFloor int
+	ParentID                       string // 被回复评论的 uuid，点「回复 N 楼」时用来定位
 	ParentFloor                    int
 	ParentSummary                  string
-	Reactions                      string
+	Reactions                      []reactionStat
+	Rewards                        rewardStat
 	Emojis                         map[string]string
 	Badges                         []badgeInfo
 	Deleted, Pinned                bool
@@ -174,9 +203,14 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 		if name := a.str("username"); name != "" {
 			t.Author = name
 		}
+		t.AuthorID = a.str("id")
 		t.AuthorLevel = a.num("level")
 		t.Avatar = authorAvatar(a)
 		t.Badges = decodeBadges(a)
+		if _, ok := a["is_following"]; ok {
+			t.FollowingKnown = true
+			t.Following = a.flag("is_following", "followed")
+		}
 	}
 	if n := o.sub("node"); n != nil {
 		t.NodeName = n.str("name")
@@ -193,6 +227,8 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 		}
 	}
 	t.Emojis = decodeEmojiURLs(o["emojis"])
+	t.Reactions = decodeReactionStats(o["reactions_summary"], o["reactions"], o["my_reactions"])
+	t.Rewards = decodeRewards(o["rewards"])
 	t.Postscripts = decodePostscripts(o["postscripts"])
 	// 线上 API 把投票放在 d.vote（顶层）；早期文档示例写在 d.extra.vote。
 	// 两处都认，避免投票块在真实帖子上去世。
@@ -311,19 +347,19 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 		if name := a.str("username"); name != "" {
 			r.Author = name
 		}
+		r.Avatar = authorAvatar(a)
 		r.Badges = decodeBadges(a)
 	}
 	if p := o.sub("parent"); p != nil {
+		r.ParentID = p.str("id")
 		r.ParentFloor = p.num("floor")
 		// 「回复 N 楼：…」是父评论的纯文本预览，与列表行的评论摘要同一套
 		// 规则去掉 Markdown 标记，避免引用里冒出 ** / > 之类符号。
 		r.ParentSummary = truncate(commentExcerpt(p.str("content")), 60)
 	}
 	// 线上 API 的字段是 reactions_summary；reactions 是旧文档 / 示例里的名字。
-	r.Reactions = reactionSummary(o["reactions_summary"])
-	if r.Reactions == "" {
-		r.Reactions = reactionSummary(o["reactions"])
-	}
+	r.Reactions = decodeReactionStats(o["reactions_summary"], o["reactions"], o["my_reactions"])
+	r.Rewards = decodeRewards(o["rewards"])
 	if depth < 8 { // guard against pathological nesting
 		for _, child := range rawArray(o["children"]) {
 			r.Children = append(r.Children, decodeReply(child, depth+1))
@@ -371,8 +407,36 @@ func weatherIconURL(symbol string) string {
 	return "https://r2.2libra.com/weather/svg/" + url.PathEscape(symbol) + ".svg"
 }
 
-func reactionSummary(raw json.RawMessage) string {
-	var parts []string
+// decodeReactionStats 汇总帖子 / 评论的表情表态。summary 是现在的字段名
+// （reactions_summary），legacy 是旧文档示例里的 reactions；两者都认。
+// mineRaw 是 my_reactions：当前登录用户选过的表情，匿名请求里为空数组。
+// 单条记录里的 mine 布尔值也认，谁先给出都算「我」已表态。
+func decodeReactionStats(summary, legacy, mineRaw json.RawMessage) []reactionStat {
+	raw := summary
+	if len(rawArray(raw)) == 0 {
+		raw = legacy
+	}
+	mine := make(map[string]bool)
+	var mineOrder []string
+	addMine := func(emoji string) {
+		if emoji == "" || mine[emoji] {
+			return
+		}
+		mine[emoji] = true
+		mineOrder = append(mineOrder, emoji)
+	}
+	for _, item := range rawArray(mineRaw) {
+		if o := asObject(item); o != nil {
+			addMine(o.str("emoji"))
+			continue
+		}
+		var emoji string
+		if json.Unmarshal(item, &emoji) == nil {
+			addMine(emoji)
+		}
+	}
+	var out []reactionStat
+	seen := make(map[string]bool)
 	for _, item := range rawArray(raw) {
 		o := asObject(item)
 		if o == nil {
@@ -382,17 +446,105 @@ func reactionSummary(raw json.RawMessage) string {
 		if emoji == "" {
 			continue
 		}
-		n := o.num("count")
-		if n > 0 {
-			parts = append(parts, fmt.Sprintf("%s%d", emoji, n))
-		} else {
-			parts = append(parts, emoji)
+		seen[emoji] = true
+		out = append(out, reactionStat{
+			Emoji: emoji,
+			Count: o.num("count"),
+			Mine:  mine[emoji] || o.flag("mine"),
+		})
+		if len(out) == 6 {
+			return out
 		}
-		if len(parts) == 6 {
+	}
+	// 自己表过、但聚合里暂时没有（例如刚表态还没回填）的表情也要留着，
+	// 这样「我」的高亮不会因为 summary 缺一项就消失。
+	for _, emoji := range mineOrder {
+		if seen[emoji] {
+			continue
+		}
+		out = append(out, reactionStat{Emoji: emoji, Mine: true})
+		if len(out) == 6 {
 			break
 		}
 	}
-	return strings.Join(parts, " ")
+	return out
+}
+
+// decodeRewards 把 rewards 数组折成「合计 / 次数 / 打赏者」。只统计有金额
+// 的记录；同一个人的多次打赏不会重复写昵称，但次数按记录累计。
+func decodeRewards(raw json.RawMessage) rewardStat {
+	var out rewardStat
+	seen := make(map[string]bool)
+	for _, item := range rawArray(raw) {
+		o := asObject(item)
+		if o == nil {
+			continue
+		}
+		amount := o.num("amount")
+		if amount <= 0 {
+			continue
+		}
+		out.Total += amount
+		out.Count++
+		if u := o.sub("user"); u != nil {
+			if name := authorName(u); name != "" && !seen[name] {
+				seen[name] = true
+				out.Users = append(out.Users, name)
+			}
+		}
+	}
+	return out
+}
+
+// replyPermalink 拼一条评论在站点上的永久链接。楼层视图按 floor 分页，
+// 嵌套回复没有 floor，改用 /post-flat/ 按 flat_floor 分页；页码与站点
+// 每页条数（siteCommentPageSize）一致，站点才能定位到那条评论。
+func replyPermalink(topic *topicDetail, fallback string, r replyItem) string {
+	if r.ID == "" {
+		return ""
+	}
+	base := fallback
+	if topic != nil && topic.URL != "" {
+		base = topic.URL
+	}
+	if base == "" {
+		return ""
+	}
+	if u, err := url.Parse(base); err == nil {
+		u.RawQuery = ""
+		u.Fragment = ""
+		base = u.String()
+	}
+	nested := r.Floor == 0
+	if nested {
+		base = strings.Replace(base, "/post/", "/post-flat/", 1)
+	}
+	floor := r.Floor
+	if floor == 0 {
+		floor = r.FlatFloor
+	}
+	if floor == 0 {
+		floor = r.LocatedFloor
+	}
+	q := url.Values{}
+	q.Set("commentId", r.ID)
+	if p := (floor + siteCommentPageSize - 1) / siteCommentPageSize; p > 1 {
+		q.Set("p", fmt.Sprintf("%d", p))
+	}
+	return base + "?" + q.Encode()
+}
+
+// replyIndexByID 返回评论在已显示列表里的行号，找不到时返回 -1。
+func replyIndexByID(list []replyItem, id string) int {
+	if id == "" {
+		return -1
+	}
+	for i := range list {
+		if list[i].ID == id {
+			return i
+		}
+	}
+	return -1
 }
 
 // insertReply 把刚发布成功的评论放进当前列表，返回它落在的行号。顶层评论

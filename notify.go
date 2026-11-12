@@ -31,7 +31,9 @@ func showNativeNotice(n nativeNotice) error {
 	return note.Show()
 }
 
-// notificationTabIndex finds the 通知 tab without hard-coding its position.
+// notificationTabIndex 定位通知的数据源。通知不再占据侧边栏的页面：它留在
+// tabSpecs 里只是因为列表、分页与筛选沿用同一套加载逻辑，入口是标题栏的
+// 铃铛与通知弹窗（见 notifications_ui.go）。
 func notificationTabIndex() int {
 	for i, s := range tabSpecs {
 		if s.Kind == kindNotification {
@@ -295,10 +297,12 @@ func (a *app) rememberNoticeTarget(id, target string) {
 
 // openNotificationTarget opens the message's target in place when it is a
 // 2Libra post (with its comment anchor), otherwise in the system browser.
+// 弹窗只是消息中心的入口：打开目标后自动收起，别让它挡住帖子或评论。
 func (a *app) openNotificationTarget(target string) {
 	if target == "" {
 		return
 	}
+	a.notifOpen = false
 	if it, ok := parseInAppTopicLink(target); ok {
 		a.openDetail(it)
 		return
@@ -424,6 +428,10 @@ func (a *app) markNotificationsRead(ids []string) {
 				delete(st.reading, id)
 			}
 			if err != nil {
+				// 缺 read:me 或登录失效：走全局授权，回调成功后把这批 id 重发
+				// 一次，已读状态照样落账。
+				batch := append([]string(nil), pending...)
+				a.handleAuthError(err, func() { a.markNotificationsRead(batch) })
 				st.actionErr = "标记已读失败：" + friendlyError(err)
 				return
 			}
@@ -493,6 +501,7 @@ func (a *app) markAllNotificationsRead() {
 		a.publish(func() {
 			st.markingAll = false
 			if err != nil {
+				a.handleAuthError(err, func() { a.markAllNotificationsRead() })
 				st.actionErr = "全部已读失败：" + friendlyError(err)
 				return
 			}

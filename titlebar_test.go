@@ -54,19 +54,38 @@ func TestTitleBarSharesTheWhitePageTheme(t *testing.T) {
 	}
 }
 
-// The app keeps its own white theme whatever the system theme is: a hidden
-// native title bar used to leave the login page dark under a light bar.
-func TestTitleBarKeepsAppThemeUnderDarkSystem(t *testing.T) {
+// 默认「跟随系统」：系统切到深色时，自绘标题栏和页面一起变深。以前固定
+// 白底且隐藏原生标题栏，深色系统下会留下一条浅色标题栏压着深色页面。
+func TestTitleBarFollowsDarkSystemByDefault(t *testing.T) {
 	a := testApp(t)
 	for _, page := range []string{"list", "login"} {
 		a.pageName = page
-		tt := ui.NewTester(a.view, 1080, 720)
-		tt.SetDark(true)
+		tt := ui.NewTesterWith(a.view, 1080, 720, ui.TesterOptions{Dark: true})
+		tt.Frame()
+		im := tt.Image()
+		for _, y := range []int{titleBarHeight / 2, titleBarHeight + 10} {
+			if got := lum(im, 400, y); got > 80 {
+				t.Errorf("深色系统主题下 %s 页 y=%d 亮度 %.0f，标题栏与页面应同为深色", page, y, got)
+			}
+		}
+	}
+}
+
+// 固定浅色时不再跟随系统：深色系统下仍保持白色标题栏与页面，用户手动
+// 选定的外观不会被系统设置覆盖。
+func TestTitleBarKeepsForcedLightUnderDarkSystem(t *testing.T) {
+	a := testApp(t)
+	if err := a.theme.Save(themeLight); err != nil {
+		t.Fatal(err)
+	}
+	for _, page := range []string{"list", "login"} {
+		a.pageName = page
+		tt := ui.NewTesterWith(a.view, 1080, 720, ui.TesterOptions{Dark: true})
 		tt.Frame()
 		im := tt.Image()
 		for _, y := range []int{titleBarHeight / 2, titleBarHeight + 10} {
 			if got := lum(im, 400, y); got < 250 {
-				t.Errorf("深色系统主题下 %s 页 y=%d 亮度 %.0f，应仍为白色主题", page, y, got)
+				t.Errorf("固定浅色时 %s 页 y=%d 亮度 %.0f，应仍为白色", page, y, got)
 			}
 		}
 	}
@@ -123,9 +142,17 @@ func TestTitleBarWindowButtonsPaintTheirGlyphs(t *testing.T) {
 		t.Error("关闭图标的中心没有画出叉")
 	}
 
-	// 图标必须落在各自的按钮里：标题栏中段（品牌与账号之间）不能有任何墨迹。
+	// 图标必须落在各自的按钮里：品牌与标题栏按钮（「检查更新」及其右侧的
+	// 外观图标、代理）之间不能出现窗口图标的墨迹。文字与图标本身当然会有
+	// 墨迹，所以边界取最左侧文字按钮的左边，而不是写死 700。
+	limit := 700
+	for _, label := range []string{"检查更新", "代理"} {
+		if r, ok := tt.Find(label); ok && int(r.X)-6 < limit {
+			limit = int(r.X) - 6
+		}
+	}
 	for y := 0; y < titleBarHeight; y++ {
-		for x := 200; x < 700; x++ {
+		for x := 200; x < limit; x++ {
 			if darkAt(im, x, y) {
 				t.Fatalf("标题栏 (%d,%d) 有多余墨迹：窗口图标画到了按钮外面", x, y)
 			}
