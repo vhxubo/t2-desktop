@@ -216,6 +216,13 @@ type coinState struct {
 	rankingLoaded  bool
 	rankingItems   []coinRankEntry
 	rankingErr     string
+
+	// 本地缓存状态。updatedAt 是当前显示数据的新鲜时间；fromCache 表示首屏
+	// 来自 cache/offline.json（之后网络刷新成功会清掉）；cacheNote 是金币页
+	// 顶部的一行说明，告诉用户现在看的是不是本地缓存。
+	updatedAt time.Time
+	fromCache bool
+	cacheNote string
 }
 
 func newCoinState() *coinState {

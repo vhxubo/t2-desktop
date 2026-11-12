@@ -333,7 +333,7 @@ func TestLivePublicTabs(t *testing.T) {
 
 // The native view runs headless: tab switching, the login gate on private
 // tabs and the list rows are all exercised here. The old login settings page
-// is gone; the title bar's 设置 now opens the separate settings window that
+// is gone; the sidebar's 设置 now opens the separate settings window that
 // holds the proxy, update and image-cache sections.
 func TestNativeView(t *testing.T) {
 	a := testApp(t)
@@ -364,7 +364,7 @@ func TestNativeView(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	// 标题栏的「设置」打开独立设置窗口；登录配置的那个设置页不会回来。
+	// 侧边栏的「设置」打开独立设置窗口；登录配置的那个设置页不会回来。
 	opened := false
 	a.onSettingsOpen = func() { opened = true }
 	if err := tt.Click("设置"); err != nil {

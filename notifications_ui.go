@@ -117,6 +117,7 @@ func (a *app) showNotificationWindow() {
 		win.Show()
 		win.Focus()
 		win.Invalidate()
+		a.setNotificationWindowShown(true)
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
@@ -132,20 +133,39 @@ func (a *app) showNotificationWindow() {
 		Content:           ui.View(a.notificationsWindowView),
 	})
 	a.notifWin = win
-	win.OnClosed(func() { a.notifWin = nil })
+	// 显示状态跟着窗口事件走：用户收起、最小化、关掉窗口时铃铛都要跟着变，
+	// 不能只按「窗口对象还在不在」判断。
+	win.OnShow(func() { a.setNotificationWindowShown(true) })
+	win.OnHide(func() { a.setNotificationWindowShown(false) })
+	win.OnClosed(func() {
+		a.notifWin = nil
+		a.setNotificationWindowShown(false)
+	})
+	a.setNotificationWindowShown(true)
 }
 
-// notificationWindowVisible 报告通知窗口是否开着。headless 测试里没有窗口，
-// 用 notifWin 也够：它只在真实窗口存在时非空。
+// notificationWindowVisible 报告通知窗口此刻是否在屏幕上。
 func (a *app) notificationWindowVisible() bool {
-	win := a.notifWin
-	return win != nil && win.IsVisible()
+	return a.notifShown
+}
+
+// setNotificationWindowShown 记下通知窗口的显示状态，并让主窗口重画一次：
+// 铃铛的高亮就跟着这个状态。只在主线程调用。
+func (a *app) setNotificationWindowShown(shown bool) {
+	if a.notifShown == shown {
+		return
+	}
+	a.notifShown = shown
+	if a.win != nil {
+		a.win.Invalidate()
+	}
 }
 
 // hideNotificationWindow 收起通知窗口但不销毁：下次从铃铛打开就是同一个
 // 窗口、同一个滚动位置。点开一条消息后也用它，把画面交回主窗口。
 func (a *app) hideNotificationWindow() {
 	if win := a.notifWin; win != nil {
+		a.setNotificationWindowShown(false)
 		win.Hide()
 	}
 }
@@ -158,6 +178,7 @@ func (a *app) closeNotificationWindow() {
 		return
 	}
 	a.notifWin = nil
+	a.setNotificationWindowShown(false)
 	win.Close()
 }
 

@@ -190,6 +190,17 @@ func (m *AuthManager) username() string {
 	return m.token.Username
 }
 
+// scopes 返回当前令牌携带的授权范围。「我的」窗口的「权限与账号」把这份
+// 列表原样展示给用户：只显示服务端真的授予了什么，不拼一份期望中的清单。
+func (m *AuthManager) scopes() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.token == nil {
+		return nil
+	}
+	return strings.Fields(m.token.Scope)
+}
+
 // avatarURL is the avatar address cached with the session, empty until the
 // profile endpoint has been read.
 func (m *AuthManager) avatarURL() string {

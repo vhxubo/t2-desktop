@@ -62,7 +62,8 @@ type app struct {
 	proxyMsgErr  bool
 
 	// settingsWin 是设置窗口：代理、检查更新与图片缓存都收在这一个窗口里，
-	// 不再是标题栏上的两个按钮。入口见 showSettings；只在主线程读写。
+	// 不再是标题栏上的两个按钮。入口在主页侧边栏底部，见 sidebarFooter
+	// 与 showSettings；只在主线程读写。
 	settingsWin *mygo.Window
 	// cacheStatus 是设置窗口「图片缓存」一块的显示状态；统计在后台跑，
 	// 结果回到主线程。
@@ -93,6 +94,17 @@ type app struct {
 	// 以及帖子配图都由它统一管理，同一个地址只下载一次。下载完成前
 	// userTag 先画昵称首字母。
 	images *imageCache
+	// kv 是离线缓存（见 offline_store.go）：金币页的余额与资产曲线、阅读
+	// 记录，以及每篇帖子缓存的正文。只读写本机文件，不发请求。
+	kv *localKV
+	// reading 是当前账号的阅读历史（最近打开的帖子），readingFor 是它所属
+	// 的作用域。未登录时记在 anonymous 下，换账号时整体重新载入。
+	reading       []readingRecord
+	readingFor    string
+	readingLoaded bool
+	readingList   ui.ListState
+	// offlineMsg 是设置窗口里「离线缓存」一块的最近一次操作提示。
+	offlineMsg string
 	// schemeWarn 是「系统没有把回调协议关联到本应用」的说明，仅在这种情况下
 	// 非空：它决定了浏览器授权后能不能自动跳回，得让用户在登录页看见。
 	schemeWarn string
@@ -123,7 +135,31 @@ type app struct {
 	unreadGen     uint64
 	// notifWin 是通知窗口：通知独立成一个 mygo 窗口，不再是主窗口里的页面
 	// 或弹窗。入口见 showNotifications；只在主线程读写。
-	notifWin      *mygo.Window
+	notifWin *mygo.Window
+	// notifShown 表示通知窗口此刻是否在屏幕上，由窗口的 show / hide / closed
+	// 事件维护：铃铛据此高亮，免得每帧去问一次原生窗口（那是跨线程调用）。
+	// 只在主线程读写。
+	notifShown bool
+	// profileWin 是「我的」窗口：点标题栏上的登录头像打开，资产 / 帖子 /
+	// 回复 / 权限分四个标签页。入口见 showProfile，界面与数据在 profile.go
+	// 与 profile_ui.go。只在主线程读写。
+	profileWin *mygo.Window
+	// profile 是「我的」窗口读的状态；profileShown 表示窗口此刻是否在屏幕上，
+	// 头像按钮据此高亮。都只在主线程读写。
+	profile      *profileState
+	profileShown bool
+	// composeWin 是「发帖」窗口：入口是主页右下角的悬浮按钮（见 composeFab）。
+	// compose 是它的草稿与各组件状态，界面与请求在 compose.go / compose_ui.go。
+	// 都只在主线程读写；关窗口后草稿保留，退出登录时丢弃。
+	composeWin *mygo.Window
+	compose    *composeState
+	// userCardWin 是「用户资料」窗口：点任何一处统一用户标识（头像 + 昵称）
+	// 打开，见 user_ui.go 的 userTag；userCard 是它读的状态，userCardShown
+	// 表示窗口此刻是否在屏幕上。界面与请求在 user_card.go / user_card_ui.go。
+	// 都只在主线程读写。
+	userCardWin   *mygo.Window
+	userCard      *userCardState
+	userCardShown bool
 	streamLive    bool
 	watchCancel   context.CancelFunc
 	watchGen      uint64
@@ -151,6 +187,9 @@ type app struct {
 	// 成功后重跑被中断的调用时触发。生产为 nil。
 	onAuthPrompt func()
 	onAuthReplay func()
+	// onPostPublished 是发帖完成（成功或失败）后的测试钩子：headless 测试
+	// 没有窗口，publish 在请求协程里直接执行，靠它把结果同步回测试。
+	onPostPublished func(created createdTopic, err error)
 }
 
 // tabID / tabFromID 把 tab 序号与侧边栏条目的 id 互相映射。
@@ -179,13 +218,22 @@ func newApp(dir string) *app {
 		theme:        newThemeManager(dir),
 		client:       &Client{Auth: auth, Proxy: proxy},
 		images:       newImageCache(dir),
+		kv:           newOfflineKV(dir),
 		tabs:         make([]*tabState, len(tabSpecs)),
 		lastTab:      -1,
 		navSel:       tabID(0),
 		pageName:     "list",
 		nativeNotify: true,
 		coins:        newCoinState(),
+		profile:      newProfileState(),
 	}
+	// 本地缓存是"先读文件、后发请求"的首屏底稿：启动时就把金币与阅读记录
+	// 装进内存，第一帧就能画出来。文件不存在或损坏都只是空缓存。
+	if err := a.kv.load(); err != nil {
+		log.Printf("离线缓存不可用：%v", err)
+	}
+	a.loadCoinCache()
+	a.loadReadingHistory()
 	for i := range a.tabs {
 		a.tabs[i] = &tabState{}
 	}
@@ -207,10 +255,14 @@ func (a *app) publish(fn func()) {
 	}
 	a.win.Update(func() {
 		fn()
-		// 主窗口、通知窗口与设置窗口读的是同一份状态：改完之后另外两个窗口
-		// 也要重建，否则它们显示的仍是上一帧的未读数、代理状态或缓存大小。
+		// 主窗口、通知窗口、设置窗口、「我的」窗口与发帖窗口读的是同一份状态：
+		// 改完之后另外几个窗口也要重建，否则它们显示的仍是上一帧的未读数、
+		// 代理状态、缓存大小或账号资料。
 		a.redrawNotificationWindow()
 		a.redrawSettingsWindow()
+		a.redrawProfileWindow()
+		a.redrawComposeWindow()
+		a.redrawUserCardWindow()
 	})
 }
 
@@ -390,6 +442,9 @@ func (a *app) onAuthChanged(err error) {
 	// 金币页同样绑定当前会话；授权补上的 read:economy 也从这个空状态重新
 	// 发起请求，不会沿用授权前的空结果。
 	a.coins = newCoinState()
+	// 「我的」窗口里的资料、资产与列表同样属于某个账号：换账号或退出后
+	// 一律丢弃，下次打开时按新会话重新拉取。
+	a.profile = newProfileState()
 	// 授权状态变了，之前因缺权限停住的 tab 可以重新拉取。
 	for _, st := range a.tabs {
 		st.authWait = false
@@ -407,6 +462,11 @@ func (a *app) onAuthChanged(err error) {
 		// 通知窗口只展示当前账号的消息：退出后立即关掉，别留一屏上一个
 		// 账号的内容。
 		a.closeNotificationWindow()
+		// 「我的」窗口展示的是当前账号的资料与资产，同样随退出关掉。
+		a.closeProfileWindow()
+		// 发帖窗口里的草稿属于上一个账号，退出后一并关掉并丢弃。
+		a.closeComposeWindow()
+		a.compose = nil
 		a.unread = 0
 		a.unreadLoading = false
 		a.notifSeen = nil
@@ -414,6 +474,9 @@ func (a *app) onAuthChanged(err error) {
 		// 退出后系统里可能还留着通知，但目标属于上一个账号，一律不再解析。
 		a.noticeTargets = nil
 	}
+	// 资料卡上的关注状态与「是不是我」都跟着账号走：登录、退出、换账号都
+	// 重新读一次（窗口没开时是空操作）。
+	a.refreshUserCardForAuth()
 	a.ensureLoaded()
 	// 授权成功后，把因为缺权限被打断的调用照原样重跑。放在 ensureLoaded
 	// 之后：两者都只会真正发出一次请求（load 自己会去重）。
@@ -487,11 +550,19 @@ func (a *app) view(c *ui.Context) {
 					a.lastTab = a.tab
 					a.status = ""
 				}
+				// 底部固定区：设置入口，以及紧挨在它下面的三档外观。
+				ui.Divider(c)
+				a.sidebarFooter(c)
 			})
 			ui.Divider(c)
-			// 右侧内容区：正文列表（无限滚动，无底部状态栏）
+			// 右侧内容区：正文列表（无限滚动，无底部状态栏）。发帖入口是
+			// 浮在内容区右下角的 FAB，绝对定位，不参与列表布局；内容区底部
+			// 为它让出一条空带，列表与「加载更多 / 重试」不会被按钮盖住。
 			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
-				a.body(c)
+				ui.Column(c).Fill().Padding(0, 0, composeFabClearance, 0).Children(func() {
+					a.body(c)
+				})
+				a.composeFab(c)
 			})
 		})
 	})
@@ -503,6 +574,59 @@ func (a *app) view(c *ui.Context) {
 // 叠在最上层。通知与设置都不在这里：它们各自是独立的窗口。
 func (a *app) dialogs(c *ui.Context) {
 	a.authDialog(c)
+}
+
+// sidebarFooter 是主页侧边栏底部的固定区：从上到下是设置入口、外观的三档
+// 图标，以及账号入口（登录 / 退出登录）。放在滚动区之外，导航项再多也不会
+// 把这些常驻入口挤走。
+func (a *app) sidebarFooter(c *ui.Context) {
+	ui.Column(c).FillWidth().Shrink(0).Padding(6, 8).Gap(2).Children(func() {
+		a.sidebarButton(c, "设置", settingsIcon, "打开设置窗口", a.showSettings)
+		a.themeButtons(c)
+		a.sidebarAccount(c)
+	})
+}
+
+// sidebarAccount 是侧边栏底部的账号入口：未登录时是「登录」，点一下直接打开
+// 系统浏览器（不再先进登录页，那一步既多余，也容易让人以为要再点一次）；
+// 等待授权时显示进度，并给出「粘贴回调」与「取消」两个兜底动作；登录后是
+// 「退出登录」。标题栏不再放登录/退出：那里只留头像与昵称。
+func (a *app) sidebarAccount(c *ui.Context) {
+	t := c.Theme()
+	switch {
+	case a.loginPending:
+		waiting := "等待浏览器授权…"
+		if a.schemeWarn != "" {
+			// 系统没注册回调协议时不会有自动跳回，别让人干等。
+			waiting = "等待授权：系统未注册回调协议，请点「粘贴回调」"
+		}
+		ui.Text(c, waiting).FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		a.sidebarButton(c, "粘贴回调", nil, "在登录页粘贴回调链接", func() { a.pageName = "login" })
+		a.sidebarButton(c, "取消", nil, "取消这次登录", a.cancelLogin)
+	case a.auth.loggedIn():
+		a.sidebarButton(c, "退出登录", logoutIcon, "退出登录", func() { a.auth.Logout() })
+	default:
+		a.sidebarButton(c, "登录", loginIcon, "登录 2Libra", func() { a.startLogin() })
+	}
+}
+
+// sidebarButton 是侧边栏底部的整行入口（设置、登录 / 退出登录）：图形与文案
+// 并排，悬停浅灰底，画法贴近 SidebarItem，但它是动作而不是页面，不参与导航
+// 选中。icon 为 nil 时只排文字（授权等待中的「粘贴回调」「取消」）。
+func (a *app) sidebarButton(c *ui.Context, label string, icon *ui.SVG, tip string, onClick func()) {
+	t := c.Theme()
+	b := ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(6, 8).
+		Radius(t.Radius).Background(ui.Transparent)
+	if b.Hovered() {
+		b.Background(t.SurfaceHover)
+	}
+	b.Children(func() {
+		if icon != nil {
+			ui.Icon(c, icon).Size(16, 16).TextColor(t.TextMuted)
+		}
+		ui.Text(c, label).FontSize(12).TextColor(t.Text).SingleLine().Grow(1)
+	})
+	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
 
 // 自绘标题栏的尺寸。32 DIP 是 Windows 标题栏的常规高度，窗口按钮 46×32
@@ -529,18 +653,19 @@ func (a *app) titleBar(c *ui.Context) {
 	}
 	ui.Row(c).Height(h).FillWidth().AlignItems(ui.Stretch).
 		Padding(0, 0, 0, bar.Left).Background(t.Surface).DragWindow().Children(func() {
-		// 左段：品牌、账号状态与登录/退出，整体可随标题栏拖动。
+		// 左段：品牌、通知铃铛，登录后再加上头像与昵称，整体可随标题栏拖动。
+		// 设置、外观与登录 / 退出登录都在主页侧边栏底部（见 sidebarFooter）。
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 12).Gap(10).
 			AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "T2 Desktop").FontSize(13).Bold().SingleLine().TextColor(t.Text)
 			ui.Spacer(c).Grow(1)
-			// 设置与外观：代理、检查更新和图片缓存都收进设置窗口，标题栏
-			// 只留一个入口；外观只有三档，直接摆在标题栏上。
-			a.titleTextButton(c, "设置", a.showSettings)
-			a.themeButtons(c)
 			// 通知铃铛：未读数值跟在铃铛右边，点开独立窗口（不再是侧边栏页面）。
 			a.notificationBell(c)
-			a.accountBar(c)
+			if a.auth.loggedIn() {
+				// 头像 + 昵称整体可点，点开「我的」窗口；标题栏不写「已登录」，
+				// 也不放退出按钮：那几个字和按钮都挪到了侧边栏底部。
+				a.profileTag(c, a.auth.username())
+			}
 		})
 		// 右段：自绘窗口控制按钮（最小化 / 最大化·还原 / 关闭），紧贴右上角。
 		a.titleButton(c, titleMinimize, "最小化", func() {
@@ -565,42 +690,6 @@ func (a *app) titleBar(c *ui.Context) {
 			}
 		})
 	})
-}
-
-// accountBar 是标题栏右侧的账号区。未登录时只有一个「登录」，点下去直接
-// 打开系统浏览器，不再先进登录页（那一步既多余，也容易让人以为要再点一次）；
-// 授权等待中显示进度与取消；登录后显示头像、用户名和「退出」。
-func (a *app) accountBar(c *ui.Context) {
-	t := c.Theme()
-	switch {
-	case a.loginPending:
-		waiting := "等待浏览器授权…"
-		if a.schemeWarn != "" {
-			// 系统没注册回调协议时不会有自动跳回，别让人干等。
-			waiting = "等待授权：系统未注册回调协议，授权后请点「粘贴回调」"
-		}
-		ui.Text(c, waiting).FontSize(12).TextColor(t.TextMuted).SingleLine()
-		a.titleTextButton(c, "粘贴回调", func() { a.pageName = "login" })
-		a.titleTextButton(c, "取消", func() { a.cancelLogin() })
-	case a.auth.loggedIn():
-		name := a.auth.username()
-		if name == "" {
-			ui.Text(c, "已登录").FontSize(12).TextColor(t.TextMuted).SingleLine()
-		} else {
-			// 头像是跟着昵称字号走的：标题栏 12px 的账号名配 18px 头像。
-			a.userTag(c, userTagSpec{
-				Name:   name,
-				Avatar: a.auth.avatarURL(),
-				Label:  "已登录 · " + name,
-				Size:   12,
-				Color:  t.TextMuted,
-			})
-		}
-		a.titleTextButton(c, "退出", func() { a.auth.Logout() })
-	default:
-		ui.Text(c, "未登录 · 匿名可读").FontSize(12).TextColor(t.TextMuted).SingleLine()
-		a.titleTextButton(c, "登录", func() { a.startLogin() })
-	}
 }
 
 // titleGlyph 是窗口按钮上要画的图形。
@@ -650,18 +739,26 @@ func (a *app) titleButton(c *ui.Context, g titleGlyph, label string, onClick fun
 	b.Label(label).Tooltip(label).OnClick(onClick)
 }
 
-// titleTextButton 是标题栏里的紧凑文字按钮（登录/退出）：高度贴合标题栏、
-// 悬停浅灰底，避免在矮标题栏里被原生 Button 的默认高度挤出。
-func (a *app) titleTextButton(c *ui.Context, label string, onClick func()) {
+// titleIconButton 是标题栏里的纯图标按钮（外观）：图形本身是装饰，可访问名
+// 与提示由 label / tip 提供；selected 为真时用强调色标出当前档。图标用
+// 24×24 的矢量线，不占文字宽度，标题栏因此不会被挤满。
+func (a *app) titleIconButton(c *ui.Context, icon *ui.SVG, selected bool, label, tip string, onClick func()) {
 	t := c.Theme()
-	b := ui.Box(c).Padding(5, 9).Center().Radius(6).Background(ui.Transparent)
-	if b.Hovered() {
+	b := ui.Box(c).Padding(4, 6).Radius(6).Center().Background(ui.Transparent)
+	if selected || b.Hovered() {
 		b.Background(t.SurfaceHover)
 	}
+	ink := t.TextMuted
+	switch {
+	case selected:
+		ink = t.Accent
+	case b.Hovered():
+		ink = t.Text
+	}
 	b.Children(func() {
-		ui.Text(c, label).FontSize(12).TextColor(t.Text)
+		ui.Icon(c, icon).Size(16, 16).TextColor(ink)
 	})
-	b.OnClick(onClick)
+	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
 
 func (a *app) body(c *ui.Context) {
@@ -1014,6 +1111,8 @@ func main() {
 		a.win.OnClosed(func() {
 			a.closeNotificationWindow()
 			a.closeSettingsWindow()
+			a.closeProfileWindow()
+			a.closeComposeWindow()
 		})
 		if a.auth.loggedIn() {
 			a.refreshUnread()

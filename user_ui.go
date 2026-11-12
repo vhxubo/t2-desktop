@@ -40,8 +40,8 @@ func userAvatarSize(fontSize float32) float32 {
 }
 
 // userTagSpec 描述一处「头像 + 昵称」。Name 是昵称，也是头像占位与无障碍
-// 名称的来源；Label 是可选的显示文本（例如「@jimmy」「已登录 · jimmy」），
-// 空时直接显示昵称。Size 是昵称字号，头像尺寸由它换算。
+// 名称的来源；Label 是可选的显示文本（例如「@jimmy」），空时直接显示昵称。
+// Size 是昵称字号，头像尺寸由它换算。
 type userTagSpec struct {
 	Name     string
 	Avatar   string
@@ -50,11 +50,20 @@ type userTagSpec struct {
 	Bold     bool
 	Color    ui.Color
 	MaxLines int
+	// Click 覆盖点击行为。默认点开这个用户的资料卡（见 user_card.go）；
+	// 标题栏的账号区传自己的动作，点它打开「我的」而不是资料卡。
+	Click func()
 }
 
 // userTag 画一个带头像的用户标识。Color 为零值（透明）时沿用主题正文色；
 // MaxLines 为 0 / 1 时单行显示，更大时按指定行数折行（通知标题这类较长的
 // 句子仍能换行）。
+//
+// 整块可点：OnClick 会把这一行标成可点击元素，它是最内层的可交互元素，所以
+// 点昵称打开资料卡时不会连带触发外面那一行（列表行、通知卡片）的点击。
+// 这里仍然用普通 Row 而不是 ButtonBase：ButtonBase 会把头像并进按钮的无障碍
+// 文案、并给整块加内边距，前者让头像不再是可命名的图片节点，后者会挪动所有
+// 用到 userTag 的版式。
 func (a *app) userTag(c *ui.Context, u userTagSpec) ui.Element {
 	if u.Name == "" {
 		return ui.Element{}
@@ -68,7 +77,7 @@ func (a *app) userTag(c *ui.Context, u userTagSpec) ui.Element {
 	if gap < 4 {
 		gap = 4
 	}
-	row := ui.Row(c).Gap(gap).AlignItems(ui.Center)
+	row := ui.Row(c).Gap(gap).AlignItems(ui.Center).Cursor(ui.CursorPointer)
 	row.Children(func() {
 		avatarView(c, u.Name, a.avatarBitmap(u.Avatar), avatar)
 		label := u.Label
@@ -88,6 +97,12 @@ func (a *app) userTag(c *ui.Context, u userTagSpec) ui.Element {
 			text.TextColor(u.Color)
 		}
 	})
+	click := u.Click
+	if click == nil {
+		click = func() { a.showUserCard(u.Name) }
+		row.Tooltip("查看 @" + u.Name + " 的资料")
+	}
+	row.OnClick(click)
 	return row
 }
 

@@ -616,7 +616,9 @@ func TestNotificationTargetOpensInMainWindow(t *testing.T) {
 
 	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
 	tt.Frame()
-	if err := tt.Click("@alice 回复了你的评论"); err != nil {
+	// 点卡片上不属于用户标识的部分：句首的头像与昵称现在是统一用户标识的
+	// 点击区，点它会打开资料卡而不是这条消息的目标。
+	if err := tt.Click("《社会观察》"); err != nil {
 		t.Fatalf("点击消息行失败：%v", err)
 	}
 	if a.pageName != "detail" {
@@ -638,7 +640,8 @@ func TestNotificationTargetOpensInMainWindow(t *testing.T) {
 	}}}
 	tt2 := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
 	tt2.Frame()
-	if err := tt2.Click("@bob 关注了你"); err != nil {
+	// 同样避开句首的用户标识：点消息类型「关注」这一处。
+	if err := tt2.Click("关注"); err != nil {
 		t.Fatalf("点击消息行失败：%v", err)
 	}
 	if a.pageName != "list" {

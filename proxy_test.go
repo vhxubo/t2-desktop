@@ -371,8 +371,8 @@ func TestSplitNoProxy(t *testing.T) {
 	}
 }
 
-// 设置是独立的窗口：标题栏只剩一个「设置」入口，代理、检查更新与图片
-// 缓存都在那个窗口里。无头测试没有 mygo 主循环，所以直接渲染设置视图。
+// 设置是独立的窗口：主页侧边栏底部只剩一个「设置」入口，代理、检查更新与
+// 图片缓存都在那个窗口里。无头测试没有 mygo 主循环，所以直接渲染设置视图。
 func TestSettingsProxySectionSaves(t *testing.T) {
 	clearProxyEnv(t)
 	a := testApp(t)
@@ -382,7 +382,7 @@ func TestSettingsProxySectionSaves(t *testing.T) {
 	tt.Frame()
 
 	if _, ok := tt.Find("设置"); !ok {
-		t.Fatalf("标题栏没有「设置」入口：%q", tt.Texts())
+		t.Fatalf("侧边栏没有「设置」入口：%q", tt.Texts())
 	}
 	if err := tt.Click("设置"); err != nil {
 		t.Fatal(err)

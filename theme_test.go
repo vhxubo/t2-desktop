@@ -94,8 +94,8 @@ func TestThemeModePersists(t *testing.T) {
 	}
 }
 
-// 标题栏直接摆三个外观图标，点击即切换并落盘，全程没有弹窗。测试从深色
-// 系统开始，这样「浅色」按钮是否真的覆盖系统外观也能一起验证。
+// 主页侧边栏底部直接摆三个外观图标，点击即切换并落盘，全程没有弹窗。测试
+// 从深色系统开始，这样「浅色」按钮是否真的覆盖系统外观也能一起验证。
 func TestThemeButtonsSwitchAndPersist(t *testing.T) {
 	dir := t.TempDir()
 	a := newApp(dir)

@@ -12,9 +12,9 @@ var (
 	darkThemeIcon   = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></svg>`))
 )
 
-// themeButtons 在标题栏直接摆出三档外观：跟随系统、浅色、深色。外观只有
-// 三种，点一下就切换，没必要再开一层弹窗；当前档用强调色标出，其余档悬停
-// 变亮，一眼能看出现在用的是哪种。
+// themeButtons 在主页侧边栏底部直接摆出三档外观：跟随系统、浅色、深色。
+// 外观只有三种，点一下就切换，没必要再开一层弹窗；当前档用强调色标出，
+// 其余档悬停变亮，一眼能看出现在用的是哪种。
 func (a *app) themeButtons(c *ui.Context) {
 	ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
 		a.themeButton(c, themeFollowSystem, systemThemeIcon, "跟随系统")
@@ -26,27 +26,13 @@ func (a *app) themeButtons(c *ui.Context) {
 // themeButton 画一个外观图标按钮。图标本身是装饰，可访问名由 Label 提供，
 // 读屏软件读到的是「外观：深色」这样的完整选项名。
 func (a *app) themeButton(c *ui.Context, mode int, icon *ui.SVG, label string) {
-	t := c.Theme()
 	selected := a.theme.mode == mode
-	b := ui.Box(c).Padding(4, 6).Radius(6).Center().Background(ui.Transparent)
-	if selected || b.Hovered() {
-		b.Background(t.SurfaceHover)
-	}
-	ink := t.TextMuted
-	switch {
-	case selected:
-		ink = t.Accent
-	case b.Hovered():
-		ink = t.Text
-	}
-	b.Children(func() {
-		ui.Icon(c, icon).Size(16, 16).TextColor(ink)
-	})
 	tip := "外观：" + label
 	if selected {
 		tip += "（当前）"
 	}
-	b.Label("外观：" + label).Tooltip(tip).OnClick(func() { a.setThemeMode(c, mode) })
+	a.titleIconButton(c, icon, selected, "外观："+label, tip,
+		func() { a.setThemeMode(c, mode) })
 }
 
 // setThemeMode 切换外观并落盘。写失败只影响下次启动的默认外观，本次运行

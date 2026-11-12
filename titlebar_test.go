@@ -142,14 +142,12 @@ func TestTitleBarWindowButtonsPaintTheirGlyphs(t *testing.T) {
 		t.Error("关闭图标的中心没有画出叉")
 	}
 
-	// 图标必须落在各自的按钮里：品牌与标题栏按钮（「设置」及其右侧的
-	// 外观图标、通知铃铛）之间不能出现窗口图标的墨迹。文字与图标本身当然
-	// 会有墨迹，所以边界取最左侧文字按钮的左边，而不是写死 700。
+	// 图标必须落在各自的按钮里：品牌与标题栏右侧的控件（通知铃铛、账号区）
+	// 之间不能出现窗口图标的墨迹。文字与图标本身当然会有墨迹，所以边界取
+	// 最左侧那个控件的左边，而不是写死 700。
 	limit := 700
-	for _, label := range []string{"设置"} {
-		if r, ok := tt.Find(label); ok && int(r.X)-6 < limit {
-			limit = int(r.X) - 6
-		}
+	if r, ok := tt.Find("通知"); ok && int(r.X)-6 < limit {
+		limit = int(r.X) - 6
 	}
 	for y := 0; y < titleBarHeight; y++ {
 		for x := 200; x < limit; x++ {
@@ -192,10 +190,9 @@ func TestTitleBarButtonHover(t *testing.T) {
 	}
 }
 
-// The title bar's own buttons work: 登录 starts the browser authorization in
-// place (no login page in between), and the three window buttons are reachable
-// controls rather than plain drawings.
-func TestTitleBarButtonsClick(t *testing.T) {
+// The window buttons are reachable controls rather than plain drawings. 登录、
+// 退出登录与设置都不在这里：它们在主页侧边栏的底部（见 sidebar_test.go）。
+func TestTitleBarWindowButtonsClick(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
@@ -205,24 +202,15 @@ func TestTitleBarButtonsClick(t *testing.T) {
 			t.Fatalf("窗口按钮「%s」不可点（没有可访问名）", label)
 		}
 	}
-	// 未登录时点「登录」直接进入等待授权，不离开当前页。
-	t.Cleanup(a.auth.Cancel)
-	if err := tt.Click("登录"); err != nil {
-		t.Fatal(err)
-	}
-	if a.pageName != "list" {
-		t.Fatalf("点「登录」不该进登录页，实际页面 = %q", a.pageName)
-	}
-	if !a.loginPending {
-		t.Fatal("点「登录」后没有进入等待授权状态")
-	}
-	tt.Frame()
-	if !tt.HasText("等待浏览器授权…") {
-		t.Errorf("标题栏没有显示等待授权：%q", tt.Texts())
+	for _, label := range []string{"登录", "设置"} {
+		if r, ok := tt.Find(label); ok && r.Y < titleBarHeight {
+			t.Errorf("「%s」不该再出现在标题栏里（y=%.0f）", label, r.Y)
+		}
 	}
 }
 
-// 登录成功后标题栏显示用户名与头像，且不再回到登录页。
+// 登录成功后标题栏显示用户名与头像，且不再回到登录页。「已登录」这三个字
+// 不再出现：头像和昵称本身就是登录状态。
 func TestTitleBarShowsAccountAfterLogin(t *testing.T) {
 	a := testApp(t)
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", Username: "jimmy", TokenType: "Bearer"}); err != nil {
@@ -235,11 +223,18 @@ func TestTitleBarShowsAccountAfterLogin(t *testing.T) {
 	}
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
-	if !tt.HasText("已登录 · jimmy") {
+	if !tt.HasText("jimmy") {
 		t.Errorf("标题栏没有显示用户名：%q", tt.Texts())
+	}
+	if tt.HasText("已登录") {
+		t.Errorf("标题栏不应再显示「已登录」：%q", tt.Texts())
 	}
 	// 头像在图片加载完成前用姓名首字母，仍是一个可命名的头像控件。
 	if _, ok := tt.Find("jimmy"); !ok {
 		t.Errorf("标题栏没有头像控件：%q", tt.Texts())
+	}
+	// 头像可点，打开「我的」窗口。
+	if _, ok := tt.Find("我的"); !ok {
+		t.Errorf("标题栏头像没有可访问名：%q", tt.Texts())
 	}
 }

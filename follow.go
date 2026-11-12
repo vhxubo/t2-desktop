@@ -178,7 +178,7 @@ func (a *app) ensureFollowState(d *detailState) {
 // toggleFollow 关注或取消关注当前帖子的作者。未登录时先走全局授权弹窗，
 // 授权成功后同一次操作自动重跑；缺 scope 的 403 也一样。
 func (a *app) toggleFollow(d *detailState, follow bool) {
-	if d == nil || d.follow.busy || a.detail != d {
+	if d == nil || a.detail != d {
 		return
 	}
 	if !a.auth.loggedIn() {
@@ -189,52 +189,64 @@ func (a *app) toggleFollow(d *detailState, follow bool) {
 		})
 		return
 	}
-	if d.follow.userID == "" {
-		d.follow.err = "缺少作者标识，暂时无法关注"
+	a.submitFollow(&d.follow, follow,
+		func() bool { return a.detail == d },
+		func() {
+			if a.detail == d {
+				a.toggleFollow(d, follow)
+			}
+		})
+}
+
+// submitFollow 提交一次关注 / 取关，并把结果写回 fs。帖子详情的作者块与
+// 用户资料卡共用这一条路径：两边只有「状态属于谁」不同，current 报告这份
+// 状态是否仍属于当前界面，replay 在重新授权成功后重跑同一次操作。
+func (a *app) submitFollow(fs *followState, follow bool, current func() bool, replay func()) {
+	if fs == nil || fs.busy || !current() || !a.auth.loggedIn() {
 		return
 	}
-	d.follow.busy = true
-	d.follow.err = ""
-	d.follow.gen++ // 作废可能还在途的关注状态读取
-	gen := d.follow.gen
-	userID := d.follow.userID
+	if fs.userID == "" {
+		fs.err = "缺少用户标识，暂时无法关注"
+		return
+	}
+	fs.busy = true
+	fs.err = ""
+	fs.gen++ // 作废可能还在途的关注状态读取
+	gen := fs.gen
+	userID := fs.userID
 	actor := a.auth.username()
 	ctx, cancel := context.WithTimeout(context.Background(), followTimeout)
 	go func() {
 		defer cancel()
 		err := a.client.setFollow(ctx, userID, follow)
 		a.publish(func() {
-			if a.detail != d || d.follow.gen != gen {
+			if !current() || fs.gen != gen {
 				return
 			}
-			d.follow.busy = false
+			fs.busy = false
 			// 请求期间换了账号 / 退出了登录：这次结果不属于当前会话，
 			// 按未知处理，当前账号下次渲染时会重新读取。
 			if !a.auth.loggedIn() || a.auth.username() != actor {
-				d.follow.known = false
-				d.follow.checked = false
-				d.follow.following = false
-				d.follow.viewer = ""
-				d.follow.need = a.auth.loggedIn()
+				fs.known = false
+				fs.checked = false
+				fs.following = false
+				fs.viewer = ""
+				fs.need = a.auth.loggedIn()
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() {
-					if a.detail == d {
-						a.toggleFollow(d, follow)
-					}
-				}) {
+				if a.handleAuthError(err, replay) {
 					return
 				}
-				d.follow.err = friendlyError(err)
+				fs.err = friendlyError(err)
 				return
 			}
-			d.follow.following = follow
-			d.follow.known = true
-			d.follow.checked = true
-			d.follow.need = false
-			d.follow.viewer = a.auth.username()
-			d.follow.err = ""
+			fs.following = follow
+			fs.known = true
+			fs.checked = true
+			fs.need = false
+			fs.viewer = a.auth.username()
+			fs.err = ""
 		})
 	}()
 }

@@ -1,0 +1,792 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"regexp"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/egoist/mygo/ui"
+)
+
+// 幂等键必须是 [A-Za-z0-9_-]{1,255}（index.md 4.8）。
+var keyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,255}$`)
+
+// loginApp 造一个已登录的 app，并把网络指向测试服务器：发帖、节点与列表
+// 请求都落在 srv 上，不会碰到真实站点。
+func loginApp(t *testing.T, srv *httptest.Server) *app {
+	t.Helper()
+	a := testApp(t)
+	a.client.Base = srv.URL
+	if err := a.auth.storeToken(tokenData{
+		AccessToken: "test-token",
+		TokenType:   "Bearer",
+		Username:    "reader",
+		Scope:       "read profile write:topic write:economy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// composeReady 让发帖窗口有节点可选：无头测试不自动加载，直接摆好列表。
+func composeReady(a *app) *composeState {
+	if a.compose == nil {
+		a.compose = newComposeState()
+	}
+	a.compose.nodes = []composeNode{
+		{ID: "uuid-community", Slug: "community", Name: "社区讨论"},
+		{ID: "uuid-work", Slug: "work", Name: "职场", ParentName: "生活"},
+	}
+	a.compose.nodeLoaded = true
+	a.compose.nodeName = a.compose.nodes[0].display()
+	return a.compose
+}
+
+// 节点下拉框：GET /v1/nodes 的响应 d 是数组；子节点要按 parent 再问一次，
+// 拼成一份带父节点名的扁平列表。发帖必须用 uuid，所以列表项要带着 id。
+func TestComposeNodesLoadTree(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.URL.Path+"?"+r.URL.RawQuery)
+		mu.Unlock()
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Query().Get("parent") {
+		case "":
+			io.WriteString(w, envelopeJSON(`[
+				{"id":"uuid-community","slug":"community","name":"社区讨论","post_count":12,"parent_slug":null},
+				{"id":"uuid-life","slug":"life","name":"生活","post_count":3}
+			]`))
+		case "life":
+			io.WriteString(w, envelopeJSON(`[
+				{"id":"uuid-work","slug":"work","name":"职场","parent_slug":"life"},
+				{"id":"uuid-pet","slug":"pet","name":"萌宠"}
+			]`))
+		default:
+			io.WriteString(w, envelopeJSON(`[]`))
+		}
+	}))
+	defer srv.Close()
+
+	a := loginApp(t, srv)
+	a.compose = newComposeState()
+	a.autoLoad = true
+	nodes, err := a.client.loadNodeTree(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 4 {
+		t.Fatalf("节点数 = %d，期望 4（2 个顶层 + life 的 2 个子节点）：%+v", len(nodes), nodes)
+	}
+	byID := map[string]composeNode{}
+	for _, n := range nodes {
+		byID[n.ID] = n
+	}
+	if got := byID["uuid-work"]; got.ParentName != "生活" || got.display() != "生活 · 职场" {
+		t.Errorf("子节点没有带上父节点名：%+v", got)
+	}
+	// 响应里缺 parent_slug 的子节点也要归到已知的父节点下。
+	if got := byID["uuid-pet"]; got.ParentSlug != "life" || got.display() != "生活 · 萌宠" {
+		t.Errorf("缺 parent_slug 的子节点归错了父节点：%+v", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 3 || seen[0] != "/v1/nodes?" || seen[1] != "/v1/nodes?parent=community" &&
+		seen[1] != "/v1/nodes?parent=life" {
+		t.Errorf("节点请求不对：%v", seen)
+	}
+}
+
+// 完整发布链路：POST /v1/topics 的路径、鉴权、必填的幂等键，以及请求体里
+// 各组件按文档的字段名与取值原样出现。
+func TestComposePublishSendsDocumentedPayload(t *testing.T) {
+	var gotPath, gotAuth, gotKey string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/topics" {
+			http.NotFound(w, r)
+			return
+		}
+		gotPath, gotAuth, gotKey = r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("Idempotency-Key")
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &gotBody); err != nil {
+			t.Errorf("请求体不是 JSON：%v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		io.WriteString(w, envelopeJSON(`{"short_id":"AbCd123","node":{"slug":"community","name":"社区讨论"}}`))
+	}))
+	defer srv.Close()
+
+	a := loginApp(t, srv)
+	st := composeReady(a)
+	st.title = "  我的第一篇帖子  "
+	st.body = "正文：**加粗**\n\n:smile:"
+	st.anonymous = true
+	st.titlePrefix = "求助"
+	st.tip = "先看置顶"
+	st.contact = "a@b.c"
+	st.status = "已解决"
+
+	st.voteOpen = true
+	st.voteTypeIndex = 1
+	st.voteTitle = "你选哪个"
+	st.voteOptions = []string{"甲", "", "乙"}
+	st.voteResultVisible = true
+	st.voteDeadline = "2026-11-20 12:00"
+	st.voteMaxChoices = 2
+
+	st.scoreOpen = true
+	st.scoreTarget = "某部电影"
+	st.scoreValue = 88
+	st.scoreComment = "值回票价"
+
+	st.betOpen = true
+	st.betTitle = "谁会赢"
+	st.betOptions = []string{"A 队", "B 队"}
+
+	st.redeemOpen = true
+	st.redeemCodes = "CODE-1\nCODE-2，CODE-3"
+	st.codeDescription = "先到先得"
+	st.maxRedeemPerUser = 2
+	st.redPacket = true
+	st.redPacketIndex = 2 // 288
+
+	st.poolOpen = true
+	st.poolCoins = 500
+	st.poolProbability = 0.2
+
+	st.guardOpen = true
+	st.guardChoice = guardTypeLabels[0] // 所有人可见：不发送 access_guard_*
+
+	var done sync.WaitGroup
+	done.Add(1)
+	a.onPostPublished = func(created createdTopic, err error) {
+		if err != nil {
+			t.Errorf("发表失败：%v", err)
+		}
+		done.Done()
+	}
+	a.submitCompose()
+	done.Wait()
+
+	if gotPath != "/v1/topics" || gotAuth != "Bearer test-token" || gotKey == "" {
+		t.Fatalf("路径 / 鉴权 / 幂等键不对：%q %q %q", gotPath, gotAuth, gotKey)
+	}
+	if !keyPattern.MatchString(gotKey) {
+		t.Errorf("幂等键格式不符合 [A-Za-z0-9_-]{1,255}：%q", gotKey)
+	}
+
+	assertField(t, gotBody, "title", "我的第一篇帖子")
+	assertField(t, gotBody, "node_id", "uuid-community")
+	assertField(t, gotBody, "is_anonymous", true)
+	assertField(t, gotBody, "title_prefix", "求助")
+	assertField(t, gotBody, "tip", "先看置顶")
+	assertField(t, gotBody, "contact", "a@b.c")
+	assertField(t, gotBody, "status", "已解决")
+
+	vote := mapField(t, gotBody, "vote")
+	assertField(t, vote, "type", "multiple")
+	assertField(t, vote, "title", "你选哪个")
+	assertField(t, vote, "options", []any{"甲", "乙"})
+	assertField(t, vote, "result_visible", true)
+	assertField(t, vote, "max_choices", float64(2))
+	if d, _ := vote["vote_deadline"].(string); !strings.HasSuffix(d, "Z") || !strings.HasPrefix(d, "2026-11-20T") {
+		t.Errorf("投票截止时间不是 ISO 8601 UTC：%v", vote["vote_deadline"])
+	}
+
+	score := mapField(t, gotBody, "score")
+	assertField(t, score, "target_name", "某部电影")
+	assertField(t, score, "score", float64(88))
+	assertField(t, score, "comment", "值回票价")
+
+	bet := mapField(t, gotBody, "bet")
+	assertField(t, bet, "title", "谁会赢")
+	assertField(t, bet, "options", []any{"A 队", "B 队"})
+
+	assertField(t, gotBody, "redeem_codes", []any{"CODE-1", "CODE-2", "CODE-3"})
+	assertField(t, gotBody, "max_redeem_per_user", float64(2))
+	assertField(t, gotBody, "code_description", "先到先得")
+	assertField(t, gotBody, "enable_red_packet", true)
+	assertField(t, gotBody, "max_red_packet_amount", float64(288))
+
+	pool := mapField(t, gotBody, "reward_pool")
+	assertField(t, pool, "initial_coins", float64(500))
+	assertField(t, pool, "probability", 0.2)
+
+	// 不限制可见性时一个 access_guard_* 字段都不发。
+	for k := range gotBody {
+		if strings.HasPrefix(k, "access_guard_") {
+			t.Errorf("未开启门槛时不该发送 %s", k)
+		}
+	}
+
+	// 发表成功后：表单清空、回执留下、下一次发帖换新幂等键。
+	if st.title != "" || st.body != "" || st.okShortID != "AbCd123" || st.key != "" {
+		t.Errorf("发表后的状态不对：%+v", st)
+	}
+	if st.okURL != "https://2libra.com/post/community/AbCd123" {
+		t.Errorf("回执原文链接 = %q", st.okURL)
+	}
+}
+
+// 可见性门槛：下拉框存的是标签，发出去的是文档里的机器取值。
+func TestComposeGuardPayload(t *testing.T) {
+	st := newComposeState()
+	st.nodes = []composeNode{{ID: "uuid-node", Name: "社区讨论"}}
+	st.nodeName = "社区讨论"
+	st.title = "标题"
+
+	p, err := st.payload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p["access_guard_type"]; ok {
+		t.Errorf("默认不限制时不该发送 access_guard_type")
+	}
+
+	st.guardChoice = guardTypeLabels[1]
+	p, err = st.payload()
+	if err != nil || p["access_guard_type"] != "login" {
+		t.Errorf("登录可见：%v %v", p["access_guard_type"], err)
+	}
+
+	st.guardChoice = guardTypeLabels[2]
+	st.guardLevel = 5
+	p, err = st.payload()
+	if err != nil || p["access_guard_type"] != "level" || p["access_guard_level"] != 5 {
+		t.Errorf("等级可见：%v %v", p, err)
+	}
+
+	st.guardChoice = guardTypeLabels[3]
+	if _, err = st.payload(); err == nil {
+		t.Errorf("按属性可见但没填属性名时应报错")
+	}
+	st.guardAttr = "力量"
+	st.guardAttrValue = 3
+	p, err = st.payload()
+	if err != nil || p["access_guard_type"] != "attribute" ||
+		p["access_guard_attr"] != "力量" || p["access_guard_attr_value"] != 3 {
+		t.Errorf("属性可见：%v %v", p, err)
+	}
+}
+
+// 校验：必填项与文档给出的上限都要在本地拦住，不能等 400。
+func TestComposePayloadValidation(t *testing.T) {
+	base := func() *composeState {
+		st := newComposeState()
+		st.nodes = []composeNode{{ID: "uuid-node", Name: "社区讨论"}}
+		st.nodeName = "社区讨论"
+		st.title = "标题"
+		return st
+	}
+	cases := []struct {
+		name string
+		mut  func(st *composeState)
+		want string
+	}{
+		{"无节点", func(st *composeState) { st.nodeName = "" }, "请选择要发到哪个节点"},
+		{"空标题", func(st *composeState) { st.title = "   " }, "标题不能为空"},
+		{"标题过长", func(st *composeState) { st.title = strings.Repeat("字", composeTitleMax+1) }, "标题最多"},
+		{"正文过长", func(st *composeState) { st.body = strings.Repeat("字", composeContentMax+1) }, "正文最多"},
+		{"投票无标题", func(st *composeState) {
+			st.voteOpen = true
+			st.voteOptions = []string{"甲"}
+		}, "投票标题不能为空"},
+		{"投票无选项", func(st *composeState) {
+			st.voteOpen = true
+			st.voteTitle = "选一个"
+			st.voteOptions = []string{"", " "}
+		}, "投票至少需要 1 个选项"},
+		{"投票标题过长", func(st *composeState) {
+			st.voteOpen = true
+			st.voteTitle = strings.Repeat("长", composeVoteTitleMax+1)
+			st.voteOptions = []string{"甲"}
+		}, "投票标题最多"},
+		{"投票时间格式", func(st *composeState) {
+			st.voteOpen = true
+			st.voteTitle = "选一个"
+			st.voteOptions = []string{"甲"}
+			st.voteDeadline = "明天中午"
+		}, "时间格式应为"},
+		{"竞猜选项不足", func(st *composeState) {
+			st.betOpen = true
+			st.betTitle = "谁会赢"
+			st.betOptions = []string{"A 队"}
+		}, "竞猜至少需要 2 个选项"},
+		{"竞猜选项过多", func(st *composeState) {
+			st.betOpen = true
+			st.betTitle = "谁会赢"
+			st.betOptions = []string{"a", "b", "c", "d", "e", "f", "g"}
+		}, "竞猜最多 6 个选项"},
+		{"兑换码块为空", func(st *composeState) { st.redeemOpen = true }, "兑换码块需要"},
+		{"兑换码过长", func(st *composeState) {
+			st.redeemOpen = true
+			st.redeemCodes = strings.Repeat("x", composeCodeTextMax+1)
+		}, "单个兑换码最多"},
+		{"金币池越界", func(st *composeState) {
+			st.poolOpen = true
+			st.poolCoins = composePoolCoinsHi + 1
+		}, "金币池金额应在"},
+		{"金币池概率越界", func(st *composeState) {
+			st.poolOpen = true
+			st.poolCoins = 100
+			st.poolProbability = 0.9
+		}, "金币池概率应在"},
+		{"状态文案过长", func(st *composeState) { st.status = strings.Repeat("x", composeStatusMax+1) }, "状态文案最多"},
+	}
+	for _, c := range cases {
+		st := base()
+		c.mut(st)
+		_, err := st.payload()
+		if err == nil {
+			t.Errorf("%s：应当报错但没有", c.name)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s：错误 = %q，期望包含 %q", c.name, err.Error(), c.want)
+		}
+	}
+	// 合法的最小表单：只有标题与节点。
+	if _, err := base().payload(); err != nil {
+		t.Errorf("最小表单不该报错：%v", err)
+	}
+}
+
+// 正文工具条的 Markdown 动作：无选区时插入占位文字并选中；有选区时包住
+// 选区；行级动作给每一行加前缀；插入后光标/选区回到正确的位置。
+func TestComposeMarkdownToolbar(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		start   int
+		end     int
+		format  composeFormat
+		want    string
+		wantSel [2]int
+	}{
+		{"加粗无选区", "abc", 3, 3, composeBold, "abc**加粗文字**", [2]int{5, 9}},
+		{"加粗包住选区", "make me bold", 5, 7, composeBold, "make **me** bold", [2]int{7, 9}},
+		{"斜体", "", 0, 0, composeItalic, "*斜体文字*", [2]int{1, 5}},
+		{"删除线", "hi", 0, 2, composeStrike, "~~hi~~", [2]int{2, 4}},
+		{"行内代码", "x", 1, 1, composeInlineCode, "x`行内代码`", [2]int{2, 6}},
+		{"标题", "标题文字", 2, 2, composeHeading, "## 标题文字", [2]int{0, 7}},
+		{"引用多行", "a\nb", 0, 3, composeQuote, "> a\n> b", [2]int{0, 7}},
+		{"无序列表", "a\nb", 0, 3, composeBulletList, "- a\n- b", [2]int{0, 7}},
+		{"有序列表", "a\nb", 0, 3, composeOrderedList, "1. a\n2. b", [2]int{0, 9}},
+		{"代码块", "", 0, 0, composeCodeBlock, "```\n代码\n```", [2]int{4, 6}},
+		{"链接", "点这里", 0, 3, composeLink, "[点这里](url)", [2]int{1, 4}},
+		{"图片", "", 0, 0, composeImage, "![图片说明](url)", [2]int{2, 6}},
+		{"分割线", "上文", 2, 2, composeDivider, "上文\n\n---\n\n", [2]int{9, 9}},
+	}
+	for _, c := range cases {
+		st := newComposeState()
+		st.body, st.selStart, st.selEnd = c.body, c.start, c.end
+		st.applyMarkdown(c.format)
+		if st.body != c.want {
+			t.Errorf("%s：正文 = %q，期望 %q", c.name, st.body, c.want)
+			continue
+		}
+		if !st.pendingSel.ok || st.pendingSel.start != c.wantSel[0] || st.pendingSel.end != c.wantSel[1] {
+			t.Errorf("%s：待恢复选区 = %+v，期望 %v", c.name, st.pendingSel, c.wantSel)
+		}
+	}
+	// 中文与 emoji 按 rune 计算选区，不按字节。
+	st := newComposeState()
+	st.body = "你好世界"
+	st.selStart, st.selEnd = 2, 4
+	st.applyMarkdown(composeBold)
+	if st.body != "你好**世界**" {
+		t.Errorf("rune 选区错误：%q", st.body)
+	}
+}
+
+// runeSel 会把反向选区与越界选区夹回正文范围。
+func TestComposeRuneSelClamps(t *testing.T) {
+	st := newComposeState()
+	st.body = "abc"
+	st.selStart, st.selEnd = 99, -5
+	rs, a, b := st.runeSel()
+	if string(rs) != "abc" || a != 0 || b != 3 {
+		t.Errorf("选区没有夹到范围内：%d %d %q", a, b, string(rs))
+	}
+}
+
+// 时间字段：本地时间进，ISO 8601 UTC 出；空值不发。
+func TestComposeDeadline(t *testing.T) {
+	if got, err := composeDeadline("  "); err != nil || got != "" {
+		t.Errorf("空值 = %q %v", got, err)
+	}
+	got, err := composeDeadline("2026-11-20 12:00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := time.ParseInLocation("2006-01-02 15:04", "2026-11-20 12:00", time.Local)
+	if got != want.UTC().Format("2006-01-02T15:04:05.000Z") {
+		t.Errorf("时间 = %q，期望 %q", got, got)
+	}
+	if _, err := composeDeadline("2026/11/20"); err == nil {
+		t.Errorf("不合法的写法应当报错")
+	}
+}
+
+// 主页的悬浮按钮（FAB）是发帖入口：它在列表页渲染出来，点一下打开窗口。
+func TestComposeFabOpensWindow(t *testing.T) {
+	a := testApp(t)
+	a.tabs[0].items = []Item{{Key: "x", Title: "列表项", Subtitle: "作者 · 刚刚"}}
+	a.tabs[0].loaded = true
+	a.tabs[0].total = 1
+	tt := ui.NewTester(a.view, 1100, 760)
+	if !tt.HasText("发帖") {
+		t.Fatalf("主页没有发帖入口：%q", tt.Texts())
+	}
+	// 绝对定位的元素要等一帧布局稳定下来才命中；真实窗口每帧都重绘。
+	tt.Frame()
+	if err := tt.Click("发帖"); err != nil {
+		t.Fatal(err)
+	}
+	// 未登录时点 FAB 先走授权，不会直接建窗口。
+	if !a.hasPendingAuthorization() || a.authGate.need.Message == "" {
+		t.Errorf("未登录点发帖应当登记授权：%+v", a.authGate)
+	}
+	if !strings.Contains(a.authGate.need.Message, "发帖") {
+		t.Errorf("授权说明应提到发帖：%q", a.authGate.need.Message)
+	}
+	if a.compose == nil {
+		t.Errorf("点发帖后应当准备好草稿状态，授权回来才能直接写")
+	}
+}
+
+// FAB 画在列表之上：它的中心是强调色，周围的页面仍是底色。
+func TestComposeFabPaintsAboveList(t *testing.T) {
+	a := testApp(t)
+	a.tabs[0].items = []Item{{Key: "x", Title: "列表项"}}
+	a.tabs[0].loaded = true
+	a.tabs[0].total = 1
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	r, ok := tt.Find("发帖")
+	if !ok {
+		t.Fatal("找不到发帖按钮")
+	}
+	img := tt.Image()
+	cx, cy := int(r.X+r.W/2), int(r.Y+r.H/2)
+	inside := img.RGBAAt(cx, cy)
+	if inside.R == inside.G && inside.G == inside.B {
+		t.Errorf("FAB 没有画在列表之上（中心是灰白色 %v）", inside)
+	}
+	// 按钮左侧紧挨着的仍是页面底色（浅色主题为纯白）。
+	if out := img.RGBAAt(int(r.X)-6, cy); out.R != 255 || out.G != 255 || out.B != 255 {
+		t.Errorf("FAB 左边缘之外的像素 = %v，期望页面底色", out)
+	}
+}
+
+// FAB 固定在内容区右下角，不随列表滚动；窗口很窄时也不会被挤出可视区域。
+func TestComposeFabStaysBottomRight(t *testing.T) {
+	a := testApp(t)
+	a.tabs[0].items = make([]Item, 30)
+	for i := range a.tabs[0].items {
+		a.tabs[0].items[i] = Item{Key: string(rune('a' + i%26)), Title: "列表项"}
+	}
+	a.tabs[0].loaded = true
+	a.tabs[0].total = 30
+	tt := ui.NewTester(a.view, 1100, 760)
+	r, ok := tt.Find("发帖")
+	if !ok {
+		t.Fatal("找不到发帖按钮")
+	}
+	if r.X < 700 || r.Y < 620 {
+		t.Errorf("FAB 没有贴在右下角：%+v", r)
+	}
+	// 滚动列表之后位置不变。
+	tt.Scroll(float32(r.X), 300, 0, 400)
+	r2, ok := tt.Find("发帖")
+	if !ok {
+		t.Fatal("滚动后找不到发帖按钮")
+	}
+	if !reflect.DeepEqual(r, r2) {
+		t.Errorf("FAB 跟着列表滚动了：%+v → %+v", r, r2)
+	}
+}
+
+// 发帖窗口：标题、正文与 Markdown 工具条都在，节点下拉框有选项；
+// 附加组件默认收起，展开后才显示各自的字段。
+func TestComposeWindowLayout(t *testing.T) {
+	a := testApp(t)
+	// 登录后底部提示才是「Ctrl+Enter 发布」；否则它会提醒先登录。
+	if err := a.auth.storeToken(tokenData{
+		AccessToken: "tok", TokenType: "Bearer", Username: "reader",
+		Scope: "read profile write:topic",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	for _, want := range []string{
+		"节点", "匿名发帖", "标题", "正文",
+		"加粗", "斜体", "删除线", "代码", "标题", "引用", "代码块", "列表", "编号", "链接", "图片", "分割线",
+		"编辑", "预览", "投票", "评分", "竞猜", "兑换码 / 红包", "金币池", "可见性（谁可以看）",
+		"发布", "Ctrl+Enter 发布",
+	} {
+		if !tt.HasText(want) {
+			t.Errorf("发帖窗口缺少 %q", want)
+		}
+	}
+	// 工具条是「头部」的一个工具栏，可访问名是「编辑工具」。
+	if _, ok := tt.AccessByRole(ui.RoleToolbar, "编辑工具"); !ok {
+		t.Errorf("正文工具条没有以工具栏角色出现")
+	}
+	// 附加组件默认收起：展开前里面一个字段都不画。
+	for _, hidden := range []string{"投票类型", "可见范围", "初始金币"} {
+		if tt.HasText(hidden) {
+			t.Errorf("附加组件默认应当收起，却画出了 %q", hidden)
+		}
+	}
+	// 展开某一块之后，它自己的字段才出现。展开会让内容变长，先滚到底再点。
+	expand := func(label string, wants ...string) {
+		t.Helper()
+		a.compose = composeReady(a)
+		it := ui.NewTester(a.composeWindowView, 780, 1100)
+		it.Frame()
+		it.Scroll(400, 500, 0, 4000)
+		if err := it.Click(label); err != nil {
+			t.Fatalf("展开 %q 失败：%v", label, err)
+		}
+		for _, w := range wants {
+			if !it.HasText(w) {
+				t.Errorf("展开 %q 后缺少 %q：%q", label, w, it.Texts())
+			}
+		}
+	}
+	expand("投票", "投票类型", "单选", "多选", "公开投票结果", "添加选项", "投票截止时间")
+	expand("可见性（谁可以看）", "可见范围", "所有人可见", "门槛由服务端判定")
+	expand("金币池", "初始金币", "中奖概率（0 = 默认）")
+	expand("兑换码 / 红包", "兑换码（一行一个）", "每人可领", "红包上限", "同时开红包")
+	expand("评分", "评分对象", "分值", "理由")
+	expand("竞猜", "竞猜标题", "参与截止时间")
+}
+
+// 工具条按钮真的会改正文，并且会把选区放在插入的内容上（不用再手动挪光标）。
+func TestComposeToolbarEditsBody(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	// 点进正文输入框再打字：选区是真实输入产生的，不是测试自己塞进去的。
+	if err := tt.Click("正文内容"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("你好")
+	if st.body != "你好" {
+		t.Fatalf("打字没有进正文：%q", st.body)
+	}
+	tt.Click("加粗")
+	if st.body != "你好**加粗文字**" {
+		t.Fatalf("加粗没有写进正文：%q", st.body)
+	}
+	if st.selStart != 4 || st.selEnd != 8 {
+		t.Errorf("加粗后选区 = %d..%d，期望 4..8", st.selStart, st.selEnd)
+	}
+	tt.Click("分割线")
+	if !strings.Contains(st.body, "---") {
+		t.Errorf("分割线没有写进正文：%q", st.body)
+	}
+}
+
+// 预览用与详情页相同的 Markdown 渲染；空正文给出提示而不是一块空白。
+func TestComposePreview(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	tt.Click("预览")
+	if !tt.HasText("还没有正文") {
+		t.Errorf("空正文预览没有提示：%q", tt.Texts())
+	}
+	st.body = "# 一级标题\n\n正文**加粗**"
+	tt.Frame()
+	if !tt.HasText("一级标题") {
+		t.Errorf("预览没有渲染标题：%q", tt.Texts())
+	}
+	if tt.HasText("**加粗**") {
+		t.Errorf("预览把 Markdown 源码当纯文字显示了")
+	}
+}
+
+// 发表成功之后窗口显示回执，并且能直接打开刚发的帖子。
+func TestComposeSuccessOpensCreatedTopic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		io.WriteString(w, envelopeJSON(`{"short_id":"Zz9","node":{"slug":"community"}}`))
+	}))
+	defer srv.Close()
+	a := loginApp(t, srv)
+	st := composeReady(a)
+	st.title = "回执测试"
+	var done sync.WaitGroup
+	done.Add(1)
+	a.onPostPublished = func(created createdTopic, err error) {
+		if err != nil {
+			t.Errorf("发表失败：%v", err)
+		}
+		done.Done()
+	}
+	a.submitCompose()
+	done.Wait()
+
+	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	if !tt.HasText("已发表：回执测试") {
+		t.Errorf("没有显示发表回执：%q", tt.Texts())
+	}
+	// 回执在表单最下面，先滚到底再点。
+	tt.Scroll(400, 500, 0, 4000)
+	if err := tt.Click("在应用内打开"); err != nil {
+		t.Fatal(err)
+	}
+	if a.pageName != "detail" || a.detail == nil || a.detail.shortID != "Zz9" {
+		t.Errorf("没有打开刚发的帖子：%s %+v", a.pageName, a.detail)
+	}
+}
+
+// 服务端拒绝时把原因摆出来，草稿与幂等键都保留：改完再点发布，重试用同一个键。
+func TestComposeFailureKeepsDraftAndKey(t *testing.T) {
+	var keys []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		keys = append(keys, r.Header.Get("Idempotency-Key"))
+		w.WriteHeader(http.StatusForbidden)
+		io.WriteString(w, `{"c":403,"code":"permission_denied","m":"你暂时不能发帖","d":null,"t":0}`)
+	}))
+	defer srv.Close()
+	a := loginApp(t, srv)
+	st := composeReady(a)
+	st.title = "会被拒绝的帖子"
+	st.body = "正文"
+
+	var done sync.WaitGroup
+	done.Add(1)
+	a.onPostPublished = func(created createdTopic, err error) {
+		if err == nil {
+			t.Errorf("应当失败")
+		}
+		done.Done()
+	}
+	a.submitCompose()
+	done.Wait()
+
+	if st.err != "你暂时不能发帖" {
+		t.Errorf("错误文案 = %q，期望服务端原话", st.err)
+	}
+	if st.title != "会被拒绝的帖子" || st.body != "正文" {
+		t.Errorf("失败后草稿被清空了：%q %q", st.title, st.body)
+	}
+	if st.key == "" {
+		t.Fatalf("失败后应当保留幂等键，便于用同一个键重试")
+	}
+	first := st.key
+
+	done = sync.WaitGroup{}
+	done.Add(1)
+	a.submitCompose()
+	done.Wait()
+	if len(keys) != 2 || keys[0] != first || keys[1] != first {
+		t.Errorf("重试没有沿用同一个幂等键：%v（首次 %s）", keys, first)
+	}
+
+	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	if !tt.HasText("你暂时不能发帖") {
+		t.Errorf("窗口没有显示失败原因：%q", tt.Texts())
+	}
+}
+
+// 缺 write:topic 时先走全局授权弹窗，而不是当成普通错误；授权成功后按同一
+// 份内容自动重发。
+func TestComposeMissingScopeGoesToAuthGate(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		io.WriteString(w, `{"c":403,"code":"insufficient_scope","m":"缺少权限范围：write:topic",`+
+			`"required_scope":["write:topic"],"d":null,"t":0}`)
+	}))
+	defer srv.Close()
+	a := loginApp(t, srv)
+	st := composeReady(a)
+	st.title = "需要授权"
+
+	var done sync.WaitGroup
+	done.Add(1)
+	a.onPostPublished = func(created createdTopic, err error) { done.Done() }
+	a.submitCompose()
+	done.Wait()
+
+	if !a.authGate.open {
+		t.Fatalf("缺 scope 时没有打开授权弹窗：%+v", a.authGate)
+	}
+	if got := a.authGate.need.Scopes; len(got) != 1 || got[0] != "write:topic" {
+		t.Errorf("授权弹窗的 scope = %v", got)
+	}
+	if len(a.authGate.replays) != 1 {
+		t.Errorf("应当登记一次重发：%d", len(a.authGate.replays))
+	}
+	if st.title != "需要授权" {
+		t.Errorf("等授权期间草稿不该丢：%q", st.title)
+	}
+}
+
+// 兑换码框支持换行、逗号、中文逗号与分号分隔，空项被丢掉。
+func TestComposeRedeemCodesParsed(t *testing.T) {
+	st := newComposeState()
+	st.redeemCodes = "A-1\n B-2 ,C-3，D-4;E-5；\n\n"
+	got := st.redeemCodeList()
+	want := []string{"A-1", "B-2", "C-3", "D-4", "E-5"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("兑换码 = %v，期望 %v", got, want)
+	}
+	if st2 := newComposeState(); len(st2.redeemCodeList()) != 0 {
+		t.Errorf("空输入应当解析成空数组")
+	}
+}
+
+// 匿名开关与默认值：新表单默认不匿名、可见性为所有人、金币池初始 100。
+func TestNewComposeStateDefaults(t *testing.T) {
+	st := newComposeState()
+	if st.anonymous || st.guardChoice != guardTypeLabels[0] || st.poolCoins != 100 {
+		t.Errorf("默认值不对：%+v", st)
+	}
+	if voteTypeAt(st.voteTypeIndex) != "pk" {
+		t.Errorf("投票默认应为单选")
+	}
+	if redPacketAt(st.redPacketIndex) != 88 {
+		t.Errorf("红包默认应为 88")
+	}
+	if len(st.voteOptions) < 1 || len(st.betOptions) < composeBetOptionsMin {
+		t.Errorf("选项初始行数不对：%v %v", st.voteOptions, st.betOptions)
+	}
+}
+
+// ------------------------------------------------------------------
+// 小工具
+// ------------------------------------------------------------------
+
+func mapField(t *testing.T, m map[string]any, key string) map[string]any {
+	t.Helper()
+	v, ok := m[key].(map[string]any)
+	if !ok {
+		t.Fatalf("缺少对象字段 %s：%v", key, m)
+	}
+	return v
+}
+
+func assertField(t *testing.T, m map[string]any, key string, want any) {
+	t.Helper()
+	if got, ok := m[key]; !ok || !reflect.DeepEqual(got, want) {
+		t.Errorf("字段 %s = %#v，期望 %#v", key, got, want)
+	}
+}

@@ -21,6 +21,11 @@ type detailState struct {
 	topicLoading                  bool
 	topicErr                      string
 	topicGen                      uint64
+	// 本地正文缓存：cachedAt 是缓存写入时间；fromCache 表示当前正文来自
+	// cache/offline.json；cacheNote 是详情页顶部的一行离线说明。
+	cachedAt  time.Time
+	fromCache bool
+	cacheNote string
 
 	replyList    []replyItem
 	replyLoading bool
@@ -197,6 +202,10 @@ func (a *app) openDetail(it Item) {
 		replyPage:    1,
 		flat:         it.CommentID != "", // 从评论列表进来用扁平序，更容易找到那层楼
 	}
+	// 先摆上缓存里的正文和第一页评论：网络慢或断开时第一帧就有内容。
+	a.preloadDetailCache(a.detail)
+	// 阅读记录用缓存里的标题补全打开时缺的字段。
+	a.recordReading(it, a.detail.topic)
 	a.pageName = "detail"
 	a.status = ""
 	// load* are no-ops when autoLoad is off, so headless UI tests never
@@ -242,10 +251,18 @@ func (a *app) loadTopic() {
 						a.loadTopic()
 					}
 				})
+				// 已有缓存正文时不要把整页换成错误：继续显示缓存，只在顶部
+				// 说明这一份是本地内容。
+				if d.topic != nil {
+					a.markDetailOffline(d)
+					return
+				}
 				d.topicErr = friendlyError(err)
 				return
 			}
 			d.topic = &topic
+			d.fromCache = false
+			d.cacheNote = ""
 			a.prefetchAvatars(topic.Avatar)
 			// 主题详情带作者的 uuid；关注状态若已随作者对象下发就直接用，
 			// 否则标记为待读取，登录后由 ensureFollowState 读用户主页补齐。
@@ -258,6 +275,9 @@ func (a *app) loadTopic() {
 			}
 			a.prefetchAvatars(topic.Avatar)
 			a.ensureFollowState(d)
+			// 正文拿到后写一份本机缓存，并补全阅读记录里打开时还缺的字段。
+			a.updateReadingTopic(d.shortID, &topic)
+			a.saveCachedDetail(d)
 		})
 	}()
 }
@@ -295,6 +315,10 @@ func (a *app) loadReplies(page int) {
 				if page > 1 && len(d.replyList) > 0 {
 					// 已经有评论时续拉失败：保留列表，在底部提示并可重试。
 					d.replyMoreErr = friendlyError(err)
+				} else if page == 1 && len(d.replyList) > 0 {
+					// 第一页失败但缓存里已经有评论：继续显示缓存评论，顶部
+					// 说明当前是本地内容，不把评论区换成错误页。
+					a.markDetailOffline(d)
 				} else {
 					d.replyErr = friendlyError(err)
 				}
@@ -349,6 +373,10 @@ func (a *app) loadReplies(page int) {
 					d.focusPending = false
 					d.focusMiss = true
 				}
+			}
+			if page == 1 {
+				// 只缓存第一页评论；续拉的页不写回，避免缓存无限增长。
+				a.saveCachedDetail(d)
 			}
 		})
 	}()
@@ -412,6 +440,11 @@ func (a *app) detailView(c *ui.Context) {
 					label, color = "未找到该评论", t.Danger
 				}
 				ui.Text(c, label).FontSize(11).TextColor(color)
+			}
+			// 离线说明：正文来自本地缓存时，明确告诉用户这是哪个时间的
+			// 内容，而不是让旧内容看起来像刚刷新过。
+			if d.cacheNote != "" {
+				ui.Text(c, d.cacheNote).FontSize(11).TextColor(t.TextMuted).SingleLine()
 			}
 			if n := len(a.detailStack); n > 0 {
 				ui.Textf(c, "内联浏览 %d 层", n).FontSize(11).TextColor(t.TextMuted)
