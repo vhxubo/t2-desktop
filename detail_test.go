@@ -26,7 +26,8 @@ const detailTopicJSON = `{
   "type":"normal","is_pinned":true,"comments_closed":false,
   "views":340,"comment_count":42,"created_at":"2026-11-01T09:00:00.000Z",
   "author":{"id":"u1","username":"jimmy","avatar_url":"https://r2.2libra.com/avatars/x.jpg","level":4},
-  "node":{"id":"n1","slug":"work","name":"职场"},
+  "node":{"id":"n1","slug":"work","name":"职场",
+    "parent":{"id":"n0","slug":"life","name":"生活"},"parent_slug":"life"},
   "tags":[{"name":"职场"},{"name":"讨论"}],
   "reactions_summary":[{"emoji":"👍","count":8},{"emoji":"❤️","count":6}],
   "my_reactions":["👍"],
@@ -87,6 +88,17 @@ func TestDecodeTopic(t *testing.T) {
 	if p.Author != "jimmy" || p.AuthorLevel != 4 || p.NodeName != "职场" ||
 		p.NodeSlug != "work" || p.Views != 340 || p.CommentCount != 42 || !p.IsPinned {
 		t.Errorf("详情元数据错误：%+v", p)
+	}
+	// 两级分类：线上详情把父节点放在 node.parent，旧响应只有 parent_slug。
+	if p.NodeParentName != "生活" || p.NodeParentSlug != "life" ||
+		p.categoryPath() != "生活 · 职场" {
+		t.Errorf("节点父级解析错误：%+v", p)
+	}
+	if got := (&topicDetail{NodeName: "职场"}).categoryPath(); got != "职场" {
+		t.Errorf("只有一级分类时应退回节点名：%q", got)
+	}
+	if got := (&topicDetail{NodeName: "职场", NodeParentSlug: "life"}).categoryPath(); got != "职场" {
+		t.Errorf("只知父节点 slug 时不应拿它顶替父名：%q", got)
 	}
 	if p.URL != "https://2libra.com/post/work/a1b2c3d4" {
 		t.Errorf("原文链接错误：%s", p.URL)
@@ -530,9 +542,9 @@ func TestDetailShowsReactionsAndRewards(t *testing.T) {
 	if left.X >= right.X {
 		t.Errorf("帖子打赏应位于左栏、评论打赏位于右栏：%+v / %+v", left, right)
 	}
-	// 表态摘要只给总数：帖子 8 + 6 = 14，评论 2；每种表情各几次不直接铺开。
-	// 右侧是两个图标入口（表态 / 打赏），不再是一条文字标签。
-	for _, want := range []string{"👍", "❤️", "💰", "表态 14 次", "表态 2 次", "表态", "打赏"} {
+	// 表情摘要默认是「叠放的表情 + 总次数」：帖子 8 + 6 = 14，评论 2；
+	// 具体每个表情几次在悬停说明与点开的明细里。右侧是两个图标入口。
+	for _, want := range []string{"👍", "❤️", "💰", "表情，共 14 次", "表情，共 2 次", "表情", "打赏"} {
 		if tt.HasText(want) {
 			continue
 		}
@@ -540,19 +552,54 @@ func TestDetailShowsReactionsAndRewards(t *testing.T) {
 			t.Errorf("详情页缺少 %q：%q", want, tt.Texts())
 		}
 	}
-	if tt.HasText("8 次") || tt.HasText("6 次") {
-		t.Errorf("摘要不该铺开每种表情的次数：%q", tt.Texts())
-	}
 
-	// 点摘要才看到明细：各表情的次数与自己是否表过。
-	if err := tt.Click("表态 14 次"); err != nil {
-		t.Fatalf("点开表态明细失败：%v", err)
+	// 点摘要才看到每种表情各自几次。
+	if err := tt.Click("表情，共 14 次"); err != nil {
+		t.Fatalf("点开表情明细失败：%v", err)
 	}
 	tt.Frame()
-	for _, want := range []string{"表态明细", "👍 8 次", "❤️ 6 次", "我"} {
+	for _, want := range []string{"表情明细", "👍 8", "❤️ 6", "我"} {
 		if !tt.HasText(want) {
-			t.Errorf("表态明细缺少 %q：%q", want, tt.Texts())
+			t.Errorf("表情明细缺少 %q：%q", want, tt.Texts())
 		}
+	}
+}
+
+// 表态与打赏固定在正文底部：正文滚走时，表态 / 打赏汇总与两个入口原地不动，
+// 长帖滚到哪儿都能直接表态或打赏。
+func TestTopicInteractionBarStaysPinned(t *testing.T) {
+	a := detailAppWithReplies(t)
+	var body strings.Builder
+	for i := 0; i < 120; i++ {
+		fmt.Fprintf(&body, "第 %d 段正文。\n\n", i)
+	}
+	a.detail.topic.Content = body.String()
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	before, ok := tt.Find("表情，共 14 次")
+	if !ok {
+		t.Fatalf("正文底部没有表态汇总：%q", tt.Texts())
+	}
+	if before.Y < 520 {
+		t.Errorf("表态汇总不在正文底部：%+v", before)
+	}
+	if _, ok := tt.Find("300"); !ok {
+		t.Fatalf("正文底部没有打赏汇总：%q", tt.Texts())
+	}
+
+	// 把正文滚下去：内容动了，底部的互动栏不动。
+	tt.Scroll(300, 300, 0, 800)
+	tt.Frame()
+	if a.detail.bodyScroll.Y <= 0 {
+		t.Fatalf("正文没有滚动：%+v", a.detail.bodyScroll)
+	}
+	after, ok := tt.Find("表情，共 14 次")
+	if !ok {
+		t.Fatalf("滚动正文后表态汇总消失了：%q", tt.Texts())
+	}
+	if dy := after.Y - before.Y; dy > 1 || dy < -1 {
+		t.Errorf("滚动正文时表态汇总跟着移动了：Y %.1f -> %.1f", before.Y, after.Y)
 	}
 }
 
@@ -613,6 +660,65 @@ func TestDetailSplitViewLayout(t *testing.T) {
 	panel := im.RGBAAt(int(comment.X)-6, int(comment.Y+comment.H/2))
 	if page == panel {
 		t.Errorf("评论卡片没有独立底色：页面 %v / 卡片 %v", page, panel)
+	}
+}
+
+// 页头显示发帖人头像、昵称与等级，帖子编号让位；分类和标签收进标题下的
+// 副标题：分类显示两级，第二行是标签，并在分类行给出浏览数。
+func TestDetailHeaderShowsAuthorInsteadOfShortID(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+
+	if tt.HasText("帖子 JBYGf2A") {
+		t.Errorf("页头不应再显示帖子编号：%q", tt.Texts())
+	}
+	author, ok := tt.Find("jimmy")
+	if !ok {
+		t.Fatalf("页头没有发帖人昵称：%q", tt.Texts())
+	}
+	title, ok := tt.Find("正文与评论的测试帖")
+	if !ok {
+		t.Fatalf("找不到正文标题：%q", tt.Texts())
+	}
+	if author.Y >= title.Y {
+		t.Errorf("发帖人信息应在页头（标题上方），实际昵称 %+v / 标题 %+v", author, title)
+	}
+	if r, ok := tt.Find("Lv.4"); !ok || r.Y >= title.Y {
+		t.Errorf("作者等级应在页头：%+v ok=%v / 标题 %+v", r, ok, title)
+	}
+	// 分类（两级）与标签在标题下方，不在页头。
+	for _, want := range []string{"生活 · 职场", "340 次浏览", "#职场  #讨论"} {
+		r, ok := tt.Find(want)
+		if !ok {
+			t.Errorf("标题下缺少 %q：%q", want, tt.Texts())
+			continue
+		}
+		if r.Y <= title.Y {
+			t.Errorf("%q 应在正文标题下方：%+v / 标题 %+v", want, r, title)
+		}
+	}
+}
+
+// 楼层号吸在评论头部行的最右侧，作者、徽章与时间留在左边。
+func TestReplyFloorSitsAtRowRight(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+
+	floor, ok := tt.Find("1 楼")
+	if !ok {
+		t.Fatalf("找不到楼层号：%q", tt.Texts())
+	}
+	author, ok := tt.Find("dannyng")
+	if !ok {
+		t.Fatalf("找不到楼层作者：%q", tt.Texts())
+	}
+	if floor.X <= author.X {
+		t.Errorf("楼层号应在作者右侧：楼层 %+v / 作者 %+v", floor, author)
+	}
+	// 评论卡片右边缘在窗口右侧 14px 处，列表与评论行各留 10px 内边距；
+	// 楼层号贴着这一行右端，不会停在中间。
+	if right := floor.X + floor.W; right < 1020 {
+		t.Errorf("楼层号没有吸在评论行右端：右边缘 %.1f", right)
 	}
 }
 
@@ -821,10 +927,10 @@ func TestReplyComposerAnonymous(t *testing.T) {
 	if tt.HasText("发送") {
 		t.Error("未登录不应出现发送按钮")
 	}
-	// 回复入口仅在悬浮评论行时出现，位于右上角，保持默认状态清爽。
+	// 回复入口常驻在评论底部那一行的右侧，不再依赖悬浮；悬浮前后都在。
 	// 注意：嵌套评论的「回复 N 楼」父引用始终可见，故用 Find 精确匹配按钮文字。
-	if _, ok := tt.Find("回复"); ok {
-		t.Error("未悬浮评论行时不应展示回复入口")
+	if _, ok := tt.Find("回复"); !ok {
+		t.Fatal("评论底部应常驻回复入口")
 	}
 	if r, ok := tt.Find("1 楼"); !ok {
 		t.Fatal("找不到评论行用于悬浮")
@@ -833,7 +939,7 @@ func TestReplyComposerAnonymous(t *testing.T) {
 		tt.Frame()
 	}
 	if _, ok := tt.Find("回复"); !ok {
-		t.Error("悬浮评论行后应出现回复入口")
+		t.Error("悬浮评论行后回复入口不应消失")
 	}
 }
 
@@ -918,20 +1024,56 @@ func detailAppWithReplies(t *testing.T) *app {
 	return a
 }
 
-// 悬浮评论行时右上角的「回复」按钮出现，但整条评论的高度保持不变，
-// 不应发生上下跳动：头部行与底部链接行都固定高度占位。
+// 评论底部固定一行：最左边是表态图标，中间是这条评论拿到的表态 / 打赏
+// 汇总，最右边是打赏图标与回复图标；不悬浮也能看到全部入口。
+func TestReplyFooterShowsSummaryAndReply(t *testing.T) {
+	a := detailAppWithReplies(t)
+	// 只留一条评论：避免置顶楼层与嵌套回复的「回复」按钮干扰定位。
+	a.detail.replyList = []replyItem{{
+		ID: "c1", Author: "dannyng", Floor: 1, Content: "第一楼",
+		Reactions: []reactionStat{{Emoji: "👍", Count: 2}},
+		Rewards:   rewardStat{Total: 100, Count: 1},
+	}}
+	a.detail.replyTotal = 1
+	tt := ui.NewTester(a.view, 1100, 760)
+
+	// 第一条评论（c1）带 👍 2 次与 100 金币打赏。
+	summary, ok := tt.Find("表情，共 2 次")
+	if !ok {
+		t.Fatalf("评论底部没有展示表态汇总：%q", tt.Texts())
+	}
+	if !tt.HasText("100") {
+		t.Errorf("评论底部没有展示打赏汇总：%q", tt.Texts())
+	}
+	// 「回复」常驻在评论底部，不依赖悬浮。
+	reply, ok := tt.Find("回复")
+	if !ok {
+		t.Fatalf("评论底部没有回复入口：%q", tt.Texts())
+	}
+	if summary.X >= reply.X {
+		t.Errorf("表态汇总应在左侧、回复在右侧：summary=%+v reply=%+v", summary, reply)
+	}
+	if dy := summary.Y - reply.Y; dy > 10 || dy < -10 {
+		t.Errorf("汇总与回复应在同一行：Δy=%v", dy)
+	}
+}
+
+// 评论底部的回复 / 表态 / 打赏那一行常驻，悬浮评论行不会改变整条评论的
+// 高度：「回复」不再随悬浮出现，因此不可能发生上下跳动。
 func TestReplyButtonNoLayoutShift(t *testing.T) {
 	a := detailAppWithReplies(t)
 	tt := ui.NewTester(a.view, 1100, 760)
 
-	// 未悬浮时，以第二条评论「楼中楼」的纵向位置作为对照基准。
+	// 未悬浮时「回复」已经在评论底部。
+	if _, ok := tt.Find("回复"); !ok {
+		t.Fatal("评论底部应常驻回复入口")
+	}
 	base, ok := tt.Find("楼中楼")
 	if !ok {
 		t.Fatal("找不到第二条评论用于对照")
 	}
 	yBase := base.Y
 
-	// 悬浮第一条评论（"1 楼"），触发右上角「回复」按钮出现。
 	row1, ok := tt.Find("1 楼")
 	if !ok {
 		t.Fatal("找不到第一条评论用于悬浮")
@@ -939,16 +1081,13 @@ func TestReplyButtonNoLayoutShift(t *testing.T) {
 	tt.Move(row1.X+row1.W/2, row1.Y+row1.H/2)
 	tt.Frame()
 
-	if _, ok := tt.Find("回复"); !ok {
-		t.Fatal("悬浮后没有出现回复入口")
-	}
 	after, ok := tt.Find("楼中楼")
 	if !ok {
 		t.Fatal("悬浮后第二条评论消失")
 	}
 	dy := after.Y - yBase
 	if dy > 1 || dy < -1 {
-		t.Errorf("悬浮出现回复按钮后整条评论高度变化，发生跳动：Y %.1f -> %.1f (Δ%v)", yBase, after.Y, dy)
+		t.Errorf("悬浮评论行后整条评论高度变化，发生跳动：Y %.1f -> %.1f (Δ%v)", yBase, after.Y, dy)
 	}
 }
 

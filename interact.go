@@ -452,7 +452,7 @@ func (a *app) openReactionPopup(d *detailState, target string) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能表态。", func() {
+		a.requestLogin("登录后才能添加表情。", func() {
 			if a.detail == d {
 				a.openReactionPopup(d, target)
 			}
@@ -500,18 +500,6 @@ func (a *app) openReactionDetails(d *detailState, target string) {
 	d.react.detailsOpen = true
 }
 
-// popupEntryOpen 报告这条评论是否有气泡正开着：气泡开着时入口要一直画出来，
-// 否则鼠标一离开评论，气泡的锚点就没了。
-func popupEntryOpen(d *detailState, target string) bool {
-	if d == nil {
-		return false
-	}
-	if d.react.reactOpen && d.react.reactFor == target {
-		return true
-	}
-	return d.react.rewardOpen && d.react.rewardFor == target
-}
-
 // canActOn 报告某个表态目标能不能操作：帖子要有作者 uuid / 节点 / 标题与
 // 原文路径；评论还要有作者 uuid。匿名帖没有可通知的人，只读展示。
 func canActOn(d *detailState, target string) bool {
@@ -555,7 +543,7 @@ func (a *app) toggleReaction(d *detailState, target, emoji string) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能表态。", func() {
+		a.requestLogin("登录后才能添加表情。", func() {
 			if a.detail == d {
 				a.toggleReaction(d, target, emoji)
 			}
@@ -627,9 +615,9 @@ func (a *app) toggleReaction(d *detailState, target, emoji string) {
 				return
 			}
 			if mine {
-				a.toast(toastMain, "已表态 "+emoji)
+				a.toast(toastMain, "已添加表情 "+emoji)
 			} else {
-				a.toast(toastMain, "已取消表态 "+emoji)
+				a.toast(toastMain, "已取消表情 "+emoji)
 			}
 			a.notifyInteractDone(nil)
 		})
@@ -698,77 +686,113 @@ func (a *app) favoriteButton(c *ui.Context, d *detailState) {
 	}
 }
 
-// reactionSummary 画一条互动区：左边是只读信息，右边是两个图标入口。
-//
-//   - 左：已有表态归并成一枚胶囊，只列真的有人表过的表情，数字是所有表态的
-//     总数；每种表情各几次要点开明细才看得到。有人打赏时再跟一枚金币胶囊。
-//   - 右：笑脸（表态）与金币（打赏）两个图标，点开的是贴着图标的小气泡，
-//     不打断页面上下文。
-//
-// 帖子这一条常驻（还没人表态时也留入口）；评论只在已有表态或打赏时出现，
-// 避免每条评论都多一行空白——评论的操作入口在悬浮时给出。
-func (a *app) reactionSummary(c *ui.Context, d *detailState, target string, rewards rewardStat, showAction, always bool) {
+// topicInteractionRow 画帖子的一条互动行：左边是归并后的表态与打赏汇总，
+// 右边是表态（笑脸）与打赏（金币）两个图标入口。它由 topicInteractionBar
+// 固定渲染在正文底部，不再跟在正文末尾滚动。
+func (a *app) topicInteractionRow(c *ui.Context, d *detailState) {
+	if !topicInteractionVisible(d) {
+		return
+	}
+	p := d.topic
+	ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
+		a.reactionSummaryInfo(c, d, reactionTopic, p.Rewards)
+		ui.Spacer(c).Grow(1)
+		a.reactionEntries(c, d, reactionTopic)
+	})
+}
+
+// topicInteractionVisible 报告帖子的互动行有没有内容可画：已经有人表态或
+// 打赏，或者当前用户可以表态 / 打赏。匿名浏览且没人互动时整条不占位。
+func topicInteractionVisible(d *detailState) bool {
+	if d == nil || d.topic == nil {
+		return false
+	}
+	p := d.topic
+	return len(visibleReactions(p.Reactions)) > 0 || p.Rewards.Total > 0 ||
+		canActOn(d, reactionTopic) || canRewardOn(d, reactionTopic)
+}
+
+// topicInteractionBar 是左栏正文底部固定的一条互动栏：帖子收到的表态 /
+// 打赏汇总在左，表态（笑脸）与打赏（金币）入口在右。它不参与正文滚动，长帖
+// 滚到哪儿，汇总与入口都留在手边。
+func (a *app) topicInteractionBar(c *ui.Context, d *detailState) {
+	if !topicInteractionVisible(d) {
+		return
+	}
+	ui.Divider(c)
+	ui.Column(c).FillWidth().Padding(8, 16).Children(func() {
+		a.topicInteractionRow(c, d)
+	})
+}
+
+// reactionSummaryInfo 在调用方的行里画左侧只读摘要：一枚表情胶囊（叠放的
+// 表情 + 总次数），有人打赏时再跟一枚金币胶囊。没有互动时什么都不画，左侧
+// 自然留白。胶囊悬停给出每种表情各几次，点开是贴着它的明细气泡。
+func (a *app) reactionSummaryInfo(c *ui.Context, d *detailState, target string, rewards rewardStat) {
 	if d == nil || d.topic == nil {
 		return
 	}
 	t := c.Theme()
 	shown := visibleReactions(reactionStatsOf(d, target))
 	total := reactionTotal(shown)
-	if len(shown) == 0 && rewards.Total <= 0 && !always {
-		return
-	}
-	ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
-		if len(shown) > 0 {
-			chip := ui.Row(c).Padding(0, 6).Radius(999).Gap(3).
-				Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center)
-			chip.Tooltip(reactionSummaryTip(shown, total))
-			label := "表态"
-			if total > 0 {
-				label = fmt.Sprintf("表态 %d 次", total)
-			}
-			chip.Label(label)
-			chip.Children(func() {
-				// 表情并成一个文本节点画：分开画每个表情会多出内边距与间距，
-				// 胶囊会明显变宽。只取最靠前的两个，其余进明细。
-				glyphs := make([]string, 0, reactionGlyphMax)
-				for _, s := range shown {
-					if len(glyphs) == reactionGlyphMax {
-						break
-					}
-					glyphs = append(glyphs, s.Emoji)
+	if len(shown) > 0 {
+		chip := ui.Row(c).Padding(0, 6).Radius(999).Gap(4).
+			Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center)
+		chip.Tooltip(reactionSummaryTip(shown))
+		chip.Label(fmt.Sprintf("表情，共 %d 次", total))
+		chip.Children(func() {
+			// 表情叠放：后一个向左压住前一个，形成一小摞圆片；超出
+			// reactionStackMax 的表情不画，悬停与明细里能看到全部。
+			for i, s := range shown {
+				if i == reactionStackMax {
+					break
 				}
-				ui.Text(c, strings.Join(glyphs, "")).FontSize(11).SingleLine()
-				if total > 0 {
-					ui.Textf(c, "%d", total).FontSize(10).TextColor(t.TextMuted)
+				emoji := s.Emoji
+				box := ui.Box(c).Size(reactionStackSize, reactionStackSize).
+					Radius(reactionStackSize / 2).Background(t.Surface).Center()
+				if i > 0 {
+					box.MarginStart(-reactionStackOverlap)
 				}
-			})
-			chip.OnClick(func() { a.openReactionDetails(d, target) })
-			if d.react.detailsFor == target {
-				ui.Popover(c, chip, &d.react.detailsOpen, func() {
-					a.detailsPanel(c, d, target)
+				box.Children(func() {
+					ui.Text(c, emoji).FontSize(10).SingleLine()
 				})
 			}
-		}
-		if rewards.Total > 0 {
-			a.rewardBadge(c, rewards)
-		}
-		ui.Spacer(c).Grow(1)
-		if showAction {
-			ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
-				if canActOn(d, target) {
-					a.reactionEntry(c, d, target)
-				}
-				if canRewardOn(d, target) {
-					a.rewardEntry(c, d, target)
-				}
+			ui.Textf(c, "%d", total).FontSize(11).TextColor(t.TextMuted)
+		})
+		chip.OnClick(func() { a.openReactionDetails(d, target) })
+		if d.react.detailsFor == target {
+			ui.Popover(c, chip, &d.react.detailsOpen, func() {
+				a.detailsPanel(c, d, target)
 			})
+		}
+	}
+	if rewards.Total > 0 {
+		a.rewardBadge(c, rewards)
+	}
+}
+
+// 表情摘要里那一摞圆片的尺寸：叠放三个也不会比一个数字宽太多。
+const (
+	reactionStackMax     = 3
+	reactionStackSize    = 15
+	reactionStackOverlap = 5
+)
+
+// reactionEntries 画右侧两个图标入口（表态 / 打赏）；两个都不可用时什么
+// 都不画。评论与帖子共用，尺寸因此保持一致。
+func (a *app) reactionEntries(c *ui.Context, d *detailState, target string) {
+	if !canActOn(d, target) && !canRewardOn(d, target) {
+		return
+	}
+	ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
+		if canActOn(d, target) {
+			a.reactionEntry(c, d, target)
+		}
+		if canRewardOn(d, target) {
+			a.rewardEntry(c, d, target)
 		}
 	})
 }
-
-// reactionGlyphMax 是摘要胶囊里最多画几个表情：只放最靠前的两个，其余的数量
-// 在点开的明细里看，胶囊因此保持窄小。
-const reactionGlyphMax = 2
 
 // visibleReactions 只保留真的有人表过的表情（自己刚表态、服务端还没回填
 // 计数的也算），并按次数从多到少排。
@@ -793,19 +817,17 @@ func reactionTotal(stats []reactionStat) int {
 	return total
 }
 
-// reactionSummaryTip 是摘要胶囊的悬停说明：总数 + 各表情的次数。
-func reactionSummaryTip(stats []reactionStat, total int) string {
+// reactionSummaryTip 是表情胶囊的悬停说明：每种表情各几次，多个表情依次
+// 拼接在一起（如「👍 8 ❤️ 6」），不再加多余的说明文字。
+func reactionSummaryTip(stats []reactionStat) string {
 	parts := make([]string, 0, len(stats))
 	for _, s := range stats {
-		if s.Count > 0 {
-			parts = append(parts, fmt.Sprintf("%s %d", s.Emoji, s.Count))
+		if s.Count <= 0 {
+			continue
 		}
+		parts = append(parts, fmt.Sprintf("%s %d", s.Emoji, s.Count))
 	}
-	tip := fmt.Sprintf("共 %d 次表态，点击查看明细", total)
-	if len(parts) > 0 {
-		tip += "：" + strings.Join(parts, "、")
-	}
-	return tip
+	return strings.Join(parts, " ")
 }
 
 // reactionEntry 是表态入口：一个笑脸图标，点开贴着它的气泡选表情。图标比
@@ -830,7 +852,7 @@ func (a *app) reactionEntry(c *ui.Context, d *detailState, target string) {
 	b.Children(func() {
 		ui.Icon(c, reactionIcon).Size(13, 13).TextColor(ink)
 	})
-	b.Label("表态").Tooltip("选一个表情表态")
+	b.Label("表情").Tooltip("添加一个表情")
 	if b.Clicked() {
 		a.openReactionPopup(d, target)
 	}
@@ -885,7 +907,7 @@ func (a *app) reactionPanel(c *ui.Context, d *detailState, target string) {
 	ui.Column(c).Width(230).Gap(8).Children(func() {
 		ui.Text(c, "选择一个表情").FontSize(12).TextColor(t.TextMuted)
 		if !a.auth.loggedIn() {
-			a.loginHint(c, "登录后才能表态。")
+			a.loginHint(c, "登录后才能添加表情。")
 			return
 		}
 		emojis := reactionEmojisOf(d, target)
@@ -905,7 +927,7 @@ func (a *app) reactionPanel(c *ui.Context, d *detailState, target string) {
 					b.Disabled(true)
 				}
 				b.Label("选择表情 " + chosen)
-				b.Tooltip("点一下" + chosen + "表态")
+				b.Tooltip("添加 " + chosen)
 				if b.Clicked() {
 					d.react.reactOpen = false
 					a.toggleReaction(d, target, chosen)
@@ -962,9 +984,9 @@ func (a *app) detailsPanel(c *ui.Context, d *detailState, target string) {
 	shown := visibleReactions(reactionStatsOf(d, target))
 	canAct := canActOn(d, target)
 	ui.Column(c).Width(260).Gap(4).Children(func() {
-		ui.Text(c, "表态明细").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "表情明细").FontSize(12).TextColor(t.TextMuted)
 		if len(shown) == 0 {
-			ui.Text(c, "还没有人表态。").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "还没有人添加表情。").FontSize(12).TextColor(t.TextMuted)
 			return
 		}
 		for _, s := range shown {
@@ -972,7 +994,7 @@ func (a *app) detailsPanel(c *ui.Context, d *detailState, target string) {
 			row := ui.Row(c).FillWidth().Padding(2, 6).Radius(6).Gap(6).
 				AlignItems(ui.Center).Background(ui.Transparent)
 			if canAct && !d.react.busy {
-				row.Label(fmt.Sprintf("%s %d 次", stat.Emoji, stat.Count))
+				row.Label(fmt.Sprintf("%s %d", stat.Emoji, stat.Count))
 				row.Tooltip(reactionBadgeTip(stat))
 				if row.Hovered() {
 					row.Background(t.SurfaceHover)
@@ -981,7 +1003,7 @@ func (a *app) detailsPanel(c *ui.Context, d *detailState, target string) {
 			}
 			row.Children(func() {
 				ui.Text(c, stat.Emoji).FontSize(14)
-				ui.Textf(c, "%d 次", stat.Count).FontSize(12).TextColor(t.TextMuted)
+				ui.Textf(c, "%d", stat.Count).FontSize(12).TextColor(t.TextMuted)
 				if stat.Mine {
 					ui.Text(c, "我").FontSize(10).Bold().TextColor(t.Accent)
 				}

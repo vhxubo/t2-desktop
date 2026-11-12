@@ -364,8 +364,8 @@ func TestDetailFavoriteButton(t *testing.T) {
 	}
 }
 
-// 表态摘要按总数归并：三个不同表情各 1 次 → 只显示一枚「表态 3 次」的胶囊，
-// 点开明细才看到每种表情各几次。
+// 表情摘要默认是「叠放的表情 + 总次数」；悬停说明把每种表情的次数依次拼接，
+// 点开明细还能逐项看。
 func TestReactionSummaryMergesCounts(t *testing.T) {
 	a := testApp(t)
 	topic, err := decodeTopic([]byte(interactJSON), "AB12")
@@ -382,33 +382,39 @@ func TestReactionSummaryMergesCounts(t *testing.T) {
 	a.detail = &detailState{shortID: "AB12", topic: &topic}
 
 	tt := ui.NewTester(a.view, 1100, 760)
-	if _, ok := tt.Find("表态 3 次"); !ok {
-		t.Fatalf("摘要没有按总数归并：%q", tt.Texts())
+	if _, ok := tt.Find("表情，共 3 次"); !ok {
+		t.Fatalf("摘要没有显示「表情 + 总数」：%q", tt.Texts())
 	}
-	// 表情合成一个文本节点画、最多两个：三个表情时摘要里只出现前两个，
-	// 第三个与各自次数都要等点开明细才出现。
-	if !tt.HasText("👍❤️") {
-		t.Errorf("摘要里的表情没有并成一段紧凑文本：%q", tt.Texts())
+	first, ok := tt.Find("👍")
+	if !ok {
+		t.Fatal("摘要里没有表情")
 	}
-	if tt.HasText("🎉") {
-		t.Errorf("摘要不该铺开第三个表情：%q", tt.Texts())
+	second, ok := tt.Find("❤️")
+	if !ok {
+		t.Fatal("摘要里缺少第二个表情")
 	}
-	if tt.HasText("+1") {
-		t.Errorf("摘要不该再带「+N」占宽度：%q", tt.Texts())
+	// 叠放：相邻表情的间距小于一个圆片的宽度，说明后一个压住了前一个。
+	pitch := second.X - first.X
+	if pitch <= 0 || pitch >= reactionStackSize {
+		t.Errorf("表情没有叠放：间距 %v（圆片宽 %d）", pitch, reactionStackSize)
 	}
-	// 摘要不该把每种表情的次数铺开。
-	for _, unwanted := range []string{"1 次", "👍 1", "❤️ 1"} {
-		if tt.HasText(unwanted) {
-			t.Errorf("摘要里不该出现 %q：%q", unwanted, tt.Texts())
-		}
+	if _, ok := tt.Find("🎉"); !ok {
+		t.Error("叠放的表情应包含第三个")
 	}
-	if err := tt.Click("表态 3 次"); err != nil {
-		t.Fatalf("点开表态明细失败：%v", err)
+	// 悬停说明拼接每种表情的次数。
+	got := reactionSummaryTip([]reactionStat{
+		{Emoji: "👍", Count: 1}, {Emoji: "❤️", Count: 1}, {Emoji: "🎉", Count: 1},
+	})
+	if want := "👍 1 ❤️ 1 🎉 1"; got != want {
+		t.Errorf("悬停说明 = %q，期望 %q", got, want)
+	}
+	if err := tt.Click("表情，共 3 次"); err != nil {
+		t.Fatalf("点开表情明细失败：%v", err)
 	}
 	tt.Frame()
-	for _, want := range []string{"表态明细", "👍 1 次", "❤️ 1 次", "🎉 1 次"} {
+	for _, want := range []string{"表情明细", "👍 1", "❤️ 1", "🎉 1"} {
 		if !tt.HasText(want) {
-			t.Errorf("表态明细缺少 %q：%q", want, tt.Texts())
+			t.Errorf("表情明细缺少 %q：%q", want, tt.Texts())
 		}
 	}
 }
@@ -433,14 +439,14 @@ func TestReactionPopover(t *testing.T) {
 	a.detail = &detailState{shortID: "AB12", topic: &topic}
 
 	tt := ui.NewTester(a.view, 1100, 760)
-	if _, ok := tt.Find("表态"); !ok {
-		t.Fatalf("右侧没有表态图标入口：%q", tt.Texts())
+	if _, ok := tt.Find("表情"); !ok {
+		t.Fatalf("右侧没有表情图标入口：%q", tt.Texts())
 	}
 	if _, ok := tt.Find("打赏"); !ok {
 		t.Fatalf("右侧没有打赏图标入口：%q", tt.Texts())
 	}
-	if err := tt.Click("表态"); err != nil {
-		t.Fatalf("点表态入口失败：%v", err)
+	if err := tt.Click("表情"); err != nil {
+		t.Fatalf("点表情入口失败：%v", err)
 	}
 	tt.Frame()
 	if !a.detail.react.reactOpen || a.detail.react.reactFor != reactionTopic {
@@ -692,8 +698,8 @@ func TestReactionEntryRequiresLogin(t *testing.T) {
 	a.detail = &detailState{shortID: "AB12", topic: &topic}
 
 	tt := ui.NewTester(a.view, 1100, 760)
-	if err := tt.Click("表态"); err != nil {
-		t.Fatalf("点表态入口失败：%v", err)
+	if err := tt.Click("表情"); err != nil {
+		t.Fatalf("点表情入口失败：%v", err)
 	}
 	if !a.authGate.open {
 		t.Fatal("未登录点表态应打开全局授权弹窗")
@@ -719,16 +725,13 @@ func TestAnonymousTopicHasNoReactionEntry(t *testing.T) {
 	a.pageName = "detail"
 	a.detail = &detailState{shortID: "ANON1", topic: &topic}
 	tt := ui.NewTester(a.view, 1100, 760)
-	for _, entry := range []string{"表态", "打赏"} {
+	for _, entry := range []string{"表情", "打赏"} {
 		if _, ok := tt.Find(entry); ok {
 			t.Errorf("匿名帖不该有「%s」入口", entry)
 		}
 	}
-	if _, ok := tt.Find("表态 1 次"); !ok {
-		t.Errorf("已有的表态仍应展示：%q", tt.Texts())
-	}
-	if !tt.HasText("👍") {
-		t.Errorf("已有的表态表情仍应展示：%q", tt.Texts())
+	if _, ok := tt.Find("表情，共 1 次"); !ok {
+		t.Errorf("已有的表情仍应展示：%q", tt.Texts())
 	}
 	if canReactTopic(&topic) {
 		t.Error("没有作者 uuid 的帖子不应允许表态")

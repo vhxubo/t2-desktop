@@ -54,6 +54,10 @@ type topicDetail struct {
 	Following          bool
 	FollowingKnown     bool
 	NodeName, NodeSlug string
+	// NodeParentName / NodeParentSlug 是节点上一级：线上详情把父节点放在
+	// node.parent 里（同时带 parent_slug），列表接口只带 parent_slug。
+	// 两级分类据此显示成「父 · 子」，只有 slug、拿不到父名时退回一级。
+	NodeParentName, NodeParentSlug string
 	// NodeID 是节点 uuid：表态接口把它作为必填的 nodeId。NodeEmojis 是节点
 	// 推荐的表态表情（main_emojis + sub_emojis），表态选择器直接用它。
 	NodeID                   string
@@ -233,6 +237,19 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 		t.NodeSlug = n.str("slug")
 		t.NodeID = n.str("id")
 		t.NodeEmojis = nodeEmojiList(n)
+		// 父节点线上在 node.parent 里；部分响应只带 parent_slug。没有父名
+		// 时仍只显示一级分类，不拿 slug 顶替名字。
+		parent := n.sub("parent", "parent_node")
+		if parent == nil {
+			parent = o.sub("parent_node")
+		}
+		if parent != nil {
+			t.NodeParentName = parent.str("name")
+			t.NodeParentSlug = parent.str("slug")
+		}
+		if t.NodeParentSlug == "" {
+			t.NodeParentSlug = n.str("parent_slug")
+		}
 		t.URL = topicURL(shortID, t.NodeSlug)
 	}
 	// favorited 在匿名响应里是 false，但要靠字段本身判断「是不是知道」：
@@ -265,6 +282,19 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 		}
 	}
 	return t, nil
+}
+
+// categoryPath 是节点的两级分类：有父节点时拼成「父 · 子」，只有一级时退回
+// 节点名。父节点名来自 node.parent；只有 parent_slug 时（老响应 / 列表接口）
+// 拿不到父名，同样只显示一级，不拿 slug 顶替。
+func (t *topicDetail) categoryPath() string {
+	switch {
+	case t.NodeParentName != "" && t.NodeName != "":
+		return t.NodeParentName + " · " + t.NodeName
+	case t.NodeName != "":
+		return t.NodeName
+	}
+	return t.NodeParentName
 }
 
 func decodePostscripts(raw json.RawMessage) []postscript {
