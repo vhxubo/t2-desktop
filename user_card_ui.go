@@ -15,12 +15,10 @@ import (
 // 版式：
 //
 //	┌────────────────────────────────────────────┐
-//	│  横幅（渐变，可拖动窗口）            [x] 关闭 │
-//	│                                            │
-//	│  (头像)  昵称                                │
-//	│          @username  [PRO] [徽章]            │
-//	│                                            │
-//	│  [关注他]                                   │
+//	│  (人) 用户资料                  – 关闭      │ 32 DIP 标题栏
+//	│  ────────────────────────────────────────  │
+//	│  (头像)  昵称 [Lv.13] [PRO] [徽章]  [关注他] │
+//	│          @username · 注册 2024-05-01 · 512 天│
 //	│  ────────────────────────────────────────  │
 //	│  个人简介：…                                │
 //	│  ────────────────────────────────────────  │
@@ -29,6 +27,10 @@ import (
 //	│  [他发布的主题] [他的最新回复]                │
 //	│  · 标题 ……………                      2 天前  │
 //	└────────────────────────────────────────────┘
+//
+// 顶部不再是一条只有关闭按钮的渐变横幅：资料卡的头部信息本来就少，整条
+// 横幅只剩大片空白。现在用和其他窗口相同的 32 DIP 自绘标题栏，头像、昵称
+// 与关注按钮并成一行，资料与列表因此整体上移。
 //
 // 数据、状态与请求在 user_card.go；这里只负责窗口的开关与界面。
 
@@ -132,8 +134,8 @@ func (a *app) redrawUserCardWindow() {
    窗口界面
 --------------------------------------------------------------- */
 
-// userCardWindowView 是资料卡窗口的 view。窗口没有系统标题栏：顶部横幅既是
-// 装饰，也是拖动窗口的区域，关闭按钮画在横幅右上角。
+// userCardWindowView 是资料卡窗口的 view。窗口没有系统标题栏：顶部是自绘
+// 标题栏（拖动窗口、最小化与关闭），下面直接是资料主体。
 func (a *app) userCardWindowView(c *ui.Context) {
 	a.applyTheme(c)
 	t := c.Theme()
@@ -149,14 +151,14 @@ func (a *app) userCardWindowView(c *ui.Context) {
 	if cs == nil {
 		// 窗口正在关闭（状态已丢弃）：画一帧空壳就好，不要在渲染里把状态
 		// 重新建出来 —— 那会让「关掉就丢掉这份资料」失效。
-		ui.Column(c).Fill().Children(func() { a.userCardBanner(c) })
+		ui.Column(c).Fill().Children(func() { a.userCardTitleBar(c) })
 		return
 	}
 
 	ui.Column(c).Fill().Children(func() {
-		a.userCardBanner(c)
+		a.userCardTitleBar(c)
+		ui.Divider(c)
 		a.userCardHeader(c, cs)
-		a.userCardActions(c, cs)
 		ui.Divider(c)
 		a.userCardBio(c, cs)
 		ui.Divider(c)
@@ -167,9 +169,12 @@ func (a *app) userCardWindowView(c *ui.Context) {
 		})
 		ui.Divider(c)
 		ui.Column(c).Grow(1).MinHeight(0).Padding(12, 16).Children(func() {
-			if cs.tab == userCardTabReplies {
+			switch cs.tab {
+			case userCardTabReplies:
 				a.userCardListBody(c, cs, userCardReplies)
-			} else {
+			case userCardTabAttrs:
+				a.userCardAttrsBody(c, cs)
+			default:
 				a.userCardListBody(c, cs, userCardTopics)
 			}
 		})
@@ -177,55 +182,52 @@ func (a *app) userCardWindowView(c *ui.Context) {
 	a.ensureUserCardLoaded()
 }
 
-// userCardBanner 是顶部横幅：从主题强调色渐变的装饰带，同时是拖动窗口的
-// 区域；右上角是关闭按钮（对应版式里的「[x] 关闭」）。
-func (a *app) userCardBanner(c *ui.Context) {
+// userCardTitleBar 是自绘标题栏：左边是人形图标与「用户资料」，右边是
+// 最小化与关闭，画法与主窗口、通知、我的三个窗口一致。它同时是拖动窗口的
+// 区域。用户名只在下面的资料头里写一次，标题栏不再重复。
+func (a *app) userCardTitleBar(c *ui.Context) {
 	t := c.Theme()
-	ui.Box(c).FillWidth().Height(userCardBannerHeight).DragWindow().
-		Gradient(t.Accent, t.AccentHover, 90).Children(func() {
-		ui.Row(c).Fill().Padding(8, 10).AlignItems(ui.Start).Children(func() {
-			ui.Spacer(c).Grow(1)
-			a.userCardCloseButton(c)
+	ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
+		Background(t.Surface).DragWindow().Children(func() {
+		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
+			AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, profileIcon).Size(16, 16).TextColor(t.Accent)
+			ui.Text(c, "用户资料").FontSize(13).Bold().SingleLine()
 		})
+		a.titleButton(c, titleMinimize, "最小化", func() {
+			if win := a.userCardWin; win != nil {
+				win.Minimize()
+			}
+		})
+		a.titleButton(c, titleClose, "关闭", a.closeUserCardWindow)
 	})
 }
 
-// userCardCloseButton 是横幅右上角的关闭按钮：图标 + 「关闭」，压在渐变色上
-// 所以固定用白字与半透明白底，深浅主题下都看得清。
-func (a *app) userCardCloseButton(c *ui.Context) {
-	white := ui.RGB(255, 255, 255)
-	b := ui.ButtonBase(c).Shrink(0).Padding(3, 8).Radius(6).Gap(4).
-		Background(ui.Transparent)
-	if b.Hovered() {
-		b.Background(ui.RGBA(255, 255, 255, 0.22))
-	}
-	b.Children(func() {
-		ui.Icon(c, closeIcon).Size(12, 12).TextColor(white)
-		ui.Text(c, "关闭").FontSize(11).TextColor(white).SingleLine()
-	})
-	b.Label("关闭").Tooltip("关闭资料卡").OnClick(a.closeUserCardWindow)
-}
-
-// userCardHeader 是资料头：大头像、昵称、@用户名、PRO 与佩戴中的徽章。
+// userCardHeader 是资料头：头像、昵称、等级 / PRO / 徽章、身份信息与关注
+// 按钮。关注按钮与身份信息同一行，不再单独占一行；资料头是整张卡里唯一
+// 需要突出的地方，其余区块都贴着它往下排。
 func (a *app) userCardHeader(c *ui.Context, cs *userCardState) {
 	t := c.Theme()
 	u := cs.user
-	avatar := u.Avatar
-	ui.Row(c).FillWidth().Padding(14, 16).Gap(14).AlignItems(ui.Center).Children(func() {
-		avatarView(c, cs.username, a.avatarBitmap(avatar), userCardAvatar)
-		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
+	ui.Row(c).FillWidth().Padding(12, 16).Gap(14).AlignItems(ui.Center).Children(func() {
+		avatarView(c, cs.username, a.avatarBitmap(u.Avatar), userCardAvatar)
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, cs.title()).FontSize(17).Bold().SingleLine()
+				ui.Text(c, cs.title()).FontSize(16).Bold().SingleLine()
+				if u.Level > 0 {
+					userCardChip(c, fmt.Sprintf("Lv.%d", u.Level), t.TextMuted)
+				}
 				if u.IsPro {
 					userCardChip(c, "PRO", t.Accent)
 				}
 			})
-			// 第二行：@用户名 + 徽章。徽章名字来自接口，站点有什么就显示
-			// 什么（「守护者」这类徽章会原样出现）。
+			// 第二行：@用户名 + 注册时间 + 佩戴中的徽章。徽章名字来自接口，
+			// 站点有什么就显示什么（「守护者」这类徽章会原样出现）。行内
+			// 放不下时自动折行，不会把关注按钮挤出窗口。
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
-				if cs.username != "" {
-					ui.Text(c, "@"+cs.username).FontSize(12).
-						TextColor(t.TextMuted).SingleLine()
+				if meta := userCardHeaderMeta(cs); meta != "" {
+					ui.Text(c, meta).FontSize(12).
+						TextColor(t.TextMuted).MaxLines(2)
 				}
 				for _, b := range u.Badges {
 					if b.Name == "" {
@@ -235,7 +237,21 @@ func (a *app) userCardHeader(c *ui.Context, cs *userCardState) {
 				}
 			})
 		})
+		a.userCardFollowButton(c, cs)
 	})
+}
+
+// userCardHeaderMeta 是昵称下面那行身份信息：@用户名与注册时间。注册的
+// 说法沿用「我的」窗口（注册日期 + 天数）；资料还没到时不编一个日期。
+func userCardHeaderMeta(cs *userCardState) string {
+	parts := make([]string, 0, 2)
+	if cs.username != "" {
+		parts = append(parts, "@"+cs.username)
+	}
+	if reg := profileRegisteredText(cs.user.CreatedAt); reg != "" {
+		parts = append(parts, reg)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // userCardChip 是昵称旁的短标签：PRO、徽章名与统计数字都用它，靠颜色区分。
@@ -247,16 +263,9 @@ func userCardChip(c *ui.Context, label string, tint ui.Color) {
 	})
 }
 
-// userCardActions 只剩关注 / 取关：打赏与网页打开都要去站点，已经去掉。
-func (a *app) userCardActions(c *ui.Context, cs *userCardState) {
-	ui.Row(c).FillWidth().Padding(0, 16, 12, 16).Gap(8).
-		AlignItems(ui.Center).Wrap().Children(func() {
-		a.userCardFollowButton(c, cs)
-	})
-}
-
 // userCardFollowButton 画关注按钮：未关注是主按钮「关注他」，已关注是低
-// 强调的描边按钮「已关注」，点一下切换。自己的资料卡不显示。
+// 强调的描边按钮「已关注」，点一下切换。自己的资料卡不显示。它画在资料头
+// 的右侧，与昵称同一行。
 func (a *app) userCardFollowButton(c *ui.Context, cs *userCardState) {
 	if !a.userCardCanFollow() {
 		return
@@ -287,23 +296,79 @@ func (a *app) userCardFollowButton(c *ui.Context, cs *userCardState) {
 	}
 }
 
-// userCardBio 是「个人简介」一块。接口只给 has_readme 这个布尔值，正文不在
-// 应用内展示，所以这里只说明填写状态。
+// userCardBio 是「个人简介」一块：正文来自 GET /v1/users/:userName/about，
+// 按 Markdown 渲染（链接、列表与表情都走正文同一套渲染），{{KEY}} 统计
+// 占位符换成该用户的实际数字。介绍可能很长，超过一块的高度就在块内滚动，
+// 下面的统计、标签页与列表不会被挤出窗口。
 func (a *app) userCardBio(c *ui.Context, cs *userCardState) {
 	t := c.Theme()
-	ui.Column(c).FillWidth().Padding(10, 16).Gap(4).Children(func() {
+	// MinHeight(0)：窗口缩到最小时先压这一块（里面的介绍框会跟着缩短），
+	// 否则内容会把统计、标签页与列表顶出窗口。
+	ui.Column(c).FillWidth().MinHeight(0).Padding(10, 16).Gap(4).Children(func() {
 		ui.Text(c, "个人简介").FontSize(11).TextColor(t.TextMuted).SingleLine()
-		text := "正在读取资料…"
 		switch {
-		case cs.profileErr != "":
-			text = "资料暂时不可用：" + cs.profileErr
-		case cs.profileLoaded && cs.user.HasReadme:
-			text = "这位用户填写了个人简介。接口只返回「是否填写」，正文没有在这里展示。"
-		case cs.profileLoaded:
-			text = "这位用户还没有填写个人简介。"
+		case cs.aboutErr != "":
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "介绍暂时不可用："+cs.aboutErr).FontSize(userCardBioFontSize).
+					TextColor(t.Danger).MaxLines(2).Grow(1)
+				a.smallAction(c, "重试", cs.aboutLoading, a.loadUserCardAbout)
+			})
+		case !cs.aboutLoaded || cs.aboutLoading:
+			ui.Text(c, "正在读取个人介绍…").FontSize(userCardBioFontSize).TextColor(t.Text)
+		case strings.TrimSpace(cs.about.Content) == "":
+			// 没填写和「仅自己可见」都是空正文，但原因不同，不能混为一谈。
+			text := "这位用户还没有填写个人介绍。"
+			if cs.about.PublicKnown && !cs.about.IsPublic {
+				text = "这位用户的个人介绍仅自己可见。"
+			}
+			ui.Text(c, text).FontSize(userCardBioFontSize).TextColor(t.Text)
+		default:
+			ui.Scroll(c).FillWidth().MaxHeight(userCardBioContentHeight(c)).Children(func() {
+				// 介绍自己的 emojiMap 可能带社区图标；并到全局表情表后一起
+				// 渲染，规则与帖子正文相同。
+				emojis := mergeEmojiMaps(a.emojis, cs.about.Emojis)
+				src := replaceEmoji(expandAboutStats(cs.about.Content, cs.about.Stats), emojis, true)
+				a.markdownView(c, src, a.bioMd)
+			})
+			if meta := userCardAboutMeta(cs.about); meta != "" {
+				ui.Text(c, meta).FontSize(11).TextColor(t.TextMuted).SingleLine()
+			}
 		}
-		ui.Text(c, text).FontSize(12).TextColor(t.Text).MaxLines(3)
 	})
+}
+
+// userCardBioContentHeight 是介绍内容区当前能给的高度：窗口总高减去其余
+// 区块（标题栏、资料头、统计、标签页、列表首行与分隔线）大约要占的高度，
+// 再限制在 [userCardBioMinHeight, userCardBioMaxHeight] 之间。窗口被缩小
+// 时介绍先让位；常量只是估计，bio 块的 MinHeight(0) 保证估错时也不会把
+// 列表顶出窗口。
+func userCardBioContentHeight(c *ui.Context) float32 {
+	_, h := c.Size()
+	height := h - userCardBioReserved
+	if height > userCardBioMaxHeight {
+		return userCardBioMaxHeight
+	}
+	if height < userCardBioMinHeight {
+		return userCardBioMinHeight
+	}
+	return height
+}
+
+// userCardAboutMeta 是介绍底下的状态行：是否公开，以及最后更新时间（站点
+// 按本地时间显示）。响应没给的信息不编。
+func userCardAboutMeta(about userAbout) string {
+	parts := make([]string, 0, 2)
+	if about.PublicKnown {
+		if about.IsPublic {
+			parts = append(parts, "介绍公开")
+		} else {
+			parts = append(parts, "介绍仅自己可见")
+		}
+	}
+	if t, ok := profileTime(about.UpdatedAt); ok {
+		parts = append(parts, "更新于 "+t.Local().Format("2006-01-02 15:04"))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // userCardStats 是统计条：主题数、回复数、粉丝、关注。数字都来自接口，

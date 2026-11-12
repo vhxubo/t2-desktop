@@ -6,6 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"io"
 	"log"
 	"net/url"
 	"os"
@@ -49,9 +54,19 @@ type imageCache struct {
 
 	mu      sync.Mutex
 	entries map[string]*imageEntry
+	// sizes 是从磁盘缓存文件头读出的尺寸，键是图片地址。详情正文用它给
+	// 还没解出来的配图先占住位置：尺寸读一次就记住，渲染每帧不会重复开文件。
+	sizes map[string]imageSize
 	// gen 在清理缓存时递增：清理前发出的下载即使晚到，也不再写回磁盘，
 	// 否则刚清空的大小会立刻被在途请求补回来。
 	gen uint64
+}
+
+// imageSize 是图片的宽高（像素）。ok 为 false 表示磁盘上还没有这张图，
+// 或它的格式读不出尺寸。
+type imageSize struct {
+	w, h float32
+	ok   bool
 }
 
 // imageEntry 是一个地址的下载 / 解码状态。src 为 nil 表示还没加载完或加载
@@ -89,6 +104,7 @@ func newImageCache(dir string) *imageCache {
 	return &imageCache{
 		dir:     filepath.Join(dir, "cache", "images"),
 		entries: make(map[string]*imageEntry),
+		sizes:   make(map[string]imageSize),
 	}
 }
 
@@ -171,6 +187,87 @@ func (c *imageCache) readDisk(raw string, cat imageCategory) ([]byte, bool) {
 	return data, true
 }
 
+// cachedSize 返回磁盘缓存里这张图的宽高：只读文件头，不下载也不解码整张图。
+// 详情正文在图片还没解出来时用它先占住一样大的位置，图片到达时就地替换，
+// 正文不会先缩后跳。读不到的格式（例如 SVG）返回 ok=false，退回小占位。
+func (c *imageCache) cachedSize(raw string, cat imageCategory) (w, h float32, ok bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, 0, false
+	}
+	c.mu.Lock()
+	s, seen := c.sizes[raw]
+	c.mu.Unlock()
+	if !seen {
+		w, h, ok = c.readDiskSize(raw, cat)
+		s = imageSize{w: w, h: h, ok: ok}
+		c.mu.Lock()
+		c.sizes[raw] = s
+		c.mu.Unlock()
+	}
+	return s.w, s.h, s.ok
+}
+
+// readDiskSize 从缓存文件头读出宽高。临时缓存过期按未命中处理，与 readDisk
+// 同一套规则；头像和表情的长期缓存不看时间。
+func (c *imageCache) readDiskSize(raw string, cat imageCategory) (w, h float32, ok bool) {
+	path := filepath.Join(c.categoryDir(cat), imageKey(raw))
+	if cat == imageCacheTemporary {
+		info, err := os.Stat(path)
+		if err != nil || time.Since(info.ModTime()) > imageCacheTTL {
+			return 0, 0, false
+		}
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0, false
+	}
+	defer f.Close()
+	// DecodeConfig 只读文件头，不会把整张图读进来。
+	if cfg, _, err := image.DecodeConfig(f); err == nil && cfg.Width > 0 && cfg.Height > 0 {
+		return float32(cfg.Width), float32(cfg.Height), true
+	}
+	// 标准库不认识 WebP（站点自己的图床会发 WebP）：回头读一段文件头自己量。
+	if _, err := f.Seek(0, io.SeekStart); err == nil {
+		head := make([]byte, 64<<10)
+		n, _ := io.ReadFull(f, head)
+		if w, h, ok := webpSize(head[:n]); ok {
+			return w, h, true
+		}
+	}
+	return 0, 0, false
+}
+
+// webpSize 从 WebP 文件头读出宽高：支持扩展格式 VP8X、有损 VP8 与无损 VP8L。
+// 只需文件开头几十个字节，读不出来就返回 ok=false。
+func webpSize(data []byte) (w, h float32, ok bool) {
+	if len(data) < 30 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
+		return 0, 0, false
+	}
+	le16 := func(b []byte) int { return int(b[0]) | int(b[1])<<8 }
+	le24 := func(b []byte) int { return int(b[0]) | int(b[1])<<8 | int(b[2])<<16 }
+	switch string(data[12:16]) {
+	case "VP8X": // 扩展格式：画布是 24 位宽高减一，放在标志位后面。
+		if len(data) < 30 {
+			return 0, 0, false
+		}
+		iw, ih := le24(data[24:27])+1, le24(data[27:30])+1
+		return float32(iw), float32(ih), true
+	case "VP8 ": // 有损：起始码之后是两个 14 位的宽高。
+		if len(data) < 30 || data[23] != 0x9d || data[24] != 0x01 || data[25] != 0x2a {
+			return 0, 0, false
+		}
+		return float32(le16(data[26:28]) & 0x3fff), float32(le16(data[28:30]) & 0x3fff), true
+	case "VP8L": // 无损：0x2f 签名之后，宽高减一各占 14 位。
+		if len(data) < 25 || data[20] != 0x2f {
+			return 0, 0, false
+		}
+		bits := uint32(data[21]) | uint32(data[22])<<8 | uint32(data[23])<<16 | uint32(data[24])<<24
+		return float32(bits&0x3fff + 1), float32((bits>>14)&0x3fff + 1), true
+	}
+	return 0, 0, false
+}
+
 // writeDisk 原子地把字节写进缓存。先写 .tmp 再改名，进程中途退出也不会
 // 留下半张图；gen 变了说明期间清理过缓存，这次结果直接丢弃。
 func (c *imageCache) writeDisk(raw string, cat imageCategory, gen uint64, data []byte) error {
@@ -186,12 +283,25 @@ func (c *imageCache) writeDisk(raw string, cat imageCategory, gen uint64, data [
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	// 刚写下磁盘：之前「读不到尺寸」的记录作废，下次排版就能先占对位置。
+	c.forgetSize(raw)
+	return nil
+}
+
+// forgetSize 丢掉一个地址的尺寸记录。写入或删除缓存文件后调用。
+func (c *imageCache) forgetSize(raw string) {
+	c.mu.Lock()
+	delete(c.sizes, raw)
+	c.mu.Unlock()
 }
 
 // forgetDisk 删掉一个缓存文件：文件损坏、解不出来时调用，让下次重新下载。
 func (c *imageCache) forgetDisk(raw string, cat imageCategory) {
 	_ = os.Remove(filepath.Join(c.categoryDir(cat), imageKey(raw)))
+	c.forgetSize(raw)
 }
 
 // imageCacheStats 是磁盘缓存的占用情况，按两类分开统计。
@@ -276,6 +386,7 @@ func (c *imageCache) clear() (imageCacheStats, error) {
 	c.mu.Lock()
 	c.gen++
 	c.entries = make(map[string]*imageEntry)
+	c.sizes = make(map[string]imageSize)
 	c.mu.Unlock()
 	var errs []error
 	for _, cat := range []imageCategory{imageCacheStable, imageCacheTemporary} {

@@ -16,7 +16,10 @@ import (
 //	GET /v1/emojis                          :code: -> img_url mapping
 //
 // Paths, query names and field names are copied verbatim from api-read.md.
-const replyLimit = 30
+// 评论接口放宽后每页 100 条（默认值与上限都是 100）；站点自己的评论页
+// 仍按 30 条分页，永久链接的 p 见 comments.go 的 siteCommentPageSize，
+// 两者不是同一个东西。
+const replyLimit = 100
 
 // topicPath escapes the short_id so a malformed list row can never turn
 // into a different endpoint (or a path outside /v1/topics).

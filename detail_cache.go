@@ -50,6 +50,10 @@ func (a *app) hasCachedDetail(shortID string) bool {
 
 // preloadDetailCache 在新建 detailState 后调用：有缓存就先把正文和第一页
 // 评论摆上去。它不改变 loading 标记，后续网络请求照常进行。
+//
+// 这里不写「正在刷新」之类的提示：缓存正文与网络刷新几乎同时到，先加一行
+// 再把它拿掉会让正文整块上下跳一下。只有刷新真的失败时，markDetailOffline
+// 才在顶部说明当前是本地内容。
 func (a *app) preloadDetailCache(d *detailState) {
 	if d == nil {
 		return
@@ -71,7 +75,6 @@ func (a *app) preloadDetailCache(d *detailState) {
 	d.replyNoMore = c.ReplyNoMore
 	d.cachedAt = c.SavedAt
 	d.fromCache = true
-	d.cacheNote = "本地缓存 · 更新于 " + formatCacheTime(c.SavedAt) + "，正在刷新…"
 	a.prefetchItemAvatars([]Item{{
 		Author:       topic.Author,
 		AuthorAvatar: topic.Avatar,

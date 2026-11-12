@@ -1,5 +1,6 @@
 /build/
 /.gocache/
+/.gocache-verify/
 /.gotmp/
 /.mygo/
 /.workbuddy-ai/

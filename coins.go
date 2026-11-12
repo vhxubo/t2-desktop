@@ -21,7 +21,7 @@ import (
 // 失败时只降级展示，不参与授权弹窗。
 //
 //	GET  /v1/me/coins/balance              余额
-//	GET  /v1/me/coins/transactions         金币流水（分页 + 日期过滤，无 limit）
+//	GET  /v1/me/coins/transactions         金币流水（分页 + 日期 / reason 过滤，无 limit）
 //	GET  /v1/me/coins/balance-with-ranking 余额 + 我的排名（需开通）
 //	GET  /v1/me/coins/today-transaction    今日收支明细（需开通）
 //	GET  /v1/me/coins/daily-flow           按日聚合（需开通）
@@ -47,7 +47,9 @@ const (
 	coinRankingPath        = "/v1/coins/ranking"
 	pandoraTodayPath       = "/v1/pandora/today"
 
-	coinRankingLimit = 30
+	// coinRankingLimit 是金币榜一次取的条数：接口上限已放宽到 200，
+	// 与站内排行榜一页展示的人数一致。
+	coinRankingLimit = 200
 	coinFlowDays     = 30
 
 	// coinSignTimeout 是提交签到的超时。签到本身很轻，和收藏 / 表态一样给
@@ -213,8 +215,12 @@ type coinState struct {
 	historyTotalPages int
 	historyNoMore     bool
 	historyRange      int
-	historyErr        string
-	historyMoreErr    string
+	// historyReason 是「类型过滤」下拉当前选中的标签（含「全部类型」）；
+	// 发请求前用 coinReasonCode 翻成 reason 机器码。存标签是因为 ui.Select
+	// 直接绑定标签字符串，和「可见范围」下拉的做法一致。
+	historyReason  string
+	historyErr     string
+	historyMoreErr string
 
 	dailySeq     uint64
 	dailyLoading bool
@@ -244,7 +250,7 @@ type coinState struct {
 }
 
 func newCoinState() *coinState {
-	return &coinState{breakdownType: "income"}
+	return &coinState{breakdownType: "income", historyReason: coinReasonAll}
 }
 
 // ---- 响应解析 ----
@@ -609,7 +615,7 @@ func (c *Client) coinGET(ctx context.Context, path string, query url.Values) (js
 	})
 }
 
-func coinTransactionsQuery(page int, start, end string) url.Values {
+func coinTransactionsQuery(page int, start, end, reason string) url.Values {
 	q := url.Values{}
 	q.Set("page", strconv.Itoa(page))
 	if start != "" {
@@ -617,6 +623,12 @@ func coinTransactionsQuery(page int, start, end string) url.Values {
 	}
 	if end != "" {
 		q.Set("end_date", end)
+	}
+	// reason 是站点「类型过滤」用的机器码；空串表示全部类型，不带这个参数。
+	// 文档的流水参数表还没列它，但站点自己的流水页就是把选中的类型作为
+	// reason 发出去的，这里照做。
+	if reason != "" {
+		q.Set("reason", reason)
 	}
 	return q
 }
@@ -645,8 +657,8 @@ func (c *Client) fetchCoinBalanceRanking(ctx context.Context) (coins, rank int, 
 	return coins, rank, nil
 }
 
-func (c *Client) fetchCoinTransactions(ctx context.Context, page int, start, end string) (coinTransactionPage, error) {
-	d, err := c.coinGET(ctx, coinTransactionsPath, coinTransactionsQuery(page, start, end))
+func (c *Client) fetchCoinTransactions(ctx context.Context, page int, start, end, reason string) (coinTransactionPage, error) {
+	d, err := c.coinGET(ctx, coinTransactionsPath, coinTransactionsQuery(page, start, end, reason))
 	if err != nil {
 		return coinTransactionPage{}, err
 	}
@@ -739,61 +751,93 @@ func (c *Client) fetchCoinPandora(ctx context.Context) (coinPandoraStatus, error
 
 // ---- 展示辅助 ----
 
-// coinReasonLabel 把 reason 机器码翻成界面文案。未知 reason 原样展示，方便
-// 新类型上线后仍能看到记录，而不是显示成空白。
-var coinReasonLabels = map[string]string{
-	"checkin":                          "签到",
-	"comment":                          "评论",
-	"post":                             "发帖",
-	"system":                           "系统操作",
-	"pandora":                          "潘多拉",
-	"send_reaction":                    "发送表情",
-	"get_reaction":                     "收到表情",
-	"register":                         "注册",
-	"suggestNode":                      "生成节点",
-	"weekly_balance_reward":            "每周平衡值奖励",
-	"daily_active_reward":              "每日活跃奖励",
-	"inviteGain":                       "注册邀请",
-	"send_reward":                      "发送打赏",
-	"receive_reward":                   "收到打赏",
-	"reward_pool":                      "金币池",
-	"contentFormat":                    "内容排版",
-	"content_check":                    "内容检定",
-	"attribute_check":                  "属性检定",
-	"makeup":                           "补签",
-	"badge_equip":                      "徽章",
-	"pin_post":                         "置顶",
-	"pin_comment":                      "评论置顶",
-	"get_pin_comment":                  "评论被置顶",
-	"avatar":                           "头像",
-	"update_readme":                    "介绍",
-	"bet_create":                       "创建竞猜",
-	"bet_participate":                  "参与竞猜",
-	"bet_win":                          "竞猜获胜",
-	"bet_lose":                         "竞猜失败",
-	"bet_fee":                          "竞猜收益分配",
-	"bet_invalid_refund":               "竞猜无效返还",
-	"bet_invalid_penalty":              "竞猜无效处罚",
-	"restricted_auction_win_deduct":    "竞拍获胜扣除",
-	"restricted_auction_win_fee":       "竞拍获胜手续费",
-	"restricted_auction_author_income": "竞拍作者收益",
-	"restricted_auction_loser_penalty": "竞拍失败扣除",
-	"reward_pool_create":               "金币池创建",
-	"reward_pool_supplement":           "金币池补充",
-	"reward_pool_refund":               "金币池返还",
-	"edit_comment":                     "编辑评论",
-	"edit_post":                        "编辑帖子",
-	"edit_postscript":                  "编辑附言",
-	"add_postscript":                   "添加附言",
-	"send_red_packet":                  "发送红包",
-	"receive_red_packet":               "收到红包",
-	"pro_sponsor":                      "Pro 赞助赠送",
-	"create_alias":                     "创建分身",
-	"pandora_extend":                   "潘多拉事件延期",
-	"showcase_bid_freeze":              "社区橱窗出价冻结",
-	"showcase_bid_refund":              "社区橱窗冻结退回",
+// coinReason 是一组 reason 机器码与界面文案。顺序照站点的「类型过滤」下拉
+// 排，筛选自己的下拉也按这个顺序列出。
+type coinReason struct {
+	Code  string
+	Label string
 }
 
+// coinReasons 是开放 API 已知的全部 reason。未知的新 reason 不会丢：流水行
+// 照旧用机器码展示（见 coinReasonLabel），只是类型下拉里没有它。
+var coinReasons = []coinReason{
+	{"checkin", "签到"},
+	{"comment", "评论"},
+	{"post", "发帖"},
+	{"system", "系统操作"},
+	{"pandora", "潘多拉"},
+	{"send_reaction", "发送表情"},
+	{"get_reaction", "收到表情"},
+	{"register", "注册"},
+	{"suggestNode", "生成节点"},
+	{"weekly_balance_reward", "每周平衡值奖励"},
+	{"daily_active_reward", "每日活跃奖励"},
+	{"inviteGain", "注册邀请"},
+	{"send_reward", "发送打赏"},
+	{"receive_reward", "收到打赏"},
+	{"reward_pool", "金币池"},
+	{"contentFormat", "内容排版"},
+	{"content_check", "内容检定"},
+	{"attribute_check", "属性检定"},
+	{"makeup", "补签"},
+	{"badge_equip", "徽章"},
+	{"pin_post", "置顶"},
+	{"pin_comment", "评论置顶"},
+	{"get_pin_comment", "评论被置顶"},
+	{"avatar", "头像"},
+	{"update_readme", "介绍"},
+	{"bet_participate", "参与竞猜"},
+	{"bet_invalid_refund", "竞猜无效返还"},
+	{"bet_invalid_penalty", "竞猜无效处罚"},
+	{"bet_win", "竞猜获胜"},
+	{"bet_lose", "竞猜失败"},
+	{"bet_create", "创建竞猜"},
+	{"bet_fee", "竞猜收益分配"},
+	{"restricted_auction_win_deduct", "竞拍获胜扣除"},
+	{"restricted_auction_win_fee", "竞拍获胜手续费"},
+	{"restricted_auction_author_income", "竞拍作者收益"},
+	{"restricted_auction_loser_penalty", "竞拍失败扣除"},
+	{"reward_pool_create", "金币池创建"},
+	{"reward_pool_supplement", "金币池补充"},
+	{"reward_pool_refund", "金币池返还"},
+	{"edit_comment", "编辑评论"},
+	{"edit_post", "编辑帖子"},
+	{"edit_postscript", "编辑附言"},
+	{"add_postscript", "添加附言"},
+	{"send_red_packet", "发送红包"},
+	{"receive_red_packet", "收到红包"},
+	{"pro_sponsor", "Pro 赞助赠送"},
+	{"create_alias", "创建分身"},
+	{"pandora_extend", "潘多拉事件延期"},
+	{"showcase_bid_freeze", "社区橱窗出价冻结"},
+	{"showcase_bid_refund", "社区橱窗冻结退回"},
+}
+
+// coinReasonLabels 是 coinReasons 的查表版，只关心文案的调用方用它。
+var coinReasonLabels = func() map[string]string {
+	labels := make(map[string]string, len(coinReasons))
+	for _, r := range coinReasons {
+		labels[r.Code] = r.Label
+	}
+	return labels
+}()
+
+// coinReasonAll 是类型下拉里「不筛选」的那一项。
+const coinReasonAll = "全部类型"
+
+// coinReasonOptions 是类型下拉的全部选项：第一项不筛类型，其余按 coinReasons
+// 的顺序。下拉绑定的是标签，发请求前用 coinReasonCode 翻回机器码。
+var coinReasonOptions = func() []string {
+	options := make([]string, 1, len(coinReasons)+1)
+	options[0] = coinReasonAll
+	for _, r := range coinReasons {
+		options = append(options, r.Label)
+	}
+	return options
+}()
+
+// coinReasonLabel 把 reason 机器码翻成界面文案。未知 reason 原样展示，方便
+// 新类型上线后仍能看到记录，而不是显示成空白。
 func coinReasonLabel(reason string) string {
 	if label, ok := coinReasonLabels[reason]; ok {
 		return label
@@ -802,6 +846,20 @@ func coinReasonLabel(reason string) string {
 		return "金币变动"
 	}
 	return reason
+}
+
+// coinReasonCode 把类型下拉的标签翻回 reason 机器码。「全部类型」和认不出的
+// 标签都返回空串，表示请求不带 reason 参数。
+func coinReasonCode(label string) string {
+	if label == "" || label == coinReasonAll {
+		return ""
+	}
+	for _, r := range coinReasons {
+		if r.Label == label {
+			return r.Code
+		}
+	}
+	return ""
 }
 
 func coinTotals(items []coinTransaction) (income, expense, net float64) {

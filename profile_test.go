@@ -25,7 +25,7 @@ func TestProfileEndpointsMatchContract(t *testing.T) {
 	}{
 		{profileContentTopics, "https://2libra.com/api/v1/me/topics"},
 		{profileContentFavorites, "https://2libra.com/api/v1/me/favorites?page=1&limit=50"},
-		{profileContentBookmarks, "https://2libra.com/api/v1/me/bookmarks?page=1&limit=50"},
+		{profileContentBookmarks, "https://2libra.com/api/v1/me/bookmarks?page=1&limit=100"},
 		{profileContentCollections, "https://2libra.com/api/v1/me/collections"},
 	}
 	for _, c := range cases {
@@ -45,17 +45,17 @@ func TestProfileEndpointsMatchContract(t *testing.T) {
 		}
 	}
 	if got, want := endpoint(apiBaseURL, profileRepliesSpec("jimmy", 1), 1),
-		"https://2libra.com/api/v1/users/jimmy/replies?page=1&limit=20"; got != want {
+		"https://2libra.com/api/v1/users/jimmy/replies?page=1&limit=50"; got != want {
 		t.Errorf("我的回复 URL = %s，期望 %s", got, want)
 	}
 	// 第 2 页只改 page，不引入其它参数。
 	if got, want := endpoint(apiBaseURL, profileRepliesSpec("jimmy", 2), 2),
-		"https://2libra.com/api/v1/users/jimmy/replies?limit=20&page=2"; got != want {
+		"https://2libra.com/api/v1/users/jimmy/replies?limit=50&page=2"; got != want {
 		t.Errorf("我的回复第 2 页 URL = %s，期望 %s", got, want)
 	}
 	// 昵称里的特殊字符必须转义，不能改变请求路径。
 	if got, want := endpoint(apiBaseURL, profileRepliesSpec("a/b", 1), 1),
-		"https://2libra.com/api/v1/users/a%2Fb/replies?page=1&limit=20"; got != want {
+		"https://2libra.com/api/v1/users/a%2Fb/replies?page=1&limit=50"; got != want {
 		t.Errorf("昵称转义不对：%s，期望 %s", got, want)
 	}
 }
@@ -502,11 +502,11 @@ func TestProfileRepliesPaging(t *testing.T) {
 			fmt.Fprint(w, `{"c":0,"d":{"items":[
 				{"id":"r1","content":"重复的那条","post":{"short_id":"T1","title":"帖子一"}},
 				{"id":"r2","content":"第二页的新回复","post":{"short_id":"T2","title":"帖子二"}}
-			],"total":3,"page":2,"limit":20,"total_pages":2}}`)
+			],"total":3,"page":2,"limit":50,"total_pages":2}}`)
 		default:
 			fmt.Fprint(w, `{"c":0,"d":{"items":[
 				{"id":"r1","content":"第一页的回复","post":{"short_id":"T1","title":"帖子一"}}
-			],"total":3,"page":1,"limit":20,"total_pages":2}}`)
+			],"total":3,"page":1,"limit":50,"total_pages":2}}`)
 		}
 	}))
 	defer srv.Close()

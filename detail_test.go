@@ -49,7 +49,7 @@ const detailRepliesJSON = `{
      "parent":{"id":"c1","content":"第一楼","floor":1}}
   ],
   "pinned":[{"id":"p1","content":"置顶公告","author":{"username":"mod"}}],
-  "total":4,"page":1,"limit":30,"total_pages":1
+  "total":4,"page":1,"limit":100,"total_pages":1
 }`
 
 const detailEmojisJSON = `[
@@ -62,10 +62,10 @@ func TestDetailPathsMatchContract(t *testing.T) {
 	if got := topicPath("a1b2c3d4"); got != "/v1/topics/a1b2c3d4" {
 		t.Errorf("详情路径 = %s", got)
 	}
-	if got := repliesPath("a1b2c3d4", 1, false); got != "/v1/topics/a1b2c3d4/replies?page=1&limit=30" {
+	if got := repliesPath("a1b2c3d4", 1, false); got != "/v1/topics/a1b2c3d4/replies?page=1&limit=100" {
 		t.Errorf("评论第 1 页路径 = %s", got)
 	}
-	if got := repliesPath("a1b2c3d4", 2, true); got != "/v1/topics/a1b2c3d4/replies?page=2&limit=30&flat=1" {
+	if got := repliesPath("a1b2c3d4", 2, true); got != "/v1/topics/a1b2c3d4/replies?page=2&limit=100&flat=1" {
 		t.Errorf("评论第 2 页 / flat 路径 = %s", got)
 	}
 	if got := repliesPath("a1b2c3d4", 0, false); !strings.Contains(got, "page=1") {
@@ -144,7 +144,7 @@ func TestDecodeTopic(t *testing.T) {
 
 func TestDecodeReplies(t *testing.T) {
 	res := decodeReplies([]byte(detailRepliesJSON))
-	if res.Total != 4 || res.Page != 1 || res.Limit != 30 || res.TotalPages != 1 {
+	if res.Total != 4 || res.Page != 1 || res.Limit != 100 || res.TotalPages != 1 {
 		t.Fatalf("评论分页元数据错误：%+v", res)
 	}
 	if len(res.Items) != 2 || len(res.Pinned) != 1 {
@@ -207,7 +207,7 @@ func TestDecodeLiveFieldNames(t *testing.T) {
 			"reactions_summary":[{"emoji":"👍","count":3}]}],
 		"pinned_comments":[{"id":"p1","content":"置顶公告",
 			"author":{"username":"mod"}}],
-		"total":2,"page":1,"limit":30,"total_pages":1}`))
+		"total":2,"page":1,"limit":100,"total_pages":1}`))
 	if len(pg.Items) != 1 || len(pg.Items[0].Reactions) != 1 ||
 		pg.Items[0].Reactions[0] != (reactionStat{Emoji: "👍", Count: 3}) {
 		t.Errorf("reactions_summary 没有解析：%+v", pg.Items)
@@ -383,7 +383,7 @@ func TestClientDetailEndpoints(t *testing.T) {
 	defer mu.Unlock()
 	want := []string{
 		"/api/v1/topics/ABC12345",
-		"/api/v1/topics/ABC12345/replies?page=2&limit=30&flat=1",
+		"/api/v1/topics/ABC12345/replies?page=2&limit=100&flat=1",
 		"/api/v1/emojis",
 	}
 	for i, w := range want {
@@ -1294,13 +1294,13 @@ func TestCommentFocusLoadsLaterPages(t *testing.T) {
 		mu.Unlock()
 		if page == "2" {
 			_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{"items":[
-				{"id":"goal","content":"目标评论","floor":40,"author":{"username":"late"}}],
-				"total":40,"page":2,"limit":30,"total_pages":2}}`)
+				{"id":"goal","content":"目标评论","floor":140,"author":{"username":"late"}}],
+				"total":140,"page":2,"limit":100,"total_pages":2}}`)
 			return
 		}
 		_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{"items":[
 			{"id":"c1","content":"第一页评论","floor":1,"author":{"username":"first"}}],
-			"total":40,"page":1,"limit":30,"total_pages":2}}`)
+			"total":140,"page":1,"limit":100,"total_pages":2}}`)
 	}))
 	defer srv.Close()
 
@@ -1341,7 +1341,7 @@ func TestCommentFocusMissingStops(t *testing.T) {
 		mu.Unlock()
 		_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{"items":[
 			{"id":"c1","content":"第一页评论","floor":1,"author":{"username":"first"}}],
-			"total":1,"page":1,"limit":30,"total_pages":1}}`)
+			"total":1,"page":1,"limit":100,"total_pages":1}}`)
 	}))
 	defer srv.Close()
 
@@ -1471,7 +1471,7 @@ func TestReplyLoadMoreRetryAppendsPage(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{
 			"items":[{"id":"late-1","content":"续拉的评论","floor":5,
 				"author":{"username":"latecomer"}}],
-			"total":5,"page":2,"limit":30,"total_pages":2}}`)
+			"total":105,"page":2,"limit":100,"total_pages":2}}`)
 	}))
 	defer srv.Close()
 

@@ -159,6 +159,9 @@ func TestCoinClientReadsAllEndpoints(t *testing.T) {
 		case "/api/v1/me/sign":
 			_, _ = io.WriteString(w, envelopeJSON(`{"signed":true,"streak":3}`))
 		case "/api/v1/coins/ranking":
+			if got := r.URL.Query().Get("limit"); got != "200" {
+				t.Errorf("金币榜 limit = %q，期望 200", got)
+			}
 			_, _ = io.WriteString(w, envelopeJSON(`[{"username":"jimmy","balance":99,"rank":2}]`))
 		case "/api/v1/pandora/today":
 			_, _ = io.WriteString(w, envelopeJSON(`{"has_box":true,"can_open":true,"box":{"event_title":"翻转"}}`))
@@ -176,7 +179,7 @@ func TestCoinClientReadsAllEndpoints(t *testing.T) {
 	if coins, rank, err := a.client.fetchCoinBalanceRanking(ctx); err != nil || coins != 1234 || rank != 7 {
 		t.Errorf("余额+排名 = %d/%d, %v", coins, rank, err)
 	}
-	page, err := a.client.fetchCoinTransactions(ctx, 1, "2026-11-01", "")
+	page, err := a.client.fetchCoinTransactions(ctx, 1, "2026-11-01", "", "")
 	if err != nil || len(page.Items) != 1 || page.Items[0].Amount != 10 {
 		t.Errorf("流水 = %+v, %v", page, err)
 	}
@@ -235,6 +238,218 @@ func TestCoinHistoryRangeSendsDateFilter(t *testing.T) {
 	}
 	if len(a.coins.historyItems) != 1 || a.coins.historyItems[0].RelateTitle != "帖子" {
 		t.Errorf("历史流水没有解析：%+v", a.coins.historyItems)
+	}
+}
+
+// 类型过滤的选项就是流水行里的文案：第一项是「全部类型」，其余按服务端的
+// reason 机器码成对给出；每个标签都能翻回机器码，标签之间不重复。
+func TestCoinReasonFilterOptionsMapToCodes(t *testing.T) {
+	if len(coinReasonOptions) != len(coinReasons)+1 || coinReasonOptions[0] != coinReasonAll {
+		t.Fatalf("类型过滤选项不对：%q", coinReasonOptions)
+	}
+	if coinReasonCode(coinReasonAll) != "" || coinReasonCode("") != "" || coinReasonCode("没有这一类") != "" {
+		t.Error("「全部类型」与不认识的标签都应表示不筛选")
+	}
+	labels := map[string]bool{}
+	for i, r := range coinReasons {
+		if coinReasonOptions[i+1] != r.Label {
+			t.Errorf("第 %d 个选项是 %q，期望 %q", i+1, coinReasonOptions[i+1], r.Label)
+		}
+		if coinReasonLabels[r.Code] != r.Label || coinReasonLabel(r.Code) != r.Label {
+			t.Errorf("reason %q 的文案不一致：%q / %q", r.Code, coinReasonLabels[r.Code], coinReasonLabel(r.Code))
+		}
+		if labels[r.Label] {
+			t.Errorf("类型过滤里有两个 %q，反查机器码会有歧义", r.Label)
+		}
+		labels[r.Label] = true
+		if got := coinReasonCode(r.Label); got != r.Code {
+			t.Errorf("%q 反查为 %q，期望 %q", r.Label, got, r.Code)
+		}
+	}
+	// 未知 reason 仍按机器码展示，不会被吞掉。
+	if got := coinReasonLabel("brand_new_reason"); got != "brand_new_reason" {
+		t.Errorf("未知 reason 应原样展示，得到 %q", got)
+	}
+}
+
+// 流水请求要同时带上日期与 reason：切换类型不只是本地过滤，而是重新问服务端。
+func TestCoinHistoryReasonFilterSendsReason(t *testing.T) {
+	var mu sync.Mutex
+	queries := []string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/me/coins/transactions" {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		queries = append(queries, r.URL.RawQuery)
+		mu.Unlock()
+		_, _ = io.WriteString(w, envelopeJSON(`{"items":[{"id":"h1","reason":"checkin","amount":5}],"total":1,"page":1,"limit":20,"total_pages":1}`))
+	}))
+	defer srv.Close()
+	a := coinTestClient(t, srv)
+	old := coinNow
+	coinNow = func() time.Time { return time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC) }
+	defer func() { coinNow = old }()
+
+	a.coins.historyRange = coinRange7Days
+	a.coins.historyReason = "签到"
+	a.loadCoinHistory(1)
+	waitCoin(t, "按类型筛选流水", func() bool { return a.coins.historyLoaded })
+
+	mu.Lock()
+	got := queries
+	mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("应请求 1 次流水，实际 %d：%v", len(got), got)
+	}
+	q := got[0]
+	for _, want := range []string{"page=1", "reason=checkin", "start_date=2026-11-06", "end_date=2026-11-12"} {
+		if !strings.Contains(q, want) {
+			t.Errorf("类型筛选请求缺少 %q：%s", want, q)
+		}
+	}
+
+	// 回到「全部类型」后不再带 reason。
+	a.coins.historyReason = coinReasonAll
+	a.loadCoinHistory(1)
+	waitCoin(t, "取消类型筛选", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(queries) == 2
+	})
+	mu.Lock()
+	got = queries
+	mu.Unlock()
+	if strings.Contains(got[1], "reason=") {
+		t.Errorf("全部类型不该带 reason：%s", got[1])
+	}
+}
+
+// 点「近 7 天」要真的重新拉第一页：分段控件在 Changed 报告前就写好了新值，
+// 切换逻辑不能因为「值没变」就跳过。
+func TestCoinHistoryRangeClickReloads(t *testing.T) {
+	var mu sync.Mutex
+	queries := []string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/me/coins/transactions" {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		queries = append(queries, r.URL.RawQuery)
+		mu.Unlock()
+		_, _ = io.WriteString(w, envelopeJSON(`{"items":[{"id":"h1","reason":"post","amount":10}],"total":1,"page":1,"limit":20,"total_pages":1}`))
+	}))
+	defer srv.Close()
+	a := coinTestClient(t, srv)
+	old := coinNow
+	coinNow = func() time.Time { return time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC) }
+	defer func() { coinNow = old }()
+	a.coins.view = coinViewHistory
+	a.coins.baseLoaded = true
+	a.coins.historyLoaded = true
+	a.coins.historyItems = []coinTransaction{{ID: "x", Reason: "post", Amount: 1}}
+	a.coins.historyPage, a.coins.historyTotalPages = 1, 1
+
+	tt := ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
+	tt.Frame()
+	if err := tt.Click("近 7 天"); err != nil {
+		t.Fatalf("切换时间范围失败：%v", err)
+	}
+	tt.Frame()
+	waitCoin(t, "时间范围重拉", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(queries) > 0
+	})
+	mu.Lock()
+	got := queries[0]
+	mu.Unlock()
+	if !strings.Contains(got, "start_date=2026-11-06") || !strings.Contains(got, "end_date=2026-11-12") {
+		t.Errorf("点时间范围没有带上日期：%s", got)
+	}
+}
+
+// 流水页的类型下拉：选中「评论」后真的带上 reason=comment；「清除筛选」把
+// 下拉切回「全部类型」并重新拉不带 reason 的流水。
+func TestCoinHistoryReasonSelectFilters(t *testing.T) {
+	var mu sync.Mutex
+	queries := []string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/me/coins/transactions" {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		queries = append(queries, r.URL.RawQuery)
+		mu.Unlock()
+		_, _ = io.WriteString(w, envelopeJSON(`{"items":[{"id":"h1","reason":"post","amount":10}],"total":1,"page":1,"limit":20,"total_pages":1}`))
+	}))
+	defer srv.Close()
+	a := coinTestClient(t, srv)
+	a.coins.view = coinViewHistory
+	a.coins.baseLoaded = true
+	a.coins.historyLoaded = true
+	a.coins.historyItems = []coinTransaction{{ID: "x", Reason: "post", Amount: 1}}
+	a.coins.historyPage, a.coins.historyTotalPages = 1, 1
+
+	tt := ui.NewTester(a.coinWindowView, coinWinMinWidth, coinWinMinHeight)
+	tt.Frame()
+	if !tt.HasText(coinReasonAll) {
+		t.Fatalf("流水页缺少类型下拉：%q", tt.Texts())
+	}
+	// 窗口缩到最小时，类型下拉也要完整落在窗口里。
+	if r, ok := tt.Find("金币类型"); !ok {
+		t.Fatalf("类型下拉没有可访问名：%q", tt.Texts())
+	} else if r.X < 0 || r.X+r.W > coinWinMinWidth {
+		t.Errorf("类型下拉超出 %d 宽的窗口：x=%.0f 宽 %.0f", coinWinMinWidth, r.X, r.W)
+	}
+	if err := tt.Click("金币类型"); err != nil {
+		t.Fatalf("打开类型下拉失败：%v", err)
+	}
+	tt.Frame()
+	if err := tt.Click("评论"); err != nil {
+		t.Fatalf("选择类型失败：%v", err)
+	}
+	tt.Frame()
+	waitCoin(t, "按评论筛选", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(queries) == 1
+	})
+	mu.Lock()
+	got := queries[0]
+	mu.Unlock()
+	if !strings.Contains(got, "reason=comment") {
+		t.Errorf("选中「评论」后请求缺少 reason=comment：%s", got)
+	}
+	if a.coins.historyReason != "评论" {
+		t.Errorf("下拉没有停在「评论」：%q", a.coins.historyReason)
+	}
+
+	tt = ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
+	tt.Frame()
+	if !tt.HasText("清除筛选") {
+		t.Fatalf("选中类型后应出现清除入口：%q", tt.Texts())
+	}
+	if err := tt.Click("清除筛选"); err != nil {
+		t.Fatalf("清除类型筛选失败：%v", err)
+	}
+	tt.Frame()
+	waitCoin(t, "清除类型筛选", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(queries) == 2
+	})
+	mu.Lock()
+	got = queries[1]
+	mu.Unlock()
+	if strings.Contains(got, "reason=") {
+		t.Errorf("清除筛选后仍带 reason：%s", got)
+	}
+	if a.coins.historyReason != coinReasonAll {
+		t.Errorf("清除后下拉应回到「%s」：%q", coinReasonAll, a.coins.historyReason)
 	}
 }
 
@@ -361,7 +576,7 @@ func TestCoinWindowRendersBalanceTodayHistoryStatsRanking(t *testing.T) {
 		t.Fatalf("切换到排行失败：%v（%q）", err, tt.Texts())
 	}
 	tt.Frame()
-	for _, want := range []string{"金币排行榜", "bopomofo", "1,139,778 金币", "（我）"} {
+	for _, want := range []string{"金币排行榜", "前 200 名", "bopomofo", "1,139,778 金币", "（我）"} {
 		if !tt.HasText(want) {
 			t.Fatalf("排行页缺少 %q：%q", want, tt.Texts())
 		}

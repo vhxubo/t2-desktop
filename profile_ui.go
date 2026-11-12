@@ -192,6 +192,8 @@ func (a *app) profileWindowView(c *ui.Context) {
 				a.profileContentBody(c, ps)
 			case profileTabReplies:
 				a.profileRepliesBody(c, ps)
+			case profileTabBadges:
+				a.profileBadgesBody(c, ps)
 			case profileTabAccount:
 				a.profileAccountBody(c, ps)
 			default:
@@ -241,7 +243,8 @@ func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 					ui.Text(c, "PRO").FontSize(10).TextColor(t.Accent)
 				}
 				// 本人资料头也展示佩戴中的徽章；数据来自已经拉到的
-				// GET /v1/users/:name，不再为徽章单独请求。
+				// GET /v1/users/:name，切换徽章后由 syncProfileEquippedBadges
+				// 就地更新，不在这里额外请求。
 				a.authorBadges(c, u.Badges)
 			})
 			line := profileIdentityLine(u)
@@ -264,6 +267,7 @@ func (a *app) profileOverviewBody(c *ui.Context, ps *profileState) {
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).FillWidth().Gap(14).Children(func() {
 			a.profileStatsSection(c, ps)
+			a.profileAttributesSection(c, ps)
 			a.profileAuthEntry(c, ps)
 		})
 	})
@@ -285,6 +289,9 @@ func (a *app) profileStatsSection(c *ui.Context, ps *profileState) {
 			}
 			if ps.replyLoaded {
 				profileStatChip(c, "回复", fmt.Sprintf("%d", ps.replyTotal))
+			}
+			if ps.badgeLoaded {
+				profileStatChip(c, "徽章", fmt.Sprintf("%d", len(ps.badges)))
 			}
 		})
 	})

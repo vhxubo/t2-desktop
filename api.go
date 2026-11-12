@@ -58,6 +58,8 @@ var tabSpecs = []tabSpec{
 	{"今日热议", "/v1/topics/hot", "", "posts", false, pagingPages, kindTopic},
 	{"近期热议", "/v1/topics/hot", "period=7d", "posts", false, pagingPages, kindTopic},
 	{"新发表", "/v1/topics/latest", "", "posts", false, pagingPages, kindTopic},
+	// 最新评论端点仍只接受 ≤50（服务端返回「每页最多显示 50 条」），
+	// 不要跟着帖子评论的 100 一起改。
 	{"最新评论", "/v1/comments/latest", "limit=50", "items", false, pagingIgnored, kindComment},
 	{"社区讨论", "/v1/topics", "page=1&limit=50&node_id=" + communityNodeID, "posts", false, pagingPages, kindTopic},
 	{"动态", "/v1/me/follows/timeline", "page=1&limit=50", "items", true, pagingPages, kindTimeline},

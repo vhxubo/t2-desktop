@@ -301,6 +301,7 @@ func (a *app) coinHistoryView(c *ui.Context, cs *coinState) {
 			ui.Textf(c, "共 %d 条记录", cs.historyTotal).FontSize(11).TextColor(t.TextMuted)
 		}
 	})
+	a.coinHistoryReasonRow(c, cs)
 
 	switch {
 	case cs.historyLoading && len(cs.historyItems) == 0:
@@ -320,7 +321,11 @@ func (a *app) coinHistoryView(c *ui.Context, cs *coinState) {
 		return
 	case len(cs.historyItems) == 0:
 		ui.Column(c).Grow(1).Center().Children(func() {
-			ui.Text(c, "这个时间范围没有金币记录。").TextColor(t.TextMuted)
+			text := "这个时间范围没有金币记录。"
+			if code := coinReasonCode(cs.historyReason); code != "" {
+				text = "这个时间范围没有「" + cs.historyReason + "」的金币记录。"
+			}
+			ui.Text(c, text).TextColor(t.TextMuted)
 		})
 		return
 	}
@@ -345,6 +350,24 @@ func (a *app) coinHistoryView(c *ui.Context, cs *coinState) {
 			a.loadCoinHistory(cs.historyPage + 1)
 		}
 	}
+}
+
+// coinHistoryReasonRow 是流水页的类型过滤：选中即从第一页重拉，不需要再点
+// 「筛选」。下拉列的是全部已知 reason，第一项「全部类型」不筛。
+func (a *app) coinHistoryReasonRow(c *ui.Context, cs *coinState) {
+	t := c.Theme()
+	ui.Row(c).FillWidth().Padding(0, 14, 6, 14).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "类型").FontSize(11).TextColor(t.TextMuted)
+		filter := ui.Select(c, &cs.historyReason, coinReasonOptions).Label("金币类型").
+			Tooltip("只看某一类金币变动").Width(150)
+		if filter.Changed() {
+			a.setCoinHistoryReason(cs.historyReason)
+		}
+		if coinReasonCode(cs.historyReason) != "" {
+			a.smallAction(c, "清除筛选", false, func() { a.setCoinHistoryReason(coinReasonAll) })
+		}
+		ui.Spacer(c).Grow(1)
+	})
 }
 
 func (a *app) coinStatsView(c *ui.Context, cs *coinState) {
@@ -544,14 +567,23 @@ func (a *app) coinPandoraLine(c *ui.Context, cs *coinState) {
 	case cs.pandora.HasBox:
 		status = "今日盲盒：已领取"
 	}
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, status).FontSize(11).TextColor(t.TextMuted)
+	row := ui.Row(c).FillWidth().Padding(8, 10).Radius(8).Gap(8).
+		AlignItems(ui.Center).Background(t.Surface)
+	if row.Hovered() {
+		row.Background(t.SurfaceHover)
+	}
+	row.Children(func() {
+		ui.Icon(c, pandoraIcon).Size(14, 14).TextColor(t.Accent)
+		ui.Text(c, status).FontSize(11).TextColor(t.Text).SingleLine()
 		if cs.pandora.EventTitle != "" {
-			ui.Text(c, "· "+cs.pandora.EventTitle).FontSize(11).TextColor(t.TextMuted).SingleLine()
+			ui.Text(c, "· "+cs.pandora.EventTitle).FontSize(11).
+				TextColor(t.TextMuted).SingleLine()
 		}
 		ui.Spacer(c).Grow(1)
-		ui.Text(c, "开启请到站点操作").FontSize(10).TextColor(t.TextMuted)
+		ui.Text(c, "打开潘多拉").FontSize(10).TextColor(t.Accent).SingleLine()
 	})
+	row.Label("潘多拉盲盒").Tooltip("打开潘多拉窗口，开启盲盒或再抽一次").
+		OnClick(a.showPandora)
 }
 
 func (a *app) coinTransactionRow(c *ui.Context, tx coinTransaction, today bool) {
@@ -881,7 +913,7 @@ func (a *app) loadCoinToday() {
 		from := "today-transaction"
 		note := ""
 		if err != nil {
-			fallback, ferr := a.client.fetchCoinTransactions(ctx, 1, today, today)
+			fallback, ferr := a.client.fetchCoinTransactions(ctx, 1, today, today, "")
 			if ferr != nil {
 				a.publish(func() {
 					if a.coins != cs || cs.todaySeq != seq {
@@ -952,10 +984,11 @@ func (a *app) loadCoinHistory(page int) {
 	cs.historyWait = false
 	cs.historyPage = page
 	start, end := coinRangeDates(cs.historyRange)
+	reason := coinReasonCode(cs.historyReason)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	go func() {
 		defer cancel()
-		res, err := a.client.fetchCoinTransactions(ctx, page, start, end)
+		res, err := a.client.fetchCoinTransactions(ctx, page, start, end, reason)
 		a.publish(func() {
 			if a.coins != cs || cs.historySeq != seq {
 				return
@@ -1006,15 +1039,13 @@ func (a *app) loadCoinHistory(page int) {
 	}()
 }
 
-func (a *app) setCoinHistoryRange(r int) {
+// resetCoinHistory 清空流水列表与分页状态，并让在途请求的结果作废；调用方
+// 随后从第一页重拉。时间范围与类型过滤共用这一份重置逻辑。
+func (a *app) resetCoinHistory() {
 	cs := a.coins
-	if cs == nil || r == cs.historyRange {
+	if cs == nil {
 		return
 	}
-	if r < coinRangeAll || r > coinRange30Days {
-		r = coinRangeAll
-	}
-	cs.historyRange = r
 	cs.historySeq++
 	cs.historyLoading = false
 	cs.historyLoaded = false
@@ -1027,6 +1058,35 @@ func (a *app) setCoinHistoryRange(r int) {
 	cs.historyErr = ""
 	cs.historyMoreErr = ""
 	cs.historyList.ScrollTo(0, ui.Start)
+}
+
+func (a *app) setCoinHistoryRange(r int) {
+	cs := a.coins
+	if cs == nil {
+		return
+	}
+	if r < coinRangeAll || r > coinRange30Days {
+		r = coinRangeAll
+	}
+	// 分段控件在 Changed 报告之前就把选中的新值写进了 cs.historyRange，
+	// 所以这里不能比较新旧值：那样每次切换都会被当成「没变」而不重拉。
+	cs.historyRange = r
+	a.resetCoinHistory()
+	a.loadCoinHistory(1)
+}
+
+// setCoinHistoryReason 切换类型过滤。和 setCoinHistoryRange 一样不比较新旧
+// 标签：下拉在 Changed 报告前已经写入 cs.historyReason。
+func (a *app) setCoinHistoryReason(label string) {
+	cs := a.coins
+	if cs == nil {
+		return
+	}
+	if label == "" {
+		label = coinReasonAll
+	}
+	cs.historyReason = label
+	a.resetCoinHistory()
 	a.loadCoinHistory(1)
 }
 
@@ -1245,17 +1305,19 @@ func (a *app) reloadCoinRanking() {
 	a.loadCoinRanking()
 }
 
-// reloadCoins 是顶部「刷新」：保留当前视图、时间范围和收入/支出页签，
-// 其余状态全部清空后按需重拉。
+// reloadCoins 是顶部「刷新」：保留当前视图、时间范围、类型过滤与收入/支出
+// 页签，其余状态全部清空后按需重拉。
 func (a *app) reloadCoins() {
 	cs := a.coins
 	if cs == nil {
 		return
 	}
 	view, historyRange, breakdownType := cs.view, cs.historyRange, cs.breakdownType
+	historyReason := cs.historyReason
 	*cs = *newCoinState()
 	cs.view = view
 	cs.historyRange = historyRange
+	cs.historyReason = historyReason
 	cs.breakdownType = breakdownType
 	a.ensureCoinsLoaded()
 }

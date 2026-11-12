@@ -18,7 +18,9 @@ import (
 //   嵌套回复没有 floor，改用 /post-flat/…（按 flat_floor 分页），否则站点
 //   定位不到那条回复。
 
-// siteCommentPageSize 是站点评论区每页的条数；跨页定位时必须一起带上 p。
+// siteCommentPageSize 是站点网页评论区每页的条数（仍为 30）；跨页定位时
+// 必须一起带上 p。接口现在允许每页 100 条（见 detail.go 的 replyLimit），
+// 但永久链接是给站点网页用的，不能跟着接口的页大小改。
 const siteCommentPageSize = 30
 
 // rowExtra 是帖子 / 评论行里比 Title/Subtitle/Meta 更细的展示字段。

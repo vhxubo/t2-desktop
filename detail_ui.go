@@ -411,16 +411,18 @@ func (a *app) ensureEmojis() {
 		m, err := a.client.fetchEmojis(ctx)
 		a.publish(func() {
 			a.emojiLoading = false
-			a.emojiTried = true
 			if err != nil {
-				// 表情表也可能因权限被拒；授权成功后允许重试一次。
+				// 失败不锁死：启动时的预取可能碰上网络还没好，下次打开详情
+				// 会再试一次，正文不必在整个运行期都显示 :code: 短码。
+				a.emojiTried = false
+				// 表情表也可能因权限被拒；授权成功后重试一次。
 				a.handleAuthError(err, func() {
-					a.emojiTried = false
 					a.ensureEmojis()
 				})
 				a.status = "表情表加载失败，正文短码原样显示"
 				return
 			}
+			a.emojiTried = true
 			a.emojis = m
 		})
 	}()
@@ -467,8 +469,8 @@ func (a *app) detailView(c *ui.Context) {
 				a.replyPane(c, d)
 			})
 		})
-		// 数据来源声明 + 可点击的原文链接占满整个窗口底部，放在最底部，
-		// 正文加载完成（d.topic 非空）时才出现。
+		// 数据来源声明 + 可点击的原文链接占满整个窗口底部，放在最底部。
+		// 进入详情就画出来：正文加载完成后高度不变，卡片区域不会跳。
 		a.topicSourceFooter(c, d)
 		// 操作按钮不再占一行页头，而是悬浮在内容右上角：不占正文高度，
 		// 也不会随正文滚走（见 detailToolBar）。
@@ -738,22 +740,24 @@ func (a *app) topicSubtitle(c *ui.Context, p *topicDetail) {
 }
 
 // topicSourceFooter 占满整个窗口底部，放在最底部：数据来源声明 + 可点击原文
-// 链接（点一下用系统浏览器打开）。正文加载完成（d.topic 非空）时才出现。
+// 链接（点一下用系统浏览器打开）。这一行从进入详情起就画出来，正文是否加载
+// 完成都不改变它占的高度，正文出现时两栏卡片不会先高后矮地跳一下；原文地址
+// 用打开这一帖时带进来的链接兜底，正文到了再换成规范的永久链接。
 func (a *app) topicSourceFooter(c *ui.Context, d *detailState) {
-	p := d.topic
-	if p == nil {
-		return
-	}
 	t := c.Theme()
 	ui.Divider(c)
 	ui.Row(c).Padding(6, 14).Gap(4).AlignItems(ui.Center).Wrap().Children(func() {
 		ui.Text(c, "内容来自 2Libra 用户，版权归原作者所有。").FontSize(10).TextColor(t.TextMuted)
+		origin := d.originURL()
+		if origin == "" {
+			return
+		}
 		ui.Text(c, "原文链接：").FontSize(10).TextColor(t.TextMuted)
-		link := ui.Button(c, truncate(d.originURL(), 60)).
+		link := ui.Button(c, truncate(origin, 60)).
 			Background(ui.Transparent).Border(0, t.Border).
 			TextColor(t.Accent).FontSize(10).Padding(0, 2)
 		if link.Clicked() {
-			a.openExternal(d.originURL())
+			a.openExternal(origin)
 		}
 	})
 }

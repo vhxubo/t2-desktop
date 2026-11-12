@@ -68,11 +68,12 @@ type app struct {
 	// updates 表示更新插件已安装（main 里 mygo.Use 之后置 true）。无头
 	// 测试不装插件，点「检查更新」只走测试钩子，不会碰 updater 的主循环。
 	updates bool
-	// onSettingsOpen / onUpdateCheck / onCoinsOpen 是测试钩子：无窗口时用来
-	// 确认按钮确实接上了动作。生产为 nil。
+	// onSettingsOpen / onUpdateCheck / onCoinsOpen / onPandoraOpen 是测试钩子：
+	// 无窗口时用来确认按钮确实接上了动作。生产为 nil。
 	onSettingsOpen func()
 	onUpdateCheck  func()
 	onCoinsOpen    func()
+	onPandoraOpen  func()
 
 	tab     int
 	lastTab int
@@ -139,6 +140,13 @@ type app struct {
 	coinRefreshTimer *time.Timer
 	coinRefreshGen   uint64
 
+	// pandora 是潘多拉窗口的状态：今日盲盒、两次抽奖进度与动作结果。入口是
+	// 标题栏上的「潘多拉」（见 pandora_window.go），窗口单独一个 mygo 窗口。
+	// pandoraShown 表示窗口此刻是否在屏幕上；都只在主线程读写。
+	pandora      *pandoraState
+	pandoraWin   *mygo.Window
+	pandoraShown bool
+
 	detail       *detailState
 	detailStack  []*detailState // 正文内联跳转的返回栈
 	emojis       map[string]emojiInfo
@@ -148,6 +156,9 @@ type app struct {
 	// commentMd 是评论正文的 Markdown 选项：与正文同一套渲染，字号更小
 	// （commentFontSize），让评论区比正文紧凑一号。
 	commentMd *markdown.Options
+	// bioMd 是资料卡「个人简介」的 Markdown 选项：介绍正文可能带标题、
+	// 列表与表情，字号取 userCardBioFontSize。
+	bioMd *markdown.Options
 	// mdBreaks 缓存「软换行 → 硬换行」改写后的 Markdown 源文，键是原文。
 	// 只在 UI 线程读写，见 hardBreakSource。
 	mdBreaks map[string]string
@@ -164,8 +175,8 @@ type app struct {
 	// 只在主线程读写。
 	notifShown bool
 	// profileWin 是「我的」窗口：点标题栏上的登录头像打开，概览 / 内容 /
-	// 回复 / 权限分四个标签页。入口见 showProfile，界面与数据在 profile.go
-	// 与 profile_ui.go。只在主线程读写。
+	// 回复 / 徽章 / 权限分五个标签页。入口见 showProfile，界面与数据在
+	// profile.go、badges.go 与 profile_ui.go。只在主线程读写。
 	profileWin *mygo.Window
 	// profile 是「我的」窗口读的状态；profileShown 表示窗口此刻是否在屏幕上，
 	// 头像按钮据此高亮。都只在主线程读写。
@@ -283,6 +294,7 @@ func newApp(dir string) *app {
 		pageName:     "list",
 		nativeNotify: true,
 		coins:        newCoinState(),
+		pandora:      newPandoraState(),
 		profile:      newProfileState(),
 		closeMode:    newCloseModeStore(dir),
 	}
@@ -306,6 +318,7 @@ func newApp(dir string) *app {
 	}
 	a.md = newMarkdownOptions(a, 0)
 	a.commentMd = newMarkdownOptions(a, commentFontSize)
+	a.bioMd = newMarkdownOptions(a, userCardBioFontSize)
 	return a
 }
 
@@ -326,6 +339,7 @@ func (a *app) publish(fn func()) {
 		a.redrawSettingsWindow()
 		a.redrawProfileWindow()
 		a.redrawCoinWindow()
+		a.redrawPandoraWindow()
 		a.redrawComposeWindow()
 		a.redrawUserCardWindow()
 		a.redrawSearchWindow()
@@ -504,6 +518,21 @@ func (a *app) onAuthChanged(err error) {
 	// 金币页同样绑定当前会话；授权补上的 read:economy 也从这个空状态重新
 	// 发起请求，不会沿用授权前的空结果。
 	a.coins = newCoinState()
+	// 潘多拉状态在「同一个账号重新授权」时要保留：授权成功后重跑的可能是
+	// 重抽，必须还拿着原来的 box_instance_id。换账号 / 退出才整体丢弃；
+	// 保留时把「已加载」标成过期，窗口下一帧会重读今日状态。
+	switch {
+	case !a.auth.loggedIn(), a.pandora == nil:
+		a.pandora = newPandoraState()
+	case a.pandora.owner != "" && a.auth.username() != "" &&
+		a.pandora.owner != a.auth.username():
+		a.pandora = newPandoraState()
+	default:
+		a.pandora.loaded = false
+		a.pandora.wait = false
+		a.pandora.err = ""
+		a.pandora.busy = ""
+	}
 	// 「我的」窗口里的资料与列表同样属于某个账号：换账号或退出后一律
 	// 丢弃，下次打开时按新会话重新拉取。
 	a.profile = newProfileState()
@@ -532,6 +561,8 @@ func (a *app) onAuthChanged(err error) {
 		// 金币窗口与标题栏金币数也只属于当前账号：停掉定时刷新并关掉窗口。
 		a.stopCoinTagWatch()
 		a.closeCoinWindow()
+		// 潘多拉窗口展示的是当前账号的盲盒与抽奖结果，退出后一并关掉。
+		a.closePandoraWindow()
 		// 发帖窗口里的草稿属于上一个账号，退出后一并关掉并丢弃。
 		a.closeComposeWindow()
 		a.compose = nil
@@ -729,6 +760,9 @@ func (a *app) titleBar(c *ui.Context) {
 			// 通知铃铛：未读数叠在铃铛右下角，点开独立窗口（不再是侧边栏页面）。
 			a.notificationBell(c)
 			if a.auth.loggedIn() {
+				// 潘多拉盲盒：独立窗口的入口，放在金币数左侧。今天还能抽时
+				// 入口自带「可抽」角标，窗口开着时高亮。
+				a.pandoraTag(c)
 				// 金币数与账号标识只给登录用户看。金币数在账号左侧：💰 + 千分位
 				// 余额，点开独立的金币窗口。
 				a.coinTag(c)
@@ -1249,6 +1283,7 @@ func main() {
 			a.closeSettingsWindow()
 			a.closeProfileWindow()
 			a.closeCoinWindow()
+			a.closePandoraWindow()
 			a.closeComposeWindow()
 			a.closeSearchWindow()
 		})
@@ -1258,6 +1293,10 @@ func main() {
 		// 托盘图标：应用就绪后才有原生通知区域，见 tray.go。创建失败只记
 		// 日志，主窗口照常使用。
 		a.startTray()
+		// 表情表启动时就拉一次（文档同样建议启动时取并缓存）：等到第一次打开
+		// 详情再拉，正文会先按 :code: 短码排一遍，短码变成图片时整段重排。
+		// 放在主窗口创建之后，结果才能经 publish 回到 UI 线程。
+		a.ensureEmojis()
 		if a.auth.loggedIn() {
 			a.refreshUnread()
 			a.startNotificationWatch()

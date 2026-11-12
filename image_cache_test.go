@@ -286,3 +286,66 @@ func TestPlainSVGStillDecodes(t *testing.T) {
 		t.Fatalf("普通 SVG 变成了 %T", src)
 	}
 }
+
+// 正文配图先占位时需要知道图片尺寸：缓存文件还在磁盘上时只读文件头，
+// 不下载也不解码整张图。
+func TestCachedImageSizeFromDisk(t *testing.T) {
+	c := newImageCache(t.TempDir())
+	const raw = "https://example.com/pic.png"
+	if _, _, ok := c.cachedSize(raw, imageCacheTemporary); ok {
+		t.Fatal("缓存里没有这张图，不应报出尺寸")
+	}
+	if err := c.writeDisk(raw, imageCacheTemporary, c.generation(), solidPNG(t, 320, 180, marker)); err != nil {
+		t.Fatalf("写缓存失败：%v", err)
+	}
+	w, h, ok := c.cachedSize(raw, imageCacheTemporary)
+	if !ok || w != 320 || h != 180 {
+		t.Fatalf("读出的尺寸 = %.0fx%.0f ok=%v，期望 320x180", w, h, ok)
+	}
+	// 尺寸读一次就记住：文件被清掉后，本次运行里排版仍按它占位。
+	if err := os.Remove(filepath.Join(c.categoryDir(imageCacheTemporary), imageKey(raw))); err != nil {
+		t.Fatal(err)
+	}
+	if w2, h2, ok := c.cachedSize(raw, imageCacheTemporary); !ok || w2 != 320 || h2 != 180 {
+		t.Errorf("尺寸没有缓存住：%.0fx%.0f ok=%v", w2, h2, ok)
+	}
+}
+
+// 图床会直接发 WebP，而标准库不认识 WebP 头；三种 WebP 变体都要能读出宽高。
+func TestWebPSizeFromHeader(t *testing.T) {
+	header := func(kind string) []byte {
+		b := make([]byte, 30)
+		copy(b[0:], "RIFF")
+		copy(b[8:], "WEBP")
+		copy(b[12:], kind)
+		return b
+	}
+	// VP8X 扩展格式：画布宽高减一，各 24 位。
+	vp8x := header("VP8X")
+	w, h := 1600, 900
+	vp8x[24], vp8x[25], vp8x[26] = byte(w-1), byte((w-1)>>8), byte((w-1)>>16)
+	vp8x[27], vp8x[28], vp8x[29] = byte(h-1), byte((h-1)>>8), byte((h-1)>>16)
+
+	// VP8 有损：起始码之后两个 14 位宽高。
+	vp8 := header("VP8 ")
+	vp8[20], vp8[21], vp8[22] = 0x10, 0x00, 0x00
+	vp8[23], vp8[24], vp8[25] = 0x9d, 0x01, 0x2a
+	vp8[26], vp8[27] = byte(w), byte(w>>8)
+	vp8[28], vp8[29] = byte(h), byte(h>>8)
+
+	// VP8L 无损：0x2f 之后宽高减一各占 14 位。
+	vp8l := header("VP8L")
+	vp8l[20] = 0x2f
+	bits := uint32(w-1) | uint32(h-1)<<14
+	vp8l[21], vp8l[22], vp8l[23], vp8l[24] = byte(bits), byte(bits>>8), byte(bits>>16), byte(bits>>24)
+
+	for name, b := range map[string][]byte{"VP8X": vp8x, "VP8": vp8, "VP8L": vp8l} {
+		w, h, ok := webpSize(b)
+		if !ok || w != 1600 || h != 900 {
+			t.Errorf("%s 头读出 %.0fx%.0f ok=%v，期望 1600x900", name, w, h, ok)
+		}
+	}
+	if _, _, ok := webpSize([]byte("not a webp file")); ok {
+		t.Error("非 WebP 数据不应读出尺寸")
+	}
+}

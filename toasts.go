@@ -28,6 +28,7 @@ const (
 	toastCompose                          // 发帖窗口
 	toastUserCard                         // 用户资料窗口：关注 / 取关
 	toastSearch                           // 搜索窗口
+	toastPandora                          // 潘多拉窗口：开盒 / 重抽结果
 )
 
 // toastNote 是一条等着显示的提示。
@@ -54,6 +55,8 @@ func (a *app) toastWindow(target toastTarget) *mygo.Window {
 		return a.userCardWin
 	case toastSearch:
 		return a.searchWin
+	case toastPandora:
+		return a.pandoraWin
 	}
 	return a.win
 }

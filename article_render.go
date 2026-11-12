@@ -249,18 +249,36 @@ func articleSegmentEmpty(in []parser.Inline, from, to int) bool {
 
 // articlePicture 显示一张正文配图：加载中先占位，加载后按原比例缩到栏宽。
 // 配图是帖子里的外部图片，进临时缓存，过期后自动清理。
+//
+// 占位按图片的真实宽高来：图片已经在磁盘缓存里时（读文件头，见
+// imageCache.cachedSize），先画一个同样大小的空框，图片解好后原地替换，
+// 下方的文字不会被顶下去。宽高都还不知道的第一张图仍用一行文字占位。
 func (a *app) articlePicture(c *ui.Context, dest, alt string) {
 	th := markdown.DefaultTheme(c.Theme())
 	if alt == "" {
 		alt = "图片"
 	}
 	src := a.articleImage(dest, imageCacheTemporary)
+	w, h := ui.ImageSize(src)
+	if w <= 0 || h <= 0 {
+		w, h, _ = a.images.cachedSize(dest, imageCacheTemporary)
+	}
 	if src == nil {
-		ui.Text(c, "["+alt+"]").FontSize(12).TextColor(th.Muted)
+		if w <= 0 || h <= 0 {
+			ui.Text(c, "["+alt+"]").FontSize(12).TextColor(th.Muted)
+			return
+		}
+		// 尺寸已知、图片还在解：占住和加载后完全相同的版面。
+		ph := ui.Box(c).Width(w).MaxWidthPercent(100).AspectRatio(w / h).
+			Radius(4).Background(th.CodeBackground).Center().Clip()
+		ph.Role(ui.RoleImage).Label(alt)
+		ph.Children(func() {
+			ui.Text(c, alt).FontSize(12).TextColor(th.Muted).MaxLines(2)
+		})
 		return
 	}
 	img := ui.Image(c, src).MaxWidthPercent(100).Radius(4).Label(alt)
-	if w, h := ui.ImageSize(src); w > 0 && h > 0 {
+	if w > 0 && h > 0 {
 		img.AspectRatio(w / h)
 	}
 }
@@ -355,29 +373,30 @@ func (r *articleRenderer) addImage(c *ui.Context, dest, alt string, st articleSt
 	}
 	// 表情与社区小图标是服务端固定的一批图，进长期缓存。
 	src := r.a.articleImage(dest, imageCacheStable)
-	if src == nil {
-		if alt == "" {
-			alt = "图片"
-		}
-		muted := st
-		muted.color = r.th.Muted
-		r.addText("["+alt+"]", muted)
-		return
-	}
-	w, h := ui.ImageSize(src)
-	if w <= 0 || h <= 0 {
-		r.addText("["+alt+"]", st)
-		return
-	}
 	size := st.size
 	if size <= 0 {
 		size = r.th.FontSize
+	}
+	w, h := ui.ImageSize(src)
+	if src != nil && (w <= 0 || h <= 0) {
+		if alt == "" {
+			alt = "图片"
+		}
+		r.addText("["+alt+"]", st)
+		return
+	}
+	if src == nil {
+		// 图片还没到也先按 1em 方形占位：表情图都是方的，图到之后原地
+		// 变成图片，这一行不会因为宽度变化而重排；失败时也只是留一个小空位。
+		w, h = 1, 1
 	}
 	// 表情按一个汉字高（1em）占位：0.8em 在基线以上、0.2em 在基线
 	// 以下，行高不变，表情与文字对齐。
 	ascent, descent := size*0.8, size*0.2
 	width := (ascent + descent) * w / h
-	r.objects[r.runes] = src
+	if src != nil {
+		r.objects[r.runes] = src
+	}
 	r.pending = append(r.pending, ui.Span{
 		Text:          "\uFFFC",
 		Size:          size,

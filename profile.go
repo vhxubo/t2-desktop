@@ -16,11 +16,12 @@ import (
 // 「我的」窗口的数据层与界面状态。窗口本身在 profile_ui.go：它是独立窗口
 // （和通知、设置一样），入口是标题栏上登录账号的头像。
 //
-// 四个标签页对应这几组只读端点：
+// 五个标签页对应这几组端点：
 //
-//	概览        GET /v1/users/:userName（最近统计）
+//	概览        GET /v1/users/:userName（最近统计与六维属性）
 //	我的内容    GET /v1/me/topics、/v1/me/favorites、/v1/me/bookmarks、/v1/me/collections
 //	我的回复    GET /v1/users/:userName/replies
+//	徽章        GET /v1/me/badges、/v1/me/badges/equipped；佩戴 / 取消佩戴（见 badges.go）
 //	权限与账号  GET /v1/users/:userName + 令牌里的 scope
 //
 // 金币不在这里：金币页是独立的金币窗口（见 coins_window.go），入口是标题栏
@@ -29,7 +30,8 @@ import (
 // 「我的内容」一页里有四个分段：帖子、收藏、书签、合集。这四类原先占着主
 // 窗口的侧边栏，现在只在这里出现。
 //
-// 这里没有任何写操作：发帖、互动等操作都在各自的窗口或站点完成。
+// 这里唯一的写操作是「徽章」里的佩戴切换（scope write:economy，可能扣金币）；
+// 发帖、互动等其它操作仍在各自的窗口或站点完成。
 
 // 弹窗的默认尺寸。它和通知窗口一样用 StateKey 记住位置与大小，这里只是
 // 首次打开时的默认值。
@@ -39,8 +41,8 @@ const (
 	profileWinMinWidth  = 430
 	profileWinMinHeight = 480
 
-	// profileReplyPageSize 是「我的回复」每页条数：该端点默认 20、上限 50。
-	profileReplyPageSize = 20
+	// profileReplyPageSize 是「我的回复」每页条数：该端点默认 50、上限 50。
+	profileReplyPageSize = 50
 )
 
 // 弹窗里的标签页。金币页不在这个窗口里，去独立的金币窗口看。
@@ -48,10 +50,11 @@ const (
 	profileTabOverview = iota
 	profileTabContent
 	profileTabReplies
+	profileTabBadges
 	profileTabAccount
 )
 
-var profileTabLabels = []string{"概览", "我的内容", "我的回复", "权限与账号"}
+var profileTabLabels = []string{"概览", "我的内容", "我的回复", "徽章", "权限与账号"}
 
 // 「我的内容」里的四个分段。
 const (
@@ -71,7 +74,8 @@ var profileContentLabels = []string{"帖子", "收藏", "书签", "合集"}
 var profileContentSpecs = []tabSpec{
 	{"我的帖子", "/v1/me/topics", "", "auto", true, pagingOff, kindTopic},
 	{"我的收藏", "/v1/me/favorites", "page=1&limit=50", "posts", true, pagingPages, kindTopic},
-	{"我的书签", "/v1/me/bookmarks", "page=1&limit=50", "items", true, pagingPages, kindComment},
+	// 书签接口上限已放宽到 100；收藏仍是 50。
+	{"我的书签", "/v1/me/bookmarks", "page=1&limit=100", "items", true, pagingPages, kindComment},
 	{"我的合集", "/v1/me/collections", "", "", true, pagingOff, kindCollection},
 }
 
@@ -87,7 +91,7 @@ var profileScopeLabels = map[string]string{
 	"read:economy":  "读取金币余额、流水与签到状态",
 	"write:comment": "发表评论",
 	"write:topic":   "发表帖子",
-	"write:economy": "金币变动（签到 / 打赏 / 解锁）",
+	"write:economy": "金币变动（签到 / 打赏 / 佩戴徽章 / 解锁）",
 	"interact":      "收藏、关注等互动",
 	"upload":        "上传图片",
 }
@@ -100,7 +104,8 @@ func profileScopeLabel(scope string) string {
 }
 
 // accountProfile 是 GET /v1/users/:userName 里窗口用得到的字段。接口不返回
-// 邮箱、金币与简介正文，所以这里也只有公开资料。
+// 邮箱、金币与简介正文，所以这里也只有公开资料；简介正文在单独的 about
+// 端点（见 user_card.go 的 userAbout）。
 type accountProfile struct {
 	Name        string
 	DisplayName string
@@ -113,10 +118,15 @@ type accountProfile struct {
 	Following   int
 	HomeView    int
 
+	// Attributes 是 GET /v1/users/:userName 的 user_attributes 六维属性；
+	// AttributesKnown 区分「没有这个字段」与「六项都是 0」，后者仍然画图。
+	Attributes      []profileAttribute
+	AttributesKnown bool
+
 	// 以下字段「我的」窗口不展示，用户资料卡（user_card.go）要用：
 	// ID 是关注端点需要的用户 uuid（用户名只用于展示与链接），Role 是站点
 	// 角色，Badges 是佩戴中的徽章，HasReadme 只说明有没有填写个人简介 ——
-	// 接口不下发简介正文。
+	// 正文要另读 GET /v1/users/:userName/about。
 	ID        string
 	Role      string
 	Badges    []badgeInfo
@@ -155,6 +165,16 @@ type profileState struct {
 	replyTotal   int
 	replyNoMore  bool
 	replyList    ui.ListState
+
+	// 徽章墙：GET /v1/me/badges 与 /v1/me/badges/equipped 一起加载。
+	badgeSeq     uint64
+	badgeLoading bool
+	badgeLoaded  bool
+	badgeErr     string
+	badges       []badgeWallEntry
+	// badgeBusyID 是正在提交佩戴 / 取消佩戴的徽章 uuid；一次只提交一枚，
+	// 避免连点造成重复扣币。
+	badgeBusyID string
 }
 
 func newProfileState() *profileState {
@@ -217,23 +237,26 @@ func decodeAccountProfile(d json.RawMessage) accountProfile {
 			}
 		}
 	}
+	attrs, attrsKnown := decodeProfileAttributes(merged)
 	return accountProfile{
-		Name:        merged.str("username", "name"),
-		DisplayName: merged.str("display_name", "displayName", "nickname"),
-		Avatar:      merged.str("avatar_url", "avatarUrl", "avatar"),
-		UserNumber:  merged.num("user_number", "userNumber", "number"),
-		CreatedAt:   merged.str("created_at", "createdAt"),
-		Level:       merged.num("level"),
-		IsPro:       merged.flag("is_pro", "isPro"),
-		Followers:   merged.num("follower_count", "followers_count", "followers"),
-		Following:   merged.num("following_count", "followings_count", "following"),
-		HomeView:    merged.num("home_view", "homeView", "home_views"),
-		ID:          merged.str("id"),
-		Role:        merged.str("role"),
-		Badges:      decodeBadges(merged),
-		HasReadme:   merged.flag("has_readme", "hasReadme"),
-		IsFollowing: merged.flag("is_following"),
-		FollowKnown: merged.has("is_following"),
+		Name:            merged.str("username", "name"),
+		DisplayName:     merged.str("display_name", "displayName", "nickname"),
+		Avatar:          merged.str("avatar_url", "avatarUrl", "avatar"),
+		UserNumber:      merged.num("user_number", "userNumber", "number"),
+		CreatedAt:       merged.str("created_at", "createdAt"),
+		Level:           merged.num("level"),
+		IsPro:           merged.flag("is_pro", "isPro"),
+		Followers:       merged.num("follower_count", "followers_count", "followers"),
+		Following:       merged.num("following_count", "followings_count", "following"),
+		HomeView:        merged.num("home_view", "homeView", "home_views"),
+		Attributes:      attrs,
+		AttributesKnown: attrsKnown,
+		ID:              merged.str("id"),
+		Role:            merged.str("role"),
+		Badges:          decodeBadges(merged),
+		HasReadme:       merged.flag("has_readme", "hasReadme"),
+		IsFollowing:     merged.flag("is_following"),
+		FollowKnown:     merged.has("is_following"),
 	}
 }
 
@@ -312,6 +335,10 @@ func (a *app) ensureProfileLoaded() {
 	case profileTabReplies:
 		if !ps.replyLoaded && !ps.replyLoading && name != "" {
 			a.loadProfileReplies(name, 1)
+		}
+	case profileTabBadges:
+		if !ps.badgeLoaded && !ps.badgeLoading {
+			a.loadProfileBadges()
 		}
 	}
 }
