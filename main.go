@@ -51,6 +51,17 @@ type app struct {
 	status      string
 	loginMsg    string
 	callbackURL string
+	// 登录：点「登录」直接打开浏览器，loginPending 表示正在等系统跳回；
+	// 只有失败或用户主动粘贴回调时才进入 login 页。
+	loginPending bool
+	// 头像位图与来源地址：登录完成后按 token 里缓存的地址异步加载一次，
+	// 标题栏先显示姓名首字母，图片到了再替换。
+	avatar        *ui.Bitmap
+	avatarURL     string
+	avatarLoading bool
+	// schemeWarn 是「系统没有把回调协议关联到本应用」的说明，仅在这种情况下
+	// 非空：它决定了浏览器授权后能不能自动跳回，得让用户在登录页看见。
+	schemeWarn string
 
 	detail       *detailState
 	detailStack  []*detailState // 正文内联跳转的返回栈
@@ -232,10 +243,14 @@ func (a *app) reloadCurrent() {
 }
 
 func (a *app) onAuthChanged(err error) {
+	a.loginPending = false
 	switch {
 	case err != nil:
 		a.loginMsg = friendlyError(err)
 		a.status = a.loginMsg
+		// 失败时才把回退页摆出来：那里有「重新打开浏览器」和粘贴回调链接，
+		// 正常授权成功不进这一页。
+		a.pageName = "login"
 	case a.auth.loggedIn():
 		a.loginMsg = "已登录"
 		if name := a.auth.username(); name != "" {
@@ -245,11 +260,15 @@ func (a *app) onAuthChanged(err error) {
 		if a.status == "" {
 			a.status = "登录成功"
 		}
-		a.pageName = "list"
+		if a.pageName == "login" {
+			a.pageName = "list"
+		}
+		a.ensureAvatar()
 	default:
 		// 退出登录也会走 onChange(nil)：不能把它当成一次登录成功。
 		a.loginMsg = "已退出登录"
 		a.status = ""
+		a.avatar, a.avatarURL, a.avatarLoading = nil, "", false
 	}
 	// 私人 tab 的缓存与登录态绑定，一律丢弃后按需重新拉取。
 	for i, s := range tabSpecs {
@@ -397,24 +416,7 @@ func (a *app) titleBar(c *ui.Context) {
 			AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "T2 Desktop").FontSize(13).Bold().SingleLine().TextColor(t.Text)
 			ui.Spacer(c).Grow(1)
-			who := "未登录 · 匿名可读"
-			if a.auth.loggedIn() {
-				who = "已登录"
-				if name := a.auth.username(); name != "" {
-					who += " · " + name
-				}
-			}
-			ui.Text(c, who).FontSize(12).TextColor(t.TextMuted).SingleLine()
-			if a.auth.loggedIn() {
-				a.titleTextButton(c, "退出", func() {
-					a.auth.Logout()
-				})
-			} else {
-				a.titleTextButton(c, "登录", func() {
-					a.pageName = "login"
-					a.loginMsg = ""
-				})
-			}
+			a.accountBar(c)
 		})
 		// 右段：自绘窗口控制按钮（最小化 / 最大化·还原 / 关闭），紧贴右上角。
 		a.titleButton(c, titleMinimize, "最小化", func() {
@@ -439,6 +441,38 @@ func (a *app) titleBar(c *ui.Context) {
 			}
 		})
 	})
+}
+
+// accountBar 是标题栏右侧的账号区。未登录时只有一个「登录」，点下去直接
+// 打开系统浏览器，不再先进登录页（那一步既多余，也容易让人以为要再点一次）；
+// 授权等待中显示进度与取消；登录后显示头像、用户名和「退出」。
+func (a *app) accountBar(c *ui.Context) {
+	t := c.Theme()
+	switch {
+	case a.loginPending:
+		waiting := "等待浏览器授权…"
+		if a.schemeWarn != "" {
+			// 系统没注册回调协议时不会有自动跳回，别让人干等。
+			waiting = "等待授权：系统未注册回调协议，授权后请点「粘贴回调」"
+		}
+		ui.Text(c, waiting).FontSize(12).TextColor(t.TextMuted).SingleLine()
+		a.titleTextButton(c, "粘贴回调", func() { a.pageName = "login" })
+		a.titleTextButton(c, "取消", func() { a.cancelLogin() })
+	case a.auth.loggedIn():
+		name := a.auth.username()
+		if name != "" {
+			ui.Avatar(c, name, a.avatar).Size(20, 20)
+		}
+		who := "已登录"
+		if name != "" {
+			who += " · " + name
+		}
+		ui.Text(c, who).FontSize(12).TextColor(t.TextMuted).SingleLine()
+		a.titleTextButton(c, "退出", func() { a.auth.Logout() })
+	default:
+		ui.Text(c, "未登录 · 匿名可读").FontSize(12).TextColor(t.TextMuted).SingleLine()
+		a.titleTextButton(c, "登录", func() { a.startLogin() })
+	}
 }
 
 // titleGlyph 是窗口按钮上要画的图形。
@@ -512,8 +546,7 @@ func (a *app) body(c *ui.Context) {
 			ui.Text(c, "「"+spec.Label+"」需要登录").FontSize(17).Bold()
 			ui.Text(c, "该端点要求 read:me / profile 权限，登录后才会发起请求。").TextColor(t.TextMuted)
 			if ui.PrimaryButton(c, "去登录").Clicked() {
-				a.pageName = "login"
-				a.loginMsg = ""
+				a.startLogin()
 			}
 		})
 		return
@@ -539,7 +572,7 @@ func (a *app) body(c *ui.Context) {
 			}
 			if strings.Contains(st.err, "登录") {
 				if ui.Button(c, "去登录").Clicked() {
-					a.pageName = "login"
+					a.startLogin()
 				}
 			}
 		})
@@ -605,6 +638,8 @@ func (a *app) row(c *ui.Context, it Item) {
 	}
 }
 
+// loginView 只是回退页：正常登录在标题栏点一下就打开浏览器、等系统跳回，
+// 不需要来这里。它只在授权失败、或用户主动选择粘贴回调链接时出现。
 func (a *app) loginView(c *ui.Context) {
 	t := c.Theme()
 	a.titleBar(c)
@@ -616,25 +651,25 @@ func (a *app) loginView(c *ui.Context) {
 			}
 			ui.Text(c, "登录 2Libra").FontSize(18).Bold()
 			ui.Spacer(c).Grow(1)
-			if a.auth.loggedIn() {
-				ui.Text(c, "当前："+a.auth.username()).FontSize(12).TextColor(t.TextMuted)
+			if name := a.auth.username(); name != "" {
+				ui.Text(c, "当前："+name).FontSize(12).TextColor(t.TextMuted)
 				if ui.Button(c, "退出登录").Clicked() {
 					a.auth.Logout()
 				}
 			}
 		})
 		ui.Divider(c)
-		ui.Textf(c, "client_id：%s", clientID).FontSize(12).TextColor(t.TextMuted)
-		ui.Textf(c, "redirect_uri：%s", defaultRedirectURI).FontSize(12).TextColor(t.TextMuted)
-		ui.Textf(c, "scope：%s", defaultScopes).FontSize(12).TextColor(t.TextMuted)
+		if a.schemeWarn != "" {
+			ui.Text(c, a.schemeWarn).FontSize(12).TextColor(t.Danger).MaxLines(4)
+		}
 		if a.loginMsg != "" {
 			ui.Text(c, a.loginMsg).TextColor(t.TextMuted).MaxLines(4)
 		}
 		if ui.PrimaryButton(c, "打开浏览器授权").Clicked() {
 			a.startLogin()
 		}
-		ui.Divider(c)
-		ui.Text(c, "浏览器同意后会通过 "+defaultRedirectURI+" 跳回应用；若系统没有自动跳回，复制地址栏完整链接粘贴到这里，完成同一次授权：").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "浏览器没有自动跳回？把地址栏里的完整链接粘贴到这里，完成同一次授权：").
+			FontSize(12).TextColor(t.TextMuted)
 		ui.TextInput(c, &a.callbackURL).Label("回调链接").Placeholder(defaultRedirectURI + "?code=...&state=...").FillWidth()
 		if ui.Button(c, "用回调链接完成登录").Clicked() {
 			if err := a.auth.Complete(a.callbackURL); err != nil {
@@ -647,17 +682,34 @@ func (a *app) loginView(c *ui.Context) {
 		ui.Text(c, "本应用由第三方开发者独立开发运营，与 2Libra 无隶属或合作关系。2Libra 仅提供账号授权与接口，不对本应用的可用性、内容与数据处理负责。你可以随时在 2Libra 的「授权应用」页面撤销本应用的授权。应用内展示的内容版权归原作者所有，详情页保留作者昵称与原文链接。").
 			FontSize(11).TextColor(t.TextMuted).MaxLines(4)
 		ui.Spacer(c).Grow(1)
-		if v := a.auth.verifyStatus(); v != "" {
-			ui.Text(c, v).FontSize(11).TextColor(t.TextMuted)
-		}
 	})
 }
 
 // handleCallbackURL receives the OS deep link. The PKCE verifier is held in
 // memory, so a callback that cold-started the app cannot resume the login.
+//
+// The link is echoed to the console on every delivery: mygo dev forwards the
+// app's stdout/stderr, and a callback the system never delivered and one it
+// delivered in an unexpected spelling both look like "nothing happened" in
+// the window. Only the console tells them apart.
 func (a *app) handleCallbackURL(raw string) {
+	raw = strings.TrimSpace(raw)
+	if !hasCallbackScheme(raw) {
+		log.Printf("深链：忽略非本应用协议的链接 %q", raw)
+		return
+	}
+	log.Printf("深链：收到 %q", raw)
 	if !isCallbackLink(raw) {
-		return // some other deep link, not an OAuth callback
+		// It is our scheme but not the callback path. Links carrying a code
+		// are attempts at logging in: dropping them silently leaves the user
+		// on the login page with no idea what happened, so say what arrived.
+		if strings.Contains(raw, "code=") {
+			a.loginMsg = "收到的系统回调地址与 " + defaultRedirectURI + " 不一致：" + raw + "。请把浏览器地址栏里的完整链接粘贴到下方完成登录。"
+			a.status = a.loginMsg
+			a.pageName = "login"
+			return
+		}
+		return // some other deep link of this app, not an OAuth callback
 	}
 	if err := a.auth.Complete(raw); err != nil {
 		a.loginMsg = "回调无法完成登录：" + err.Error() + "。如果应用是被浏览器链接刚启动的，PKCE 会话不在本进程，请点「打开浏览器授权」重新发起。"
@@ -668,19 +720,38 @@ func (a *app) handleCallbackURL(raw string) {
 	a.loginMsg = "已收到系统回调，正在用授权码换取令牌…"
 }
 
+// startLogin 打开系统浏览器并进入等待状态：不回登录页、不需要第二次点击，
+// 系统回调（或用户粘贴的回调链接）完成授权后自行登录。
 func (a *app) startLogin() {
 	authorizeURL, err := a.auth.Begin(context.Background())
 	if err != nil {
 		a.loginMsg = err.Error()
+		a.pageName = "login"
 		return
 	}
-	a.loginMsg = "已在浏览器打开授权页。同意后浏览器会通过 " + defaultRedirectURI + " 跳回应用；若没有跳回，请复制地址栏完整链接粘贴到下方。"
+	a.loginPending = true
+	a.loginMsg = "已在浏览器打开授权页，同意后会自动跳回。"
+	a.status = a.loginMsg
 	a.srv.OpenURL(authorizeURL) // URL 服务在 UI 线程调用
+}
+
+// cancelLogin 放弃本次授权：AuthManager 丢掉 PKCE 会话，界面回到未登录。
+func (a *app) cancelLogin() {
+	a.auth.Cancel()
+	a.loginPending = false
+	a.loginMsg = "已取消登录"
+	a.status = a.loginMsg
 }
 
 func main() {
 	a := newApp("")
 	a.autoLoad = true
+	// 深链回调先注册，再取单实例锁：浏览器跳回时系统拉起的是一个新进程，
+	// 它把命令行转给第一个实例，转发可能早于下面几行执行。mygo 的
+	// OnOpenURL 只在投递那一刻有监听者时才送达，注册晚了链接就被丢掉。
+	mygo.App.OnOpenURL(func(raw string) {
+		a.publish(func() { a.handleCallbackURL(raw) })
+	})
 	// On Windows/Linux the custom-scheme callback starts a second process;
 	// hand its URL to the instance that holds the PKCE verifier.
 	if !mygo.App.RequestSingleInstanceLock() {
@@ -691,11 +762,11 @@ func main() {
 	// and apps launched without an installer. Failure only disables the
 	// automatic jump back: pasting the callback link still works.
 	if err := mygo.App.RegisterURLScheme(appIdentifier); err != nil {
+		a.schemeWarn = "系统未把 " + appIdentifier + " 关联到本应用（" + err.Error() + "）：授权后浏览器不会自动跳回，请复制地址栏里的完整链接粘贴到下方。"
 		log.Printf("运行时注册 %s 未成功（打包版由 mygo.json 的 urlSchemes 声明；仍可手动粘贴回调链接）：%v", appIdentifier, err)
+	} else {
+		log.Printf("回调协议已注册：%s", appIdentifier)
 	}
-	mygo.App.OnOpenURL(func(raw string) {
-		a.publish(func() { a.handleCallbackURL(raw) })
-	})
 	// 原生通知的点击只带回 id，由 openNotificationNotice 查回目标：帖子和
 	// 评论在应用内打开，其余交给系统浏览器。注册在 Run 之前，因此连「点击
 	// 通知才启动本进程」的那一次也能收到。
@@ -726,9 +797,18 @@ func main() {
 		if a.auth.loggedIn() {
 			a.refreshUnread()
 			a.startNotificationWatch()
+			// 令牌里已经缓存了用户名与头像地址；这里再校准一次，老会话
+			// 也能补上头像，并在加载完成后刷新标题栏。
+			a.ensureAvatar()
 			go func() {
-				_ = a.auth.verify(context.Background(), a.auth.accessToken())
-				a.publish(func() { a.status = a.auth.verifyStatus() })
+				ctx := context.Background()
+				token := a.auth.accessToken()
+				_ = a.auth.verify(ctx, token)
+				a.auth.fetchIdentity(ctx, token)
+				a.publish(func() {
+					a.status = a.auth.verifyStatus()
+					a.ensureAvatar()
+				})
 			}()
 		}
 	})

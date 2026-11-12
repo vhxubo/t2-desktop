@@ -45,6 +45,9 @@ type tokenData struct {
 	Scope        string `json:"scope"`
 	ObtainedAt   int64  `json:"obtained_at"`
 	Username     string `json:"username,omitempty"`
+	// Avatar is the account's avatar URL, cached so the title bar can show the
+	// picture at the next start without asking the profile endpoint again.
+	Avatar string `json:"avatar,omitempty"`
 }
 
 // configDir is where the token lives. It stays outside the repo and can be
@@ -181,6 +184,21 @@ func (m *AuthManager) username() string {
 	return m.token.Username
 }
 
+// avatarURL is the avatar address cached with the session, empty until the
+// profile endpoint has been read.
+func (m *AuthManager) avatarURL() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.token == nil {
+		return ""
+	}
+	return m.token.Avatar
+}
+
+// Cancel drops the in-flight authorization when the user gives up on it, so a
+// late browser redirect cannot sign the session back in.
+func (m *AuthManager) Cancel() { m.cancelPending("已取消登录") }
+
 func (m *AuthManager) verifyStatus() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -244,6 +262,15 @@ func newPKCE() (verifier, challenge string) {
 	sum := sha256.Sum256([]byte(verifier))
 	challenge = base64.RawURLEncoding.EncodeToString(sum[:]) // 43 chars, S256
 	return
+}
+
+// hasCallbackScheme reports whether raw uses the app's own URL scheme,
+// whatever its path. It separates "the OS delivered something of ours that we
+// cannot use" from "the OS delivered some other app's link", which is what
+// decides whether a delivery is worth reporting to the user.
+func hasCallbackScheme(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && strings.EqualFold(u.Scheme, appIdentifier)
 }
 
 // isCallbackLink accepts only the app's registered native callback URL.
@@ -536,62 +563,98 @@ func (m *AuthManager) invalidate(err error) {
 	m.notify(err)
 }
 
-// fetchIdentity reads GET /api/oauth/me (profile scope) for the display
-// name, then falls back to GET /api/v1/me/summary.
+// fetchIdentity reads GET /api/oauth/me (profile scope) for the display name
+// and avatar, then falls back to GET /api/v1/me/summary.
 func (m *AuthManager) fetchIdentity(ctx context.Context, access string) {
 	for _, p := range []string{"/oauth/me", "/v1/me/summary"} {
-		name, err := m.identityFrom(ctx, m.apiBase+p, access)
-		if err == nil && name != "" {
-			// 只把姓名写回它所属的那次登录：期间若已退出或换了账号，
-			// 这里写回会把别人的令牌又落盘。写盘也在锁内，与 refresh 的
-			// 令牌落盘串行，不会互相覆盖。
-			m.mu.Lock()
-			if m.token != nil && m.token.AccessToken == access {
-				m.token.Username = name
-				_ = writeJSONFile(filepath.Join(m.dir, "token.json"), *m.token)
-			}
-			m.mu.Unlock()
-			return
+		id, err := m.identityFrom(ctx, m.apiBase+p, access)
+		if err != nil || (id.name == "" && id.avatar == "") {
+			continue
 		}
+		// 只把身份写回它所属的那次登录：期间若已退出或换了账号，
+		// 这里写回会把别人的令牌又落盘。写盘也在锁内，与 refresh 的
+		// 令牌落盘串行，不会互相覆盖。
+		m.mu.Lock()
+		if m.token != nil && m.token.AccessToken == access {
+			if id.name != "" {
+				m.token.Username = id.name
+			}
+			if id.avatar != "" {
+				m.token.Avatar = id.avatar
+			}
+			_ = writeJSONFile(filepath.Join(m.dir, "token.json"), *m.token)
+		}
+		m.mu.Unlock()
+		return
 	}
 }
 
-func (m *AuthManager) identityFrom(ctx context.Context, u, access string) (string, error) {
+// identity is what the profile endpoints say about the signed-in account.
+type identity struct {
+	name   string
+	avatar string
+}
+
+func (m *AuthManager) identityFrom(ctx context.Context, u, access string) (identity, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return "", err
+		return identity{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+access)
 	req.Header.Set("Accept", "application/json")
 	resp, err := m.http.Do(req)
 	if err != nil {
-		return "", err
+		return identity{}, err
 	}
 	defer resp.Body.Close()
 	var env envelope
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&env); err != nil {
-		return "", err
+		return identity{}, err
 	}
 	if resp.StatusCode >= 400 || env.C != 0 {
-		return "", fmt.Errorf("HTTP %d %s", resp.StatusCode, env.Code)
+		return identity{}, fmt.Errorf("HTTP %d %s", resp.StatusCode, env.Code)
 	}
-	var d struct {
-		Username string `json:"username"`
-		Name     string `json:"name"`
-		User     struct {
-			Username string `json:"username"`
-		} `json:"user"`
-	}
+	var d any
 	if err := json.Unmarshal(env.D, &d); err != nil {
-		return "", err
+		return identity{}, err
 	}
-	if d.Username != "" {
-		return d.Username, nil
+	// /oauth/me puts the account at the top level, /v1/me/summary nests it
+	// under user, and the avatar key is spelled both ways: search the whole
+	// response breadth first instead of guessing one shape.
+	return identity{
+		name:   firstString(d, "username", "nickname", "name"),
+		avatar: firstString(d, "avatar_url", "avatarUrl", "avatar"),
+	}, nil
+}
+
+// firstString returns the first non-empty string among keys in v, breadth
+// first, so a nested account object is found without knowing its exact shape.
+func firstString(v any, keys ...string) string {
+	queue := []any{v}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		switch t := cur.(type) {
+		case map[string]any:
+			for _, k := range keys {
+				if s, ok := t[k].(string); ok && s != "" {
+					return s
+				}
+			}
+			for _, child := range t {
+				if _, ok := child.(map[string]any); ok {
+					queue = append(queue, child)
+				}
+			}
+		case []any:
+			for _, child := range t {
+				if _, ok := child.(map[string]any); ok {
+					queue = append(queue, child)
+				}
+			}
+		}
 	}
-	if d.User.Username != "" {
-		return d.User.Username, nil
-	}
-	return d.Name, nil
+	return ""
 }
 
 // verify is the documented connectivity check: GET /api/v1/me/summary.

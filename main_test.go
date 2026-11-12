@@ -601,6 +601,58 @@ func TestDeepLinkColdStart(t *testing.T) {
 	}
 }
 
+// A delivered link that carries a code but does not match the registered
+// callback must say what arrived: silently dropping it leaves the user on the
+// login page with no idea whether the system handed anything over at all.
+func TestDeepLinkWrongCallbackSpellingReports(t *testing.T) {
+	a := testApp(t)
+	a.pageName = "list"
+	a.handleCallbackURL(appIdentifier + ":/callback/?code=x&state=y")
+	if a.pageName != "login" {
+		t.Fatalf("带 code 的非标准回调应切到登录页：%s", a.pageName)
+	}
+	if !strings.Contains(a.loginMsg, defaultRedirectURI) || !strings.Contains(a.loginMsg, "不一致") {
+		t.Errorf("提示里应给出期望的回调地址：%q", a.loginMsg)
+	}
+	if a.status == "" {
+		t.Error("状态栏也应留下同样的说明")
+	}
+}
+
+// hasCallbackScheme separates "ours but unusable" from "another app's link",
+// which decides whether a delivery is worth reporting.
+func TestCallbackSchemeDetection(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{defaultRedirectURI + "?code=c&state=s", true},
+		{alternateCallbackURI + "?code=c&state=s", true},
+		{appIdentifier + ":/something-else", true},
+		{"https://2libra.com/post/x", false},
+		{"com.other.app:/callback?code=c", false},
+		{"", false},
+		{"not a url", false},
+	}
+	for _, c := range cases {
+		if got := hasCallbackScheme(c.raw); got != c.want {
+			t.Errorf("hasCallbackScheme(%q) = %v，期望 %v", c.raw, got, c.want)
+		}
+	}
+}
+
+// 系统没有把回调协议关联到本应用时，登录页必须说出来：否则用户看到的是
+// 「浏览器授权完了，应用没有任何反应」。
+func TestLoginPageReportsSchemeRegistrationFailure(t *testing.T) {
+	a := testApp(t)
+	a.pageName = "login"
+	a.schemeWarn = "系统未把 " + appIdentifier + " 关联到本应用：浏览器不会自动跳回，请复制地址栏里的完整链接粘贴到下方。"
+	tt := ui.NewTester(a.view, 1100, 760)
+	if !tt.HasText(a.schemeWarn) {
+		t.Errorf("登录页没有显示协议注册失败的说明：%q", tt.Texts())
+	}
+}
+
 // Both UI pages must offer only the native-scheme PKCE flow. The paste box
 // on the login page belongs to that same flow (it takes the callback URL).
 func TestOnlyNativeSchemeLoginIsOffered(t *testing.T) {
@@ -626,10 +678,6 @@ func TestOnlyNativeSchemeLoginIsOffered(t *testing.T) {
 		if page == "login" {
 			if !tt.HasText("打开浏览器授权") || !tt.HasText("用回调链接完成登录") {
 				t.Errorf("登录页缺少唯一流程的操作入口：%q", texts)
-			}
-			if !tt.HasText("redirect_uri："+defaultRedirectURI) ||
-				!tt.HasText("client_id："+clientID) || !tt.HasText("scope："+defaultScopes) {
-				t.Errorf("登录页没有显示固定的 OAuth 参数：%q", texts)
 			}
 			if !tt.HasText("本应用由第三方开发者独立开发运营，与 2Libra 无隶属或合作关系。") {
 				t.Errorf("登录页缺少第三方声明：%q", texts)

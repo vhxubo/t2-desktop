@@ -88,7 +88,7 @@ func (a *app) notificationsBody(c *ui.Context, st *tabState) {
 			}
 			if strings.Contains(st.err, "登录") {
 				if ui.Button(c, "去登录").Clicked() {
-					a.pageName = "login"
+					a.startLogin()
 				}
 			}
 		})

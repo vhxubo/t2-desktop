@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -104,6 +105,24 @@ func (a *app) openExternal(raw string) {
 // loadImage backs markdown images (including the :code: emoji map) with a
 // bounded, http(s)-only fetch. ui.DecodeImage handles PNG/JPEG/GIF/SVG.
 func (a *app) loadImage(raw string) (ui.ImageSource, error) {
+	data, err := a.fetchImage(raw)
+	if err != nil {
+		return nil, err
+	}
+	return ui.DecodeImage(data)
+}
+
+// loadBitmap fetches an image for widgets that take a bitmap (Avatar, which
+// crops it to a circle).
+func (a *app) loadBitmap(raw string) (*ui.Bitmap, error) {
+	data, err := a.fetchImage(raw)
+	if err != nil {
+		return nil, err
+	}
+	return ui.DecodeBitmap(data)
+}
+
+func (a *app) fetchImage(raw string) ([]byte, error) {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
 		return nil, fmt.Errorf("不支持的图片地址：%s", raw)
@@ -123,11 +142,33 @@ func (a *app) loadImage(raw string) (ui.ImageSource, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("图片 HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return nil, err
+	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+}
+
+// ensureAvatar loads the signed-in account's avatar once per URL, off the UI
+// thread, and publishes the bitmap back; the title bar draws initials until
+// it arrives (or when the profile has no picture).
+func (a *app) ensureAvatar() {
+	if !a.autoLoad || a.avatarLoading {
+		return // headless tests never touch the network
 	}
-	return ui.DecodeImage(data)
+	u := a.auth.avatarURL()
+	if u == "" || (u == a.avatarURL && a.avatar != nil) {
+		return
+	}
+	a.avatarURL = u
+	a.avatarLoading = true
+	go func() {
+		bmp, err := a.loadBitmap(u)
+		a.publish(func() {
+			a.avatarLoading = false
+			if err != nil {
+				log.Printf("头像加载失败：%v", err)
+				return
+			}
+			a.avatar = bmp
+		})
+	}()
 }
 
 func (a *app) openDetail(it Item) {
@@ -669,8 +710,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 			// 未登录时把框内动作换成「登录后评论」；否则为集成在框内的发送按钮。
 			if !a.auth.loggedIn() {
 				if ui.Button(c, "登录后评论").Clicked() {
-					a.loginMsg = ""
-					a.pageName = "login"
+					a.startLogin()
 				}
 			} else {
 				send := ui.PrimaryButton(c, "发送").Disabled(sendDisabled)

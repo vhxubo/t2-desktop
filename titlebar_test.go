@@ -165,8 +165,9 @@ func TestTitleBarButtonHover(t *testing.T) {
 	}
 }
 
-// The title bar's own buttons work: 登录 opens the login page, and the three
-// window buttons are reachable controls rather than plain drawings.
+// The title bar's own buttons work: 登录 starts the browser authorization in
+// place (no login page in between), and the three window buttons are reachable
+// controls rather than plain drawings.
 func TestTitleBarButtonsClick(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1080, 720)
@@ -177,15 +178,41 @@ func TestTitleBarButtonsClick(t *testing.T) {
 			t.Fatalf("窗口按钮「%s」不可点（没有可访问名）", label)
 		}
 	}
-	// 未登录时点「登录」进入登录页。
+	// 未登录时点「登录」直接进入等待授权，不离开当前页。
+	t.Cleanup(a.auth.Cancel)
 	if err := tt.Click("登录"); err != nil {
 		t.Fatal(err)
 	}
-	if a.pageName != "login" {
-		t.Fatalf("点「登录」后页面 = %q，期望 login", a.pageName)
+	if a.pageName != "list" {
+		t.Fatalf("点「登录」不该进登录页，实际页面 = %q", a.pageName)
+	}
+	if !a.loginPending {
+		t.Fatal("点「登录」后没有进入等待授权状态")
 	}
 	tt.Frame()
-	if !tt.HasText("登录 2Libra") {
-		t.Errorf("登录页没有渲染：%q", tt.Texts())
+	if !tt.HasText("等待浏览器授权…") {
+		t.Errorf("标题栏没有显示等待授权：%q", tt.Texts())
+	}
+}
+
+// 登录成功后标题栏显示用户名与头像，且不再回到登录页。
+func TestTitleBarShowsAccountAfterLogin(t *testing.T) {
+	a := testApp(t)
+	if err := a.auth.storeToken(tokenData{AccessToken: "tok", Username: "jimmy", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	a.pageName = "login"
+	a.onAuthChanged(nil)
+	if a.pageName != "list" {
+		t.Errorf("登录成功后应回到列表，实际 %q", a.pageName)
+	}
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	if !tt.HasText("已登录 · jimmy") {
+		t.Errorf("标题栏没有显示用户名：%q", tt.Texts())
+	}
+	// 头像在图片加载完成前用姓名首字母，仍是一个可命名的头像控件。
+	if _, ok := tt.Find("jimmy"); !ok {
+		t.Errorf("标题栏没有头像控件：%q", tt.Texts())
 	}
 }

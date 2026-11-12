@@ -259,6 +259,44 @@ func TestSupersededLoginAttemptStaysSilent(t *testing.T) {
 	}
 }
 
+// The profile endpoints differ in shape: the account name and the avatar URL
+// must be found whether they sit at the top level or under user, and both are
+// cached in token.json so the next start shows the avatar without a request.
+func TestFetchIdentityReadsNameAndAvatar(t *testing.T) {
+	bodies := []string{
+		`{"c":0,"d":{"username":"jimmy","avatar_url":"https://r2.2libra.com/a.png"}}`,
+		`{"c":0,"d":{"user":{"username":"jimmy","avatarUrl":"https://r2.2libra.com/a.png"}}}`,
+	}
+	for _, body := range bodies {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/oauth/me" {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = fmt.Fprint(w, body)
+		}))
+		dir := t.TempDir()
+		m := newAuthManager(dir)
+		m.apiBase = srv.URL + "/api"
+		m.http = srv.Client()
+		if err := m.storeToken(tokenData{AccessToken: "T", TokenType: "Bearer"}); err != nil {
+			t.Fatal(err)
+		}
+		m.fetchIdentity(context.Background(), "T")
+		srv.Close()
+		if m.username() != "jimmy" || m.avatarURL() != "https://r2.2libra.com/a.png" {
+			t.Fatalf("身份解析不对：%q / %q（响应 %s）", m.username(), m.avatarURL(), body)
+		}
+		var saved tokenData
+		if err := readJSONFile(filepath.Join(dir, "token.json"), &saved); err != nil {
+			t.Fatal(err)
+		}
+		if saved.Username != "jimmy" || saved.Avatar != "https://r2.2libra.com/a.png" {
+			t.Errorf("用户名或头像没有写入 token.json：%+v", saved)
+		}
+	}
+}
+
 // 退出登录也会走 onChange(nil)，UI 不能把它当成一次登录成功。
 func TestAuthChangedDistinguishesLogout(t *testing.T) {
 	a := testApp(t)
