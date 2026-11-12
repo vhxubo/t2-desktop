@@ -64,6 +64,11 @@ type detailState struct {
 func (d *detailState) originURL() string {
 	if d.topic != nil && d.topic.URL != "" {
 		if d.focusID != "" {
+			// 已定位到的评论用完整永久链接（含页码），站外打开也能落到那层楼；
+			// 还没加载到它时退回只带 commentId 的地址。
+			if at := replyIndexByID(d.replyList, d.focusID); at >= 0 {
+				return replyPermalink(d.topic, d.fallbackURL, d.replyList[at])
+			}
 			return d.topic.URL + "?commentId=" + url.QueryEscape(d.focusID)
 		}
 		return d.topic.URL
@@ -1035,8 +1040,8 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 }
 
 // submitReply posts the draft through the Client. On success it clears the
-// box and optimistically prepends the created comment so the author sees it
-// immediately; a later refresh re-sorts into the server's floor order.
+// box, inserts the created comment where the current view expects it and
+// scrolls to it, so the author sees it immediately in floor order.
 func (a *app) submitReply() {
 	d := a.detail
 	if d == nil || d.posting {
@@ -1056,6 +1061,11 @@ func (a *app) submitReply() {
 		return
 	}
 	parentID := d.replyToID
+	parentFloor := d.replyToFloor
+	parentSummary := ""
+	if at := replyIndexByID(d.replyList, parentID); at >= 0 {
+		parentSummary = truncate(commentExcerpt(d.replyList[at].Content), 60)
+	}
 	d.posting = true
 	d.postErr = ""
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -1091,6 +1101,17 @@ func (a *app) submitReply() {
 			}
 			if created.Floor == 0 && created.FlatFloor > 0 {
 				created.Floor = created.FlatFloor
+			}
+			// 服务端没回父评论信息时用提交前的目标补齐，刚发的楼中楼
+			// 立刻就能显示「回复 N 楼：…」并点回父评论。
+			if created.ParentID == "" {
+				created.ParentID = parentID
+			}
+			if created.ParentFloor == 0 {
+				created.ParentFloor = parentFloor
+			}
+			if created.ParentSummary == "" {
+				created.ParentSummary = parentSummary
 			}
 			d.draft = ""
 			d.replyToID = ""
