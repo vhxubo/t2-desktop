@@ -1,5 +1,6 @@
 /build/
 /.gocache/
+/.gotmp/
 /.mygo/
 /.workbuddy-ai/
 mygo_windows_*.syso
