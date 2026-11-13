@@ -9,6 +9,7 @@
     "publicKey": "9yymxgRUElbwYyaP66qp3iQH4T+eyvHFV7stp4dz11o="
   },
   "windows": {
+    "displayName": "T2 Desktop",
     "installerInclude": "packaging/installer.nsh"
   }
 }
