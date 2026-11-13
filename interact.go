@@ -695,8 +695,8 @@ func (a *app) favoriteButton(c *ui.Context, d *detailState) {
 	b := ui.Button(c, "").
 		Background(ui.Transparent).
 		Border(1, t.Border).
-		FontSize(11).
-		Padding(3, 8).
+		FontSize(metaFontSize).
+		Padding(4, 10).
 		Radius(999).
 		Shrink(0)
 	hovered := b.Hovered()
@@ -722,12 +722,12 @@ func (a *app) favoriteButton(c *ui.Context, d *detailState) {
 		if favorited {
 			icon = favoriteOnIcon
 		}
-		ui.Icon(c, icon).Size(14, 14).TextColor(ink)
-		ui.Text(c, text).FontSize(11).TextColor(ink).SingleLine()
+		ui.Icon(c, icon).Size(15, 15).TextColor(ink)
+		ui.Text(c, text).FontSize(metaFontSize).TextColor(ink).SingleLine()
 		if d.topic.FavoriteCountKnown {
 			// 数字比状态文案再小一号、用弱化色：它是数量，不是按钮的第二个
 			// 状态词，长起来也不会让「已收藏」看起来像动作。
-			ui.Textf(c, "%d", d.topic.FavoritedCount).FontSize(10).
+			ui.Textf(c, "%d", d.topic.FavoritedCount).FontSize(metaSmallFontSize).
 				TextColor(t.TextMuted).SingleLine()
 		}
 	})
@@ -771,7 +771,7 @@ func (a *app) topicInteractionBar(c *ui.Context, d *detailState) {
 		return
 	}
 	ui.Divider(c)
-	ui.Column(c).FillWidth().Padding(8, 16).Children(func() {
+	ui.Column(c).FillWidth().Padding(10, 18).Children(func() {
 		a.topicInteractionRow(c, d)
 	})
 }
@@ -787,7 +787,7 @@ func (a *app) reactionSummaryInfo(c *ui.Context, d *detailState, target string, 
 	shown := visibleReactions(reactionStatsOf(d, target))
 	total := reactionTotal(shown)
 	if len(shown) > 0 {
-		chip := ui.Row(c).Padding(0, 6).Radius(999).Gap(4).
+		chip := ui.Row(c).Padding(1, 8).Radius(999).Gap(5).
 			Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center)
 		chip.Tooltip(reactionSummaryTip(shown))
 		chip.Label(fmt.Sprintf("表情，共 %d 次", total))
@@ -805,10 +805,10 @@ func (a *app) reactionSummaryInfo(c *ui.Context, d *detailState, target string, 
 					box.MarginStart(-reactionStackOverlap)
 				}
 				box.Children(func() {
-					ui.Text(c, emoji).FontSize(10).SingleLine()
+					ui.Text(c, emoji).FontSize(11).SingleLine()
 				})
 			}
-			ui.Textf(c, "%d", total).FontSize(11).TextColor(t.TextMuted)
+			ui.Textf(c, "%d", total).FontSize(metaSmallFontSize).TextColor(t.TextMuted)
 		})
 		chip.OnClick(func() { a.openReactionDetails(d, target) })
 		if d.react.detailsFor == target {
@@ -825,8 +825,8 @@ func (a *app) reactionSummaryInfo(c *ui.Context, d *detailState, target string, 
 // 表情摘要里那一摞圆片的尺寸：叠放三个也不会比一个数字宽太多。
 const (
 	reactionStackMax     = 3
-	reactionStackSize    = 15
-	reactionStackOverlap = 5
+	reactionStackSize    = 17
+	reactionStackOverlap = 6
 )
 
 // 表态 / 打赏入口的尺寸。正文底部那条互动栏只有一枚图标加一条汇总，留白
@@ -841,7 +841,7 @@ type interactEntryStyle struct {
 
 var (
 	// interactEntryCompact 是评论底行的尺寸，和评论正文同一档。
-	interactEntryCompact = interactEntryStyle{box: 18, icon: 13, radius: 5}
+	interactEntryCompact = interactEntryStyle{box: 20, icon: 14, radius: 6}
 	// interactEntryComfy 是正文互动栏的尺寸：比汇总胶囊略高，点起来不费劲。
 	interactEntryComfy = interactEntryStyle{box: 28, icon: 18, radius: 7}
 )
@@ -973,14 +973,14 @@ func (a *app) rewardEntry(c *ui.Context, d *detailState, target string, style in
 func (a *app) reactionPanel(c *ui.Context, d *detailState, target string) {
 	t := c.Theme()
 	ui.Column(c).Width(230).Gap(8).Children(func() {
-		ui.Text(c, "选择一个表情").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "选择一个表情").FontSize(metaFontSize).TextColor(t.TextMuted)
 		if !a.auth.loggedIn() {
 			a.loginHint(c, "登录后才能添加表情。")
 			return
 		}
 		emojis := reactionEmojisOf(d, target)
 		if len(emojis) == 0 {
-			ui.Text(c, "这个节点没有推荐表情。").FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+			ui.Text(c, "这个节点没有推荐表情。").FontSize(metaFontSize).TextColor(t.TextMuted).MaxLines(2)
 			return
 		}
 		ui.Row(c).Gap(4).Wrap().Children(func() {
@@ -1010,7 +1010,7 @@ func (a *app) reactionPanel(c *ui.Context, d *detailState, target string) {
 func (a *app) rewardPanel(c *ui.Context, d *detailState, target string) {
 	t := c.Theme()
 	ui.Column(c).Width(260).Gap(8).Children(func() {
-		ui.Text(c, "打赏金币").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "打赏金币").FontSize(metaFontSize).TextColor(t.TextMuted)
 		if !a.auth.loggedIn() {
 			a.loginHint(c, "登录后才能打赏。")
 			return
@@ -1018,7 +1018,7 @@ func (a *app) rewardPanel(c *ui.Context, d *detailState, target string) {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.NumberInput(c, &d.react.amount, rewardAmountLo, rewardAmountHi, 1).
 				Label("打赏金额").Width(110)
-			ui.Text(c, "金币").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "金币").FontSize(metaFontSize).TextColor(t.TextMuted)
 			if a.coins != nil && a.coins.balanceOK {
 				ui.Textf(c, "余额 %s", coinThousands(a.coins.balance)).
 					FontSize(11).TextColor(t.TextMuted).SingleLine()
@@ -1052,9 +1052,9 @@ func (a *app) detailsPanel(c *ui.Context, d *detailState, target string) {
 	shown := visibleReactions(reactionStatsOf(d, target))
 	canAct := a.canActOn(d, target)
 	ui.Column(c).Width(260).Gap(4).Children(func() {
-		ui.Text(c, "表情明细").FontSize(12).TextColor(t.TextMuted)
+		ui.Text(c, "表情明细").FontSize(metaFontSize).TextColor(t.TextMuted)
 		if len(shown) == 0 {
-			ui.Text(c, "还没有人添加表情。").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "还没有人添加表情。").FontSize(metaFontSize).TextColor(t.TextMuted)
 			return
 		}
 		for _, s := range shown {
@@ -1071,9 +1071,9 @@ func (a *app) detailsPanel(c *ui.Context, d *detailState, target string) {
 			}
 			row.Children(func() {
 				ui.Text(c, stat.Emoji).FontSize(14)
-				ui.Textf(c, "%d", stat.Count).FontSize(12).TextColor(t.TextMuted)
+				ui.Textf(c, "%d", stat.Count).FontSize(metaFontSize).TextColor(t.TextMuted)
 				if stat.Mine {
-					ui.Text(c, "我").FontSize(10).Bold().TextColor(t.Accent)
+					ui.Text(c, "我").FontSize(11).Bold().TextColor(t.Accent)
 				}
 			})
 		}
@@ -1096,12 +1096,12 @@ func (a *app) rewardBadge(c *ui.Context, rewards rewardStat) {
 		return
 	}
 	t := c.Theme()
-	chip := ui.Row(c).Padding(0, 6).Radius(999).Gap(3).
+	chip := ui.Row(c).Padding(1, 8).Radius(999).Gap(4).
 		Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center)
 	chip.Tooltip(rewardBadgeTip(rewards))
 	chip.Children(func() {
-		ui.Text(c, "💰").FontSize(10)
-		ui.Textf(c, "%d", rewards.Total).FontSize(10).TextColor(t.Warning)
+		ui.Text(c, "💰").FontSize(11)
+		ui.Textf(c, "%d", rewards.Total).FontSize(metaSmallFontSize).TextColor(t.Warning)
 	})
 }
 

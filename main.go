@@ -158,7 +158,7 @@ type app struct {
 	emojiTried   bool
 	md           *markdown.Options
 	// commentMd 是评论正文的 Markdown 选项：与正文同一套渲染，字号更小
-	// （commentFontSize），让评论区比正文紧凑一号。
+	// （commentTextStyle），让评论区比正文紧凑一号。
 	commentMd *markdown.Options
 	// bioMd 是资料卡「个人简介」的 Markdown 选项：介绍正文可能带标题、
 	// 列表与表情，字号取 userCardBioFontSize。
@@ -363,9 +363,9 @@ func newApp(dir string) *app {
 	a.auth.onChange = func(err error) {
 		a.publish(func() { a.onAuthChanged(err) })
 	}
-	a.md = newMarkdownOptions(a, 0)
-	a.commentMd = newMarkdownOptions(a, commentFontSize)
-	a.bioMd = newMarkdownOptions(a, userCardBioFontSize)
+	a.md = newMarkdownOptions(a, postTextStyle)
+	a.commentMd = newMarkdownOptions(a, commentTextStyle)
+	a.bioMd = newMarkdownOptions(a, bioTextStyle)
 	return a
 }
 
@@ -1007,7 +1007,7 @@ func (a *app) loadMoreFooter(c *ui.Context, errText string, loading bool, retry 
 	t := c.Theme()
 	ui.Row(c).FillWidth().Padding(8, composeFabInset, 8, 16).Gap(8).AlignItems(ui.Center).Children(func() {
 		if errText != "" {
-			ui.Text(c, "加载更多失败："+errText).FontSize(11).
+			ui.Text(c, "加载更多失败："+errText).FontSize(metaSmallFontSize).
 				TextColor(t.Danger).MaxLines(2).Grow(1)
 			if ui.Button(c, "重试").Clicked() {
 				retry()
@@ -1015,7 +1015,7 @@ func (a *app) loadMoreFooter(c *ui.Context, errText string, loading bool, retry 
 			return
 		}
 		ui.Spinner(c).Size(14, 14)
-		ui.Text(c, "正在加载更多…").FontSize(11).TextColor(t.TextMuted)
+		ui.Text(c, "正在加载更多…").FontSize(metaSmallFontSize).TextColor(t.TextMuted)
 	})
 }
 

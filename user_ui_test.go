@@ -45,8 +45,8 @@ func TestUserTagAvatarFollowsNameSize(t *testing.T) {
 	}
 }
 
-// 评论作者与列表行作者的头像跟着昵称字号走：评论区 12px 昵称配 18px 头像。
-// 帖子作者的头像也回到同一套规则里——13px 昵称配 20px 头像，放在标题下方
+// 评论作者与列表行作者的头像跟着昵称字号走：评论区 13px 昵称配 20px 头像。
+// 帖子作者的头像也回到同一套规则里——14px 昵称配 21px 头像，放在标题下方
 // 随正文滚动，不再在页头单独放大。
 func TestDetailAuthorAvatarFollowsNameSize(t *testing.T) {
 	a := detailAppWithReplies(t)
@@ -57,7 +57,7 @@ func TestDetailAuthorAvatarFollowsNameSize(t *testing.T) {
 	if !ok {
 		t.Fatalf("帖子作者没有头像：%q", tt.Texts())
 	}
-	if got, want := author.Bounds.W, userAvatarSize(13); got != want {
+	if got, want := author.Bounds.W, userAvatarSize(postAuthorFontSize); got != want {
 		t.Errorf("帖子作者头像宽 %.1f，期望 %.1f", got, want)
 	}
 	// 头像在正文卡片内（卡片左边 14 + 正文内边距 24），不再贴着窗口页头。
@@ -69,7 +69,7 @@ func TestDetailAuthorAvatarFollowsNameSize(t *testing.T) {
 		if !ok {
 			t.Fatalf("评论作者 %q 没有头像：%q", name, tt.Texts())
 		}
-		if got, want := comment.Bounds.W, userAvatarSize(12); got != want {
+		if got, want := comment.Bounds.W, userAvatarSize(metaFontSize); got != want {
 			t.Errorf("评论作者 %q 的头像宽 %.1f，期望 %.1f", name, got, want)
 		}
 	}
