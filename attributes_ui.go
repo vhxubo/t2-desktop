@@ -1,15 +1,14 @@
 package main
 
 import (
-	"math"
 	"strconv"
 
 	"github.com/egoist/mygo/ui"
 )
 
-// 「我的 - 概览」里的六维属性：左侧是雷达图，右侧是六项数值。雷达图用
-// ui.Painter 直接画，不依赖图片或第三方图表库；颜色全部取自当前主题，
-// 浅色与深色外观下都不用另做一套素材。
+// 「我的 - 概览」里的六维属性：左侧是雷达图，右侧是六项数值。雷达图本身封装
+// 在 radar.go 的 radarChart 组件里（用 ui.Painter 直接画，颜色取自当前主题，
+// 不依赖图片或第三方图表库），这里只负责把它和右侧列表摆进一块。
 //
 // 数据来自已经拉到的 GET /v1/users/:userName（user_attributes），属性块不
 // 单独发请求。满格按 10 计，超过 10 的值在图上贴外圈，图例仍显示原值。
@@ -30,7 +29,7 @@ func (a *app) profileAttributesSection(c *ui.Context, ps *profileState) {
 		case ps.user.AttributesKnown:
 			attrs := ps.user.Attributes
 			ui.Row(c).FillWidth().Gap(14).AlignItems(ui.Center).Children(func() {
-				a.profileAttributeRadar(c, attrs)
+				radarChart(c, attrs, profileAttributeRadarSize)
 				ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 					for _, attr := range attrs {
 						profileAttributeRow(c, attr)
@@ -58,103 +57,4 @@ func profileAttributeRow(c *ui.Context, attr profileAttribute) {
 		ui.Spacer(c).Grow(1)
 		ui.Textf(c, "/%d", profileAttributeMax).FontSize(9).TextColor(t.TextMuted).SingleLine()
 	})
-}
-
-// profileAttributeRadar 是雷达图的画布。Box 本身不显示任何内容，图像由
-// DrawOver 的 Painter 每帧直接绘制；圆点、网格与数据多边形都随主题变化。
-func (a *app) profileAttributeRadar(c *ui.Context, attrs []profileAttribute) {
-	ui.Box(c).Size(profileAttributeRadarSize, profileAttributeRadarSize).Shrink(0).
-		Label("六维属性雷达图").Tooltip("六维属性雷达图：越靠外表示数值越高").
-		DrawOver(func(p *ui.Painter, r ui.Rect) {
-			a.drawProfileAttributeRadar(p, r, attrs)
-		})
-}
-
-// drawProfileAttributeRadar 画雷达图：5 圈网格、6 条轴、数据多边形与顶点。
-// 轴标签用 Painter 画在顶点外侧；右侧列表已经给出可读的数字，所以这里只画
-// 属性名，给图形留出空间。
-func (a *app) drawProfileAttributeRadar(p *ui.Painter, r ui.Rect, attrs []profileAttribute) {
-	if p == nil || len(attrs) < 3 || r.W <= 0 || r.H <= 0 {
-		return
-	}
-	t := p.Theme()
-	n := len(attrs)
-	size := min(r.W, r.H)
-	radius := size * 0.34
-	cx, cy := r.X+r.W/2, r.Y+r.H/2
-
-	// 网格：从 1/5 到满格共 5 圈。
-	for step := 1; step <= 5; step++ {
-		ringRadius := radius * float32(step) / 5
-		ring := &ui.Path{}
-		for i := 0; i < n; i++ {
-			x, y := profileAttributePoint(cx, cy, ringRadius, i, n)
-			if i == 0 {
-				ring.MoveTo(x, y)
-			} else {
-				ring.LineTo(x, y)
-			}
-		}
-		p.StrokePath(ring.Close(), 1, t.Border)
-	}
-
-	// 从圆心到每个顶点的轴。
-	for i := 0; i < n; i++ {
-		x, y := profileAttributePoint(cx, cy, radius, i, n)
-		p.Line(cx, cy, x, y, 1, t.Border)
-	}
-
-	// 数据多边形：先填一层半透明强调色，再描边，数值越大多边形越大。
-	data := &ui.Path{}
-	points := make([][2]float32, n)
-	for i, attr := range attrs {
-		level := profileAttributeLevel(attr.Value)
-		x, y := profileAttributePoint(cx, cy, radius*level, i, n)
-		points[i] = [2]float32{x, y}
-		if i == 0 {
-			data.MoveTo(x, y)
-		} else {
-			data.LineTo(x, y)
-		}
-	}
-	data.Close()
-	p.FillPath(data, ui.RGBA(t.Accent.R, t.Accent.G, t.Accent.B, 0.18))
-	p.StrokePath(data, 2, t.Accent)
-
-	// 每个数据顶点画一个小圆，数值为 0 时也落在圆心附近，能看出这一项低。
-	for _, pt := range points {
-		const dot = 2.5
-		p.Fill(ui.Rect{X: pt[0] - dot, Y: pt[1] - dot, W: dot * 2, H: dot * 2},
-			t.Accent, dot)
-	}
-
-	// 轴标签：沿轴再往外 15 DIP，按文字宽度水平居中。
-	for i, attr := range attrs {
-		x, y := profileAttributePoint(cx, cy, radius+15, i, n)
-		const fontSize float32 = 10
-		width := profileAttributeTextWidth(attr.Label, fontSize)
-		p.Text(x-width/2, y-fontSize/2, attr.Label, fontSize, t.Text)
-	}
-}
-
-// profileAttributePoint 返回第 i 条轴、给定半径处的点。第一条轴朝正上方，
-// 其余按顺时针均分，读起来和常见的雷达图一致。
-func profileAttributePoint(cx, cy, radius float32, i, n int) (float32, float32) {
-	angle := -math.Pi/2 + 2*math.Pi*float64(i)/float64(n)
-	return cx + radius*float32(math.Cos(angle)), cy + radius*float32(math.Sin(angle))
-}
-
-// profileAttributeTextWidth 估算一行文字在给定字号下的宽度。Painter.Text
-// 不返回测量结果，雷达图的轴标签只有两三个汉字，按全角一个字宽、半角六成
-// 字宽估算足以居中，也不会把标签挤进图里。
-func profileAttributeTextWidth(s string, size float32) float32 {
-	var width float32
-	for _, r := range s {
-		if r > 0x7f {
-			width += size
-		} else {
-			width += size * 0.6
-		}
-	}
-	return width
 }

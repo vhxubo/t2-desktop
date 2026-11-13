@@ -2,17 +2,17 @@ package main
 
 // 六维属性。GET /v1/users/:userName 的 user_attributes 给出六项：
 //
-//	craft_attr       技艺
-//	diligence_attr   勤勉
-//	charm_attr       魅力
-//	experience_attr  阅历
 //	karma_attr       财富
+//	experience_attr  阅历
+//	charm_attr       魅力
 //	luck_attr        幸运
+//	diligence_attr   勤勉
+//	craft_attr       技艺
 //
 // 显示名取自同一用户 GET /v1/users/:userName/about 的 constantsLabel
-//（「技艺属性」「勤勉属性」……），去掉「属性」二字；顺序沿用站点
-// achievement_count 里这六项的排列，与资料卡的「属性雷达」一致，避免两处
-// 雷达图的轴顺序不同。
+//（「技艺属性」「勤勉属性」……），去掉「属性」二字；本文件里这个顺序同时是
+// 雷达图「从顶部顺时针」的轴顺序：财富在最上，顺时针依次为阅历、魅力、幸运、
+// 勤勉、技艺。右侧数值列表也按同一顺序排，雷达与列表读起来不会错位。
 //
 // 值是字符串数字，按字段名原样读取；顺序固定为上面的顺序，雷达图的轴才不会
 // 因为响应里键的顺序变化而转来转去。文档没有给单项上限，站内 D20 属性检定
@@ -30,13 +30,14 @@ type profileAttribute struct {
 }
 
 // profileAttributeDefs 固定六维属性的顺序与中文名，与绘制雷达图的轴一一对应。
+// 首条（财富）在顶部，顺时针依次为阅历、魅力、幸运、勤勉、技艺。
 var profileAttributeDefs = []profileAttribute{
-	{Key: "craft_attr", Label: "技艺"},
-	{Key: "diligence_attr", Label: "勤勉"},
-	{Key: "charm_attr", Label: "魅力"},
-	{Key: "experience_attr", Label: "阅历"},
 	{Key: "karma_attr", Label: "财富"},
+	{Key: "experience_attr", Label: "阅历"},
+	{Key: "charm_attr", Label: "魅力"},
 	{Key: "luck_attr", Label: "幸运"},
+	{Key: "diligence_attr", Label: "勤勉"},
+	{Key: "craft_attr", Label: "技艺"},
 }
 
 // decodeProfileAttributes 读用户对象里的 user_attributes。known 区分「没有这个

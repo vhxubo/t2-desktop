@@ -8,8 +8,8 @@ import (
 // 来自 GET /v1/users/:userName 的 user_attributes（和「我的 - 概览」同一
 // 份数据），资料读到时就有了，不必再等 about 请求。
 //
-// 画布、属性顺序与满格值都复用 attributes_ui.go：两个窗口里同样的六项属性
-// 必须长得一样，不能各画一套。
+// 画布、属性顺序与满格值都复用 radar.go 的 radarChart 组件：两个窗口里
+// 同样的六项属性必须长得一样，不能各画一套。
 
 // userCardAttrsBody 是「属性雷达」标签页。四种状态各自说明，没数据时不画
 // 一张全 0 的假图。
@@ -42,9 +42,9 @@ func (a *app) userCardAttrsBody(c *ui.Context, cs *userCardState) {
 		ui.Column(c).FillWidth().Gap(8).Children(func() {
 			ui.Text(c, "六维属性").FontSize(12).Bold().SingleLine()
 			ui.Row(c).FillWidth().Gap(14).AlignItems(ui.Center).Children(func() {
-				// 与「我的 - 概览」同一块画布：轴标签、网格与数据多边形都
-				// 走同一个函数，深浅主题下颜色也一致。
-				a.profileAttributeRadar(c, attrs)
+				// 与「我的 - 概览」同一个 radarChart 组件：轴标签、网格与
+				// 数据多边形都走同一份绘制逻辑，深浅主题下颜色也一致。
+				radarChart(c, attrs, profileAttributeRadarSize)
 				ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 					for _, attr := range attrs {
 						profileAttributeRow(c, attr)

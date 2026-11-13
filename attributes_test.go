@@ -28,12 +28,12 @@ func TestDecodeProfileAttributes(t *testing.T) {
 		key, label string
 		value      int
 	}{
-		{"craft_attr", "技艺", 8},
-		{"diligence_attr", "勤勉", 7},
-		{"charm_attr", "魅力", 5},
-		{"experience_attr", "阅历", 4},
 		{"karma_attr", "财富", 6},
+		{"experience_attr", "阅历", 4},
+		{"charm_attr", "魅力", 5},
 		{"luck_attr", "幸运", 6},
+		{"diligence_attr", "勤勉", 7},
+		{"craft_attr", "技艺", 8},
 	}
 	if len(p.Attributes) != len(want) {
 		t.Fatalf("属性数量 = %d，期望 %d：%+v", len(p.Attributes), len(want), p.Attributes)
@@ -57,7 +57,7 @@ func TestDecodeProfileAttributes(t *testing.T) {
 	if !p.AttributesKnown || len(p.Attributes) != 6 {
 		t.Fatalf("部分属性没有补齐：%+v", p)
 	}
-	if p.Attributes[5].Label != "幸运" || p.Attributes[5].Value != 3 ||
+	if p.Attributes[3].Label != "幸运" || p.Attributes[3].Value != 3 ||
 		p.Attributes[0].Value != 0 {
 		t.Errorf("部分属性的值不对：%+v", p.Attributes)
 	}
@@ -87,11 +87,11 @@ func TestProfileAttributeLevel(t *testing.T) {
 // 第一条轴朝正上方，六条轴顺时针均分；顶点位置决定雷达图的朝向。
 func TestProfileAttributePoint(t *testing.T) {
 	cx, cy, radius := float32(100), float32(100), float32(60)
-	x, y := profileAttributePoint(cx, cy, radius, 0, 6)
+	x, y := radarPoint(cx, cy, radius, 0, 6)
 	if math.Abs(float64(x-cx)) > 0.01 || math.Abs(float64(y-(cy-radius))) > 0.01 {
 		t.Errorf("第一条轴没有朝上：(%v, %v)", x, y)
 	}
-	x, y = profileAttributePoint(cx, cy, radius, 1, 6)
+	x, y = radarPoint(cx, cy, radius, 1, 6)
 	wantX := cx + radius*float32(math.Cos(-math.Pi/2+math.Pi/3))
 	wantY := cy + radius*float32(math.Sin(-math.Pi/2+math.Pi/3))
 	if math.Abs(float64(x-wantX)) > 0.01 || math.Abs(float64(y-wantY)) > 0.01 {
@@ -107,12 +107,12 @@ func attributeProfileApp(t *testing.T) *app {
 	t.Helper()
 	a := profileWindowApp(t)
 	a.profile.user.Attributes = []profileAttribute{
-		{Key: "craft_attr", Label: "技艺", Value: 8},
-		{Key: "diligence_attr", Label: "勤勉", Value: 7},
-		{Key: "charm_attr", Label: "魅力", Value: 5},
-		{Key: "experience_attr", Label: "阅历", Value: 4},
 		{Key: "karma_attr", Label: "财富", Value: 6},
+		{Key: "experience_attr", Label: "阅历", Value: 4},
+		{Key: "charm_attr", Label: "魅力", Value: 5},
 		{Key: "luck_attr", Label: "幸运", Value: 6},
+		{Key: "diligence_attr", Label: "勤勉", Value: 7},
+		{Key: "craft_attr", Label: "技艺", Value: 8},
 	}
 	a.profile.user.AttributesKnown = true
 	return a
