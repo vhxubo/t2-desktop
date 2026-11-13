@@ -150,13 +150,6 @@ func redPacketAt(i int) float64 {
 	return redPacketAmounts[i]
 }
 
-// composeSelection 是正文输入框里的一段选区，按 rune 计。ok 为真表示插入
-// Markdown 标记后要把光标 / 选区恢复到这里。
-type composeSelection struct {
-	ok         bool
-	start, end int
-}
-
 // composeState 是「发帖」窗口的全部界面状态。只在 UI 线程读写；后台请求
 // 完成后通过 publish 回填，并用 seq 丢弃过期结果。
 type composeState struct {
@@ -188,13 +181,10 @@ type composeState struct {
 	focusTitle bool
 	anonymous  bool
 
-	// 正文编辑器的选区与工具条状态。sel* 是上一帧构建输入框时读到的选区，
-	// 工具条按钮据此决定把 Markdown 标记插在哪里；pendingSel 是刚插完标记
-	// 之后希望恢复的选区，在同一个构建帧里交给输入框。
-	selStart, selEnd int
-	pendingSel       composeSelection
-	// preview 是正文区的视图：0 编辑，1 预览。
-	preview int
+	// 正文编辑器与评论编辑器共用一套选区、工具面板与预览状态（见
+	// editor_core.go）。匿名嵌入，所以外层仍可直接读写 st.selStart /
+	// st.preview 等字段；正文字符串仍留在这里，方便 payload 与草稿读写。
+	mdEditor
 
 	// 附加组件：右侧栏常驻，点一项以弹窗编辑。下面每个 xxxOpen 是「这个组件
 	// 随帖一起发送」的开关（不再是折叠面板的展开状态）；moduleOpen 为真时
@@ -272,6 +262,7 @@ type composeState struct {
 // 各数量字段取文档允许的最小值，避免一打开就显示 0 这种必然被服务端拒绝的值。
 func newComposeState() *composeState {
 	return &composeState{
+		mdEditor:         newMDEditor(),
 		voteOptions:      []string{"", ""},
 		voteMaxChoices:   1,
 		betOptions:       []string{"", ""},
@@ -448,105 +439,58 @@ const (
 	composeDivider
 )
 
-// applyMarkdown 把一种 Markdown 标记写进正文。选区来自上一帧构建输入框时
-// 读到的值（selStart / selEnd），写入后把希望恢复的选区记在 pendingSel，
-// 由同一个构建帧里的输入框执行，用户不用再手动把光标挪回去。
+// applyMarkdown 把一种 Markdown 标记写进正文。真正的插入逻辑在 editor_core.go，
+// 评论编辑器用同一套；这里只把正文指针传过去，保留旧调用方式。
 func (st *composeState) applyMarkdown(f composeFormat) {
+	st.mdEditor.applyMarkdown(&st.body, f)
+}
+
+// applyMarkdown 是共用实现：选区来自上一帧构建输入框时读到的值，写入后把
+// 希望恢复的选区记在 pendingSel，由输入框执行。
+func (e *mdEditor) applyMarkdown(body *string, f composeFormat) {
 	switch f {
 	case composeBold:
-		st.wrapSelection("**", "**", "加粗文字")
+		e.wrapSelection(body, "**", "**", "加粗文字")
 	case composeItalic:
-		st.wrapSelection("*", "*", "斜体文字")
+		e.wrapSelection(body, "*", "*", "斜体文字")
 	case composeStrike:
-		st.wrapSelection("~~", "~~", "删除线")
+		e.wrapSelection(body, "~~", "~~", "删除线")
 	case composeInlineCode:
-		st.wrapSelection("`", "`", "行内代码")
+		e.wrapSelection(body, "`", "`", "行内代码")
 	case composeHeading:
-		st.prefixLines("## ", false)
+		e.prefixLines(body, "## ", false)
 	case composeQuote:
-		st.prefixLines("> ", false)
+		e.prefixLines(body, "> ", false)
 	case composeBulletList:
-		st.prefixLines("- ", false)
+		e.prefixLines(body, "- ", false)
 	case composeOrderedList:
-		st.prefixLines("", true)
+		e.prefixLines(body, "", true)
 	case composeCodeBlock:
-		st.wrapSelection("```\n", "\n```", "代码")
+		e.wrapSelection(body, "```\n", "\n```", "代码")
 	case composeLink:
-		st.wrapSelection("[", "](url)", "链接文字")
+		e.wrapSelection(body, "[", "](url)", "链接文字")
 	case composeImage:
-		st.wrapSelection("![", "](url)", "图片说明")
+		e.wrapSelection(body, "![", "](url)", "图片说明")
 	case composeDivider:
-		st.insertText("\n\n---\n\n")
+		e.insertText(body, "\n\n---\n\n")
 	}
 }
 
-// runeSel 把选区夹到正文范围内并归一顺序。
+// 下面四个包装方法只为兼容发帖窗口原有的调用（含既有测试）。
 func (st *composeState) runeSel() ([]rune, int, int) {
-	rs := []rune(st.body)
-	a, b := st.selStart, st.selEnd
-	if a > b {
-		a, b = b, a
-	}
-	a = max(0, min(a, len(rs)))
-	b = max(0, min(b, len(rs)))
-	return rs, a, b
+	return st.mdEditor.runeSel(st.body)
 }
 
-// wrapSelection 用 prefix / suffix 包住选区；没有选区时插入 placeholder
-// 并把它选中，接着打字就是替换占位文字。
 func (st *composeState) wrapSelection(prefix, suffix, placeholder string) {
-	rs, a, b := st.runeSel()
-	inner := string(rs[a:b])
-	if inner == "" {
-		inner = placeholder
-	}
-	st.body = string(rs[:a]) + prefix + inner + suffix + string(rs[b:])
-	start := a + utf8.RuneCountInString(prefix)
-	st.pendingSel = composeSelection{ok: true, start: start, end: start + utf8.RuneCountInString(inner)}
+	st.mdEditor.wrapSelection(&st.body, prefix, suffix, placeholder)
 }
 
-// prefixLines 给选区覆盖的每一行加前缀；没有选区时只处理光标所在的那一行。
-// numbered 为真时用 1. 2. 3. 的行号前缀（有序列表）。
 func (st *composeState) prefixLines(prefix string, numbered bool) {
-	rs, a, b := st.runeSel()
-	from := composeLineStart(rs, a)
-	to := b
-	if a == b {
-		to = composeLineEnd(rs, a)
-	}
-	lines := strings.Split(string(rs[from:to]), "\n")
-	for i, ln := range lines {
-		marker := prefix
-		if numbered {
-			marker = strconv.Itoa(i+1) + ". "
-		}
-		lines[i] = marker + ln
-	}
-	seg := strings.Join(lines, "\n")
-	st.body = string(rs[:from]) + seg + string(rs[to:])
-	st.pendingSel = composeSelection{ok: true, start: from, end: from + utf8.RuneCountInString(seg)}
+	st.mdEditor.prefixLines(&st.body, prefix, numbered)
 }
 
-// insertText 在选区处插入一段文字（替换选区），并把光标放到插入内容之后。
 func (st *composeState) insertText(text string) {
-	rs, a, b := st.runeSel()
-	st.body = string(rs[:a]) + text + string(rs[b:])
-	at := a + utf8.RuneCountInString(text)
-	st.pendingSel = composeSelection{ok: true, start: at, end: at}
-}
-
-func composeLineStart(rs []rune, at int) int {
-	for at > 0 && rs[at-1] != '\n' {
-		at--
-	}
-	return at
-}
-
-func composeLineEnd(rs []rune, at int) int {
-	for at < len(rs) && rs[at] != '\n' {
-		at++
-	}
-	return at
+	st.mdEditor.insertText(&st.body, text)
 }
 
 // ------------------------------------------------------------------
@@ -618,6 +562,11 @@ func (st *composeState) payload() (map[string]any, error) {
 	}
 	if n := utf8.RuneCountInString(st.body); n > composeContentMax {
 		return nil, fmt.Errorf("正文最多 %d 字，当前 %d 字", composeContentMax, n)
+	}
+	// 图片还在上传（或上传失败留在正文里）时不能发布：正文里那些
+	// upload:ID 只是临时占位，发到站点就是一堆坏链接。
+	if n := editorPendingUploads(st.body); n > 0 {
+		return nil, fmt.Errorf("还有 %d 张图片未处理完，请等上传结束或移除后再发布", n)
 	}
 
 	p := map[string]any{"title": title}

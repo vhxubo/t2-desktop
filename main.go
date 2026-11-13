@@ -196,6 +196,12 @@ type app struct {
 	// 的工具面板直接把它绑到下拉框上。都只在 UI 线程读写，见 image_hosts.go。
 	hosts           imageHostConfig
 	hostActiveLabel string
+	// 设置窗口「图库」一块的编辑草稿：hostEditLabel 是当前展开编辑的条目名字，
+	// hostMaxDraft / hostMaxFor 把 int64 的 MaxBytes 接到 NumberInput 的
+	// float64 上（切条目时重新读一次）。都只在 UI 线程读写。
+	hostEditLabel string
+	hostMaxDraft  float64
+	hostMaxFor    string
 	// uploads 是编辑器里所有图片上传任务（含已完成 / 失败的），按加入顺序
 	// 串行执行。占位符 → 真实 URL 的替换、失败重试与移除都靠它；只在 UI
 	// 线程读写，后台结果经 publish 回来，见 editor_upload.go。

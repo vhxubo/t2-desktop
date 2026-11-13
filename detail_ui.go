@@ -72,6 +72,9 @@ type detailState struct {
 
 	// composer: write a comment (optionally as a nested reply to replyToID).
 	// 发送失败的原因不落在页面上，用主窗口的 toast 说明（见 submitReply）。
+	// mdEditor 与发帖窗口共用选区、工具面板、表情与预览状态
+	// （见 editor_core.go）；正文字符串仍是下面的 draft。
+	mdEditor
 	draft        string
 	replyToID    string
 	replyToFloor int
@@ -214,6 +217,7 @@ func (a *app) openDetail(it Item) {
 		a.detailStack = nil
 	}
 	a.detail = &detailState{
+		mdEditor:     newMDEditor(),
 		shortID:      it.ShortID,
 		focusID:      it.CommentID,
 		focusPending: it.CommentID != "",
@@ -1309,12 +1313,43 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 		border = t.Accent // 编辑中的输入框给一圈强调色，明确「已选中」
 	}
 	// 未输入时不占满：折叠态让输入框只裹住内容，聚焦 / 有内容 / 回复某楼才撑满整行。
-	box := ui.Column(c).Padding(vpad, 8).Radius(10).
-		Background(t.Background).Border(1, border)
+	box := ui.Column(c).Padding(vpad, 8).Radius(10).Background(t.Background)
+	// 整个评论框也是拖放区。登记要在 Children 之前；拖进图片后草稿立刻有
+	// 内容，这一帧就该展开，让用户看见刚插进来的占位符。
+	over := a.editorDropZone(box, uploadTargetReply)
+	expanded = expanded || strings.TrimSpace(d.draft) != ""
 	if expanded {
 		box = box.FillWidth()
 	}
+	if over {
+		box.Border(1, t.Accent).Background(t.SurfaceHover)
+	} else {
+		box.Border(1, border)
+	}
 	box.Children(func() {
+		if expanded {
+			// 折叠态仍只有一行：工具条、视图切换与两个面板都只在展开时出现。
+			ui.Row(c).FillWidth().Padding(2, 4).Children(func() {
+				a.editorToolbar(c, &d.mdEditor, &d.draft)
+			})
+			ui.Divider(c)
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Segmented(c, &d.preview, "编辑", "预览").Label("评论视图")
+				ui.Spacer(c).Grow(1)
+				a.editorPanelButtons(c, &d.mdEditor, "插入表情", "插入图片")
+			})
+			a.editorPanels(c, uploadTargetReply, &d.mdEditor, &d.draft,
+				a.replyCommunityEmojis(d))
+			if d.preview == 1 {
+				a.editorPreviewView(c, d.draft, a.replyEmojis(d),
+					a.commentMd, replyPreviewHeight)
+			}
+		}
+		// 展开时上面会多出工具条、视图切换与面板。MyGo 的节点身份由
+		// 「父节点 + 子节点序号」推导，若不给这一行固定 key，多出来的兄弟
+		// 会把输入框挤到另一个 ID 上，焦点随之丢失（发送后折不回一行）。
+		// 输入框本身是复合控件不能带 key，key 给包着它的 Row。
+		c.Key("reply-composer-row")
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.End).Children(func() {
 			// 多行文本区即 Markdown 编辑器：透明背景、去边框，融入外层输入框。
 			// 未输入时不 Grow，只留约 200 宽的输入框；展开时才撑满整行。
@@ -1323,10 +1358,11 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				Border(0, t.Border).Bind(&d.composerField)
 			if expanded {
 				area.Grow(1).Lines(4, 10).
-					Placeholder("说点什么…（支持 Markdown 与表情短码 :smile:）")
+					Placeholder("说点什么…（支持 Markdown、表情短码 :smile:，图片可直接拖进来）")
 			} else {
 				area.Lines(1, 8).Placeholder("写评论…")
 			}
+			d.syncSelection(area)
 			if d.posting {
 				ui.Spinner(c).Size(16, 16)
 			}
@@ -1351,6 +1387,20 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 			}
 		})
 	})
+}
+
+// replyCommunityEmojis 是当前帖子自带的社区表情表；没有正文数据时为空。
+func (a *app) replyCommunityEmojis(d *detailState) map[string]string {
+	if d == nil || d.topic == nil {
+		return nil
+	}
+	return d.topic.Emojis
+}
+
+// replyEmojis 是评论预览用的完整表情表：先全局表，再叠上当前帖子的社区
+// 自定义图标（同名短码以帖子为准），和详情页正文渲染走的是同一份合并。
+func (a *app) replyEmojis(d *detailState) map[string]emojiInfo {
+	return mergeEmojiMaps(a.emojis, a.replyCommunityEmojis(d))
 }
 
 // submitReply posts the draft through the Client. On success it clears the

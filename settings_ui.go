@@ -9,7 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 设置窗口的尺寸：比代理弹窗宽一些，放得下「代理 / 更新 / 图片缓存」三块。
+// 设置窗口的尺寸：比代理弹窗宽一些，放得下「代理 / 更新 / 图片缓存 / 图库」几块。
 const (
 	settingsWindowWidth  = 520
 	settingsWindowHeight = 700
@@ -50,6 +50,7 @@ func (a *app) showSettingsWindow() {
 		win.Invalidate()
 		return
 	}
+	a.reloadImageHostSettings()
 	win := mygo.NewWindow(mygo.WindowOptions{
 		Title:             "设置",
 		Width:             settingsWindowWidth,
@@ -64,6 +65,15 @@ func (a *app) showSettingsWindow() {
 	})
 	a.settingsWin = win
 	win.OnClosed(func() { a.settingsWin = nil })
+}
+
+// reloadImageHostSettings 在真正新开设置窗口时重读图库配置，并清掉上一次
+// 留下的「展开哪一条」「MB 草稿绑到哪一条」。已经开着的窗口只带到前台，
+// 不重读：用户可能正填到一半，重新加载会把没保存的编辑抹掉。
+func (a *app) reloadImageHostSettings() {
+	a.loadImageHosts()
+	a.hostEditLabel = ""
+	a.hostMaxFor = ""
 }
 
 // closeSettingsWindow 关掉设置窗口：主窗口关闭时调用，别留下一个没有主窗口
@@ -135,6 +145,8 @@ func (a *app) settingsWindowView(c *ui.Context) {
 				a.updateSettingsSection(c)
 				ui.Divider(c)
 				a.imageCacheSection(c)
+				ui.Divider(c)
+				a.imageHostsSection(c)
 				ui.Divider(c)
 				a.windowSettingsSection(c)
 			})

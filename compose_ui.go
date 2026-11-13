@@ -323,7 +323,8 @@ func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 }
 
 // composeEditorSection 是正文区：上面是 Markdown 工具条与编辑 / 预览切换，
-// 下面是输入框或预览。
+// 下面是输入框或预览，中间按需展开表情 / 图片面板。整个编辑框同时是拖放
+// 区：文件落进来就交给上传队列，不必先点开图片面板。
 func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
@@ -331,6 +332,7 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 		// 工具条窄了会把末尾的控件收进「»」菜单——模式切换不该被藏起来。
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Text(c, "正文").FontSize(12).TextColor(t.TextMuted).Grow(1)
+			a.editorPanelButtons(c, &st.mdEditor, "表情", "上传图片")
 			ui.Segmented(c, &st.preview, "编辑", "预览").Label("正文视图")
 			count := ui.Text(c, fmt.Sprintf("%d / %d 字",
 				utf8.RuneCountInString(st.body), composeContentMax)).
@@ -339,39 +341,45 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 				count.TextColor(t.Danger)
 			}
 		})
-		ui.Column(c).FillWidth().Radius(10).Background(t.Background).
-			Border(1, t.Border).Children(func() {
+		zone := ui.Column(c).FillWidth().Radius(10).Background(t.Background)
+		// 拖放区要在 Children 之前登记：这一帧就得把 flagDropTarget 记进
+		// 节点，下一次 drop 事件才找得到它。悬停时整圈换成强调色。
+		over := a.editorDropZone(zone, uploadTargetCompose)
+		if over {
+			zone.Border(1, t.Accent).Background(t.SurfaceHover)
+		} else {
+			zone.Border(1, t.Border)
+		}
+		zone.Children(func() {
 			// 工具条固定在输入框上方（「头部」），滚动正文时始终可见。
 			ui.Row(c).FillWidth().Padding(2, 4).Children(func() {
-				a.composeMarkdownToolbar(c, st)
+				a.editorToolbar(c, &st.mdEditor, &st.body)
 			})
 			ui.Divider(c)
+			a.editorPanels(c, uploadTargetCompose, &st.mdEditor, &st.body, nil)
+			if over {
+				ui.Text(c, "松开即可把图片插入正文").FontSize(11).
+					TextColor(t.Accent).Padding(6, 10)
+			}
 			if st.preview == 1 {
 				a.composePreview(c, st)
 				return
 			}
+			// 打开表情 / 图片面板、拖入文件时的悬停提示都会在输入框之前加
+			// 兄弟节点。用 key 固定输入框身份，否则焦点会随节点 ID 漂移，
+			// 工具条插入后就没法接着打字了。复合控件要用 Context.Key 在
+			// 构造之前给，不能用 Element.Key。
+			c.Key("compose-body-area")
 			// 可访问名用「正文内容」：区块标题已经叫「正文」，两者重名会让
 			// 读屏与测试分不清点的是哪一块。
 			area := ui.TextArea(c, &st.body).Label("正文内容").
 				Border(0, t.Border).Background(ui.Transparent).FillWidth().
 				Lines(composeEditorLines, composeEditorMaxLine).
-				Placeholder("支持 Markdown：**加粗**、# 标题、> 引用、- 列表、`代码`、[链接](url)、![图片](url) 与 :smile: 表情").
+				Placeholder("支持 Markdown：**加粗**、# 标题、> 引用、- 列表、`代码`、[链接](url)、![图片](url) 与 :smile: 表情；图片可直接拖进来").
 				Bind(&st.bodyField)
 			a.syncComposeSelection(area, st)
 		})
 	})
-}
-
-// composeMarkdownToolbar 是正文的编辑工具条：一排 Markdown 标记按钮。窗口
-// 太窄时放不下的按钮会收进工具条末尾的「»」菜单，仍然可用。
-func (a *app) composeMarkdownToolbar(c *ui.Context, st *composeState) {
-	ui.Toolbar(c, func() {
-		for _, b := range markdownButtons {
-			if ui.Button(c, b.label).Tooltip(b.hint).Clicked() {
-				st.applyMarkdown(b.format)
-			}
-		}
-	}).Label("编辑工具").FillWidth()
 }
 
 // markdownButton 是工具条上的一项：显示文案、悬停说明与它插入的标记。
@@ -398,31 +406,15 @@ var markdownButtons = []markdownButton{
 
 // composePreview 是正文的预览：与详情页同一套 Markdown 渲染（一个回车换行、
 // 表情与配图都按文章正文的方式画），所以预览里看到的就是发表后的样子。
+// 发帖草稿只用全局表情表；社区自带的短码也在这张表里。
 func (a *app) composePreview(c *ui.Context, st *composeState) {
-	t := c.Theme()
-	ui.Scroll(c).FillWidth().Height(composePreviewHeight).Children(func() {
-		ui.Column(c).FillWidth().Padding(12, 14).Children(func() {
-			if strings.TrimSpace(st.body) == "" {
-				ui.Text(c, "还没有正文。切回「编辑」写点什么，这里会按发表后的样子显示。").
-					FontSize(12).TextColor(t.TextMuted).MaxLines(3)
-				return
-			}
-			a.markdownView(c, st.body, a.md)
-		})
-	})
+	a.editorPreviewView(c, st.body, a.emojis, a.md, composePreviewHeight)
 }
 
-// syncComposeSelection 处理工具条插入标记之后的选区：pendingSel 是刚算好的
-// 位置，交给同一个构建帧里的输入框；否则把当前选区记下来，供下一帧的工具条
-// 按钮使用（元素出构建帧就失效，所以选区必须先读进状态）。
+// syncComposeSelection 现在只是共用编辑器状态的一个薄包装：选区逻辑在
+// editor_core.go 的 mdEditor.syncSelection 里，评论输入框用的是同一个。
 func (a *app) syncComposeSelection(area ui.Element, st *composeState) {
-	if st.pendingSel.ok {
-		area.SetTextSelection(st.pendingSel.start, st.pendingSel.end)
-		st.selStart, st.selEnd = st.pendingSel.start, st.pendingSel.end
-		st.pendingSel = composeSelection{}
-		return
-	}
-	st.selStart, st.selEnd = area.TextSelection()
+	st.syncSelection(area)
 }
 
 /* ------------------------------------------------------------------
