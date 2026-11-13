@@ -270,7 +270,7 @@ func (a *app) editorImagePanel(c *ui.Context, t uploadTarget, iconMode bool) {
 			}
 			ui.Spacer(c).Grow(1)
 		})
-		ui.Text(c, "把图片直接拖进编辑区，或用下面的按钮。支持 JPEG / PNG / WebP，单张上限在图库设置里改。").
+		ui.Text(c, "把图片直接拖进编辑区或粘贴进来，也可以用下面的按钮。支持 JPEG / PNG / WebP，单张上限在图库设置里改。").
 			FontSize(11).TextColor(th.TextMuted).MaxLines(2)
 		// 当前图库不能用时先把原因说清楚：否则用户拖进图片只看到一句上传
 		// 失败，还得自己去设置里猜是没登录、不是 Pro 还是没填 Token。

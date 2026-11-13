@@ -4,10 +4,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -33,6 +37,30 @@ func uploadTestApp(t *testing.T, handler http.HandlerFunc) (*app, *httptest.Serv
 
 func uploadOKHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprint(w, `{"data":{"url":"https://img.test/photo.png"}}`)
+}
+
+// uploadGate 把上传接口卡住，直到 open。无头环境下 publish 直接在 worker
+// 协程里跑回调，上传若在构建帧的同一时刻完成，占位符替换会和这一帧读正文撞
+// 在一起（-race 会报）；卡一下就能先把「占位符进了正文」断言完，再放开。
+type uploadGate struct {
+	ch   chan struct{}
+	once sync.Once
+}
+
+func newUploadGate(t *testing.T) *uploadGate {
+	t.Helper()
+	g := &uploadGate{ch: make(chan struct{})}
+	// 测试中途 t.Fatal 时也要放开，否则 httptest.Server.Close 会等这个请求。
+	t.Cleanup(g.open)
+	return g
+}
+
+func (g *uploadGate) open() { g.once.Do(func() { close(g.ch) }) }
+
+// gatedUploadHandler 是卡在闸门后面的 uploadOKHandler。
+func (g *uploadGate) handler(w http.ResponseWriter, r *http.Request) {
+	<-g.ch
+	uploadOKHandler(w, r)
 }
 
 // waitUpload 收一条任务完成通知。上传在后台 goroutine 跑，结果经 publish
@@ -253,6 +281,205 @@ func TestPickImagesUsesTestHook(t *testing.T) {
 		t.Errorf("正文 = %q", a.compose.body)
 	}
 	waitUpload(t, done)
+}
+
+// 直接往正文里粘一张图：截图工具复制出来的剪贴板只有图片、没有文字，编辑器
+// 应当自己认出这是图片，走图床队列，正文里先留占位符、传完换成真实地址。
+func TestPasteImageIntoComposeEditor(t *testing.T) {
+	gate := newUploadGate(t)
+	a, _ := uploadTestApp(t, gate.handler)
+	done := make(chan uploadJob, 2)
+	a.onUploadDone = func(j uploadJob) { done <- j }
+	composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	tt.Frame()
+
+	if err := tt.Click("正文内容"); err != nil {
+		t.Fatalf("点正文输入框失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	tt.SetClipboardData(transfer.New(transfer.NewItem(
+		transfer.Bytes(transfer.PNG, pngHeadForUpload))))
+	tt.Key(ui.Cmd, ui.KeyV)
+	tt.Frame()
+
+	if !strings.Contains(a.compose.body, "![剪贴板图片.png](upload:") {
+		t.Fatalf("粘贴图片后正文应有占位符：%q toasts=%v", a.compose.body, toastTexts(a))
+	}
+	if len(a.uploads) != 1 {
+		t.Errorf("队列里的任务数 = %d", len(a.uploads))
+	}
+	gate.open()
+	j := waitUpload(t, done)
+	if j.State != uploadDone || j.Target != uploadTargetCompose {
+		t.Fatalf("任务状态 = %+v", j)
+	}
+	tt.Frame()
+	if strings.Contains(a.compose.body, "upload:") ||
+		!strings.Contains(a.compose.body, "https://img.test/photo.png") {
+		t.Errorf("占位符没换成真实地址：%q", a.compose.body)
+	}
+}
+
+// 粘文字还是粘文字：只有剪贴板里没有文字时才当图片处理，否则从网页上复制
+// 图片带出来的那段文字（标题或地址）会莫名其妙变成一次上传。
+func TestPasteTextIntoComposeEditorStaysText(t *testing.T) {
+	a, _ := uploadTestApp(t, uploadOKHandler)
+	composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	tt.Frame()
+
+	if err := tt.Click("正文内容"); err != nil {
+		t.Fatalf("点正文输入框失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	tt.SetClipboard("一段普通文字")
+	tt.Key(ui.Cmd, ui.KeyV)
+	tt.Frame()
+
+	if a.compose.body != "一段普通文字" {
+		t.Errorf("正文 = %q", a.compose.body)
+	}
+	if len(a.uploads) != 0 {
+		t.Errorf("文字粘贴不该入队：%d", len(a.uploads))
+	}
+}
+
+// 资源管理器 / 访达复制文件时，剪贴板上的文字就是那个路径。整段文字是一个
+// 存在的图片文件时按图片处理，别把路径原样插进正文。
+func TestPasteImageFilePathUploadsInsteadOfInsertingPath(t *testing.T) {
+	gate := newUploadGate(t)
+	a, _ := uploadTestApp(t, gate.handler)
+	done := make(chan uploadJob, 2)
+	a.onUploadDone = func(j uploadJob) { done <- j }
+	composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	tt.Frame()
+
+	if err := tt.Click("正文内容"); err != nil {
+		t.Fatalf("点正文输入框失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	p := writeTestImage(t, "copied.png", pngHeadForUpload)
+	tt.SetClipboard(p)
+	tt.Key(ui.Cmd, ui.KeyV)
+	tt.Frame()
+
+	if strings.Contains(a.compose.body, p) {
+		t.Errorf("路径被当正文插进去了：%q", a.compose.body)
+	}
+	if !strings.Contains(a.compose.body, "![copied.png](upload:") {
+		t.Fatalf("正文里应有这张图的占位符：%q", a.compose.body)
+	}
+	gate.open()
+	j := waitUpload(t, done)
+	if j.State != uploadDone {
+		t.Fatalf("任务状态 = %+v", j)
+	}
+}
+
+// 访达复制图片文件时，剪贴板上的文字只有文件名，完整路径在文件列表里。
+// 这种情况同样要认成图片，而不是把文件名插进正文。
+func TestPasteImageFileNamedOnlyByText(t *testing.T) {
+	gate := newUploadGate(t)
+	a, _ := uploadTestApp(t, gate.handler)
+	done := make(chan uploadJob, 2)
+	a.onUploadDone = func(j uploadJob) { done <- j }
+	composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	tt.Frame()
+
+	if err := tt.Click("正文内容"); err != nil {
+		t.Fatalf("点正文输入框失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	p := writeTestImage(t, "finder.png", pngHeadForUpload)
+	d, err := transfer.FileData(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 文件列表 + 只有文件名的文字，和访达复制出来的剪贴板一样。
+	tt.SetClipboardData(transfer.New(append(d.Items(),
+		transfer.NewItem(transfer.Bytes(transfer.Text, []byte(filepath.Base(p)))))...))
+	tt.Key(ui.Cmd, ui.KeyV)
+	tt.Frame()
+
+	if !strings.Contains(a.compose.body, "![finder.png](upload:") {
+		t.Fatalf("正文里应有这张图的占位符：%q", a.compose.body)
+	}
+	gate.open()
+	if j := waitUpload(t, done); j.State != uploadDone {
+		t.Fatalf("任务状态 = %+v", j)
+	}
+}
+
+// 评论输入框挂的是同一个钩子，任务要落在评论草稿里，不能串到发帖正文。
+func TestPasteImageIntoReplyComposer(t *testing.T) {
+	gate := newUploadGate(t)
+	a, _ := uploadTestApp(t, gate.handler)
+	done := make(chan uploadJob, 2)
+	detail := detailAppWithReplies(t)
+	detail.client.HTTP = a.client.HTTP
+	detail.hosts = a.hosts
+	detail.hostActiveLabel = a.hostActiveLabel
+	detail.onUploadDone = func(j uploadJob) { done <- j }
+	detail.compose = a.compose
+	detail.detail.draft = ""
+
+	tt := ui.NewTester(detail.view, 1100, 760)
+	tt.Frame()
+	if err := tt.Click("写评论"); err != nil {
+		t.Fatalf("点评论输入框失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	tt.SetClipboardData(transfer.New(transfer.NewItem(
+		transfer.Bytes(transfer.PNG, pngHeadForUpload))))
+	tt.Key(ui.Cmd, ui.KeyV)
+	tt.Frame()
+
+	if !strings.Contains(detail.detail.draft, "![剪贴板图片.png](upload:") {
+		t.Fatalf("评论草稿里应有占位符：%q", detail.detail.draft)
+	}
+	if detail.compose.body != "" {
+		t.Errorf("发帖正文被误改：%q", detail.compose.body)
+	}
+	gate.open()
+	j := waitUpload(t, done)
+	if j.Target != uploadTargetReply || j.State != uploadDone {
+		t.Fatalf("任务状态 = %+v", j)
+	}
+	tt.Frame()
+	if !strings.Contains(detail.detail.draft, "https://img.test/photo.png") ||
+		strings.Contains(detail.detail.draft, "upload:") {
+		t.Errorf("评论草稿没换成真实地址：%q", detail.detail.draft)
+	}
+}
+
+func TestClipboardImagePath(t *testing.T) {
+	p := writeTestImage(t, "shot.PNG", pngHeadForUpload) // 扩展名大写也要认
+	if got := clipboardImagePath(p); got != p {
+		t.Errorf("裸路径 = %q，应为 %q", got, p)
+	}
+	if got := clipboardImagePath(`"` + p + `"`); got != p {
+		t.Errorf("带引号的路径 = %q，应为 %q", got, p)
+	}
+	u := (&url.URL{Scheme: "file", Path: "/" + filepath.ToSlash(p)}).String()
+	if got := clipboardImagePath(u); got != p {
+		t.Errorf("file:// URI = %q，应为 %q", got, p)
+	}
+
+	for _, text := range []string{
+		"",
+		"一段普通文字",
+		"https://example.com/a.png",            // 网络地址不是本地文件
+		filepath.Join(t.TempDir(), "gone.png"), // 文件不存在
+		writeTestImage(t, "note.txt", []byte("hi")), // 不是图片扩展名
+		p + "\n第二行", // 多行不是路径
+	} {
+		if got := clipboardImagePath(text); got != "" {
+			t.Errorf("%q 不该认成图片路径，得到 %q", text, got)
+		}
+	}
 }
 
 func TestUploadPlaceholderEscapesMarkdown(t *testing.T) {

@@ -1304,6 +1304,9 @@ func (a *app) replyComposer(c *ui.Context, d *detailState) {
 // is answering a floor. Sending folds it back so the list regains the room.
 func (a *app) replyInput(c *ui.Context, d *detailState) {
 	t := c.Theme()
+	// 刚粘进来的图片在这里落地：必须在算 expanded 与构造输入框之前，
+	// 和拖放一样，这一帧就要把占位符写进草稿并让输入框展开。
+	a.drainPaste(uploadTargetReply)
 	focused := d.composerField.Focused(c)
 	if !focused {
 		d.composerIdle = false // 失焦后再选中，重新展开
@@ -1374,12 +1377,18 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.End).Children(func() {
 			// 多行文本区即 Markdown 编辑器：透明背景、去边框，融入外层输入框。
 			// 未输入时不 Grow，只留约 200 宽的输入框；展开时才撑满整行。
+			// OnPaste 让直接粘进来的图片自动上传（见 pasteIntoEditor），
+			// 文字仍按原样插入。
 			area := ui.TextArea(c, &d.draft).Label("写评论").
 				MinHeight(0).Background(ui.Transparent).
-				Border(0, t.Border).Bind(&d.composerField)
+				Border(0, t.Border).
+				OnPaste(func(text string) bool {
+					return a.pasteIntoEditor(uploadTargetReply, text)
+				}).
+				Bind(&d.composerField)
 			if expanded {
 				area.Grow(1).Lines(4, 10).
-					Placeholder("说点什么…（支持 Markdown、表情短码 :smile:，图片可直接拖进来）")
+					Placeholder("说点什么…（支持 Markdown、表情短码 :smile:，图片可直接拖进来或粘贴）")
 			} else {
 				area.Lines(1, 8).Placeholder("写评论…")
 			}

@@ -214,6 +214,12 @@ type app struct {
 	uploads      []*uploadJob
 	uploadSeq    uint64
 	uploadWorker bool
+	// pendingPaste 是刚粘进来、还没插进正文的一组图片。输入框的 OnPaste
+	// 回调不能直接改正文（输入框会把自己持有的文本写回去，覆盖掉外面写进去
+	// 的内容），所以回调只登记来源并吞掉这次粘贴，等目标编辑器下一次构建、
+	// 在构造输入框之前领走，见 editor_upload.go 的 drainPaste。只在 UI 线程
+	// 读写。
+	pendingPaste *pendingPaste
 	// onUploadDone 是上传结束（成功或失败）的测试钩子：headless 没有主循环，
 	// 靠它把结果同步回测试。生产为 nil。
 	onUploadDone func(uploadJob)

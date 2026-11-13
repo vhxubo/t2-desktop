@@ -327,6 +327,9 @@ func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 // 区：文件落进来就交给上传队列，不必先点开图片面板。
 func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 	t := c.Theme()
+	// 刚粘进来的图片在这里落地：必须在构造输入框之前，和拖放一样，这一帧
+	// 就要把占位符写进正文（见 drainPaste）。
+	a.drainPaste(uploadTargetCompose)
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		// 标题行：区块名、编辑 / 预览切换与字数。切换放在工具条外面，因为
 		// 工具条窄了会把末尾的控件收进「»」菜单——模式切换不该被藏起来。
@@ -372,10 +375,15 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 			c.Key("compose-body-area")
 			// 可访问名用「正文内容」：区块标题已经叫「正文」，两者重名会让
 			// 读屏与测试分不清点的是哪一块。
+			// OnPaste：直接粘进来的图片（截图或图片文件）自动走图床，见
+			// pasteIntoEditor；文字照常插入。
 			area := ui.TextArea(c, &st.body).Label("正文内容").
 				Border(0, t.Border).Background(ui.Transparent).FillWidth().
 				Lines(composeEditorLines, composeEditorMaxLine).
-				Placeholder("支持 Markdown：**加粗**、# 标题、> 引用、- 列表、`代码`、[链接](url)、![图片](url) 与 :smile: 表情；图片可直接拖进来").
+				Placeholder("支持 Markdown：**加粗**、# 标题、> 引用、- 列表、`代码`、[链接](url)、![图片](url) 与 :smile: 表情；图片可直接拖进来或粘贴").
+				OnPaste(func(text string) bool {
+					return a.pasteIntoEditor(uploadTargetCompose, text)
+				}).
 				Bind(&st.bodyField)
 			a.syncComposeSelection(area, st)
 		})

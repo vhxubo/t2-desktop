@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,6 +22,10 @@ import (
 // 两个作用——用户马上看到「图放在这里了」，发布前也能据此拦住还没传完的
 // 草稿（editorPendingUploads）。上传成功后换成真实 URL，失败则保留占位符
 // 并给出重试 / 移除，绝不会把临时标记发到服务端。
+//
+// 其中剪贴板那条还分成两个动作：面板里的「粘贴剪贴板图片」按钮（pasteImages），
+// 以及直接往输入框里按 Cmd/Ctrl+V（pasteIntoEditor，挂在 TextArea 的
+// OnPaste 上，粘的是图片就自动上传）。
 //
 // a.uploads 只在 UI 线程读写；后台 goroutine 只拿一份任务的快照，结果一律
 // 经 a.publish 回到 UI 线程。Window.Update 是异步的，取下一个任务时用一个
@@ -288,6 +294,135 @@ func (a *app) pasteImages(t uploadTarget) int {
 		return 0
 	}
 	return a.enqueueUploads(t, srcs)
+}
+
+// pendingPaste 是一次还没落地的图片粘贴：粘到了哪个编辑器、粘的是什么。
+type pendingPaste struct {
+	target  uploadTarget
+	sources []uploadSource
+}
+
+// pasteIntoEditor 是正文输入框的粘贴钩子（TextArea 的 OnPaste）：粘进来的
+// 是图片就吞掉这次粘贴，改走图床队列；是文字就返回 false，让输入框照常插入。
+//
+// 判断按顺序来：
+//   - 整段文字就是一个存在的本地图片文件路径（资源管理器 / 访达复制文件时
+//     剪贴板上的文字就是它），或者一个指向图片的 file:// URI，按图片处理；
+//   - 其余有文字的情况一律当文字粘贴：从网页上复制图片常常同时带一段文字
+//     （标题或图片地址），那时用户要的多半是那段文字；
+//   - 没有文字时才去读剪贴板里的图片数据——截图工具直接复制的就是这种，
+//     MyGo 的 OnPaste 也正是在这种时候给出空字符串。
+//
+// 这里只登记、不动正文：回调跑在输入框的事件处理里，此刻改绑定的正文会被
+// 输入框自己持有的文本写回去（见 TextKey.SetText 的说明），占位符当场就没了。
+// 真正的插入交给目标编辑器下一次构建时的 drainPaste，路径与拖放完全一样。
+//
+// 返回 true 表示这次粘贴由我们接管：输入框的选区与撤销历史都不动，正文里
+// 随后出现的是 ![名字](upload:ID) 占位符。
+func (a *app) pasteIntoEditor(t uploadTarget, text string) bool {
+	srcs := a.pastedImageSources(text)
+	if len(srcs) == 0 {
+		return false
+	}
+	a.pendingPaste = &pendingPaste{target: t, sources: srcs}
+	return true
+}
+
+// pastedImageSources 从这次粘贴里认出图片：先看文字是不是图片文件路径，再在
+// 没有文字时读剪贴板里的图片数据。
+func (a *app) pastedImageSources(text string) []uploadSource {
+	if p := clipboardImagePath(text); p != "" {
+		return []uploadSource{{Path: p, Name: filepath.Base(p)}}
+	}
+	if strings.TrimSpace(text) != "" {
+		// 访达复制文件时，剪贴板上的文字只有文件名，完整路径在文件列表里。
+		if p := a.clipboardImageFileNamed(text); p != "" {
+			return []uploadSource{{Path: p, Name: filepath.Base(p)}}
+		}
+		return nil
+	}
+	return a.clipboardImageSources()
+}
+
+// clipboardImageFileNamed 在剪贴板只带着一个文件、且它的名字正是这段文字时
+// 返回它的路径。只有这种情况才把文字当成图片：否则「正文里恰好写着某个图片
+// 文件名」也会被当成一次上传。
+func (a *app) clipboardImageFileNamed(text string) string {
+	name := strings.TrimSpace(text)
+	if name == "" || strings.ContainsAny(name, "\r\n") {
+		return ""
+	}
+	held := a.srv.ClipboardFormats()
+	files := false
+	for _, f := range held {
+		if f == transfer.FileList || f == transfer.URIList {
+			files = true
+			break
+		}
+	}
+	if !files {
+		return ""
+	}
+	paths, err := a.srv.ReadClipboardData(transfer.FileList, transfer.URIList).Files()
+	if err != nil || len(paths) != 1 {
+		return ""
+	}
+	if filepath.Base(paths[0]) != name || !isImageFileName(paths[0]) {
+		return ""
+	}
+	return paths[0]
+}
+
+// drainPaste 在目标编辑器构建时领走刚粘进来的图片。调用点必须在构造输入框
+// 之前：和拖放一样，正文要在这一帧的输入框读到之前改好。图库没就绪、图片
+// 不合格都走 enqueueUploads 里现成的提示。
+func (a *app) drainPaste(t uploadTarget) {
+	p := a.pendingPaste
+	if p == nil || p.target != t {
+		return
+	}
+	a.pendingPaste = nil
+	a.enqueueUploads(t, p.sources)
+}
+
+// clipboardImagePath 把一段粘贴文字认成图片文件路径。剪贴板上只有文字时，
+// 「这段文字本身就是一个存在的图片文件」比「把路径原样插进正文」更像用户的
+// 本意。认不出来就返回空串，交回普通的文字粘贴。
+func clipboardImagePath(text string) string {
+	s := strings.TrimSpace(text)
+	if s == "" || strings.ContainsAny(s, "\r\n") {
+		return ""
+	}
+	// Windows 复制带空格的路径时会加一对引号。
+	if len(s) > 2 && strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`) {
+		s = strings.TrimSpace(s[1 : len(s)-1])
+	}
+	if u, err := url.Parse(s); err == nil && u.Scheme == "file" {
+		p := u.Path
+		if len(p) > 3 && p[0] == '/' && p[2] == ':' {
+			p = p[1:] // file:///C:/... 还原成 C:/...
+		}
+		s = filepath.FromSlash(p)
+	} else if strings.Contains(s, "://") {
+		return "" // 网络地址不是本地文件，交给文字粘贴
+	}
+	if !filepath.IsAbs(s) || !isImageFileName(s) {
+		return ""
+	}
+	if info, err := os.Stat(s); err != nil || info.IsDir() {
+		return ""
+	}
+	return s
+}
+
+// isImageFileName 只看扩展名，用来判断「这段文字像不像图片路径」；真正的
+// 格式由 inspectImage 读文件头确认，扩展名撒谎的文件会被它拒掉。
+func isImageFileName(p string) bool {
+	switch strings.ToLower(filepath.Ext(p)) {
+	case ".jpg", ".jpeg", ".png", ".webp":
+		return true
+	}
+	return false
 }
 
 // editorDropZone 把一个容器登记成拖放区，返回是否正被拖着文件悬停。
