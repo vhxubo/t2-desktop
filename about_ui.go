@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/updater"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -107,6 +108,24 @@ func (a *app) aboutWindowView(c *ui.Context) {
 				})
 				ui.Text(c, "第三方 2Libra 原生桌面端").
 					FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+
+				// 版本与更新：展示当前版本，并给想立即确认的人一个检查入口；
+				// 更新窗口会说明结果或列出新版本。应用无法自更新时（开发构建、
+				// 包管理器安装的版本）点一下也会在更新窗口里说明原因。
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "当前版本 "+mygo.App.Version()).FontSize(12).
+						TextColor(t.TextMuted).Grow(1).SingleLine()
+					if ui.Button(c, "检查更新").Clicked() {
+						a.checkForUpdates()
+					}
+				})
+				// 上一次检查若发现有新版本，这里提示一下，点「检查更新」看详情。
+				if a.updates {
+					if v := updater.AvailableVersion(); v != "" {
+						ui.Text(c, "发现新版本 "+v).
+							FontSize(11).TextColor(t.Accent).MaxLines(1)
+					}
+				}
 
 				ui.Divider(c)
 
