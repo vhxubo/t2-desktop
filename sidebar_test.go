@@ -185,3 +185,50 @@ func TestSidebarLogoutAfterLogin(t *testing.T) {
 		t.Errorf("退出后不该还留着「退出登录」：%q", tt.Texts())
 	}
 }
+
+// 侧边栏多了「关于」入口：点一下打开「关于」窗口。它排在设置下方、账号入口
+// 上方，并且整行仍待在侧边栏宽度之内，不溢到右侧内容区。
+func TestSidebarAboutOpensWindow(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	about, ok := tt.Find("关于")
+	if !ok {
+		t.Fatalf("侧边栏没有「关于」入口：%q", tt.Texts())
+	}
+	if about.X+about.W > sidebarWidth {
+		t.Errorf("「关于」的 x=%.0f 宽 %.0f，超出 %d 宽的侧边栏", about.X, about.W, sidebarWidth)
+	}
+	set, _ := tt.Find("设置")
+	if about.Y <= set.Y {
+		t.Errorf("「关于」的 y=%.0f，应在设置入口（y=%.0f）下方", about.Y, set.Y)
+	}
+	opened := false
+	a.onAboutOpen = func() { opened = true }
+	if err := tt.Click("关于"); err != nil {
+		t.Fatal(err)
+	}
+	if !opened {
+		t.Error("点侧边栏的「关于」没有打开关于窗口")
+	}
+}
+
+// 关于窗口列出开发者、邮箱、项目地址与 2Libra 主页；邮箱与两个网址都可点击
+// 打开（邮件客户端 / 浏览器）。
+func TestAboutWindowShowsCredits(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.aboutWindowView, aboutWindowWidth, aboutWindowHeight)
+	tt.Frame()
+	for _, s := range []string{
+		"关于", "T2 Desktop",
+		"开发者", "vhxubo",
+		"邮箱", "vhxubo@gmail.com",
+		"项目地址", "github.com/vhxubo/t2-desktop",
+		"2Libra 主页", "https://2libra.com/user/vhxubo/about",
+	} {
+		if !tt.HasText(s) {
+			t.Errorf("关于窗口缺少 %q：%q", s, tt.Texts())
+		}
+	}
+}

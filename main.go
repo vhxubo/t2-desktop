@@ -62,6 +62,9 @@ type app struct {
 	// 不再是标题栏上的两个按钮。入口在主页侧边栏底部，见 sidebarFooter
 	// 与 showSettings；只在主线程读写。
 	settingsWin *mygo.Window
+	// aboutWin 是「关于」窗口：开发者、邮箱、项目地址与 2Libra 主页都列在
+	// 这一个窗口里。入口见 sidebarFooter 与 showAbout；只在主线程读写。
+	aboutWin *mygo.Window
 	// cacheStatus 是设置窗口「图片缓存」一块的显示状态；统计在后台跑，
 	// 结果回到主线程。
 	cacheStatus cacheStatus
@@ -74,6 +77,7 @@ type app struct {
 	onUpdateCheck  func()
 	onCoinsOpen    func()
 	onPandoraOpen  func()
+	onAboutOpen    func()
 
 	tab     int
 	lastTab int
@@ -187,6 +191,23 @@ type app struct {
 	// 都只在主线程读写；关窗口后草稿保留，退出登录时丢弃。
 	composeWin *mygo.Window
 	compose    *composeState
+	// hosts 是图库（图床）配置：几个内置预设加用户手工添加的项，落盘在
+	// localKV 的 imagehosts:v1。hostActiveLabel 是当前激活项的名字，编辑器
+	// 的工具面板直接把它绑到下拉框上。都只在 UI 线程读写，见 image_hosts.go。
+	hosts           imageHostConfig
+	hostActiveLabel string
+	// uploads 是编辑器里所有图片上传任务（含已完成 / 失败的），按加入顺序
+	// 串行执行。占位符 → 真实 URL 的替换、失败重试与移除都靠它；只在 UI
+	// 线程读写，后台结果经 publish 回来，见 editor_upload.go。
+	uploads      []*uploadJob
+	uploadSeq    uint64
+	uploadWorker bool
+	// onUploadDone 是上传结束（成功或失败）的测试钩子：headless 没有主循环，
+	// 靠它把结果同步回测试。生产为 nil。
+	onUploadDone func(uploadJob)
+	// pickImagePaths 是文件选择框的测试替身：headless 里没有原生对话框，
+	// 测试把它换成直接返回几个路径。为 nil 时走 mygo.Dialog.Open。
+	pickImagePaths func() ([]string, error)
 	// nodes 是节点表的共享缓存（内存 + cache/offline.json，见 nodes.go）：
 	// 发帖级联选择用它，节点页以后也读这一份。只在主线程读写。
 	nodes nodeCache
@@ -310,6 +331,8 @@ func newApp(dir string) *app {
 	a.loadCoinCache()
 	a.loadReadingHistory()
 	a.loadPostReads()
+	// 图库配置也要在首帧前就位：编辑器工具面板打开时不能还是空列表。
+	a.loadImageHosts()
 	for i := range a.tabs {
 		a.tabs[i] = &tabState{}
 	}
@@ -680,6 +703,7 @@ func (a *app) sidebarFooter(c *ui.Context) {
 	ui.Column(c).FillWidth().Shrink(0).Padding(6, 8).Gap(2).Children(func() {
 		a.themeButtons(c)
 		a.sidebarButton(c, "设置", settingsIcon, "打开设置窗口", a.showSettings)
+		a.sidebarButton(c, "关于", aboutIcon, "关于本应用", a.showAbout)
 		a.sidebarAccount(c)
 	})
 }
@@ -1289,6 +1313,7 @@ func main() {
 			a.closePandoraWindow()
 			a.closeComposeWindow()
 			a.closeSearchWindow()
+			a.closeAboutWindow()
 		})
 		// 关闭按钮（自绘标题栏、Alt+F4、任务栏右键都一样）先问设置：默认
 		// 照常关闭，选了「收进托盘」就拦下来藏起窗口，见 window_mode.go。
