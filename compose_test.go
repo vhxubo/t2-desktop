@@ -59,8 +59,19 @@ func TestComposeNodeCascader(t *testing.T) {
 	a := testApp(t)
 	st := composeReady(a)
 	st.nodes = append(st.nodes, composeNode{ID: "uuid-q", Slug: "q-and-a", Name: "问与答"})
-	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	tt.Frame()
+	// 节点默认收起：说明里标出手动指定的节点，但不画级联选择。
+	if _, ok := tt.Find("由 AI 判定分类"); ok {
+		t.Errorf("默认不该画出节点级联选择：%q", tt.Texts())
+	}
+	if err := tt.Click("手动指定节点"); err != nil {
+		t.Fatalf("找不到手动指定节点入口：%v：%q", err, tt.Texts())
+	}
+	tt.Frame()
+	if !st.nodeManual {
+		t.Fatalf("点「手动指定节点」后应展开：%+v", st)
+	}
 	if !tt.HasText("社区 · 社区讨论") {
 		t.Fatalf("触发框没有显示当前节点：%q", tt.Texts())
 	}
@@ -202,10 +213,6 @@ func TestComposePublishSendsDocumentedPayload(t *testing.T) {
 	st.title = "  我的第一篇帖子  "
 	st.body = "正文：**加粗**\n\n:smile:"
 	st.anonymous = true
-	st.titlePrefix = "求助"
-	st.tip = "先看置顶"
-	st.contact = "a@b.c"
-	st.status = "已解决"
 
 	st.voteOpen = true
 	st.voteTypeIndex = 1
@@ -270,10 +277,12 @@ func TestComposePublishSendsDocumentedPayload(t *testing.T) {
 	assertField(t, gotBody, "title", "我的第一篇帖子")
 	assertField(t, gotBody, "node_id", "uuid-community")
 	assertField(t, gotBody, "is_anonymous", true)
-	assertField(t, gotBody, "title_prefix", "求助")
-	assertField(t, gotBody, "tip", "先看置顶")
-	assertField(t, gotBody, "contact", "a@b.c")
-	assertField(t, gotBody, "status", "已解决")
+	// 界面已经移除的补充字段，请求体里也不该再出现。
+	for _, key := range []string{"title_prefix", "tip", "contact", "status"} {
+		if _, ok := gotBody[key]; ok {
+			t.Errorf("已移除的字段不该发送：%s", key)
+		}
+	}
 
 	vote := mapField(t, gotBody, "vote")
 	assertField(t, vote, "type", "multiple")
@@ -366,7 +375,6 @@ func TestComposePayloadValidation(t *testing.T) {
 	base := func() *composeState {
 		st := newComposeState()
 		st.nodes = []composeNode{{ID: "uuid-node", Name: "社区讨论"}}
-		st.nodeID = "uuid-node"
 		st.title = "标题"
 		return st
 	}
@@ -375,7 +383,6 @@ func TestComposePayloadValidation(t *testing.T) {
 		mut  func(st *composeState)
 		want string
 	}{
-		{"无节点", func(st *composeState) { st.nodeID = "" }, "请选择要发到哪个节点"},
 		{"空标题", func(st *composeState) { st.title = "   " }, "标题不能为空"},
 		{"标题过长", func(st *composeState) { st.title = strings.Repeat("字", composeTitleMax+1) }, "标题最多"},
 		{"正文过长", func(st *composeState) { st.body = strings.Repeat("字", composeContentMax+1) }, "正文最多"},
@@ -423,7 +430,6 @@ func TestComposePayloadValidation(t *testing.T) {
 			st.poolCoins = 100
 			st.poolProbability = 0.9
 		}, "金币池概率应在"},
-		{"状态文案过长", func(st *composeState) { st.status = strings.Repeat("x", composeStatusMax+1) }, "状态文案最多"},
 	}
 	for _, c := range cases {
 		st := base()
@@ -437,9 +443,57 @@ func TestComposePayloadValidation(t *testing.T) {
 			t.Errorf("%s：错误 = %q，期望包含 %q", c.name, err.Error(), c.want)
 		}
 	}
-	// 合法的最小表单：只有标题与节点。
-	if _, err := base().payload(); err != nil {
+	// 合法的最小表单：只有标题，节点留空也不拦。
+	p, err := base().payload()
+	if err != nil {
 		t.Errorf("最小表单不该报错：%v", err)
+	}
+	if _, ok := p["node_id"]; ok {
+		t.Errorf("没选节点时不该发送 node_id：%v", p)
+	}
+}
+
+// 节点默认由 AI 判定：级联面板里能清除选择，清除后触发框显示「由 AI 判定
+// 分类」，请求体里没有 node_id，也不会在本地报「请选择节点」。
+func TestComposeNodeIsOptional(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	st.title = "不挑节点的帖子"
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	tt.Frame()
+	if err := tt.Click("手动指定节点"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("社区 · 社区讨论"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("清除节点选择"); err != nil {
+		t.Fatalf("级联面板里没有清除入口：%q", tt.Texts())
+	}
+	if st.nodeID != "" {
+		t.Fatalf("清除后 nodeID = %q", st.nodeID)
+	}
+	tt.Frame()
+	if !tt.HasText("由 AI 判定分类") || !tt.HasText("选填") {
+		t.Errorf("清除后没有说明节点由 AI 判定：%q", tt.Texts())
+	}
+	// 明显的「恢复 AI 判定」入口：不用再进面板就能清掉手动选择。
+	st.nodeID = "uuid-work"
+	tt.Frame()
+	if err := tt.Click("恢复 AI 判定"); err != nil {
+		t.Fatalf("找不到恢复 AI 判定入口：%v：%q", err, tt.Texts())
+	}
+	if st.nodeID != "" {
+		t.Errorf("点恢复后 nodeID = %q，期望留空", st.nodeID)
+	}
+	p, err := st.payload()
+	if err != nil {
+		t.Fatalf("不选节点不该拦住发布：%v", err)
+	}
+	if _, ok := p["node_id"]; ok {
+		t.Errorf("不选节点时请求体里不该有 node_id：%v", p)
 	}
 }
 
@@ -599,8 +653,8 @@ func TestComposeFabStaysBottomRight(t *testing.T) {
 	}
 }
 
-// 发帖窗口：标题、正文与 Markdown 工具条都在，节点级联选择有选项；
-// 附加组件默认收起，展开后才显示各自的字段。
+// 发帖窗口：左边写作区放标题、正文与 Markdown 工具条，右边常驻附加组件栏；
+// 四个补充字段不再出现，组件字段只在点开弹窗之后才画。
 func TestComposeWindowLayout(t *testing.T) {
 	a := testApp(t)
 	// 登录后底部提示才是「Ctrl+Enter 发布」；否则它会提醒先登录。
@@ -611,56 +665,132 @@ func TestComposeWindowLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	composeReady(a)
-	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	for _, want := range []string{
-		"节点", "匿名发帖", "标题", "正文",
-		"加粗", "斜体", "删除线", "代码", "标题", "引用", "代码块", "列表", "编号", "链接", "图片", "分割线",
-		"编辑", "预览", "投票", "评分", "竞猜", "兑换码 / 红包", "金币池", "可见性（谁可以看）",
+		"节点", "选填", "默认由 AI 判定", "手动指定节点",
+		"标题", "正文", "发布设置", "匿名发帖",
+		"加粗", "斜体", "删除线", "代码", "引用", "代码块", "列表", "编号", "链接", "图片", "分割线",
+		"编辑", "预览", "附加组件", "已添加 0 / 6 项",
+		"投票", "评分", "竞猜", "兑换码 / 红包", "金币池", "可见性（谁可以看）",
 		"发布", "Ctrl+Enter 发布",
 	} {
 		if !tt.HasText(want) {
-			t.Errorf("发帖窗口缺少 %q", want)
+			t.Errorf("发帖窗口缺少 %q：%q", want, tt.Texts())
+		}
+	}
+	// 匿名开关在右侧控制区，不再和标题挤在第一行。
+	if r, ok := tt.Find("匿名发帖"); !ok || r.X < composeWindowWidth-composeSidebarWidth {
+		t.Errorf("匿名发帖不在右侧栏：%+v %q", r, tt.Texts())
+	}
+	// 移除的补充字段不再占版面，也不留在请求体里（见 payload 的断言）。
+	for _, gone := range []string{"标题前缀", "提示信息", "联系方式", "状态"} {
+		if tt.HasText(gone) {
+			t.Errorf("已移除的字段仍画在发帖窗口里：%q", gone)
 		}
 	}
 	// 工具条是「头部」的一个工具栏，可访问名是「编辑工具」。
 	if _, ok := tt.AccessByRole(ui.RoleToolbar, "编辑工具"); !ok {
 		t.Errorf("正文工具条没有以工具栏角色出现")
 	}
-	// 附加组件默认收起：展开前里面一个字段都不画。
-	for _, hidden := range []string{"投票类型", "可见范围", "初始金币"} {
+	// 弹窗没打开前，一块组件的字段都不画。
+	for _, hidden := range []string{"投票类型", "可见范围", "初始金币", "添加此组件"} {
 		if tt.HasText(hidden) {
-			t.Errorf("附加组件默认应当收起，却画出了 %q", hidden)
+			t.Errorf("组件弹窗没打开，却画出了 %q", hidden)
 		}
 	}
-	// 展开某一块之后，它自己的字段才出现。展开会让内容变长，先滚到底再点。
-	expand := func(label string, wants ...string) {
+	// 点右侧栏的一行，它的字段以弹窗形式出现。
+	openModule := func(label string, wants ...string) {
 		t.Helper()
-		a.compose = composeReady(a)
-		it := ui.NewTester(a.composeWindowView, 780, 1100)
+		// 每项都用一份新草稿：上一次的弹窗不会留着遮住侧栏。
+		a.compose = newComposeState()
+		composeReady(a)
+		it := ui.NewTester(a.composeWindowView, composeWindowWidth, 1100)
 		it.Frame()
-		it.Scroll(400, 500, 0, 4000)
 		if err := it.Click(label); err != nil {
-			t.Fatalf("展开 %q 失败：%v", label, err)
+			t.Fatalf("打开 %q 的弹窗失败：%v：%q", label, err, it.Texts())
+		}
+		it.Frame()
+		if !it.HasText("添加此组件") {
+			t.Errorf("点 %q 没有打开组件弹窗：%q", label, it.Texts())
+		}
+		// 移除不该再藏在弹窗里：侧栏行尾直接有入口。
+		if it.HasText("移除此组件") {
+			t.Errorf("%q 的弹窗里还有隐藏的移除入口：%q", label, it.Texts())
 		}
 		for _, w := range wants {
 			if !it.HasText(w) {
-				t.Errorf("展开 %q 后缺少 %q：%q", label, w, it.Texts())
+				t.Errorf("%q 的弹窗里缺少 %q：%q", label, w, it.Texts())
 			}
 		}
 	}
-	expand("投票", "投票类型", "单选", "多选", "公开投票结果", "添加选项", "投票截止时间")
-	expand("可见性（谁可以看）", "可见范围", "所有人可见", "门槛由服务端判定")
-	expand("金币池", "初始金币", "中奖概率（0 = 默认）")
-	expand("兑换码 / 红包", "兑换码（一行一个）", "每人可领", "红包上限", "同时开红包")
-	expand("评分", "评分对象", "分值", "理由")
-	expand("竞猜", "竞猜标题", "参与截止时间")
+	openModule("投票", "投票类型", "单选", "多选", "公开投票结果", "添加选项",
+		"批量添加", "删除选中", "投票截止时间")
+	openModule("可见性（谁可以看）", "可见范围", "所有人可见", "门槛由服务端判定")
+	openModule("金币池", "初始金币", "中奖概率（0 = 默认）")
+	openModule("兑换码 / 红包", "兑换码（一行一个）", "批量粘贴", "清空兑换码",
+		"每人可领", "红包上限", "同时开红包")
+	openModule("评分", "评分对象", "分值", "理由")
+	openModule("竞猜", "竞猜标题", "参与截止时间")
+}
+
+// 附加组件在右侧栏点开弹窗里编辑：添加后随帖发送、侧栏显示已添加、结果用
+// 窗口内 toast 报告。移除不用再进弹窗：侧栏行尾直接点，只是关掉开关，
+// 填过的内容仍留在草稿里。
+func TestComposeModuleDialogAddRemove(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	tt.Frame()
+	if err := tt.Click("投票"); err != nil {
+		t.Fatal(err)
+	}
+	if !st.moduleOpen || st.moduleIndex != 0 {
+		t.Fatalf("没有打开投票弹窗：%+v", st)
+	}
+	tt.Frame()
+	if err := tt.Click("添加此组件"); err != nil {
+		t.Fatalf("添加组件失败：%v：%q", err, tt.Texts())
+	}
+	if !st.voteOpen || st.moduleOpen {
+		t.Errorf("添加后状态不对：voteOpen=%v moduleOpen=%v", st.voteOpen, st.moduleOpen)
+	}
+	tt.Frame()
+	if !tt.HasText("已添加 1 / 6 项") {
+		t.Errorf("侧栏没有显示已添加的组件：%q", tt.Texts())
+	}
+	if !tt.HasText("已添加投票") {
+		t.Errorf("添加结果没有用 toast 报告：%q", tt.Texts())
+	}
+	tt.Advance(6 * time.Second)
+	if tt.HasText("已添加投票") {
+		t.Errorf("toast 没有自己消失")
+	}
+
+	// 移除就在侧栏行尾，不必再打开弹窗；填过的字段不会丢。
+	st.voteTitle = "留着的草稿"
+	if st.moduleOpen {
+		t.Errorf("移除前不该还开着弹窗")
+	}
+	if err := tt.Click("移除投票"); err != nil {
+		t.Fatalf("侧栏里没有直接移除入口：%v：%q", err, tt.Texts())
+	}
+	if st.voteOpen || st.moduleOpen {
+		t.Errorf("移除后状态不对：voteOpen=%v moduleOpen=%v", st.voteOpen, st.moduleOpen)
+	}
+	if st.voteTitle != "留着的草稿" {
+		t.Errorf("移除组件不该清掉填过的内容：%q", st.voteTitle)
+	}
+	tt.Frame()
+	if !tt.HasText("已移除投票") {
+		t.Errorf("移除结果没有用 toast 报告：%q", tt.Texts())
+	}
 }
 
 // 工具条按钮真的会改正文，并且会把选区放在插入的内容上（不用再手动挪光标）。
 func TestComposeToolbarEditsBody(t *testing.T) {
 	a := testApp(t)
 	st := composeReady(a)
-	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	// 点进正文输入框再打字：选区是真实输入产生的，不是测试自己塞进去的。
 	if err := tt.Click("正文内容"); err != nil {
 		t.Fatal(err)
@@ -686,7 +816,7 @@ func TestComposeToolbarEditsBody(t *testing.T) {
 func TestComposePreview(t *testing.T) {
 	a := testApp(t)
 	st := composeReady(a)
-	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	tt.Click("预览")
 	if !tt.HasText("还没有正文") {
 		t.Errorf("空正文预览没有提示：%q", tt.Texts())
@@ -722,7 +852,7 @@ func TestComposeSuccessOpensCreatedTopic(t *testing.T) {
 	a.submitCompose()
 	done.Wait()
 
-	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	if !tt.HasText("已发表：回执测试") {
 		t.Errorf("没有显示发表回执：%q", tt.Texts())
 	}
@@ -780,7 +910,7 @@ func TestComposeFailureKeepsDraftAndKey(t *testing.T) {
 		t.Errorf("重试没有沿用同一个幂等键：%v（首次 %s）", keys, first)
 	}
 
-	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	if !tt.HasText("你暂时不能发帖") {
 		t.Errorf("窗口没有显示失败原因：%q", tt.Texts())
 	}
@@ -850,18 +980,20 @@ func TestNewComposeStateDefaults(t *testing.T) {
 	}
 }
 
-// 投票与竞猜的选项是动态行：能加、能删，且卡在文档给的上下限上。
+// 投票与竞猜的选项是动态行：在组件弹窗里能加、能删，且卡在文档给的上下限上。
 func TestComposeOptionRowsAddRemove(t *testing.T) {
 	a := testApp(t)
 	st := composeReady(a)
 	st.voteOpen = true
 	st.voteOptions = []string{"甲"}
-	tt := ui.NewTester(a.composeWindowView, 780, 1100)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 1100)
 	tt.Frame()
-	tt.Scroll(400, 500, 0, 4000)
-
-	if err := tt.Click("添加选项"); err != nil {
+	if err := tt.Click("投票"); err != nil {
 		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("添加选项"); err != nil {
+		t.Fatalf("弹窗里找不到添加选项：%v：%q", err, tt.Texts())
 	}
 	if len(st.voteOptions) != 2 {
 		t.Fatalf("添加后行数 = %d，期望 2", len(st.voteOptions))
@@ -869,14 +1001,12 @@ func TestComposeOptionRowsAddRemove(t *testing.T) {
 	// 只剩一行时「删除」被禁用，避免删成空列表。
 	st.voteOptions = []string{"甲"}
 	tt.Frame()
-	tt.Scroll(400, 500, 0, 4000)
 	if info, ok := tt.Access("删除"); ok && !info.Disabled {
 		t.Errorf("只剩一个选项时删除按钮应当禁用")
 	}
 	// 到上限后不再加行。
 	st.voteOptions = make([]string, composeOptionMax)
 	tt.Frame()
-	tt.Scroll(400, 500, 0, 4000)
 	if info, ok := tt.Access("添加选项"); ok && !info.Disabled {
 		t.Errorf("选项到 %d 个后添加按钮应当禁用", composeOptionMax)
 	}
@@ -891,7 +1021,7 @@ func TestComposeClearKeepsNode(t *testing.T) {
 	st.voteOpen = true
 	st.voteTitle = "投票"
 	st.nodeID = "uuid-work"
-	tt := ui.NewTester(a.composeWindowView, 780, 900)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	tt.Frame()
 	if err := tt.Click("清空"); err != nil {
 		t.Fatal(err)
@@ -1006,6 +1136,248 @@ func TestComposeFabFloatsOverContent(t *testing.T) {
 	}
 	if last.Y > fab.Y+fab.H || last.Y+last.H < fab.Y {
 		t.Errorf("最后一行 %+v 与 FAB %+v 没有重叠，FAB 没有浮在内容上", last, fab)
+	}
+}
+
+// 新草稿默认不指定节点：不预选、不画级联选择、不主动拉节点列表，请求体里
+// 也没有 node_id，发帖后由站点 AI 判定分类。
+func TestComposeDefaultsToAIClassification(t *testing.T) {
+	a := testApp(t)
+	st := newComposeState()
+	a.compose = st
+	if st.nodeID != "" || st.nodeManual {
+		t.Fatalf("默认不该指定节点：%+v", st)
+	}
+	st.title = "让 AI 归类的帖子"
+	p, err := st.payload()
+	if err != nil {
+		t.Fatalf("最小表单不该报错：%v", err)
+	}
+	if _, ok := p["node_id"]; ok {
+		t.Errorf("默认不该发送 node_id：%v", p)
+	}
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	tt.Frame()
+	if !tt.HasText("发帖后由 AI 自动判定分类，无需选择。") {
+		t.Errorf("没有说明 AI 判定：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("由 AI 判定分类"); ok {
+		t.Errorf("默认不该画出节点级联选择：%q", tt.Texts())
+	}
+	if st.nodeLoading || len(st.nodes) != 0 {
+		t.Errorf("默认不该为节点列表发请求：loading=%v nodes=%d",
+			st.nodeLoading, len(st.nodes))
+	}
+}
+
+// 节点选择是按需展开的次要入口，收起后界面上只剩一行说明。
+func TestComposeNodeManualToggle(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	tt.Frame()
+	if err := tt.Click("手动指定节点"); err != nil {
+		t.Fatalf("找不到手动指定入口：%v：%q", err, tt.Texts())
+	}
+	tt.Frame()
+	if !st.nodeManual {
+		t.Fatalf("展开状态没记下：%+v", st)
+	}
+	if _, ok := tt.Find("社区 · 社区讨论"); !ok {
+		t.Errorf("展开后没有级联选择的触发框：%q", tt.Texts())
+	}
+	if err := tt.Click("收起节点"); err != nil {
+		t.Fatalf("找不到收起入口：%v：%q", err, tt.Texts())
+	}
+	if st.nodeManual {
+		t.Errorf("收起后 nodeManual 仍为真")
+	}
+	tt.Frame()
+	if _, ok := tt.Find("社区 · 社区讨论"); ok {
+		t.Errorf("收起后仍画着级联选择：%q", tt.Texts())
+	}
+}
+
+// 匿名开关在右侧发布设置里，点一下就把 is_anonymous 带进请求体。
+func TestComposeAnonymousSidebarToggle(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	st.title = "匿名测试"
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	tt.Frame()
+	if err := tt.Click("匿名发帖"); err != nil {
+		t.Fatalf("右侧栏没有匿名开关：%v：%q", err, tt.Texts())
+	}
+	if !st.anonymous {
+		t.Fatalf("点匿名开关没有改状态")
+	}
+	p, err := st.payload()
+	if err != nil || p["is_anonymous"] != true {
+		t.Errorf("匿名没有进请求体：%v %v", p, err)
+	}
+}
+
+// 「全部移除」是组件的批量移除入口，一次把所有开关关掉，填过的内容保留。
+func TestComposeRemoveAllModules(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	st.voteOpen, st.scoreOpen, st.poolOpen = true, true, true
+	st.voteTitle = "留着的草稿"
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	tt.Frame()
+	if err := tt.Click("全部移除附加组件"); err != nil {
+		t.Fatalf("侧栏没有全部移除入口：%v：%q", err, tt.Texts())
+	}
+	if st.enabledModuleCount() != 0 {
+		t.Errorf("全部移除后仍开着 %d 项", st.enabledModuleCount())
+	}
+	if st.voteTitle != "留着的草稿" {
+		t.Errorf("批量移除不该清掉填过的内容：%q", st.voteTitle)
+	}
+	tt.Frame()
+	if !tt.HasText("已移除全部附加组件") {
+		t.Errorf("批量移除结果没有用 toast 报告：%q", tt.Texts())
+	}
+}
+
+// 投票 / 竞猜 / 兑换码都有批量入口：一次粘贴多行加满选项，勾选后一次删掉。
+func TestComposeBatchAddVoteOptions(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	st.voteOpen = true
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 1100)
+	tt.Frame()
+	if err := tt.Click("投票"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("批量添加"); err != nil {
+		t.Fatalf("投票没有批量添加入口：%v：%q", err, tt.Texts())
+	}
+	tt.Frame()
+	st.voteBatchText = "甲\n乙\n丙\n"
+	tt.Frame()
+	if err := tt.Click("加入选项"); err != nil {
+		t.Fatalf("加入选项失败：%v：%q", err, tt.Texts())
+	}
+	if !reflect.DeepEqual(st.voteOptions, []string{"甲", "乙", "丙"}) {
+		t.Errorf("批量粘贴后的选项 = %v", st.voteOptions)
+	}
+	if st.voteBatchOpen || st.voteBatchText != "" {
+		t.Errorf("批量录入区没有收起：%+v", st)
+	}
+	// 勾选两行再一次删掉：至少留一行，勾选状态跟着重置。
+	if err := tt.Click("勾选投票选项 1"); err != nil {
+		t.Fatalf("找不到行首勾选框：%v：%q", err, tt.Texts())
+	}
+	tt.Frame()
+	if err := tt.Click("勾选投票选项 3"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("删除选中"); err != nil {
+		t.Fatalf("找不到批量删除入口：%v：%q", err, tt.Texts())
+	}
+	if !reflect.DeepEqual(st.voteOptions, []string{"乙"}) {
+		t.Errorf("批量删除后的选项 = %v", st.voteOptions)
+	}
+	for _, on := range st.voteChecked {
+		if on {
+			t.Errorf("批量删除后勾选状态没清空：%v", st.voteChecked)
+		}
+	}
+}
+
+// 竞猜的批量入口同样卡在 2～6 项：一次全选也只会删到下限。
+func TestComposeBatchBetOptionsKeepMinimum(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	st.betOpen = true
+	st.betOptions = []string{"A", "B", "C", "D"}
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 1100)
+	tt.Frame()
+	if err := tt.Click("竞猜"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("批量添加"); err != nil {
+		t.Fatalf("竞猜没有批量添加入口：%v：%q", err, tt.Texts())
+	}
+	tt.Frame()
+	st.betChecked = []bool{true, true, true, true}
+	tt.Frame()
+	if err := tt.Click("删除选中"); err != nil {
+		t.Fatalf("找不到批量删除入口：%v：%q", err, tt.Texts())
+	}
+	if len(st.betOptions) != composeBetOptionsMin {
+		t.Errorf("批量删除应保留 %d 项，实际 %v", composeBetOptionsMin, st.betOptions)
+	}
+	tt.Frame()
+	if !tt.HasText("至少保留 2 个") {
+		t.Errorf("触到下限时没有说明原因：%q", tt.Texts())
+	}
+}
+
+// 兑换码也有批量粘贴与一次清空：空行丢掉，已有内容不被覆盖。
+func TestComposeBatchRedeemCodes(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	st.redeemOpen = true
+	st.redeemCodes = "OLD-1"
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 1100)
+	tt.Frame()
+	if err := tt.Click("兑换码 / 红包"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("批量粘贴兑换码"); err != nil {
+		t.Fatalf("兑换码没有批量入口：%v：%q", err, tt.Texts())
+	}
+	tt.Frame()
+	st.redeemBatchText = "A-1\nB-2\n\nC-3"
+	tt.Frame()
+	if err := tt.Click("追加兑换码"); err != nil {
+		t.Fatalf("追加失败：%v：%q", err, tt.Texts())
+	}
+	want := []string{"OLD-1", "A-1", "B-2", "C-3"}
+	if got := st.redeemCodeList(); !reflect.DeepEqual(got, want) {
+		t.Errorf("批量粘贴后的兑换码 = %v，期望 %v", got, want)
+	}
+	tt.Frame()
+	if err := tt.Click("清空兑换码"); err != nil {
+		t.Fatalf("兑换码没有清空入口：%v：%q", err, tt.Texts())
+	}
+	if st.redeemCodes != "" {
+		t.Errorf("清空后仍留着兑换码：%q", st.redeemCodes)
+	}
+}
+
+// 批量辅助函数：拆行、上限截断、下限保留都按文档给的上下限来。
+func TestComposeBatchHelpers(t *testing.T) {
+	lines := composeBatchLines(" 甲 \n\n乙\r\n丙")
+	if !reflect.DeepEqual(lines, []string{"甲", "乙", "丙"}) {
+		t.Errorf("拆行 = %v", lines)
+	}
+	// 默认两行都是空行时，粘贴内容直接替换占位行。
+	next, added, skipped := appendComposeBatch([]string{"", ""}, lines, 1, 3)
+	if !reflect.DeepEqual(next, []string{"甲", "乙", "丙"}) || added != 3 || skipped != 0 {
+		t.Errorf("批量追加 = %v %d %d", next, added, skipped)
+	}
+	// 超过上限的部分省略，但不会把已有内容挤掉。
+	next, added, skipped = appendComposeBatch([]string{"旧"}, []string{"a", "b", "c", "d"}, 1, 3)
+	if !reflect.DeepEqual(next, []string{"旧", "a", "b"}) || added != 2 || skipped != 2 {
+		t.Errorf("超上限 = %v %d %d", next, added, skipped)
+	}
+	// 一次删掉勾中的行，下限之内不再删，勾选状态全部清空。
+	opts, flags, removed, held := removeComposeChecked(
+		[]string{"a", "b", "c"}, []bool{true, false, true}, 2)
+	if !reflect.DeepEqual(opts, []string{"b", "c"}) || removed != 1 || !held {
+		t.Errorf("批量删除 = %v %v %d %v", opts, flags, removed, held)
+	}
+	for _, on := range flags {
+		if on {
+			t.Errorf("批量删除后勾选没清空：%v", flags)
+		}
 	}
 }
 

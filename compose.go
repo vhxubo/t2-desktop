@@ -23,16 +23,17 @@ import (
 // access_guard_*（可见性门槛）。文档明确「随时可以新增字段」，所以解码
 // 一律忽略不认识的字段，不做严格结构体绑定。
 //
+// 文档把 node_id 标成必填，但界面上默认不指定节点：发帖后由站点的 AI
+// 判定分类，请求体里不带 node_id。想发到特定节点时可以在「手动指定节点」
+// 里选，选中才发送；站点若确实要求节点，会把原因作为普通错误显示出来
+// （见 compose_ui.go 的回执区），而不是在本地先拦一道。
+//
 // 付费墙的隐藏内容（restricted_*）没有做：文档只写了「付费 / D20 检定 /
 // 竞拍」这些中文说法，没给 restricted_access_type 的机器可读取值，猜一个
 // 值发出去只会换来 400，所以宁可缺这一块也不写死。
 const (
-	composeTitleMax       = 500
-	composeContentMax     = 20000
-	composeTitlePrefixMax = 100
-	composeTipMax         = 500
-	composeContactMax     = 500
-	composeStatusMax      = 50
+	composeTitleMax   = 500
+	composeContentMax = 20000
 
 	composeVoteTitleMax  = 16
 	composeOptionMax     = 20 // vote.options 上限
@@ -170,20 +171,22 @@ type composeState struct {
 	// 否则视图每帧重建都会再发一次注定失败的请求（「重试」按钮会清掉它）。
 	nodeFailedAt time.Time
 	// nodePick 是第一列的展开状态；nodeID 是选中的节点 uuid，提交时直接用。
+	// 默认空串：不发送 node_id，发帖后由站点 AI 判定分类，见 payload。
 	nodePick cascaderState
 	nodeID   string
+	// nodeManual 是「手动指定节点」是否展开。默认收起：界面不展示级联选择，
+	// 也不去拉节点列表，节点这件事不该占发帖时的注意力。
+	nodeManual bool
 
-	// 基础字段
-	title       string
-	body        string
-	titleField  ui.Handle
-	bodyField   ui.Handle
-	focusTitle  bool
-	titlePrefix string
-	tip         string
-	contact     string
-	status      string
-	anonymous   bool
+	// 基础字段：界面只留标题与正文；匿名开关在右侧栏的「发布设置」里。
+	// 文档里 title_prefix / tip / contact / status 这类补充字段不再展示，
+	// 也不再进入请求体。
+	title      string
+	body       string
+	titleField ui.Handle
+	bodyField  ui.Handle
+	focusTitle bool
+	anonymous  bool
 
 	// 正文编辑器的选区与工具条状态。sel* 是上一帧构建输入框时读到的选区，
 	// 工具条按钮据此决定把 Markdown 标记插在哪里；pendingSel 是刚插完标记
@@ -193,11 +196,21 @@ type composeState struct {
 	// preview 是正文区的视图：0 编辑，1 预览。
 	preview int
 
-	// 投票块
+	// 附加组件：右侧栏常驻，点一项以弹窗编辑。下面每个 xxxOpen 是「这个组件
+	// 随帖一起发送」的开关（不再是折叠面板的展开状态）；moduleOpen 为真时
+	// moduleIndex 指向当前打开的那一块（见 compose_ui.go 的组件表）。
+	moduleOpen  bool
+	moduleIndex int
+
+	// 投票块。voteChecked 与 voteOptions 等长，是行首勾选框的状态；
+	// voteBatch* 是「批量添加」内联录入区的展开状态与一次粘贴的多行文本。
 	voteOpen          bool
 	voteTypeIndex     int // 0 单选（pk），1 多选（multiple）
 	voteTitle         string
 	voteOptions       []string
+	voteChecked       []bool
+	voteBatchOpen     bool
+	voteBatchText     string
 	voteResultVisible bool
 	voteDeadline      string
 	voteMaxChoices    float64
@@ -208,15 +221,20 @@ type composeState struct {
 	scoreValue   float64
 	scoreComment string
 
-	// 竞猜块
-	betOpen     bool
-	betTitle    string
-	betOptions  []string
-	betDeadline string
+	// 竞猜块。批量编辑的状态与投票块同构。
+	betOpen      bool
+	betTitle     string
+	betOptions   []string
+	betChecked   []bool
+	betBatchOpen bool
+	betBatchText string
+	betDeadline  string
 
 	// 兑换码 / 红包块
 	redeemOpen       bool
 	redeemCodes      string // 一行一个
+	redeemBatchOpen  bool   // 「批量粘贴」内联录入区
+	redeemBatchText  string
 	codeDescription  string
 	maxRedeemPerUser float64
 	redPacket        bool
@@ -279,10 +297,8 @@ func (a *app) ensureComposeNodes() {
 	// 1) 缓存优先：首帧就有可选项，不用先看一屏「正在读取节点…」。
 	if len(st.nodes) == 0 {
 		if nodes, at, ok := a.nodeSnapshot(); ok {
+			// 只把列表摆进级联选择，不预选：默认由站点 AI 判定分类。
 			st.nodes, st.nodesAt, st.nodeLoaded = nodes, at, true
-			if st.selectedNode() == nil {
-				st.nodeID = defaultComposeNode(nodes)
-			}
 		}
 	}
 	// 2) 新鲜期内直接用，不再请求。
@@ -327,9 +343,6 @@ func (a *app) ensureComposeNodes() {
 			st.nodes = nodes
 			st.nodeLoaded = true
 			st.nodesAt = a.nodes.at
-			if st.selectedNode() == nil {
-				st.nodeID = defaultComposeNode(nodes)
-			}
 			a.notifyNodesLoaded(nil)
 		})
 	}()
@@ -353,21 +366,8 @@ func (a *app) hasAuthScope(want string) bool {
 	return false
 }
 
-// defaultComposeNode 是首次打开时的默认节点：优先「社区讨论」，其次第一个。
-// 返回 uuid，提交与级联选择都用它。
-func defaultComposeNode(nodes []composeNode) string {
-	for _, n := range nodes {
-		if n.ID == communityNodeID {
-			return n.ID
-		}
-	}
-	if len(nodes) > 0 {
-		return nodes[0].ID
-	}
-	return ""
-}
-
-// selectedNode 返回级联选择当前选中的节点；没选中时为 nil。
+// selectedNode 返回级联选择当前选中的节点；没选中时为 nil。默认就是没选中：
+// 不指定节点时发帖后由站点 AI 判定分类。
 func (st *composeState) selectedNode() *composeNode {
 	if st == nil || st.nodeID == "" {
 		return nil
@@ -609,10 +609,6 @@ func composeDeadline(raw string) (string, error) {
 // payload 组装 POST /v1/topics 的请求体，同时完成校验：返回的 error 就是
 // 界面要展示的那句中文。字段名、取值与长度上限全部照 api-write.md 原文。
 func (st *composeState) payload() (map[string]any, error) {
-	node := st.selectedNode()
-	if node == nil {
-		return nil, fmt.Errorf("请选择要发到哪个节点")
-	}
 	title := strings.TrimSpace(st.title)
 	if title == "" {
 		return nil, fmt.Errorf("标题不能为空")
@@ -624,24 +620,17 @@ func (st *composeState) payload() (map[string]any, error) {
 		return nil, fmt.Errorf("正文最多 %d 字，当前 %d 字", composeContentMax, n)
 	}
 
-	p := map[string]any{"title": title, "node_id": node.ID}
+	p := map[string]any{"title": title}
+	// 默认不指定节点：不发 node_id，发帖后由站点 AI 判定分类。只有手动
+	// 选中了节点才带上 uuid，本地不拦着发布。
+	if node := st.selectedNode(); node != nil {
+		p["node_id"] = node.ID
+	}
 	if st.body != "" {
 		p["content"] = st.body
 	}
 	if st.anonymous {
 		p["is_anonymous"] = true
-	}
-	if err := composeOptionalText(p, "title_prefix", st.titlePrefix, composeTitlePrefixMax, "标题前缀"); err != nil {
-		return nil, err
-	}
-	if err := composeOptionalText(p, "tip", st.tip, composeTipMax, "提示信息"); err != nil {
-		return nil, err
-	}
-	if err := composeOptionalText(p, "contact", st.contact, composeContactMax, "联系方式"); err != nil {
-		return nil, err
-	}
-	if err := composeOptionalText(p, "status", st.status, composeStatusMax, "状态文案"); err != nil {
-		return nil, err
 	}
 
 	if st.voteOpen {
@@ -681,19 +670,6 @@ func (st *composeState) payload() (map[string]any, error) {
 		return nil, err
 	}
 	return p, nil
-}
-
-// composeOptionalText 写入一个可选的文本字段：空值不发送，超长直接报错。
-func composeOptionalText(p map[string]any, key, value string, maxRunes int, label string) error {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	if n := utf8.RuneCountInString(value); n > maxRunes {
-		return fmt.Errorf("%s最多 %d 字，当前 %d 字", label, maxRunes, n)
-	}
-	p[key] = value
-	return nil
 }
 
 func (st *composeState) votePayload() (map[string]any, error) {
@@ -895,10 +871,102 @@ func (c *Client) createTopic(ctx context.Context, payload map[string]any, key st
 	})
 }
 
-// resetComposeForm 在发表成功后清空正文与各组件，保留节点选择：连着发两篇
-// 通常还是发到同一个节点，节点列表也不用重拉。
+// resetComposeForm 在发表成功后清空正文与各组件。节点列表与手动指定的节点
+// 都留着：默认本来就不指定（由 AI 判定），而用户特意选过节点时，连着发两篇
+// 通常还是发到同一个节点，不该被一次发布悄悄改回去。
 func (st *composeState) resetComposeForm() {
-	nodes, nodesAt, loaded, id, pick := st.nodes, st.nodesAt, st.nodeLoaded, st.nodeID, st.nodePick
+	nodes, nodesAt, loaded := st.nodes, st.nodesAt, st.nodeLoaded
+	id, pick, manual := st.nodeID, st.nodePick, st.nodeManual
 	*st = *newComposeState()
-	st.nodes, st.nodesAt, st.nodeLoaded, st.nodeID, st.nodePick = nodes, nodesAt, loaded, id, pick
+	st.nodes, st.nodesAt, st.nodeLoaded = nodes, nodesAt, loaded
+	st.nodeID, st.nodePick, st.nodeManual = id, pick, manual
+}
+
+// ------------------------------------------------------------------
+// 多项输入的批量编辑
+// ------------------------------------------------------------------
+
+// composeBatchLines 把一次粘贴的多行文本拆成条目：按换行分、去空白与空行。
+// 选项内容里可能有逗号，所以这里只认换行，不像兑换码那样按标点拆。
+func composeBatchLines(raw string) []string {
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// appendComposeBatch 把批量粘贴的条目加进现有列表。当前全是空行时先丢掉这些
+// 占位行，免得粘贴完列表里还混着几行空白；超过 max 的部分截断。返回新列表、
+// 实际加入的条数与因上限被丢掉的条数，行数不足 min 时补占位行。
+func appendComposeBatch(current []string, lines []string, min, max int) ([]string, int, int) {
+	base := current
+	allEmpty := true
+	for _, o := range base {
+		if strings.TrimSpace(o) != "" {
+			allEmpty = false
+			break
+		}
+	}
+	if allEmpty {
+		base = nil
+	}
+	out := append([]string{}, base...)
+	added, skipped := 0, 0
+	for _, line := range lines {
+		if len(out) >= max {
+			skipped++
+			continue
+		}
+		out = append(out, line)
+		added++
+	}
+	for len(out) < min {
+		out = append(out, "")
+	}
+	return out, added, skipped
+}
+
+// syncComposeChecks 让勾选框数组与选项行等长：加行补 false，删行截短。
+func syncComposeChecks(checked []bool, n int) []bool {
+	if len(checked) > n {
+		return checked[:n]
+	}
+	for len(checked) < n {
+		checked = append(checked, false)
+	}
+	return checked
+}
+
+// removeComposeChecked 一次删掉勾中的行，但至少保留 min 行。返回新列表、
+// 清空后的勾选状态、实际删掉的行数，以及是否因为下限留下了勾选项。
+func removeComposeChecked(options []string, checked []bool, min int) ([]string, []bool, int, bool) {
+	budget := len(options) - min
+	if budget < 0 {
+		budget = 0
+	}
+	out := make([]string, 0, len(options))
+	flags := make([]bool, 0, len(options))
+	removed, held := 0, false
+	for i, o := range options {
+		on := i < len(checked) && checked[i]
+		if on && budget > 0 {
+			budget--
+			removed++
+			continue
+		}
+		if on {
+			held = true
+		}
+		out = append(out, o)
+		flags = append(flags, false)
+	}
+	for len(out) < min {
+		out = append(out, "")
+		flags = append(flags, false)
+	}
+	return out, flags, removed, held
 }

@@ -16,18 +16,33 @@ import (
 // 带工具条与预览），并按需挂上发帖接口提供的各类组件——投票、评分、竞猜、
 // 兑换码 / 红包、金币池，以及「谁可以看」的可见性门槛。
 //
-// 和通知、设置、「我的」一样，它是独立的 mygo 窗口，而不是主窗口里的一层
-// 遮罩：一份草稿要同时放下标题、正文和六块可选组件，塞进弹窗里只会互相挤。
-// 数据、校验与请求在 compose.go；这里只负责窗口的开关与界面。
+// 左边专心写：标题、正文，最下面才是「节点」——默认由站点 AI 判定分类，
+// 不用选也不拉列表，想手动指定才展开。右边是常驻的控制栏：上面是匿名等
+// 发布设置，下面是六块组件，每块点开在弹窗里填写；已添加的行尾直接有
+// 「移除」，不必再进弹窗，底部还有「全部移除」。凡是可以有多个选项的地方
+// （投票、竞猜、兑换码）都有「批量添加」与批量删除入口。
+//
+// 这是独立的 mygo 窗口而不是主窗口里的一层遮罩。数据、校验与请求在
+// compose.go；这里只负责窗口的开关与界面。
 
 const (
-	composeWindowWidth   = 780
-	composeWindowHeight  = 760
-	composeWinMinWidth   = 600
-	composeWinMinHeight  = 520
-	composeEditorLines   = 10
-	composeEditorMaxLine = 30
-	composePreviewHeight = 320
+	composeWindowWidth  = 1000
+	composeWindowHeight = 760
+	composeWinMinWidth  = 600
+	composeWinMinHeight = 520
+	// 右侧常驻的附加组件栏与它的编辑弹窗：弹窗里的字段可以滚动，窗口缩到
+	// 最小尺寸时也不会长出屏幕。
+	composeSidebarWidth       = 200
+	composeModuleDialogWidth  = 520
+	composeModuleDialogHeight = 380
+	// 弹窗里滚动区以外的部分（标题、说明、两条分隔线、按钮行、间距与
+	// 内边距）约 210 DIP：窗口矮时按这个差把滚动区压小，底部按钮不会被
+	// 挤出屏幕。
+	composeModuleDialogChrome = 210
+	composeModuleDialogMin    = 220
+	composeEditorLines        = 10
+	composeEditorMaxLine      = 30
+	composePreviewHeight      = 320
 	// composeFabInset 是 FAB 占用的右侧宽度（按钮 + 边距）。列表底部的
 	// 「加载更多 / 重试」那一行据此让出这一段，免得被浮在上面的按钮盖住；
 	// FAB 本身不占布局高度，只是浮在内容区右下角。
@@ -57,7 +72,8 @@ func (a *app) showComposeWindow() {
 		a.openComposeWindow()
 		return
 	}
-	a.ensureComposeNodes()
+	// 节点列表按需加载：默认由 AI 判定分类，用户展开「手动指定节点」时
+	// 才在视图里拉（见 composeWindowView）。
 	a.openComposeWindow()
 }
 
@@ -152,17 +168,24 @@ func (a *app) composeWindowView(c *ui.Context) {
 	c.Root().Background(t.Background)
 	// 本窗口里发起的操作结果以 toast 显示在这里，不退回主窗口。
 	a.drainToasts(c, a.claimsToasts(toastCompose))
-	// Ctrl+Enter 发布、Esc 关闭：两者都是写长文的常用手势。Esc 不会丢草稿，
-	// 草稿留在 a.compose 里，重新打开还在。
+	// Ctrl+Enter 发布：写长文的常用手势。
 	c.OnShortcut(ui.Ctrl, ui.KeyEnter, a.submitCompose)
-	c.OnShortcut(0, ui.KeyEscape, a.closeComposeWindow)
 
 	st := a.compose
 	if st == nil {
 		st = newComposeState()
 		a.compose = st
 	}
-	a.ensureComposeNodes()
+	// 节点列表按需加载：默认不指定节点，由站点 AI 判定分类，只有展开
+	// 「手动指定节点」才去读缓存 / 发请求。
+	if st.nodeManual {
+		a.ensureComposeNodes()
+	}
+	// Esc 关闭窗口，但组件弹窗开着时由 Modal 自己吃掉 Esc（只关弹窗，不丢
+	// 草稿，也不关窗口），所以那一帧不再注册窗口级快捷键。
+	if !st.moduleOpen {
+		c.OnShortcut(0, ui.KeyEscape, a.closeComposeWindow)
+	}
 
 	ui.Column(c).Fill().Children(func() {
 		// 自绘标题栏：拖动窗口，右上角是最小化与关闭。
@@ -182,64 +205,35 @@ func (a *app) composeWindowView(c *ui.Context) {
 		})
 		ui.Divider(c)
 
-		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-			ui.Column(c).FillWidth().Padding(18, 20).Gap(14).Children(func() {
-				a.composeBasics(c, st)
-				a.composeEditorSection(c, st)
-				ui.Divider(c)
-				a.composeModules(c, st)
-				a.composeMessages(c, st)
+		// 主体分两栏：左边专心写，右边常驻组件入口。两栏各自滚动，正文
+		// 写多长都不会把组件列表顶出视野。
+		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
+				ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+					ui.Column(c).FillWidth().Padding(18, 20).Gap(14).Children(func() {
+						a.composeTitleField(c, st)
+						a.composeEditorSection(c, st)
+						ui.Divider(c)
+						a.composeMessages(c, st)
+						// 节点排在写作区最后：默认不用选，AI 判定分类。
+						a.composeNodeSection(c, st)
+					})
+				})
 			})
+			ui.Box(c).Width(1).AlignSelf(ui.Stretch).Background(t.Border)
+			a.composeSidebar(c, st)
 		})
 
 		ui.Divider(c)
 		a.composeFooter(c, st)
 	})
+	// 弹窗画在内容之上：和授权弹窗一样放在 view 末尾，才能盖住整扇窗口。
+	a.composeModuleDialog(c, st)
 }
 
-// composeBasics 是节点、匿名与标题三块。节点是必填项：发帖必须给 node_id
-// （uuid），不是 slug，所以级联选择按 uuid 记选中项。节点的父子关系来自
-// GET /v1/nodes：第一列是顶层分类，第二列才是可发帖的节点。
-func (a *app) composeBasics(c *ui.Context, st *composeState) {
-	t := c.Theme()
-	ui.Row(c).FillWidth().Gap(12).AlignItems(ui.End).Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-			ui.Text(c, "节点").FontSize(12).TextColor(t.TextMuted)
-			if len(st.nodes) > 0 {
-				options := nodeCascaderOptions(st.nodes)
-				if len(options) > 0 {
-					cascader(c, "节点", options, &st.nodeID, &st.nodePick)
-					return
-				}
-			}
-			// 节点还没到（或取不到）时不给一个空的级联选择：说明正在做什么，
-			// 失败时把原因和服务端的原话摆出来。
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				if st.nodeLoading {
-					ui.Spinner(c).Size(12, 12)
-				}
-				msg := "正在读取节点…"
-				switch {
-				case st.nodeErr != "":
-					msg = "节点读取失败：" + st.nodeErr
-				case st.nodeLoaded:
-					// 读到了但一个节点都没有：接口异常或权限问题，不是「还在读」。
-					msg = "没有可用的节点，请稍后重试，或到站点发帖。"
-				}
-				ui.Text(c, msg).FontSize(12).TextColor(t.TextMuted).MaxLines(2).Grow(1)
-				if st.nodeErr != "" || st.nodeLoaded {
-					if ui.Button(c, "重试").Clicked() {
-						// 手动重试要跳过失败冷却，并立刻重新请求。
-						st.nodesAt = time.Time{}
-						st.nodeFailedAt = time.Time{}
-						a.ensureComposeNodes()
-					}
-				}
-			})
-		})
-		ui.Toggle(c, &st.anonymous, "匿名发帖").Label("匿名发帖")
-	})
-
+// composeTitleField 是写作区第一块：只有标题。节点挪到最下面并降级为默认
+// AI 判定，匿名开关挪到右侧栏，打开窗口时标题就是唯一要填的东西。
+func (a *app) composeTitleField(c *ui.Context, st *composeState) {
 	ui.Field(c, "标题", func() {
 		ui.TextInput(c, &st.title).Label("标题").
 			Placeholder("一句话说清这帖讲什么").FillWidth().
@@ -250,30 +244,80 @@ func (a *app) composeBasics(c *ui.Context, st *composeState) {
 			st.focusTitle = false
 		}
 	}).Description(fmt.Sprintf("%d / %d 字", utf8.RuneCountInString(st.title), composeTitleMax))
+}
 
-	// 这三个是可选的补充信息，收在一行里，不抢标题和正文的位置。
-	ui.Row(c).FillWidth().Gap(10).Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-			ui.Text(c, "标题前缀").FontSize(12).TextColor(t.TextMuted)
-			ui.TextInput(c, &st.titlePrefix).Label("标题前缀").
-				Placeholder("可选，如「求助」").FillWidth().MaxLength(composeTitlePrefixMax)
+// composeNodeSection 是写作区最下面的一块：节点默认由站点的 AI 判定分类，
+// 不需要选、也不会为了一个用不上的列表去发请求。只有点了「手动指定节点」
+// 才展开级联选择并按需读缓存 / 拉节点；「恢复 AI 判定」直接把手动选择清掉，
+// 清除入口摆在明显位置，不用进弹窗。
+func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
+	t := c.Theme()
+	ui.Divider(c)
+	ui.Column(c).FillWidth().Gap(8).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "节点").FontSize(12).TextColor(t.TextMuted)
+					ui.Text(c, "选填 · 默认由 AI 判定").FontSize(11).TextColor(t.TextMuted)
+				})
+				state := "发帖后由 AI 自动判定分类，无需选择。"
+				if node := st.selectedNode(); node != nil {
+					state = "已手动指定：" + node.parentDisplay() + "，发布时发到这个节点。"
+				}
+				ui.Text(c, state).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+			})
+			if st.nodeManual {
+				if ui.Button(c, "收起节点").Clicked() {
+					st.nodeManual = false
+					st.nodePick.open = false
+				}
+			} else if ui.Button(c, "手动指定节点").Clicked() {
+				st.nodeManual = true
+			}
+			if st.nodeID != "" {
+				if ui.Button(c, "恢复 AI 判定").Clicked() {
+					st.nodeID = ""
+					st.nodePick.open = false
+					a.toast(toastCompose, "已恢复由 AI 判定分类")
+				}
+			}
 		})
-		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-			ui.Text(c, "状态").FontSize(12).TextColor(t.TextMuted)
-			ui.TextInput(c, &st.status).Label("状态").
-				Placeholder("可选").FillWidth().MaxLength(composeStatusMax)
-		})
-	})
-	ui.Row(c).FillWidth().Gap(10).Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-			ui.Text(c, "提示信息").FontSize(12).TextColor(t.TextMuted)
-			ui.TextInput(c, &st.tip).Label("提示信息").
-				Placeholder("可选").FillWidth().MaxLength(composeTipMax)
-		})
-		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-			ui.Text(c, "联系方式").FontSize(12).TextColor(t.TextMuted)
-			ui.TextInput(c, &st.contact).Label("联系方式").
-				Placeholder("可选").FillWidth().MaxLength(composeContactMax)
+		if !st.nodeManual {
+			return
+		}
+		if len(st.nodes) > 0 {
+			options := nodeCascaderOptions(st.nodes)
+			if len(options) > 0 {
+				cascader(c, "节点", options, &st.nodeID, &st.nodePick,
+					"清除节点选择", "由 AI 判定分类")
+				return
+			}
+		}
+		// 节点还没到（或取不到）时不给一个空的级联选择：说明正在做什么，
+		// 失败时把原因摆出来；节点本来就选填，读不到也能发帖。
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			if st.nodeLoading {
+				ui.Spinner(c).Size(12, 12)
+			}
+			msg := "节点列表还没准备好，可不选节点直接发布。"
+			if st.nodeLoading {
+				msg = "正在读取节点…（可不选节点直接发布）"
+			}
+			switch {
+			case st.nodeErr != "":
+				msg = "节点读取失败：" + st.nodeErr + "；可不选节点直接发布"
+			case st.nodeLoaded:
+				msg = "没有可用的节点，可不选节点直接发布。"
+			}
+			ui.Text(c, msg).FontSize(12).TextColor(t.TextMuted).MaxLines(2).Grow(1)
+			if st.nodeErr != "" || st.nodeLoaded {
+				if ui.Button(c, "重试").Clicked() {
+					// 手动重试要跳过失败冷却，并立刻重新请求。
+					st.nodesAt = time.Time{}
+					st.nodeFailedAt = time.Time{}
+					a.ensureComposeNodes()
+				}
+			}
 		})
 	})
 }
@@ -385,19 +429,283 @@ func (a *app) syncComposeSelection(area ui.Element, st *composeState) {
    附加组件
 ---------------------------------------------------------------- */
 
-// composeModules 是发帖接口支持的可选块。默认全部收起：大多数帖子不需要
-// 它们，展开哪一块就发哪一块的字段，没展开的一个字段都不发。
-func (a *app) composeModules(c *ui.Context, st *composeState) {
+// composeModuleSpec 是右侧栏里的一项。flag 指向「这一块随帖发送」的开关，
+// body 画弹窗里的字段；侧栏与弹窗共用同一张表，加组件时不用改两处。
+type composeModuleSpec struct {
+	name string
+	hint string
+	flag func(*composeState) *bool
+	body func(*app, *ui.Context, *composeState)
+}
+
+// composeModuleSpecs 是发帖接口支持的全部可选块，顺序就是侧栏里的顺序。
+// 默认一个都不启用：没点「添加此组件」的块，一个字段都不会进请求体。
+var composeModuleSpecs = []composeModuleSpec{
+	{"投票", "给帖子加一个单选或多选投票。",
+		func(st *composeState) *bool { return &st.voteOpen },
+		func(a *app, c *ui.Context, st *composeState) { a.composeVote(c, st) }},
+	{"评分", "给某个对象打分并附上理由。",
+		func(st *composeState) *bool { return &st.scoreOpen },
+		func(a *app, c *ui.Context, st *composeState) { a.composeScore(c, st) }},
+	{"竞猜", "发起一场竞猜，让读者选边。",
+		func(st *composeState) *bool { return &st.betOpen },
+		func(a *app, c *ui.Context, st *composeState) { a.composeBet(c, st) }},
+	{"兑换码 / 红包", "发兑换码，或开一个随帖红包。",
+		func(st *composeState) *bool { return &st.redeemOpen },
+		func(a *app, c *ui.Context, st *composeState) { a.composeRedeem(c, st) }},
+	{"金币池", "放一笔金币，读者浏览时按概率领取。",
+		func(st *composeState) *bool { return &st.poolOpen },
+		func(a *app, c *ui.Context, st *composeState) { a.composePool(c, st) }},
+	{"可见性（谁可以看）", "限制谁能读这篇帖子。",
+		func(st *composeState) *bool { return &st.guardOpen },
+		func(a *app, c *ui.Context, st *composeState) { a.composeGuard(c, st) }},
+}
+
+// enabledModuleCount 是侧栏底部那行汇总用的数量。
+func (st *composeState) enabledModuleCount() int {
+	n := 0
+	for _, m := range composeModuleSpecs {
+		if *m.flag(st) {
+			n++
+		}
+	}
+	return n
+}
+
+// composeSidebar 是窗口右侧常驻的控制栏：上半是匿名等发布设置，下半是六块
+// 附加组件。点一行在弹窗里编辑；已添加的行尾直接放「移除」，不必为了移除再
+// 进一次弹窗，底部还有「全部移除」一次清掉所有组件。
+func (a *app) composeSidebar(c *ui.Context, st *composeState) {
 	t := c.Theme()
-	ui.Column(c).FillWidth().Gap(6).Children(func() {
-		ui.Text(c, "附加组件").FontSize(12).Bold().TextColor(t.Text).SingleLine()
-		ui.Collapsible(c, "投票", &st.voteOpen, func() { a.composeVote(c, st) })
-		ui.Collapsible(c, "评分", &st.scoreOpen, func() { a.composeScore(c, st) })
-		ui.Collapsible(c, "竞猜", &st.betOpen, func() { a.composeBet(c, st) })
-		ui.Collapsible(c, "兑换码 / 红包", &st.redeemOpen, func() { a.composeRedeem(c, st) })
-		ui.Collapsible(c, "金币池", &st.poolOpen, func() { a.composePool(c, st) })
-		ui.Collapsible(c, "可见性（谁可以看）", &st.guardOpen, func() { a.composeGuard(c, st) })
+	ui.Column(c).Width(composeSidebarWidth).FillHeight().MinHeight(0).
+		Background(t.Surface).Padding(14, 12).Gap(8).Children(func() {
+		ui.Text(c, "发布设置").FontSize(13).Bold().TextColor(t.Text).SingleLine()
+		ui.Row(c).FillWidth().Children(func() {
+			ui.Toggle(c, &st.anonymous, "匿名发帖").Label("匿名发帖")
+		})
+		ui.Text(c, "匿名只随这篇帖子生效。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		ui.Divider(c)
+		ui.Text(c, "附加组件").FontSize(13).Bold().TextColor(t.Text).SingleLine()
+		ui.Text(c, "选填。点一行，在弹窗里设置好再添加。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
+				for i := range composeModuleSpecs {
+					m := composeModuleSpecs[i]
+					index := i
+					on := *m.flag(st)
+					// 边框始终是 1 DIP，只换颜色：启用状态切换时按钮不会跳。
+					ring := t.Border
+					if on {
+						ring = t.Accent
+					}
+					ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
+						setup := ui.Button(c, "").Grow(1).MinWidth(0).
+							Justify(ui.SpaceBetween).
+							Border(1, ring).Label(m.name).Tooltip(m.hint)
+						setup.Children(func() {
+							ui.Text(c, m.name).FontSize(12).SingleLine().
+								TextColor(t.Text).Grow(1)
+							mark, fg := "设置", t.TextMuted
+							if on {
+								mark, fg = "已添加", t.Success
+							}
+							ui.Text(c, mark).FontSize(11).SingleLine().TextColor(fg)
+						})
+						setup.OnClick(func() {
+							st.moduleIndex = index
+							st.moduleOpen = true
+						})
+						if on {
+							// 移除就在行尾：不用再打开弹窗，填过的内容仍留在草稿里。
+							remove := ui.Button(c, "移除").
+								Label("移除" + m.name).
+								Tooltip("移除" + m.name + "，填过的内容仍留在草稿里")
+							if remove.Clicked() {
+								*m.flag(st) = false
+								a.toast(toastCompose, "已移除"+m.name)
+							}
+						}
+					})
+				}
+			})
+		})
+		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, fmt.Sprintf("已添加 %d / %d 项", st.enabledModuleCount(),
+				len(composeModuleSpecs))).FontSize(11).
+				TextColor(t.TextMuted).SingleLine().Grow(1)
+			if st.enabledModuleCount() > 0 {
+				if ui.Button(c, "全部移除").Label("全部移除附加组件").Clicked() {
+					for _, m := range composeModuleSpecs {
+						*m.flag(st) = false
+					}
+					a.toast(toastCompose, "已移除全部附加组件")
+				}
+			}
+		})
 	})
+}
+
+// composeModuleDialog 是点侧栏某一行之后弹出的编辑窗。字段和以前折叠面板里
+// 的一模一样，只是搬进了弹窗：启不启用由底部的按钮决定，编辑中的内容一直
+// 留在草稿里，关掉弹窗再点进来还在。移除不在这里做——侧栏对应行的行尾
+// 直接有「移除」。点窗外或按 Esc 只关弹窗，不关窗口。
+func (a *app) composeModuleDialog(c *ui.Context, st *composeState) {
+	if !st.moduleOpen || st.moduleIndex < 0 || st.moduleIndex >= len(composeModuleSpecs) {
+		return
+	}
+	m := composeModuleSpecs[st.moduleIndex]
+	t := c.Theme()
+	ui.Modal(c, &st.moduleOpen, func() {
+		ui.Column(c).Width(composeModuleDialogWidth).Gap(8).Children(func() {
+			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+				ui.Text(c, m.name).FontSize(16).Bold().TextColor(t.Text).Grow(1)
+				if ui.Button(c, "关闭").Clicked() {
+					st.moduleOpen = false
+				}
+			})
+			ui.Text(c, m.hint).FontSize(12).TextColor(t.TextMuted).MaxLines(3)
+			ui.Divider(c)
+			_, windowHeight := c.Size()
+			scrollHeight := windowHeight - composeModuleDialogChrome
+			scrollHeight = max(composeModuleDialogMin,
+				min(scrollHeight, composeModuleDialogHeight))
+			ui.Scroll(c).FillWidth().MaxHeight(scrollHeight).Children(func() {
+				ui.Column(c).FillWidth().Padding(2, 2).Children(func() {
+					m.body(a, c, st)
+					// 最后一行不要紧贴滚动区下沿：看起来像被截断。
+					ui.Spacer(c).Height(8)
+				})
+			})
+			ui.Divider(c)
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				on := *m.flag(st)
+				state := "未添加：不会随帖发送"
+				if on {
+					state = "已添加：会随帖一起发送；移除在右侧栏这一行的行尾。"
+				}
+				ui.Text(c, state).FontSize(11).TextColor(t.TextMuted).
+					MaxLines(2).Grow(1)
+				label := "添加此组件"
+				if on {
+					label = "完成"
+				}
+				if ui.PrimaryButton(c, label).Clicked() {
+					if !on {
+						*m.flag(st) = true
+						a.toast(toastCompose, "已添加"+m.name)
+					}
+					st.moduleOpen = false
+				}
+			})
+		})
+	})
+}
+
+// composeOptionList 是所有「可以有多个选项」的地方共用的编辑区。操作行放在
+// 最上面：「添加选项」「批量添加」「删除选中」都在显眼处；批量添加展开的内联
+// 录入区紧跟其后，弹窗不用滚动就能点「加入选项」。下面才是逐行的输入框、
+// 行首勾选框与行尾「删除」。增删都卡在 minCount～maxCount 之间，操作结果
+// 一律用窗口内 toast 报告。
+func (a *app) composeOptionList(c *ui.Context, opts *[]string, checked *[]bool,
+	batchOpen *bool, batchText *string, label string, minCount, maxCount, maxLen int) {
+	t := c.Theme()
+	*checked = syncComposeChecks(*checked, len(*opts))
+	nChecked := 0
+	for _, on := range *checked {
+		if on {
+			nChecked++
+		}
+	}
+	batchToggled, removeChecked := false, false
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		add := ui.Button(c, "添加选项").Disabled(len(*opts) >= maxCount)
+		if add.Clicked() {
+			*opts = append(*opts, "")
+			*checked = append(*checked, false)
+		}
+		if ui.Button(c, "批量添加").Tooltip("一次粘贴多行，每行一个选项").Clicked() {
+			batchToggled = true
+		}
+		ui.Spacer(c).Grow(1)
+		drop := ui.Button(c, "删除选中").
+			Tooltip(fmt.Sprintf("删除勾选的 %d 个%s", nChecked, label)).
+			Disabled(nChecked == 0)
+		if drop.Clicked() {
+			removeChecked = true
+		}
+	})
+	if batchToggled {
+		*batchOpen = !*batchOpen
+	}
+	// 批量删除在画选项行之前落账，这一帧看到的就是删完的列表。
+	if removeChecked {
+		next, flags, removed, held := removeComposeChecked(*opts, *checked, minCount)
+		*opts, *checked = next, flags
+		msg := fmt.Sprintf("已删除 %d 个%s", removed, label)
+		if held {
+			msg += fmt.Sprintf("；至少保留 %d 个", minCount)
+		}
+		a.toast(toastCompose, msg)
+	}
+	if *batchOpen {
+		ui.Column(c).FillWidth().Gap(6).Radius(8).Background(t.Surface).
+			Border(1, t.Border).Padding(8, 10).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "批量添加：一行一个，可直接粘贴多行").
+					FontSize(11).TextColor(t.TextMuted).Grow(1)
+				if ui.Button(c, "取消").Clicked() {
+					*batchOpen = false
+					*batchText = ""
+				}
+				if ui.PrimaryButton(c, "加入选项").Clicked() {
+					lines := composeBatchLines(*batchText)
+					if len(lines) == 0 {
+						a.toast(toastCompose, "请先粘贴要添加的"+label)
+						return
+					}
+					next, added, skipped := appendComposeBatch(*opts, lines, minCount, maxCount)
+					*opts = next
+					*checked = syncComposeChecks(*checked, len(next))
+					*batchOpen = false
+					*batchText = ""
+					msg := fmt.Sprintf("已批量添加 %d 个%s", added, label)
+					if skipped > 0 {
+						msg += fmt.Sprintf("，超出上限省略 %d 个", skipped)
+					}
+					a.toast(toastCompose, msg)
+				}
+			})
+			ui.Text(c, fmt.Sprintf("最多 %d 项", maxCount)).
+				FontSize(11).TextColor(t.TextMuted)
+			ui.TextArea(c, batchText).Label(label+"批量录入").
+				Placeholder("第一行\n第二行\n第三行").FillWidth().Lines(4, 12)
+		})
+	}
+	removeAt := -1
+	for i := range *opts {
+		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Checkbox(c, &(*checked)[i], "").Shrink(0).
+				Label(fmt.Sprintf("勾选%s %d", label, i+1)).
+				Tooltip("勾选后可批量删除")
+			ui.TextInput(c, &(*opts)[i]).
+				Label(fmt.Sprintf("%s %d", label, i+1)).
+				Placeholder(fmt.Sprintf("%s %d", label, i+1)).
+				FillWidth().MaxLength(maxLen)
+			remove := ui.Button(c, "删除").
+				Tooltip(fmt.Sprintf("删除%s %d", label, i+1)).
+				Disabled(len(*opts) <= minCount)
+			if remove.Clicked() {
+				removeAt = i
+			}
+		})
+	}
+	// 正在构建的集合留到循环结束后再改，避免遍历到一半行数变了。
+	if removeAt >= 0 {
+		*opts = append((*opts)[:removeAt], (*opts)[removeAt+1:]...)
+		*checked = append((*checked)[:removeAt], (*checked)[removeAt+1:]...)
+	}
 }
 
 // composeVote 是投票块：类型（pk / multiple）、标题（≤16 字）、1～20 个选项、
@@ -412,28 +720,15 @@ func (a *app) composeVote(c *ui.Context, st *composeState) {
 				Placeholder(fmt.Sprintf("最多 %d 字", composeVoteTitleMax)).
 				FillWidth()
 		})
-		// 选项是动态行：每行一个输入框 + 删除按钮，末尾是「添加选项」。
-		// 行数受 1～20 限制，删除最后一行的按钮在只剩一行时禁用。
-		for i := range st.voteOptions {
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.TextInput(c, &st.voteOptions[i]).
-					Label(fmt.Sprintf("选项 %d", i+1)).
-					Placeholder(fmt.Sprintf("选项 %d", i+1)).
-					FillWidth().MaxLength(composeOptionTextMax)
-				remove := ui.Button(c, "删除").Disabled(len(st.voteOptions) <= 1)
-				if remove.Clicked() {
-					st.voteOptions = append(st.voteOptions[:i], st.voteOptions[i+1:]...)
-				}
-			})
-		}
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			add := ui.Button(c, "添加选项").Disabled(len(st.voteOptions) >= composeOptionMax)
-			if add.Clicked() {
-				st.voteOptions = append(st.voteOptions, "")
-			}
+		// 选项是动态行，支持逐行增删、批量粘贴与勾选批量删除；行数受
+		// 1～20 限制（见 composeOptionList）。
+		a.composeOptionList(c, &st.voteOptions, &st.voteChecked,
+			&st.voteBatchOpen, &st.voteBatchText,
+			"投票选项", 1, composeOptionMax, composeOptionTextMax)
+		ui.Row(c).FillWidth().Children(func() {
+			ui.Toggle(c, &st.voteResultVisible, "公开投票结果")
 			ui.Spacer(c).Grow(1)
 		})
-		ui.Toggle(c, &st.voteResultVisible, "公开投票结果")
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.End).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 				ui.Text(c, "截止时间").FontSize(12).TextColor(t.TextMuted)
@@ -481,25 +776,10 @@ func (a *app) composeBet(c *ui.Context, st *composeState) {
 			ui.TextInput(c, &st.betTitle).Label("竞猜标题").
 				Placeholder(fmt.Sprintf("最多 %d 字", composeBetTitleMax)).FillWidth()
 		})
-		for i := range st.betOptions {
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.TextInput(c, &st.betOptions[i]).
-					Label(fmt.Sprintf("竞猜选项 %d", i+1)).
-					Placeholder(fmt.Sprintf("选项 %d", i+1)).
-					FillWidth().MaxLength(composeBetOptionMax)
-				remove := ui.Button(c, "删除").Disabled(len(st.betOptions) <= composeBetOptionsMin)
-				if remove.Clicked() {
-					st.betOptions = append(st.betOptions[:i], st.betOptions[i+1:]...)
-				}
-			})
-		}
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			add := ui.Button(c, "添加选项").Disabled(len(st.betOptions) >= composeBetOptionsMax)
-			if add.Clicked() {
-				st.betOptions = append(st.betOptions, "")
-			}
-			ui.Spacer(c).Grow(1)
-		})
+		// 竞猜选项与投票共用一套动态行：2～6 项，批量入口也在里面。
+		a.composeOptionList(c, &st.betOptions, &st.betChecked,
+			&st.betBatchOpen, &st.betBatchText,
+			"竞猜选项", composeBetOptionsMin, composeBetOptionsMax, composeBetOptionMax)
 		ui.Column(c).Gap(4).Children(func() {
 			ui.Text(c, "参与截止时间").FontSize(12).TextColor(t.TextMuted)
 			ui.TextInput(c, &st.betDeadline).Label("竞猜参与截止时间").
@@ -508,17 +788,37 @@ func (a *app) composeBet(c *ui.Context, st *composeState) {
 	})
 }
 
-// composeRedeem 是兑换码 / 红包块：一行一个兑换码，加上说明、每人可领数量
+// composeRedeem 是兑换码 / 红包块：一行一个兑换码（本身就支持批量），另有
+// 「批量粘贴」一次追加多行、「清空」一次移除全部，加上说明、每人可领数量
 // 与可选的红包。红包金额只有文档给出的六档，用分段控件选。
 func (a *app) composeRedeem(c *ui.Context, st *composeState) {
 	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		ui.Column(c).Gap(4).Children(func() {
-			ui.Text(c, "兑换码（一行一个）").FontSize(12).TextColor(t.TextMuted)
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "兑换码（一行一个）").FontSize(12).
+					TextColor(t.TextMuted).Grow(1)
+				if ui.Button(c, "批量粘贴").Label("批量粘贴兑换码").
+					Tooltip("一次粘贴多行，追加到兑换码列表").Clicked() {
+					st.redeemBatchOpen = !st.redeemBatchOpen
+				}
+				clear := ui.Button(c, "清空").Label("清空兑换码").
+					Tooltip("清空全部兑换码").Disabled(st.redeemCodes == "")
+				if clear.Clicked() {
+					st.redeemCodes = ""
+					st.redeemBatchText = ""
+					a.toast(toastCompose, "已清空兑换码")
+				}
+			})
 			ui.TextArea(c, &st.redeemCodes).Label("兑换码").
 				Placeholder("一行一个兑换码，也可以用逗号分隔").
 				FillWidth().Lines(4, 10).MaxLength(composeCodeMax * (composeCodeTextMax + 1))
+			ui.Text(c, "支持一次粘贴多行，或用逗号 / 分号分隔；上限 500 个。").
+				FontSize(11).TextColor(t.TextMuted).MaxLines(2)
 		})
+		if st.redeemBatchOpen {
+			a.composeRedeemBatch(c, st)
+		}
 		ui.Column(c).Gap(4).Children(func() {
 			ui.Text(c, "兑换说明").FontSize(12).TextColor(t.TextMuted)
 			ui.TextArea(c, &st.codeDescription).Label("兑换说明").
@@ -535,7 +835,58 @@ func (a *app) composeRedeem(c *ui.Context, st *composeState) {
 				ui.Segmented(c, &st.redPacketIndex, redPacketLabels...).Label("红包金额上限")
 			})
 		})
-		ui.Toggle(c, &st.redPacket, "同时开红包")
+		ui.Row(c).FillWidth().Children(func() {
+			ui.Toggle(c, &st.redPacket, "同时开红包")
+			ui.Spacer(c).Grow(1)
+		})
+	})
+}
+
+// composeRedeemBatch 是兑换码的批量入口：粘贴一段多行文本，一次追加到兑换码
+// 列表里。空行自动丢掉，超过 500 个的部分省略，结果用 toast 报告。
+func (a *app) composeRedeemBatch(c *ui.Context, st *composeState) {
+	t := c.Theme()
+	ui.Column(c).FillWidth().Gap(6).Radius(8).Background(t.Surface).
+		Border(1, t.Border).Padding(8, 10).Children(func() {
+		// 按钮放在录入区最上面：弹窗不用滚动就能点「追加兑换码」。
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, fmt.Sprintf("批量粘贴兑换码（已有 %d / %d 个）",
+				len(st.redeemCodeList()), composeCodeMax)).
+				FontSize(11).TextColor(t.TextMuted).Grow(1).MaxLines(2)
+			if ui.Button(c, "取消").Clicked() {
+				st.redeemBatchOpen = false
+				st.redeemBatchText = ""
+			}
+			if ui.PrimaryButton(c, "追加兑换码").Clicked() {
+				lines := composeBatchLines(st.redeemBatchText)
+				if len(lines) == 0 {
+					a.toast(toastCompose, "请先粘贴要添加的兑换码")
+					return
+				}
+				room := composeCodeMax - len(st.redeemCodeList())
+				if room < 0 {
+					room = 0
+				}
+				added := min(room, len(lines))
+				st.redeemCodes = strings.TrimSpace(st.redeemCodes)
+				if st.redeemCodes != "" {
+					st.redeemCodes += "\n"
+				}
+				st.redeemCodes += strings.Join(lines[:added], "\n")
+				skipped := len(lines) - added
+				st.redeemBatchOpen = false
+				st.redeemBatchText = ""
+				msg := fmt.Sprintf("已批量添加 %d 个兑换码", added)
+				if skipped > 0 {
+					msg += fmt.Sprintf("，超出上限省略 %d 个", skipped)
+				}
+				a.toast(toastCompose, msg)
+			}
+		})
+		ui.Text(c, "一行一个，可直接粘贴多行；空行会丢掉。").
+			FontSize(11).TextColor(t.TextMuted)
+		ui.TextArea(c, &st.redeemBatchText).Label("兑换码批量录入").
+			Placeholder("CODE-1\nCODE-2\nCODE-3").FillWidth().Lines(4, 12)
 	})
 }
 

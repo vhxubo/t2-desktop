@@ -11,6 +11,10 @@ import "github.com/egoist/mygo/ui"
 // 站点节点是「父节点 / 子节点」两层，父节点只是分类，发帖要的 node_id 是
 // 子节点的 uuid，所以这里不把父节点当可选项；发帖窗口的选中值因此一直存
 // uuid（见 composeState.nodeID），显示时才拼成父/子名字。
+//
+// clearLabel 非空时节点是选填的：第一列顶部多一行清除入口（发帖窗口写
+// 「清除节点选择」），点它把值置空并收起面板。emptyLabel 是空值时触发框上的
+// 文字（发帖窗口写「由 AI 判定分类」），为空时退回「不选择节点」。
 
 // cascaderOption 是一列里的一个选项。Children 非空时它是分类，只在第一列
 // 出现；Detail 是可选的右侧说明（节点表里放帖子数）。
@@ -29,12 +33,19 @@ type cascaderState struct {
 }
 
 // cascader 画一个两列级联选择，把选中项写进 *value。label 是控件的可访问
-// 名称；空值显示为「请选择节点」。
-func cascader(c *ui.Context, label string, options []cascaderOption, value *string, st *cascaderState) {
+// 名称；空值默认显示「请选择节点」，允许清空时显示「不选择节点」，
+// emptyLabel 非空时优先显示它。
+func cascader(c *ui.Context, label string, options []cascaderOption, value *string, st *cascaderState, clearLabel, emptyLabel string) {
 	t := c.Theme()
 	display, picked := cascaderLabel(options, *value)
 	if !picked {
 		display = "请选择节点"
+		switch {
+		case emptyLabel != "":
+			display = emptyLabel
+		case clearLabel != "":
+			display = "不选择节点"
+		}
 	}
 	textColor := t.Text
 	if !picked {
@@ -76,6 +87,25 @@ func cascader(c *ui.Context, label string, options []cascaderOption, value *stri
 			// 两列都限高并各自滚动，窗口缩到最小尺寸时面板也不会长出窗口。
 			ui.Scroll(c).Width(180).MaxHeight(320).Children(func() {
 				ui.Column(c).Gap(2).Children(func() {
+					if clearLabel != "" {
+						row := ui.ButtonBase(c).FillWidth().Padding(6, 9).Radius(6).
+							AlignItems(ui.Center)
+						switch {
+						case *value == "":
+							row.Background(t.Surface)
+						case row.Hovered():
+							row.Background(t.SurfaceHover)
+						}
+						row.Children(func() {
+							ui.Text(c, clearLabel).FontSize(12).SingleLine().
+								Grow(1).TextColor(t.TextMuted)
+						})
+						row.Label(clearLabel)
+						row.OnClick(func() {
+							*value = ""
+							st.open = false
+						})
+					}
 					for i := range options {
 						a := &options[i]
 						row := ui.ButtonBase(c).FillWidth().Padding(6, 9).Radius(6).
