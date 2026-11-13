@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
@@ -1514,6 +1515,12 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 					"在独立窗口里写评论，一边看帖一边写").Clicked() {
 					a.showReplyWindow()
 				}
+				// 实时字数：评论正文在客户端不卡硬上限（只有表态通知正文按
+				// 2000 字截断），所以只显示当前有多少字，不报上限；超限由
+				// 服务端在发送时拦截。和独立写评论窗口同一套写法（见
+				// replyWindowBody），展开输入框时才出现，正好压在工具条右端。
+				ui.Text(c, fmt.Sprintf("%d 字", utf8.RuneCountInString(d.draft))).
+					FontSize(11).TextColor(t.TextMuted).SingleLine()
 			})
 			a.editorPanels(c, uploadTargetReply, &d.mdEditor, &d.draft,
 				a.replyCommunityEmojis(d))
