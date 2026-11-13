@@ -333,10 +333,18 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		// 标题行：区块名、编辑 / 预览切换与字数。切换放在工具条外面，因为
 		// 工具条窄了会把末尾的控件收进「»」菜单——模式切换不该被藏起来。
+		// 与评论区一样只画图标：编辑 / 预览是反复点的开关，图标比文字省地方，
+		// 说明在悬浮提示里。
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Text(c, "正文").FontSize(12).TextColor(t.TextMuted).Grow(1)
-			a.editorPanelButtons(c, &st.mdEditor, "表情", "上传图片", false)
-			ui.Segmented(c, &st.preview, "编辑", "预览").Label("正文视图")
+			ui.Row(c).Gap(2).AlignItems(ui.Center).KeepFocus().
+				Label("正文视图").Children(func() {
+				a.editorIconToggle(c, st.preview == 0, editIcon, "编辑", "编辑模式",
+					func() { st.preview = 0 })
+				a.editorIconToggle(c, st.preview == 1, eyeIcon, "预览", "预览模式",
+					func() { st.preview = 1 })
+			})
+			a.editorPanelButtons(c, &st.mdEditor, "表情", "上传图片")
 			count := ui.Text(c, fmt.Sprintf("%d / %d 字",
 				utf8.RuneCountInString(st.body), composeContentMax)).
 				FontSize(11).TextColor(t.TextMuted).SingleLine()
@@ -356,10 +364,10 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 		zone.Children(func() {
 			// 工具条固定在输入框上方（「头部」），滚动正文时始终可见。
 			ui.Row(c).FillWidth().Padding(2, 4).Children(func() {
-				a.editorToolbar(c, &st.mdEditor, &st.body, false)
+				a.editorToolbar(c, &st.mdEditor, &st.body)
 			})
 			ui.Divider(c)
-			a.editorPanels(c, uploadTargetCompose, &st.mdEditor, &st.body, nil, false)
+			a.editorPanels(c, uploadTargetCompose, &st.mdEditor, &st.body, nil)
 			if over {
 				ui.Text(c, "松开即可把图片插入正文").FontSize(11).
 					TextColor(t.Accent).Padding(6, 10)
@@ -390,8 +398,9 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 	})
 }
 
-// markdownButton 是工具条上的一项：显示文案（图标模式下作无障碍名与
-// 悬停说明的回退）、悬停说明、它插入的标记，以及图标模式下的线性图标。
+// markdownButton 是工具条上的一项：图标（必填，工具条只画图标）、无障碍名
+// 与悬浮提示用的名字、它插入的标记，以及悬浮提示里附带的标记示例。
+// 悬浮提示写成「名字：标记」的形式（见 editorToolbar）。
 type markdownButton struct {
 	label  string
 	hint   string

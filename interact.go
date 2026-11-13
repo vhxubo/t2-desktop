@@ -748,7 +748,7 @@ func (a *app) topicInteractionRow(c *ui.Context, d *detailState) {
 	ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
 		a.reactionSummaryInfo(c, d, reactionTopic, p.Rewards)
 		ui.Spacer(c).Grow(1)
-		a.reactionEntries(c, d, reactionTopic)
+		a.reactionEntries(c, d, reactionTopic, interactEntryComfy)
 	})
 }
 
@@ -829,18 +829,35 @@ const (
 	reactionStackOverlap = 5
 )
 
+// 表态 / 打赏入口的尺寸。正文底部那条互动栏只有一枚图标加一条汇总，留白
+// 多、离正文远，图标因此画大一号；评论底行要和 11px 的正文挤在一行里，保持
+// 紧凑，一屏能多读几条。两者共用同一套绘制，只有盒子边长、圆角与图标边长
+// 不同。
+type interactEntryStyle struct {
+	box    float32
+	icon   float32
+	radius float32
+}
+
+var (
+	// interactEntryCompact 是评论底行的尺寸，和评论正文同一档。
+	interactEntryCompact = interactEntryStyle{box: 18, icon: 13, radius: 5}
+	// interactEntryComfy 是正文互动栏的尺寸：比汇总胶囊略高，点起来不费劲。
+	interactEntryComfy = interactEntryStyle{box: 28, icon: 18, radius: 7}
+)
+
 // reactionEntries 画右侧两个图标入口（表态 / 打赏）；两个都不可用时什么
-// 都不画。评论与帖子共用，尺寸因此保持一致。
-func (a *app) reactionEntries(c *ui.Context, d *detailState, target string) {
+// 都不画。评论与帖子共用，尺寸由调用方给（见 interactEntryCompact / Comfy）。
+func (a *app) reactionEntries(c *ui.Context, d *detailState, target string, style interactEntryStyle) {
 	if !a.canActOn(d, target) && !a.canRewardOn(d, target) {
 		return
 	}
 	ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
 		if a.canActOn(d, target) {
-			a.reactionEntry(c, d, target)
+			a.reactionEntry(c, d, target, style)
 		}
 		if a.canRewardOn(d, target) {
-			a.rewardEntry(c, d, target)
+			a.rewardEntry(c, d, target, style)
 		}
 	})
 }
@@ -883,10 +900,10 @@ func reactionSummaryTip(stats []reactionStat) string {
 
 // reactionEntry 是表态入口：一个笑脸图标，点开贴着它的气泡选表情。图标比
 // 文字入口更紧凑，也不会把右侧挤成一条长标签。
-func (a *app) reactionEntry(c *ui.Context, d *detailState, target string) {
+func (a *app) reactionEntry(c *ui.Context, d *detailState, target string, style interactEntryStyle) {
 	t := c.Theme()
 	active := d.react.reactOpen && d.react.reactFor == target
-	b := ui.Box(c).Size(18, 18).Radius(5).Center().Background(ui.Transparent)
+	b := ui.Box(c).Size(style.box, style.box).Radius(style.radius).Center().Background(ui.Transparent)
 	if active || b.Hovered() {
 		b.Background(t.SurfaceHover)
 	}
@@ -901,7 +918,7 @@ func (a *app) reactionEntry(c *ui.Context, d *detailState, target string) {
 		b.Disabled(true)
 	}
 	b.Children(func() {
-		ui.Icon(c, reactionIcon).Size(13, 13).TextColor(ink)
+		ui.Icon(c, reactionIcon).Size(style.icon, style.icon).TextColor(ink)
 	})
 	b.Label("表情").Tooltip("添加一个表情")
 	if b.Clicked() {
@@ -917,10 +934,10 @@ func (a *app) reactionEntry(c *ui.Context, d *detailState, target string) {
 }
 
 // rewardEntry 是打赏入口：一个金币图标，点开贴着它的气泡填金额。
-func (a *app) rewardEntry(c *ui.Context, d *detailState, target string) {
+func (a *app) rewardEntry(c *ui.Context, d *detailState, target string, style interactEntryStyle) {
 	t := c.Theme()
 	active := d.react.rewardOpen && d.react.rewardFor == target
-	b := ui.Box(c).Size(18, 18).Radius(5).Center().Background(ui.Transparent)
+	b := ui.Box(c).Size(style.box, style.box).Radius(style.radius).Center().Background(ui.Transparent)
 	if active || b.Hovered() {
 		b.Background(t.SurfaceHover)
 	}
@@ -935,7 +952,7 @@ func (a *app) rewardEntry(c *ui.Context, d *detailState, target string) {
 		b.Disabled(true)
 	}
 	b.Children(func() {
-		ui.Icon(c, rewardIcon).Size(13, 13).TextColor(ink)
+		ui.Icon(c, rewardIcon).Size(style.icon, style.icon).TextColor(ink)
 	})
 	b.Label("打赏").Tooltip("打赏作者金币")
 	if b.Clicked() {

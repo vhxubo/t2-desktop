@@ -143,17 +143,24 @@ type replyItem struct {
 	// Avatar 是评论作者的头像地址；统一用户标识据此在昵称旁画头像。
 	Avatar                         string
 	Floor, FlatFloor, LocatedFloor int
-	ParentID                       string // 被回复评论的 uuid，点父评论引用时用来定位
-	ParentFloor                    int    // 父评论的楼层；父评论也是楼中楼时为 0
-	ParentAuthor                   string // 父评论作者，父评论没有楼层时用于引用
-	ParentSummary                  string
-	Reactions                      []reactionStat
-	Rewards                        rewardStat
-	Emojis                         map[string]string
-	Badges                         []badgeInfo
-	Deleted, Pinned                bool
-	Depth                          int
-	Children                       []replyItem
+	// Level 是评论在楼层树里的层级：1 = 楼层评论，2 = 楼中楼，3 = 三级回复。
+	// 站点最多三级，回复三级评论产生的是同级的兄弟节点，不是第四层
+	// （见 replyTarget）。服务端没给 level 时按树里的深度兜底。
+	Level    int
+	ParentID string // 被回复评论的 uuid，点父评论引用时用来定位
+	// ReplyCommentID 是真正被回复的那条评论。三级回复的 ParentID 停在二级
+	// 评论上，想回的是谁只能看这个字段；一级 / 二级评论两者是同一个值。
+	ReplyCommentID  string
+	ParentFloor     int    // 父评论的楼层；父评论也是楼中楼时为 0
+	ParentAuthor    string // 父评论作者，父评论没有楼层时用于引用
+	ParentSummary   string
+	Reactions       []reactionStat
+	Rewards         rewardStat
+	Emojis          map[string]string
+	Badges          []badgeInfo
+	Deleted, Pinned bool
+	Depth           int
+	Children        []replyItem
 	// HasChildren 标记这条评论在原始数据里带子树（楼中楼）。flattenReplies
 	// 把树摊平后 Children 被清空，但保留这个标志，供楼层视图在评论旁显示
 	// 折叠 / 展开入口，并据此隐藏被折叠的子回复。
@@ -401,10 +408,17 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 		Floor:        o.num("floor"),
 		FlatFloor:    o.num("flat_floor"),
 		LocatedFloor: o.num("located_floor"),
+		Level:        o.num("level"),
 		Deleted:      o.flag("is_deleted"),
 		Emojis:       decodeEmojiURLs(o["emojis"]),
 		Depth:        depth,
 	}
+	// 服务端不保证每条响应都带 level（老响应、部分端点）。楼层视图里
+	// 深度就是层级减一；扁平视图没有树，只能按顶层算，比不显示强。
+	if r.Level <= 0 {
+		r.Level = depth + 1
+	}
+	r.ReplyCommentID = o.str("reply_comment_id")
 	if a := o.sub("author"); a != nil {
 		if name := a.str("username"); name != "" {
 			r.Author = name
@@ -688,17 +702,86 @@ func flattenReplies(p replyPage) []replyItem {
 	return out
 }
 
-// createReply posts a new comment, optionally nested under parentID (the id
-// of the comment being replied to), using the write:comment scope. It goes
-// through withAuthRetry so a 401 triggers one refresh + retry like every read.
+// replyMaxLevel 是站点的回复层数上限：1 楼层评论、2 楼中楼、3 三级回复。
+// 到三级就到底了——回复三级评论不会再挂第四层，服务端把新评论作为三级评论
+// 的兄弟节点，父仍然是那条二级评论。线上数据与网页端提交都是这个形状。
+const replyMaxLevel = 3
+
+// replyTarget 是评论框当前在回的那条评论，零值表示发一条新的顶层评论。
+//
+// 三级回复是扁平存储的：真正回谁记在 replyCommentId 里，parentId 停在二级
+// 评论上，level 恒为 3。所以「提交用的父」和「被点的那条」不是同一个，字段
+// 必须按层级组装，见 postParentID / newLevel。
+type replyTarget struct {
+	ID       string // 被点「回复」的那条评论
+	Level    int    // 它的层级；0 表示未知（服务端没给）
+	ParentID string // 它的父评论：三级评论的父是二级评论
+	Floor    int
+	Author   string
+	AuthorID string
+}
+
+// postParentID 是提交时 parentId 的取值：回三级评论时停在它的父（二级评论）
+// 上，新评论因此成为三级评论的兄弟；其余情况就是被回复的那条本身。
+func (t replyTarget) postParentID() string {
+	if t.Level >= replyMaxLevel {
+		// 父评论缺失时宁可不发 parentId（当成新楼层），也不发一个必然被
+		// 服务端判成第四层的 id。
+		return t.ParentID
+	}
+	return t.ID
+}
+
+// newLevel 是这条回复发出去之后的层级，也就是提交时 level 的取值：回复
+// 顶层评论是 2 级，回复楼中楼是 3 级，回复三级评论仍是 3 级（同级兄弟）。
+// 层级未知时不发这个字段，让服务端按 parentId 自己推。
+func (t replyTarget) newLevel() int {
+	switch {
+	case t.ID == "":
+		return 1
+	case t.Level <= 0:
+		return 0
+	case t.Level >= replyMaxLevel:
+		return replyMaxLevel
+	}
+	return t.Level + 1
+}
+
+// needsMention 表示这条回复会成为某条三级回复的兄弟，正文得带上被回复人的
+// 名字才有上下文——网页端也在提交前补一个「@昵称 」。
+func (t replyTarget) needsMention() bool {
+	return t.Level >= replyMaxLevel && t.Author != ""
+}
+
+// label 是「正在回复 X」里的 X：有楼层号报楼层，否则报作者名。
+func (t replyTarget) label() string {
+	if t.Floor > 0 {
+		return fmt.Sprintf("%d 楼", t.Floor)
+	}
+	if t.Author != "" {
+		return t.Author
+	}
+	return "评论"
+}
+
+// createReply posts a new comment, optionally answering target, using the
+// write:comment scope. It goes through withAuthRetry so a 401 triggers one
+// refresh + retry like every read.
 // A fresh Idempotency-Key is minted per call: retrying a timed-out request is
 // the caller's job and must reuse the same key, while each new submit gets a
 // new one (index.md: the key identifies one logical creation).
-func (c *Client) createReply(ctx context.Context, shortID, content, parentID string) (replyItem, error) {
+func (c *Client) createReply(ctx context.Context, shortID, content string, target replyTarget) (replyItem, error) {
 	return withAuthRetry(c, ctx, func(token string) (replyItem, error) {
 		payload := map[string]any{"content": content}
-		if parentID != "" {
+		// 嵌套回复的字段按层级组装：parentId 是挂载点，replyCommentId 才是
+		// 真正被回复的那条，level 是新评论的层级。三个字段缺一，三级回复就
+		// 会被服务端当成第四层（parentId 直接指向三级评论）而报错。
+		if parentID := target.postParentID(); parentID != "" {
 			payload["parentId"] = parentID
+			payload["replyCommentId"] = target.ID
+			if level := target.newLevel(); level > 0 {
+				payload["level"] = level
+			}
 		}
 		d, err := c.postJSON(ctx, c.apiURL(topicPath(shortID)+"/replies"),
 			token, randomURLSafe(24), payload)
@@ -733,12 +816,15 @@ func decodeEmojis(d json.RawMessage) map[string]emojiInfo {
 		if o == nil {
 			continue
 		}
+		// 短码统一成「:code:」：文档的 code 自带冒号，但不能假设每个来源
+		// 都这样，否则同一张表里会混着两种写法。
+		code := ":" + strings.Trim(o.str("code"), ":") + ":"
 		e := emojiInfo{
-			Code:   o.str("code"),
+			Code:   code,
 			Name:   o.str("name"),
 			ImgURL: o.str("img_url"),
 		}
-		if e.Code != "" && e.ImgURL != "" {
+		if code != "::" && e.ImgURL != "" {
 			out[e.Code] = e
 		}
 	}
@@ -747,7 +833,9 @@ func decodeEmojis(d json.RawMessage) map[string]emojiInfo {
 
 // decodeEmojiURLs reads a post / reply's own short code → image map. The
 // server may send relative paths ("/emojis/x.png?size=medium"); the web
-// resolves them against the media origin.
+// resolves them against the media origin. Keys are normalized to the
+// ":code:" form the short-code scanner produces, so a table that omits the
+// colons still renders and still inserts one pair of them.
 func decodeEmojiURLs(raw json.RawMessage) map[string]string {
 	o := asObject(raw)
 	if o == nil {
@@ -755,7 +843,7 @@ func decodeEmojiURLs(raw json.RawMessage) map[string]string {
 	}
 	var out map[string]string
 	for code, v := range o {
-		if code == "" {
+		if strings.Trim(code, ":") == "" {
 			continue
 		}
 		var u string
@@ -765,7 +853,7 @@ func decodeEmojiURLs(raw json.RawMessage) map[string]string {
 		if out == nil {
 			out = make(map[string]string)
 		}
-		out[code] = resolveEmojiURL(u)
+		out[":"+strings.Trim(code, ":")+":"] = resolveEmojiURL(u)
 	}
 	return out
 }

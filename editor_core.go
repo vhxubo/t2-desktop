@@ -51,7 +51,10 @@ func newMDEditor() mdEditor {
 
 const (
 	emojiPageSize = 40
-	emojiColumns  = 8
+	emojiColumns  = 10
+	// emojiCellSize 是表情格子的边长：图标 20 DIP 加一圈内边距。格子定宽，
+	// 只有两三个表情时不会被均分拉成半屏一个。
+	emojiCellSize float32 = 30
 	// uploadPlaceholderPrefix 是图片还没传完时正文里的临时 URL。
 	// 预览会先把这些占位符换成中文说明，绝不会把它们交给 Markdown 渲染器。
 	uploadPlaceholderPrefix = "](upload:"
@@ -215,13 +218,29 @@ func editorFilteredEmojis(list []emojiInfo, query string, onlyPost bool, communi
 		if onlyPost && !community[e.Code] {
 			continue
 		}
-		if q != "" && !strings.Contains(strings.ToLower(e.Code), q) &&
+		if q != "" && !strings.Contains(strings.ToLower(emojiCode(e)), q) &&
 			!strings.Contains(strings.ToLower(e.Name), q) {
 			continue
 		}
 		out = append(out, e)
 	}
 	return out
+}
+
+// emojiCode 是表情不带冒号的短码：服务端表情表的 code 自带冒号（":sigh:"），
+// 社区表情表里的短码则不一定。内部一律按不带冒号的写法比较与搜索。
+func emojiCode(e emojiInfo) string {
+	return strings.Trim(e.Code, ":")
+}
+
+// emojiShortcode 是插入正文、以及悬停提示里显示的短码，永远只有一层冒号。
+// 直接拼 ":"+Code+":" 会在服务端表情上变成「::sigh::」——正文里短码匹配
+// 不到，预览和详情页就把它原样显示出来。
+func emojiShortcode(e emojiInfo) string {
+	if code := emojiCode(e); code != "" {
+		return ":" + code + ":"
+	}
+	return ""
 }
 
 // editorPendingUploads 数出正文里还没换成真实 URL 的图片占位符。发布前用它

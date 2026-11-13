@@ -510,15 +510,22 @@ func TestEditorEmojiPanelAndPreview(t *testing.T) {
 	if !a.compose.emojiOpen || a.compose.imageOpen {
 		t.Fatal("表情面板应与图片面板互斥")
 	}
-	if !tt.HasText(":sigh:") || !tt.HasText("搜索表情") {
-		t.Errorf("表情面板没画出全局表情：%q", tt.Texts())
+	if !tt.HasText("搜索表情") {
+		t.Errorf("表情面板没画出来：%q", tt.Texts())
+	}
+	// 面板里只画图标，不画短码：图标旁边再摆一串 :sigh: 只是噪声，
+	// 短码留给悬停提示。
+	if tt.HasText(":sigh:") || tt.HasText("::sigh::") {
+		t.Errorf("表情面板不该显示短码文字：%q", tt.Texts())
 	}
 	if err := tt.Click("叹气"); err != nil {
 		t.Fatalf("找不到表情单元：%v：%q", err, tt.Texts())
 	}
 	tt.Frame()
-	if !strings.Contains(a.compose.body, ":sigh:") {
-		t.Errorf("点击表情应插入短码：%q", a.compose.body)
+	// 服务端表情表的 code 自带冒号（":sigh:"），插入时必须剥掉再包一层，
+	// 否则正文里会出现匹配不到的「::sigh::」。
+	if a.compose.body != ":sigh:" {
+		t.Errorf("点击表情应插入一层冒号的短码：%q", a.compose.body)
 	}
 
 	// 过滤：只看本帖表情时，全局短码不出现。

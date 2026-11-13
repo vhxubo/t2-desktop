@@ -997,7 +997,7 @@ func TestCreateReplyPostsComment(t *testing.T) {
 	defer srv.Close()
 	c := &Client{HTTP: srv.Client(), Base: srv.URL + "/api", bearer: func() string { return "tok" }}
 
-	reply, err := c.createReply(context.Background(), "JBYGf2A", "顶", "c1")
+	reply, err := c.createReply(context.Background(), "JBYGf2A", "顶", replyTarget{ID: "c1", Level: 1})
 	if err != nil {
 		t.Fatalf("发评论失败：%v", err)
 	}
@@ -1020,7 +1020,7 @@ func TestCreateReplyPostsComment(t *testing.T) {
 	mu.Lock()
 	body = ""
 	mu.Unlock()
-	if _, err := c.createReply(context.Background(), "JBYGf2A", "顶", ""); err != nil {
+	if _, err := c.createReply(context.Background(), "JBYGf2A", "顶", replyTarget{}); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
@@ -1040,7 +1040,7 @@ func TestCreateReplyFallsBackToSubmittedContent(t *testing.T) {
 	defer srv.Close()
 	c := &Client{HTTP: srv.Client(), Base: srv.URL + "/api", bearer: func() string { return "tok" }}
 
-	reply, err := c.createReply(context.Background(), "JBYGf2A", "刚发的评论", "")
+	reply, err := c.createReply(context.Background(), "JBYGf2A", "刚发的评论", replyTarget{})
 	if err != nil {
 		t.Fatalf("发评论失败：%v", err)
 	}
@@ -1078,7 +1078,7 @@ func TestCreateReplyRefreshesOn401(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &Client{HTTP: srv.Client(), Base: srv.URL + "/api", Auth: m}
-	if _, err := c.createReply(context.Background(), "XYZ", "x", ""); err != nil {
+	if _, err := c.createReply(context.Background(), "XYZ", "x", replyTarget{}); err != nil {
 		t.Fatalf("刷新后重试失败：%v", err)
 	}
 	if success.Load() != 1 || m.accessToken() != "new" {
@@ -1094,7 +1094,7 @@ func TestCreateReplyScopeError(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := &Client{HTTP: srv.Client(), Base: srv.URL + "/api", bearer: func() string { return "tok" }}
-	_, err := c.createReply(context.Background(), "ABC12345", "x", "")
+	_, err := c.createReply(context.Background(), "ABC12345", "x", replyTarget{})
 	if err == nil || !strings.Contains(friendlyError(err), "write:comment") {
 		t.Errorf("403 错误提示不对：%v", err)
 	}
@@ -1198,6 +1198,91 @@ func TestReplyComposerCollapsesUnlessSelected(t *testing.T) {
 	blur()
 	if r, ok := tt.Find("写评论"); !ok || r.H < collapsed.H+20 {
 		t.Errorf("有草稿时应保持展开：%+v", r)
+	}
+}
+
+// 空草稿时发送按钮只是一枚弱化图标，有内容才变成实心主按钮：折叠态的输入栏
+// 因此不会在右边压一块醒目的强调色，看着像「已经可以发」。
+func TestReplyComposerSendIsQuietUntilTyped(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.theme.mode = themeLight
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	r, ok := tt.Find("发送")
+	if !ok {
+		t.Fatal("找不到发送按钮")
+	}
+	// 采样按钮左端、避开居中的纸飞机图标：空草稿时这里透出输入框的底色，
+	// 有草稿时是强调色的实心填充。
+	sample := func() float64 {
+		return colorLum(tt.Image().RGBAAt(int(r.X+2), int(r.Y+r.H/2)))
+	}
+	if quiet := sample(); quiet < 240 {
+		t.Errorf("空草稿时发送按钮不该有实心填充：亮度 %.0f", quiet)
+	}
+
+	a.detail.draft = "有内容了"
+	tt.Frame()
+	if r, ok = tt.Find("发送"); !ok {
+		t.Fatal("有草稿后找不到发送按钮")
+	}
+	if loud := sample(); loud > 200 {
+		t.Errorf("有草稿时发送按钮应是实心强调色：亮度 %.0f", loud)
+	}
+}
+
+// 正文底部那条互动栏比评论底行宽松，表态 / 打赏图标因此画大一号；评论底行
+// 仍用紧凑尺寸，一行评论不会被两枚大图标撑高。
+func TestTopicInteractionEntriesLargerThanCommentOnes(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	bar, ok := tt.Find("表情")
+	if !ok {
+		t.Fatal("找不到正文互动栏的表态入口")
+	}
+	if bar.W < interactEntryComfy.box || bar.H < interactEntryComfy.box {
+		t.Errorf("正文互动栏的图标应是大号：%+v", bar)
+	}
+
+	// 清掉正文的互动内容后整条栏不再绘制，剩下的「表情」就是评论底行的入口。
+	a.detail.topic.AuthorID = ""
+	a.detail.topic.Reactions = nil
+	a.detail.topic.Rewards = rewardStat{}
+	tt.Frame()
+	comment, ok := tt.Find("表情")
+	if !ok {
+		t.Fatal("找不到评论底行的表态入口")
+	}
+	if comment.H > interactEntryCompact.box {
+		t.Errorf("评论底行的图标应保持紧凑：%+v", comment)
+	}
+	if bar.H <= comment.H {
+		t.Errorf("正文互动栏的图标应比评论底行大：%.0f <= %.0f", bar.H, comment.H)
+	}
+}
+
+// 发送按钮贴在输入框右端：输入框占满整条，按钮才会落在右边缘，不会停在
+// 文字区后面、浮在框的中间。
+func TestReplyComposerSendSitsAtRightEdge(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	area, ok := tt.Find("写评论")
+	if !ok {
+		t.Fatal("找不到回复输入框")
+	}
+	send, ok := tt.Find("发送")
+	if !ok {
+		t.Fatal("找不到发送按钮")
+	}
+	// 两者之间只该有这一行的 8px 间距；差得多说明输入框没有吃满宽度。
+	if gap := send.X - (area.X + area.W); gap < 0 || gap > 16 {
+		t.Errorf("发送按钮没贴在输入框右端：间距 %.0f（输入框右边缘 %.0f，按钮左边缘 %.0f）",
+			gap, area.X+area.W, send.X)
 	}
 }
 
@@ -1610,7 +1695,7 @@ func TestReplyComposerLoggedIn(t *testing.T) {
 	if err := tt.Click("回复"); err != nil {
 		t.Fatalf("点击回复失败：%v", err)
 	}
-	if a.detail.replyToID == "" {
+	if a.detail.replyTo.ID == "" {
 		t.Error("点击回复后没有设置被回复的评论 id")
 	}
 	if !tt.HasText("正在回复") {
@@ -1623,9 +1708,9 @@ func TestReplyComposerLoggedIn(t *testing.T) {
 	if !tt.Focused("写评论") {
 		t.Error("点回复后应聚焦输入框")
 	}
-	// 空内容直接调用 submitReply 走同步校验、不发起请求（UI 上此时按钮已禁用，
-	// 点击不会触发，这里绕过按钮验证守卫逻辑本身）。校验不通过只在窗口底部
-	// 弹一条 toast，页面上不留一行红字。
+	// 空内容直接调用 submitReply 走同步校验、不发起请求（空草稿时按钮只是一
+	// 枚弱化的图标，点它同样走到这里；这里直接调用守卫逻辑本身）。校验不通过
+	// 只在窗口底部弹一条 toast，页面上不留一行红字。
 	a.detail.draft = ""
 	a.submitReply()
 	tt.Frame()
@@ -1788,9 +1873,7 @@ func TestReplyComposerNestedReplyHasNoFloor(t *testing.T) {
 	a.detail.replyTotal = pg.Total
 	a.detail.replyLoaded = true
 
-	a.detail.replyToID = "c1"
-	a.detail.replyToFloor = 1
-	a.detail.replyToName = "dannyng"
+	a.detail.replyTo = replyTarget{ID: "c1", Level: 1, Floor: 1, Author: "dannyng"}
 	a.detail.draft = "回复第一楼"
 	done := make(chan struct{})
 	a.onReplyPosted = func(replyItem, error) { close(done) }
@@ -1812,8 +1895,8 @@ func TestReplyComposerNestedReplyHasNoFloor(t *testing.T) {
 	if last.ParentID != "c1" || last.ParentFloor != 1 || last.ParentAuthor != "dannyng" {
 		t.Errorf("父评论引用没有补齐：%+v", last)
 	}
-	if a.detail.replyToName != "" {
-		t.Errorf("发送后应清空回复目标：%q", a.detail.replyToName)
+	if a.detail.replyTo.ID != "" {
+		t.Errorf("发送后应清空回复目标：%+v", a.detail.replyTo)
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for !tt.HasText("回复第一楼") {
@@ -1825,5 +1908,175 @@ func TestReplyComposerNestedReplyHasNoFloor(t *testing.T) {
 	}
 	if tt.HasText("9 楼") {
 		t.Errorf("楼中楼不应显示成 9 楼：%q", tt.Texts())
+	}
+}
+
+// 三级回复在线上是扁平存储的：parent 停在二级评论上，真正回的那条在
+// reply_comment_id 里。两个字段都要解出来，否则引用会认错人，再回复它时
+// parentId 也会指到三级评论上（服务端判成第四层，直接报错）。
+const thirdLevelRepliesJSON = `{
+  "items":[
+    {"id":"l1","content":"第一楼","floor":1,"level":1,"author":{"id":"u2","username":"dannyng"},
+     "children":[
+       {"id":"l2","content":"楼中楼","level":2,"author":{"id":"u3","username":"jimmy"},
+        "parent":{"id":"l1","content":"第一楼","floor":1,"author":{"username":"dannyng"}},
+        "children":[
+          {"id":"l3a","content":"三级 A","level":3,"author":{"id":"u4","username":"alice"},
+           "parent":{"id":"l2","content":"楼中楼","author":{"username":"jimmy"}},
+           "reply_comment_id":"l2"},
+          {"id":"l3b","content":"三级 B","level":3,"author":{"id":"u5","username":"bob"},
+           "parent":{"id":"l2","content":"楼中楼","author":{"username":"jimmy"}},
+           "reply_comment_id":"l3a"}
+        ]}
+     ]}
+  ],
+  "total":4,"page":1,"limit":100,"total_pages":1
+}`
+
+func TestDecodeReplyThirdLevel(t *testing.T) {
+	pg := decodeReplies([]byte(thirdLevelRepliesJSON))
+	list := flattenReplies(pg)
+	at := replyIndexByID(list, "l3b")
+	if at < 0 {
+		t.Fatalf("三级回复没有解出来：%+v", list)
+	}
+	got := list[at]
+	if got.Level != 3 || got.Depth != 2 {
+		t.Errorf("三级回复的层级 / 深度不对：%+v", got)
+	}
+	if got.ParentID != "l2" {
+		t.Errorf("三级回复的 parent 应停在二级评论：%q", got.ParentID)
+	}
+	if got.ReplyCommentID != "l3a" {
+		t.Errorf("没有解出 reply_comment_id：%q", got.ReplyCommentID)
+	}
+}
+
+// 回三级评论不能把 parentId 指到三级评论上：服务端会把它当成第四层。
+// parentId 停在二级评论、level 固定 3，真正回谁写在 replyCommentId 里。
+func TestCreateReplyFlattensThirdLevel(t *testing.T) {
+	var mu sync.Mutex
+	body := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		body = string(b)
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"r9","content":"@bob 顶","level":3,"author":{"username":"reader"}}`))
+	}))
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), Base: srv.URL + "/api", bearer: func() string { return "tok" }}
+
+	target := replyTarget{ID: "c3", Level: 3, ParentID: "c2", Author: "bob"}
+	if _, err := c.createReply(context.Background(), "JBYGf2A", "@bob 顶", target); err != nil {
+		t.Fatalf("发评论失败：%v", err)
+	}
+	mu.Lock()
+	sent := body
+	mu.Unlock()
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(sent), &payload); err != nil {
+		t.Fatalf("请求体不是 JSON：%s", sent)
+	}
+	if payload["parentId"] != "c2" {
+		t.Errorf("parentId 应停在二级评论：%s", sent)
+	}
+	if payload["replyCommentId"] != "c3" {
+		t.Errorf("replyCommentId 应是真正被回复的那条：%s", sent)
+	}
+	if payload["level"] != float64(3) {
+		t.Errorf("level 应为 3：%s", sent)
+	}
+}
+
+// 回复三级评论发出去后要落在二级评论子树的末尾，深度是 2（与其它三级回复
+// 平级），引用指向被点的那条，而不是它的父。
+func TestReplyComposerAnswersThirdLevelAsSibling(t *testing.T) {
+	var mu sync.Mutex
+	body := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		body = string(b)
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"new3","level":3,"flat_floor":12,"author":{"username":"reader"}}`))
+	}))
+	defer srv.Close()
+
+	a := loginApp(t, srv)
+	a.client.Base = srv.URL + "/api"
+	a.openDetail(Item{ShortID: "JBYGf2A", URL: "https://2libra.com/post/work/JBYGf2A"})
+	topic, _ := decodeTopic([]byte(detailTopicJSON), "JBYGf2A")
+	a.detail.topic = &topic
+	pg := decodeReplies([]byte(thirdLevelRepliesJSON))
+	a.detail.replyList = flattenReplies(pg)
+	a.detail.replyTotal = pg.Total
+	a.detail.replyLoaded = true
+	a.detail.rebuildDisplay()
+
+	a.detail.replyTo = replyTarget{ID: "l3a", Level: 3, ParentID: "l2", Author: "alice", AuthorID: "u4"}
+	a.detail.draft = "顶"
+	done := make(chan struct{})
+	a.onReplyPosted = func(replyItem, error) { close(done) }
+	a.submitReply()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("发送回调超时")
+	}
+
+	mu.Lock()
+	sent := body
+	mu.Unlock()
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(sent), &payload); err != nil {
+		t.Fatalf("请求体不是 JSON：%s", sent)
+	}
+	if payload["parentId"] != "l2" || payload["replyCommentId"] != "l3a" || payload["level"] != float64(3) {
+		t.Errorf("三级回复的嵌套字段不对：%s", sent)
+	}
+	// 新评论会成为三级评论的兄弟，正文必须带上被回复人。
+	if payload["content"] != "@alice 顶" {
+		t.Errorf("三级回复应在正文前补被回复人：%s", sent)
+	}
+
+	at := replyIndexByID(a.detail.replyList, "new3")
+	if at < 0 {
+		t.Fatalf("新回复没有插入列表：%+v", a.detail.replyList)
+	}
+	got := a.detail.replyList[at]
+	if got.Level != 3 || got.Depth != 2 {
+		t.Errorf("三级回复的层级 / 缩进不对：%+v", got)
+	}
+	if got.ParentID != "l2" || got.ReplyCommentID != "l3a" {
+		t.Errorf("引用目标没有补齐：%+v", got)
+	}
+	// 列表：l1、l2、l3a、l3b，新的三级回复接在子树末尾。
+	if at != 4 || at != len(a.detail.replyList)-1 {
+		t.Errorf("应插在二级评论子树末尾（行 4），实际 %d：%+v", at, a.detail.replyList)
+	}
+	if a.detail.replyTo.ID != "" {
+		t.Errorf("发送后应清空回复目标：%+v", a.detail.replyTo)
+	}
+}
+
+// 三级回复上方那条引用要指向真正被回复的那条（reply_comment_id），而不是
+// 它的 parent（二级评论），否则会显示成「回复二级评论的作者」，认错人。
+func TestReplyQuotePointsAtThirdLevelTarget(t *testing.T) {
+	d := &detailState{display: flattenReplies(decodeReplies([]byte(thirdLevelRepliesJSON)))}
+	l3b := d.display[replyIndexByID(d.display, "l3b")]
+	target, ok := replyQuoteTarget(d, l3b)
+	if !ok || target.ID != "l3a" {
+		t.Fatalf("引用应指向真正被回复的那条：%+v ok=%v", target, ok)
+	}
+	if got := replyQuoteLabel(target.Author, "三级 A", target.Floor); got != "回复 alice：三级 A" {
+		t.Errorf("引用文案 = %q", got)
+	}
+	// 一级 / 二级评论的 reply_comment_id 就是 parent，不走这条分支。
+	l2 := d.display[replyIndexByID(d.display, "l2")]
+	if _, ok := replyQuoteTarget(d, l2); ok {
+		t.Error("二级评论不该走三级回复的引用分支")
 	}
 }

@@ -73,22 +73,29 @@ type detailState struct {
 	fav   favoriteState
 	react reactionState
 
-	// composer: write a comment (optionally as a nested reply to replyToID).
+	// composer: write a comment (optionally as a nested reply to replyTo).
 	// 发送失败的原因不落在页面上，用主窗口的 toast 说明（见 submitReply）。
 	// mdEditor 与发帖窗口共用选区、工具面板、表情与预览状态
 	// （见 editor_core.go）；正文字符串仍是下面的 draft。
 	mdEditor
-	draft        string
-	replyToID    string
-	replyToFloor int
-	replyToName  string
-	posting      bool
+	draft string
+	// replyTo 是当前在回哪条评论；零值表示发一条新的顶层评论。带上层级
+	// 与父评论，是因为回复三级评论时提交用的 parentId 不是被点的那条
+	// （见 detail.go 的 replyTarget）。
+	replyTo replyTarget
+	posting bool
 	// composerField is the input's identity across builds: its committed
 	// focus decides whether the composer rests at one line or unfolds.
 	composerField ui.Handle
 	// composerIdle folds the composer back after a comment was sent, until
 	// the input is selected again or the next draft is typed.
 	composerIdle bool
+	// composerDetached 表示这份草稿正在独立写评论窗口里编辑（见
+	// reply_window.go）：页面里的评论框只留一行说明与「收回」入口，同一个
+	// 草稿不会在两个窗口里各有一个输入框。winPreview 是那个窗口右侧预览栏
+	// 的开关，默认显示。
+	composerDetached bool
+	winPreview       bool
 }
 
 func (d *detailState) originURL() string {
@@ -209,6 +216,9 @@ func (a *app) openDetail(it Item) {
 	if it.ShortID == "" {
 		return
 	}
+	// 换帖子就把独立写评论窗口收起来：它绑的是上一份 detailState 的草稿，
+	// 留着会让人以为写的是刚打开的这一篇。
+	a.closeReplyWindow()
 	if a.pageName == "detail" && a.detail != nil {
 		// Inline navigation: keep the post we came from so "✕ 关闭" walks
 		// back through the chain before dropping to the list.
@@ -221,6 +231,7 @@ func (a *app) openDetail(it Item) {
 	}
 	a.detail = &detailState{
 		mdEditor:     newMDEditor(),
+		winPreview:   true,
 		shortID:      it.ShortID,
 		focusID:      it.CommentID,
 		focusPending: it.CommentID != "",
@@ -268,6 +279,9 @@ func (a *app) openDetail(it Item) {
 
 func (a *app) closeDetail() {
 	a.status = ""
+	// 离开评论区时独立写评论窗口也一起收起：草稿还留在那个 detailState
+	// 里，回到这篇帖子时会原样出现。
+	a.closeReplyWindow()
 	// 离开评论区前把浏览状态（视图、停留位置、折叠、新评论基线）落盘，下次
 	// 回到同一篇时沿用。inline 跳转（压栈）和真正回到列表都会走到这里。
 	if a.detail != nil {
@@ -1060,14 +1074,23 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string, isNew bool) {
 			// 回复、表态与打赏都收到评论底部那一行（见下面的 replyFooter），
 			// 头部只留身份信息，不再随悬浮长出按钮。
 		})
-		if label := replyParentLabel(r); label != "" {
+		// 三级回复的 parent 只是挂载点（二级评论），真正回的那条在
+		// reply_comment_id 里：找得到就用它的作者与正文，引用和跳转都指向
+		// 它，否则会显示成「回复二级评论的作者」，认错人。
+		quoteID := r.ParentID
+		label := replyParentLabel(r)
+		if target, ok := replyQuoteTarget(a.detail, r); ok {
+			label = replyQuoteLabel(target.Author, truncate(commentExcerpt(target.Content), 60), target.Floor)
+			quoteID = target.ID
+		}
+		if label != "" {
 			at := -1
 			if a.detail != nil {
-				at = replyIndexByID(a.detail.display, r.ParentID)
+				at = replyIndexByID(a.detail.display, quoteID)
 			}
 			if at >= 0 {
 				// 父评论还在已加载的列表里：点一下跳过去并高亮它。
-				a.parentJump(c, label, r.ParentID, at)
+				a.parentJump(c, label, quoteID, at)
 			} else {
 				ui.Text(c, label).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
 			}
@@ -1136,12 +1159,12 @@ func (a *app) replyFooter(c *ui.Context, r replyItem, closed bool) {
 	d := a.detail
 	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 		if a.canActOn(d, r.ID) {
-			a.reactionEntry(c, d, r.ID)
+			a.reactionEntry(c, d, r.ID, interactEntryCompact)
 		}
 		a.reactionSummaryInfo(c, d, r.ID, r.Rewards)
 		ui.Spacer(c).Grow(1)
 		if a.canRewardOn(d, r.ID) {
-			a.rewardEntry(c, d, r.ID)
+			a.rewardEntry(c, d, r.ID, interactEntryCompact)
 		}
 		if !closed {
 			a.replyEntry(c, d, r)
@@ -1166,9 +1189,14 @@ func (a *app) replyEntry(c *ui.Context, d *detailState, r replyItem) {
 	})
 	b.Label("回复").Tooltip("回复这条评论")
 	if b.Clicked() {
-		d.replyToID = r.ID
-		d.replyToFloor = r.Floor
-		d.replyToName = r.Author
+		d.replyTo = replyTarget{
+			ID:       r.ID,
+			Level:    r.Level,
+			ParentID: r.ParentID,
+			Floor:    r.Floor,
+			Author:   r.Author,
+			AuthorID: r.AuthorID,
+		}
 		d.composerIdle = false
 		d.composerField.Focus(c)
 	}
@@ -1178,23 +1206,41 @@ func (a *app) replyEntry(c *ui.Context, d *detailState, r replyItem) {
 // 楼」，父评论本身也是楼中楼（没有 floor）时退回作者名，避免出现「回复 0
 // 楼」这种并不存在的楼层。
 func replyParentLabel(r replyItem) string {
-	if r.ParentFloor > 0 {
-		if r.ParentSummary != "" {
-			return fmt.Sprintf("回复 %d 楼：%s", r.ParentFloor, r.ParentSummary)
+	return replyQuoteLabel(r.ParentAuthor, r.ParentSummary, r.ParentFloor)
+}
+
+// replyQuoteLabel 拼一条引用文案。summary 为空时只报楼层或作者。
+func replyQuoteLabel(author, summary string, floor int) string {
+	if floor > 0 {
+		if summary != "" {
+			return fmt.Sprintf("回复 %d 楼：%s", floor, summary)
 		}
-		return fmt.Sprintf("回复 %d 楼", r.ParentFloor)
+		return fmt.Sprintf("回复 %d 楼", floor)
 	}
-	who := r.ParentAuthor
-	if who != "" {
-		if r.ParentSummary != "" {
-			return "回复 " + who + "：" + r.ParentSummary
+	if author != "" {
+		if summary != "" {
+			return "回复 " + author + "：" + summary
 		}
-		return "回复 " + who
+		return "回复 " + author
 	}
-	if r.ParentSummary != "" {
-		return "回复：" + r.ParentSummary
+	if summary != "" {
+		return "回复：" + summary
 	}
 	return ""
+}
+
+// replyQuoteTarget 找出三级回复真正在回的那条评论。它的 parent 只是挂载点
+// （二级评论），被回复的是 reply_comment_id 里的那条；开放 API 不下发那条
+// 评论的正文，只能在已经加载的列表里找。找不到、或本来就不是三级回复时
+// 返回 false，调用方退回 parent 的引用。
+func replyQuoteTarget(d *detailState, r replyItem) (replyItem, bool) {
+	if d == nil || r.ReplyCommentID == "" || r.ReplyCommentID == r.ParentID {
+		return replyItem{}, false
+	}
+	if at := replyIndexByID(d.display, r.ReplyCommentID); at >= 0 {
+		return d.display[at], true
+	}
+	return replyItem{}, false
 }
 
 // parentJump 是「回复 N 楼：…」的可点击版本：父评论已经在列表里时，
@@ -1271,21 +1317,12 @@ func (a *app) replyComposer(c *ui.Context, d *detailState) {
 	// 输入栏固定在评论卡片底部，不再为右下角的悬浮按钮让出宽度：刷新与
 	// 返回顶部已经收进右上角的悬浮工具条，这里只需要普通的内边距。
 	ui.Column(c).FillWidth().Padding(8, 12).Gap(4).Children(func() {
-		if d.replyToID != "" {
+		if d.replyTo.ID != "" {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				// 回复顶层评论时报楼层；回复楼中楼时它没有楼层，改用作者名。
-				who := d.replyToName
-				if d.replyToFloor > 0 {
-					who = fmt.Sprintf("%d 楼", d.replyToFloor)
-				}
-				if who == "" {
-					who = "评论"
-				}
-				ui.Text(c, "正在回复 "+who).FontSize(12).TextColor(t.Accent).Grow(1)
+				ui.Text(c, "正在回复 "+d.replyTo.label()).FontSize(12).TextColor(t.Accent).Grow(1)
 				a.replyAction(c, "取消", func() {
-					d.replyToID = ""
-					d.replyToFloor = 0
-					d.replyToName = ""
+					d.replyTo = replyTarget{}
 				})
 			})
 		}
@@ -1302,7 +1339,14 @@ func (a *app) replyComposer(c *ui.Context, d *detailState) {
 // tall, like a quiet channel under the comments, and unfolds into the
 // multiline field as soon as it is selected (focused), carries a draft, or
 // is answering a floor. Sending folds it back so the list regains the room.
+//
+// 草稿搬进独立写评论窗口时（见 reply_window.go），这里只剩一行说明与「收回」
+// 入口：同一个草稿只留一个输入框，不会两边各写一半。
 func (a *app) replyInput(c *ui.Context, d *detailState) {
+	if d.composerDetached {
+		a.replyDetachedHint(c, d)
+		return
+	}
 	t := c.Theme()
 	// 刚粘进来的图片在这里落地：必须在算 expanded 与构造输入框之前，
 	// 和拖放一样，这一帧就要把占位符写进草稿并让输入框展开。
@@ -1315,19 +1359,16 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	// 表情，都会让文本框失焦。只看焦点决定展开与否，输入框会在点下按钮的
 	// 那一帧缩回一行，刚打开的面板随之消失（评论列表重新占满、页面往下一沉）。
 	// 所以面板打开或切到预览时也保持展开，直到用户自己收起。
-	expanded := d.replyToID != "" || strings.TrimSpace(d.draft) != "" ||
+	expanded := d.replyTo.ID != "" || strings.TrimSpace(d.draft) != "" ||
 		(focused && !d.composerIdle) ||
 		d.emojiOpen || d.imageOpen || d.preview == 1
-	sendDisabled := d.posting || strings.TrimSpace(d.draft) == ""
-	vpad := float32(4)
+	// 折叠态的输入框是评论区底部的「入口」，不是一块空白的白板：上下留白
+	// 比展开态略收一点，整条撑满卡片宽度，鼠标移上去底色提亮一档，暗示点
+	// 一下就能写。
+	vpad := float32(6)
 	if expanded {
 		vpad = 8
 	}
-	border := t.Border
-	if focused {
-		border = t.Accent // 编辑中的输入框给一圈强调色，明确「已选中」
-	}
-	// 未输入时不占满：折叠态让输入框只裹住内容，聚焦 / 有内容 / 回复某楼才撑满整行。
 	box := ui.Column(c).Padding(vpad, 8).Radius(10).Background(t.Background)
 	// 整个评论框也是拖放区。登记要在 Children 之前；拖进图片后草稿立刻有
 	// 内容，这一帧就该展开，让用户看见刚插进来的占位符。
@@ -1336,22 +1377,32 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	if expanded {
 		box = box.FillWidth()
 	}
-	if over {
+	// 三种状态各自说一件事：拖进图片用强调色，编辑中用强调色描边，折叠态
+	// 只在悬浮时提亮底色（不抢焦点环的颜色）。展开后是正在写字的地方，
+	// 鼠标划过不再改底色，免得编辑面跟着闪。
+	switch {
+	case over:
 		box.Border(1, t.Accent).Background(t.SurfaceHover)
-	} else {
-		box.Border(1, border)
+	case focused:
+		box.Border(1, t.Accent)
+	case !expanded && box.Hovered():
+		box.Border(1, t.Border).Background(t.SurfaceHover)
+	default:
+		box.Border(1, t.Border)
 	}
 	box.Children(func() {
 		if expanded {
 			// 折叠态仍只有一行：工具条、视图切换与两个面板都只在展开时出现。
-			// 这几行带 KeepFocus：按下工具条、分隔线与视图切换时焦点仍留在
-			// 输入框里，光标与选区不动，插入标记后可以接着打字（见
-			// editorToolbar），输入框也不会因为这一下失焦而缩回去。
-			ui.Row(c).FillWidth().Padding(2, 4).KeepFocus().Children(func() {
-				a.editorToolbar(c, &d.mdEditor, &d.draft, true)
+			// 这两行带 KeepFocus：按下工具条、视图切换时焦点仍留在输入框里，
+			// 光标与选区不动，插入标记后可以接着打字（见 editorToolbar），
+			// 输入框也不会因为这一下失焦而缩回去。
+			//
+			// 两行都按评论区的紧凑尺寸画：图标 15 DIP、间距 2，工具条与视图
+			// 切换合成一块，不再用分隔线把输入框上方切出一条灰带。
+			ui.Row(c).FillWidth().Padding(1, 2).KeepFocus().Children(func() {
+				a.editorToolbar(c, &d.mdEditor, &d.draft)
 			})
-			ui.Divider(c).KeepFocus()
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).KeepFocus().
+			ui.Row(c).FillWidth().Gap(2).AlignItems(ui.Center).KeepFocus().
 				Label("评论视图").Children(func() {
 				// 编辑 / 预览：两个图标按钮代替文字 Segmented，平时只显示图标，
 				// 悬浮由 Tooltip 说明，选中项用底色区分；保留「评论视图」无障碍名。
@@ -1360,13 +1411,20 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				a.editorIconToggle(c, d.preview == 1, eyeIcon, "预览", "预览模式",
 					func() { d.preview = 1 })
 				ui.Spacer(c).Grow(1)
-				a.editorPanelButtons(c, &d.mdEditor, "插入表情", "插入图片", true)
+				a.editorPanelButtons(c, &d.mdEditor, "插入表情", "插入图片")
+				// 独立窗口：把草稿搬到一个单独的 mygo 窗口里写，页面留在
+				// 帖子上，一边看正文一边写回复；文字一直留在 d.draft 里，
+				// 收回来时原样接着写（见 reply_window.go）。
+				if a.editorIconButton(c, expandIcon, "独立窗口写评论",
+					"在独立窗口里写评论，一边看帖一边写").Clicked() {
+					a.showReplyWindow()
+				}
 			})
 			a.editorPanels(c, uploadTargetReply, &d.mdEditor, &d.draft,
-				a.replyCommunityEmojis(d), true)
+				a.replyCommunityEmojis(d))
 			if d.preview == 1 {
 				a.editorPreviewView(c, d.draft, a.replyEmojis(d),
-					a.commentMd, replyPreviewHeight)
+					a.commentMd, replyPreviewFit(d.draft))
 			}
 		}
 		// 展开时上面会多出工具条、视图切换与面板。MyGo 的节点身份由
@@ -1375,64 +1433,124 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 		// 输入框本身是复合控件不能带 key，key 给包着它的 Row。
 		c.Key("reply-composer-row")
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.End).Children(func() {
-			// 多行文本区即 Markdown 编辑器：透明背景、去边框，融入外层输入框。
-			// 未输入时不 Grow，只留约 200 宽的输入框；展开时才撑满整行。
-			// OnPaste 让直接粘进来的图片自动上传（见 pasteIntoEditor），
-			// 文字仍按原样插入。
-			area := ui.TextArea(c, &d.draft).Label("写评论").
-				MinHeight(0).Background(ui.Transparent).
-				Border(0, t.Border).
-				OnPaste(func(text string) bool {
-					return a.pasteIntoEditor(uploadTargetReply, text)
-				}).
-				Bind(&d.composerField)
-			if expanded {
-				area.Grow(1).Lines(4, 10).
-					Placeholder("说点什么…（支持 Markdown、表情短码 :smile:，图片可直接拖进来或粘贴）")
-			} else {
-				area.Lines(1, 8).Placeholder("写评论…")
-			}
-			d.syncSelection(area)
-			if d.posting {
-				ui.Spinner(c).Size(16, 16)
-			}
-			// 未登录时把框内动作换成「登录后评论」；否则为集成在框内的发送按钮。
-			// 两个动作都只显示图标，文字说明交由 Tooltip（Label 仍保留文字
-			// 作无障碍名与点击测试的命中名）。
-			if !a.auth.loggedIn() {
-				login := ui.Button(c, "").
-					Background(ui.Transparent).
-					Border(0, t.Border).
-					TextColor(t.Text).
-					Padding(4, 6).
-					Radius(6)
-				login.Children(func() {
-					ui.Icon(c, loginIcon).Size(16, 16).TextColor(t.Text)
-				})
-				login.Label("登录后评论").Tooltip("登录后才能发表评论")
-				if login.Clicked() {
-					var replay func()
-					if strings.TrimSpace(d.draft) != "" {
-						replay = func() {
-							if a.detail == d {
-								a.submitReply()
-							}
-						}
-					}
-					a.requestLogin("登录后才能发表评论。", replay)
-				}
-			} else {
-				send := ui.PrimaryButton(c, "").Disabled(sendDisabled)
-				send.Children(func() {
-					ui.Icon(c, sendIcon).Size(16, 16).TextColor(t.AccentText)
-				})
-				send.Label("发送").Tooltip("发送评论")
-				if send.Clicked() {
-					a.submitReply()
-				}
-			}
+			a.replyField(c, d, expanded)
 		})
 	})
+}
+
+// replyDetachedHint 是草稿在独立窗口里时页面上的那一行：说明去哪儿了，以及
+// 把草稿收回页面评论框的入口。文字不复制一份到这里，免得两处不同步。
+func (a *app) replyDetachedHint(c *ui.Context, d *detailState) {
+	t := c.Theme()
+	row := ui.Row(c).FillWidth().Padding(6, 8).Gap(8).AlignItems(ui.Center).
+		Radius(10).Border(1, t.Border).Background(t.Background)
+	row.Children(func() {
+		ui.Icon(c, expandIcon).Size(14, 14).TextColor(t.Accent)
+		ui.Text(c, "正在独立窗口里写评论，可以一边看帖一边写").FontSize(12).
+			TextColor(t.TextMuted).SingleLine().Grow(1).MinWidth(0)
+		if ui.Button(c, "收回评论区").
+			Tooltip("把草稿收回页面里的评论框，已经写好的文字不变").Clicked() {
+			a.closeReplyWindow()
+		}
+	})
+}
+
+// replyTextArea 画输入框本身。页面里的评论框与独立窗口共用它，只是行数与
+// 占位文案不同；窗口里它占满左栏高度，页面里随内容长到 10 行。
+func (a *app) replyTextArea(c *ui.Context, d *detailState, mode replyFieldMode, expanded bool) ui.Element {
+	t := c.Theme()
+	// 多行文本区即 Markdown 编辑器：透明背景、去边框，融入外层输入框。
+	// 三个模式都 Grow(1)：输入框占满整条，右侧的发送按钮才会贴在框的右端，
+	// 而不是停在文字区后面、浮在框中间。OnPaste 让直接粘进来的图片自动上传
+	// （见 pasteIntoEditor），文字仍按原样插入。
+	area := ui.TextArea(c, &d.draft).Label("写评论").
+		MinHeight(0).Background(ui.Transparent).
+		Border(0, t.Border).
+		OnPaste(func(text string) bool {
+			return a.pasteIntoEditor(uploadTargetReply, text)
+		}).
+		Bind(&d.composerField)
+	switch {
+	case mode == replyFieldWindow:
+		area.Grow(1).MinHeight(0).Lines(8, 40).AutoFocus().
+			Placeholder("说点什么…（支持 Markdown、表情短码 :smile:，图片可直接拖进来或粘贴）")
+	case expanded:
+		area.Grow(1).Lines(4, 10).
+			Placeholder("说点什么…（支持 Markdown、表情短码 :smile:，图片可直接拖进来或粘贴）")
+	default:
+		area.Grow(1).Lines(1, 8).Placeholder("写评论…")
+	}
+	d.syncSelection(area)
+	return area
+}
+
+// replyField 是页面里评论框的那一行：输入框 + 右侧那一个动作。窗口里的
+// 输入框自己占满左栏，动作在底部的页脚里（见 replyWindowBody）。
+func (a *app) replyField(c *ui.Context, d *detailState, expanded bool) {
+	a.replyTextArea(c, d, replyFieldInline, expanded)
+	if d.posting {
+		ui.Spinner(c).Size(16, 16)
+	}
+	a.replyFieldActions(c, d)
+}
+
+// replyFieldActions 是输入框右侧那一个动作：未登录时是「登录后评论」，登录后
+// 是发送按钮。两个动作都只显示图标，文字说明交由 Tooltip（Label 仍保留文字
+// 作无障碍名与点击测试的命中名）。
+func (a *app) replyFieldActions(c *ui.Context, d *detailState) {
+	t := c.Theme()
+	if !a.auth.loggedIn() {
+		login := ui.Button(c, "").
+			Background(ui.Transparent).
+			Border(0, t.Border).
+			TextColor(t.Text).
+			Padding(4, 6).
+			Radius(6)
+		login.Children(func() {
+			ui.Icon(c, loginIcon).Size(16, 16).TextColor(t.Text)
+		})
+		login.Label("登录后评论").Tooltip("登录后才能发表评论")
+		if login.Clicked() {
+			var replay func()
+			if strings.TrimSpace(d.draft) != "" {
+				replay = func() {
+					if a.detail == d {
+						a.submitReply()
+					}
+				}
+			}
+			a.requestLogin("登录后才能发表评论。", replay)
+		}
+		return
+	}
+	// 空草稿时发送按钮只是一枚弱化的图标：没有内容可发，实心的强调色按钮
+	// 会把整条输入栏的重量压到右边，看着像「已经可以发」。有内容才换成实心
+	// 的主按钮，这时它才是这一行里唯一该被看见的动作。
+	empty := strings.TrimSpace(d.draft) == ""
+	send := ui.Button(c, "").
+		Background(ui.Transparent).
+		Border(0, t.Border).
+		Padding(4, 6).
+		Radius(8)
+	ink := t.TextMuted
+	if !empty {
+		send = ui.PrimaryButton(c, "").Radius(8)
+		ink = t.AccentText
+	}
+	if send.Hovered() && !d.posting {
+		ink = t.Text
+		if empty {
+			send.Background(t.SurfaceHover)
+		}
+	}
+	send.Disabled(d.posting)
+	send.Children(func() {
+		ui.Icon(c, sendIcon).Size(16, 16).TextColor(ink)
+	})
+	send.Label("发送").Tooltip("发送评论")
+	if send.Clicked() {
+		a.submitReply()
+	}
 }
 
 // replyCommunityEmojis 是当前帖子自带的社区表情表；没有正文数据时为空。
@@ -1449,6 +1567,17 @@ func (a *app) replyEmojis(d *detailState) map[string]emojiInfo {
 	return mergeEmojiMaps(a.emojis, a.replyCommunityEmojis(d))
 }
 
+// replyToast 把评论输入相关的结果弹在「正在写」的那个窗口里：草稿在独立
+// 窗口里写就弹在窗口底部，否则弹在主窗口底部。窗口不在了由 toast 的退回
+// 规则交给主窗口，结果不会丢。
+func (a *app) replyToast(text string) {
+	if a.replyWindowOpen() {
+		a.toast(toastReply, text)
+		return
+	}
+	a.toast(toastMain, text)
+}
+
 // submitReply posts the draft through the Client. On success it clears the
 // box, inserts the created comment where the current view expects it and
 // scrolls to it, so the author sees it immediately in floor order.
@@ -1462,36 +1591,48 @@ func (a *app) submitReply() {
 	}
 	content := strings.TrimSpace(d.draft)
 	if content == "" {
-		a.toast(toastMain, "评论内容不能为空")
+		a.replyToast("评论内容不能为空")
 		return
 	}
 	if n := editorPendingUploads(d.draft); n > 0 {
-		a.toast(toastMain, "还有 "+strconv.Itoa(n)+" 张图片未处理完，请等上传结束或移除后再发送")
+		a.replyToast("还有 " + strconv.Itoa(n) + " 张图片未处理完，请等上传结束或移除后再发送")
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.toast(toastMain, "请先登录后再评论")
+		a.replyToast("请先登录后再评论")
 		return
 	}
 	if d.topic != nil && d.topic.CommentsClosed {
-		a.toast(toastMain, "该帖子已关闭评论")
+		a.replyToast("该帖子已关闭评论")
 		return
 	}
-	parentID := d.replyToID
-	parentFloor := d.replyToFloor
-	parentName := d.replyToName
+	target := d.replyTo
+	// 回三级评论时新评论会变成它的兄弟（见 detail.go 的 replyMaxLevel）：
+	// 正文补上被回复人的名字，否则读的人看不出在回谁。网页端也这么补。
+	// 用户自己已经写了「@昵称 」就不重复加。
+	if target.needsMention() {
+		mention := "@" + target.Author
+		if content != mention && !strings.HasPrefix(content, mention+" ") {
+			content = mention + " " + content
+		}
+	}
+	// parentID 是挂载点（三级回复挂在二级评论下），target.ID 才是被回复的
+	// 那条。列表落位用挂载点，引用与跳转用 target。
+	parentID := target.postParentID()
+	parentFloor := target.Floor
+	parentName := target.Author
 	parentSummary := ""
-	if at := replyIndexByID(d.display, parentID); at >= 0 {
+	if at := replyIndexByID(d.display, target.ID); at >= 0 {
 		parentSummary = truncate(commentExcerpt(d.display[at].Content), 60)
 		if parentName == "" {
-			parentName = d.replyList[at].Author
+			parentName = d.display[at].Author
 		}
 	}
 	d.posting = true
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	go func() {
 		defer cancel()
-		created, err := a.client.createReply(ctx, d.shortID, content, parentID)
+		created, err := a.client.createReply(ctx, d.shortID, content, target)
 		a.publish(func() {
 			if a.detail != d {
 				return // navigated away; drop the stale result
@@ -1505,7 +1646,7 @@ func (a *app) submitReply() {
 						a.submitReply()
 					}
 				})
-				a.toast(toastMain, friendlyError(err))
+				a.replyToast(friendlyError(err))
 				if a.onReplyPosted != nil {
 					a.onReplyPosted(replyItem{}, err)
 				}
@@ -1526,8 +1667,22 @@ func (a *app) submitReply() {
 			}
 			// 服务端没回父评论信息时用提交前的目标补齐，刚发的楼中楼
 			// 立刻就能显示父评论引用并点回去；父评论没有楼层时引用作者名。
+			// 三级回复的 parent 是二级评论，真正回的那条记在 ReplyCommentID。
 			if created.ParentID == "" {
 				created.ParentID = parentID
+			}
+			if created.ReplyCommentID == "" {
+				created.ReplyCommentID = target.ID
+			}
+			// 201 常常只回 id / 楼层，不带 level，decode 会按深度兜底成 1。
+			// 刚发的回复按提交的目标补齐，否则它在列表里会被当成一级评论
+			// （缩进少一层，再回复它时又会走错分支）。
+			if created.Level <= 1 && target.ID != "" {
+				level := target.newLevel()
+				if level <= 0 {
+					level = 2 // 层级未知时至少按楼中楼算
+				}
+				created.Level = level
 			}
 			if created.ParentFloor == 0 {
 				created.ParentFloor = parentFloor
@@ -1539,13 +1694,16 @@ func (a *app) submitReply() {
 				created.ParentSummary = parentSummary
 			}
 			d.draft = ""
-			d.replyToID = ""
-			d.replyToFloor = 0
-			d.replyToName = ""
+			d.replyTo = replyTarget{}
 			d.composerIdle = true // 发送后折回一行，把空间还给评论列表
 			// 工具面板与预览会让输入框保持展开（见 replyInput），发送后一并
 			// 收起，否则空输入框还占着面板的高度，折不回一行。
 			d.emojiOpen, d.imageOpen, d.preview = false, false, 0
+			// 草稿是在独立窗口里写完的：评论已经发出去了，窗口没有可写的内容，
+			// 一并收起，主窗口回到评论区。
+			if d.composerDetached {
+				a.closeReplyWindow()
+			}
 			// 按当前视图放到正确的位置：楼中楼落在父评论的子树后面，
 			// 顶层与扁平时间序接在已加载评论之后，而不是插到最顶端。
 			// 插到正确位置后再重建显示列表，并在显示空间里定位刚发的评论

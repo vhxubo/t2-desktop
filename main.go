@@ -191,6 +191,12 @@ type app struct {
 	// 都只在主线程读写；关窗口后草稿保留，退出登录时丢弃。
 	composeWin *mygo.Window
 	compose    *composeState
+	// replyWin 是独立写评论窗口（见 reply_window.go）：入口是详情页评论框
+	// 工具条上的展开图标。replyWinFor 是它正在编辑的那份 detailState——草稿
+	// 一直存在那个状态里，所以关掉窗口或「收回评论区」都不会丢字。都只在
+	// 主线程读写。
+	replyWin    *mygo.Window
+	replyWinFor *detailState
 	// hosts 是图库（图床）配置：几个内置预设加用户手工添加的项，落盘在
 	// localKV 的 imagehosts:v1。hostActiveLabel 是当前激活项的名字，编辑器
 	// 的工具面板直接把它绑到下拉框上。都只在 UI 线程读写，见 image_hosts.go。
@@ -382,6 +388,7 @@ func (a *app) publish(fn func()) {
 		a.redrawCoinWindow()
 		a.redrawPandoraWindow()
 		a.redrawComposeWindow()
+		a.redrawReplyWindow()
 		a.redrawUserCardWindow()
 		a.redrawSearchWindow()
 	})
@@ -613,6 +620,9 @@ func (a *app) onAuthChanged(err error) {
 		// 发帖窗口里的草稿属于上一个账号，退出后一并关掉并丢弃。
 		a.closeComposeWindow()
 		a.compose = nil
+		// 独立写评论窗口也一样：退出后没有可发的身份，草稿留在页面状态里，
+		// 窗口收起来。
+		a.closeReplyWindow()
 		a.unread = 0
 		a.unreadLoading = false
 		a.notifSeen = nil
@@ -1333,6 +1343,7 @@ func main() {
 			a.closeCoinWindow()
 			a.closePandoraWindow()
 			a.closeComposeWindow()
+			a.closeReplyWindow()
 			a.closeSearchWindow()
 			a.closeAboutWindow()
 		})
