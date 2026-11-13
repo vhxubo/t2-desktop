@@ -226,9 +226,31 @@ func TestAboutWindowShowsCredits(t *testing.T) {
 		"邮箱", "vhxubo@gmail.com",
 		"项目地址", "github.com/vhxubo/t2-desktop",
 		"2Libra 主页", "https://2libra.com/user/vhxubo/about",
+		"条款", "第三方开发者 vhxubo",
+		"服务条款", "2Libra 第三方接入条款",
 	} {
 		if !tt.HasText(s) {
 			t.Errorf("关于窗口缺少 %q：%q", s, tt.Texts())
 		}
+	}
+}
+
+// 关于窗口每行的标签列左边缘对齐：四行的标签都在同一列，开发者行（不可点击）
+// 和其余可点击行的内边距相同，不能因为少了 padding 而错位。
+func TestAboutWindowRowsAligned(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.aboutWindowView, aboutWindowWidth, aboutWindowHeight)
+	tt.Frame()
+
+	var lastX float32
+	for i, lab := range []string{"开发者", "邮箱", "项目地址", "2Libra 主页"} {
+		r, ok := tt.Find(lab)
+		if !ok {
+			t.Fatalf("关于窗口缺少标签 %q：%q", lab, tt.Texts())
+		}
+		if i > 0 && (r.X-lastX > 0.5 || r.X-lastX < -0.5) {
+			t.Errorf("标签列左边缘错位：%q x=%.0f，上一行 x=%.0f", lab, r.X, lastX)
+		}
+		lastX = r.X
 	}
 }

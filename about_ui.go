@@ -110,39 +110,51 @@ func (a *app) aboutWindowView(c *ui.Context) {
 
 				ui.Divider(c)
 
-				// 联系与来源：邮箱、项目地址与 2Libra 主页都可点击打开，
-				// 开发者是纯文本（没有对应的可跳转链接）。
-				a.aboutRow(c, "开发者", "vhxubo", "")
+				// 联系与来源：开发者、邮箱、项目地址与 2Libra 主页都可点击打开。
+				a.aboutRow(c, "开发者", "vhxubo", "https://github.com/vhxubo")
 				a.aboutRow(c, "邮箱", "vhxubo@gmail.com", "mailto:vhxubo@gmail.com")
 				a.aboutRow(c, "项目地址", "github.com/vhxubo/t2-desktop",
 					"https://github.com/vhxubo/t2-desktop")
 				a.aboutRow(c, "2Libra 主页", "https://2libra.com/user/vhxubo/about",
 					"https://2libra.com/user/vhxubo/about")
+
+				ui.Divider(c)
+
+				// 条款：第三方接入的必须指引。整段展示不截断，让用户打开应用
+				// 就能看到本应用与 2Libra 的关系、授权撤回方式与版权说明。
+				ui.Text(c, "条款").FontSize(13).Bold().TextColor(t.Text)
+				ui.Text(c, "本应用由第三方开发者 vhxubo 独立开发运营，与 2Libra 无隶属或合作关系。"+
+					"2Libra 仅提供账号授权与接口，不对本应用的可用性、内容与数据处理负责。"+
+					"你可以随时在 2Libra 的「授权应用」页面撤销本应用的授权。"+
+					"应用内展示的内容版权归原作者所有，详情页保留作者昵称与原文链接。").
+					FontSize(11).TextColor(t.TextMuted).MaxLines(12)
+				a.aboutRow(c, "服务条款", "2Libra 第三方接入条款",
+					"https://r2.2libra.com/openapi/v1/terms.md")
 			})
 		})
 	})
 }
 
 // aboutRow 是「关于」窗口里的一行信息：左侧是标签（灰色固定宽度），右侧是
-// 值。link 非空时整行可点击，悬停浅灰底，点一下用系统默认程序打开（邮件或
-// 浏览器）；link 为空时是只读文本。
+// 值。无论是否可点击，整行的内边距与标签列宽都一致，保证各行标签左边缘与值
+// 左边缘分别对齐。link 非空时整行可点击，悬停浅灰底，点一下用系统默认程序
+// 打开（邮件或浏览器）；link 为空时是只读文本。
 func (a *app) aboutRow(c *ui.Context, label, value, link string) {
 	t := c.Theme()
-	if link == "" {
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, label).FontSize(12).TextColor(t.TextMuted).Width(72)
-			ui.Text(c, value).FontSize(12).TextColor(t.Text).Grow(1)
-		})
-		return
+	color := t.Text
+	if link != "" {
+		color = t.Accent
 	}
 	b := ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(6, 8).
 		Radius(t.Radius).Background(ui.Transparent)
-	if b.Hovered() {
+	if link != "" && b.Hovered() {
 		b.Background(t.SurfaceHover)
 	}
 	b.Children(func() {
-		ui.Text(c, label).FontSize(12).TextColor(t.TextMuted).Width(72)
-		ui.Text(c, value).FontSize(12).TextColor(t.Accent).SingleLine().Grow(1)
+		ui.Text(c, label).FontSize(12).TextColor(t.TextMuted).Width(84)
+		ui.Text(c, value).FontSize(12).TextColor(color).SingleLine().Grow(1)
 	})
-	b.Label(value).Tooltip("点击打开").OnClick(func() { a.openExternal(link) })
+	if link != "" {
+		b.Label(value).Tooltip("点击打开").OnClick(func() { a.openExternal(link) })
+	}
 }
