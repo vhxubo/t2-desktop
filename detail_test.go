@@ -818,6 +818,81 @@ func TestReplyComposerNestedTargetUsesAuthor(t *testing.T) {
 	}
 }
 
+// 评论输入框展开后，点它自己的工具条、视图切换与两个面板入口都不能把它
+// 折回一行：这些控件一按下，文本框就失焦，只看焦点决定展开与否的话，
+// 输入框会连同刚打开的面板一起缩回去，评论列表重新占满、页面往下一沉。
+func TestReplyComposerStaysOpenOnInnerClick(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.emojis = decodeEmojis([]byte(detailEmojisJSON))
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	if err := tt.Click("写评论"); err != nil {
+		t.Fatalf("点输入框失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if !tt.HasText("插入表情") {
+		t.Fatalf("聚焦后输入框没有展开：%q", tt.Texts())
+	}
+
+	// 工具条插入标记：焦点留在输入框里，输入框保持展开。
+	if err := tt.Click("加粗"); err != nil {
+		t.Fatalf("点工具条按钮失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if !tt.HasText("插入表情") || !tt.HasText("加粗") {
+		t.Errorf("点工具条后输入框缩回了：%q", tt.Texts())
+	}
+	if strings.TrimSpace(a.detail.draft) == "" {
+		t.Errorf("工具条按钮没有插入标记：%q", a.detail.draft)
+	}
+
+	// 表情面板：打开后连面板一起留在页面上，挑一个表情也不会收回去。
+	if err := tt.Click("插入表情"); err != nil {
+		t.Fatalf("点插入表情失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if !a.detail.emojiOpen || !tt.HasText("搜索表情") {
+		t.Fatalf("表情面板没有打开：%q", tt.Texts())
+	}
+	if !tt.HasText("插入表情") {
+		t.Errorf("打开表情面板后输入框缩回了：%q", tt.Texts())
+	}
+	if err := tt.Click("叹气"); err != nil {
+		t.Fatalf("点表情失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if !strings.Contains(a.detail.draft, ":sigh:") {
+		t.Errorf("点表情没有插入短码：%q", a.detail.draft)
+	}
+	if !tt.HasText("插入表情") {
+		t.Errorf("插入表情后输入框缩回了：%q", tt.Texts())
+	}
+
+	// 视图切换同理：切到预览，输入框与预览都还在。
+	if err := tt.Click("预览"); err != nil {
+		t.Fatalf("点视图切换失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if a.detail.preview != 1 || !tt.HasText("评论视图") {
+		t.Errorf("视图切换后输入框缩回了：preview=%d %q", a.detail.preview, tt.Texts())
+	}
+
+	// 收起面板、切回编辑、清空草稿后，点评论列表里的元素仍然把输入框折回
+	// 一行，把空间还给列表。
+	a.detail.emojiOpen = false
+	a.detail.preview = 0
+	a.detail.draft = ""
+	tt.Frame()
+	if err := tt.Click("第一楼 :feel_wronged:"); err != nil {
+		t.Fatalf("点评论正文失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if tt.HasText("插入表情") {
+		t.Errorf("点评论列表后输入框应折回一行：%q", tt.Texts())
+	}
+}
+
 // A comment row opens its parent topic, remembers the comment id and
 // starts in the flat view so the floor can be located.
 func TestClickCommentOpensParentTopic(t *testing.T) {

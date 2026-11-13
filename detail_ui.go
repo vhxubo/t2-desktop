@@ -1301,8 +1301,13 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	if !focused {
 		d.composerIdle = false // 失焦后再选中，重新展开
 	}
+	// 工具条、视图切换与两个面板都是输入框的一部分：点开它们、在面板里搜索
+	// 表情，都会让文本框失焦。只看焦点决定展开与否，输入框会在点下按钮的
+	// 那一帧缩回一行，刚打开的面板随之消失（评论列表重新占满、页面往下一沉）。
+	// 所以面板打开或切到预览时也保持展开，直到用户自己收起。
 	expanded := d.replyToID != "" || strings.TrimSpace(d.draft) != "" ||
-		(focused && !d.composerIdle)
+		(focused && !d.composerIdle) ||
+		d.emojiOpen || d.imageOpen || d.preview == 1
 	sendDisabled := d.posting || strings.TrimSpace(d.draft) == ""
 	vpad := float32(4)
 	if expanded {
@@ -1329,11 +1334,14 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	box.Children(func() {
 		if expanded {
 			// 折叠态仍只有一行：工具条、视图切换与两个面板都只在展开时出现。
-			ui.Row(c).FillWidth().Padding(2, 4).Children(func() {
+			// 这几行带 KeepFocus：按下工具条、分隔线与视图切换时焦点仍留在
+			// 输入框里，光标与选区不动，插入标记后可以接着打字（见
+			// editorToolbar），输入框也不会因为这一下失焦而缩回去。
+			ui.Row(c).FillWidth().Padding(2, 4).KeepFocus().Children(func() {
 				a.editorToolbar(c, &d.mdEditor, &d.draft)
 			})
-			ui.Divider(c)
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Divider(c).KeepFocus()
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).KeepFocus().Children(func() {
 				ui.Segmented(c, &d.preview, "编辑", "预览").Label("评论视图")
 				ui.Spacer(c).Grow(1)
 				a.editorPanelButtons(c, &d.mdEditor, "插入表情", "插入图片")
@@ -1497,6 +1505,9 @@ func (a *app) submitReply() {
 			d.replyToFloor = 0
 			d.replyToName = ""
 			d.composerIdle = true // 发送后折回一行，把空间还给评论列表
+			// 工具面板与预览会让输入框保持展开（见 replyInput），发送后一并
+			// 收起，否则空输入框还占着面板的高度，折不回一行。
+			d.emojiOpen, d.imageOpen, d.preview = false, false, 0
 			// 按当前视图放到正确的位置：楼中楼落在父评论的子树后面，
 			// 顶层与扁平时间序接在已加载评论之后，而不是插到最顶端。
 			// 插到正确位置后再重建显示列表，并在显示空间里定位刚发的评论

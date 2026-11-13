@@ -22,6 +22,10 @@ const replyPreviewHeight = 180
 // editorToolbar 是两边共用的 Markdown 工具条。原有的标记按钮一字不改：
 // 工具条窄时 MyGo 从末尾把放不下的按钮收进「»」菜单，所以表情 / 图片
 // 入口不放在这里，否则默认窗口宽度下这两项恰好是最先被藏起来的。
+//
+// 整条工具条带 KeepFocus：按标记按钮时焦点仍留在输入框里，选区不动，
+// 插入的标记落在光标处，插完可以直接接着打字；评论输入框也不会因为
+// 失焦而缩回一行。
 func (a *app) editorToolbar(c *ui.Context, e *mdEditor, body *string) {
 	ui.Toolbar(c, func() {
 		for _, b := range markdownButtons {
@@ -29,17 +33,17 @@ func (a *app) editorToolbar(c *ui.Context, e *mdEditor, body *string) {
 				e.applyMarkdown(body, b.format)
 			}
 		}
-	}).Label("编辑工具").FillWidth()
+	}).Label("编辑工具").FillWidth().KeepFocus()
 }
 
 // editorPanelButtons 放在「编辑 / 预览」那一行，永远可见。emojiLabel /
 // imageLabel 由调用方给：详情页正文里已经有一个「表情」表态按钮，评论
 // 工具条改用别的名字，免得读屏与点击测试分不清两个入口。
 func (a *app) editorPanelButtons(c *ui.Context, e *mdEditor, emojiLabel, imageLabel string) {
-	if ui.Button(c, emojiLabel).Tooltip("插入社区表情").Clicked() {
+	if ui.Button(c, emojiLabel).Tooltip("插入社区表情").KeepFocus().Clicked() {
 		e.togglePanel("emoji")
 	}
-	if ui.Button(c, imageLabel).Tooltip("拖入、选择或粘贴图片").Clicked() {
+	if ui.Button(c, imageLabel).Tooltip("拖入、选择或粘贴图片").KeepFocus().Clicked() {
 		e.togglePanel("image")
 	}
 }
@@ -87,7 +91,9 @@ func (a *app) editorEmojiPanel(c *ui.Context, e *mdEditor, body *string,
 		}
 		for start := 0; start < len(shown); start += emojiColumns {
 			row := shown[start:min(start+emojiColumns, len(shown))]
-			ui.Row(c).FillWidth().Gap(4).Children(func() {
+			// 网格带 KeepFocus：挑表情时焦点留在输入框里，插入的短码落在
+			// 原来的光标处，挑完接着打字不用再点一次输入框。
+			ui.Row(c).FillWidth().Gap(4).KeepFocus().Children(func() {
 				for _, em := range row {
 					cell := ui.Row(c).Gap(4).AlignItems(ui.Center).
 						Padding(3, 5).Radius(6).Background(ui.Transparent).Grow(1).MinWidth(0)
@@ -108,7 +114,7 @@ func (a *app) editorEmojiPanel(c *ui.Context, e *mdEditor, body *string,
 				}
 			})
 		}
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).KeepFocus().Children(func() {
 			ui.Text(c, "共 "+strconv.Itoa(len(filtered))+" 个表情，显示 "+
 				strconv.Itoa(len(shown))+" 个").
 				FontSize(11).TextColor(t.TextMuted).SingleLine().Grow(1)
@@ -151,7 +157,7 @@ func (a *app) editorImagePanel(c *ui.Context, t uploadTarget) {
 		})
 		ui.Text(c, "把图片直接拖进编辑区，或用下面的按钮。支持 JPEG / PNG / WebP，单张上限在图库设置里改。").
 			FontSize(11).TextColor(th.TextMuted).MaxLines(2)
-		ui.Row(c).Gap(8).Wrap().Children(func() {
+		ui.Row(c).Gap(8).Wrap().KeepFocus().Children(func() {
 			if ui.Button(c, "选择图片").Clicked() {
 				a.pickImages(t)
 			}
@@ -188,7 +194,7 @@ func (a *app) editorUploadRow(c *ui.Context, j *uploadJob) {
 	case uploadFailed:
 		state, color = "失败："+j.Err, t.Danger
 	}
-	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).KeepFocus().Children(func() {
 		ui.Text(c, j.Name).FontSize(11).TextColor(t.Text).
 			SingleLine().Grow(1).MinWidth(0)
 		ui.Text(c, state).FontSize(11).TextColor(color).MaxLines(2)
