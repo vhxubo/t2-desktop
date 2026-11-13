@@ -60,6 +60,10 @@ type detailState struct {
 	// bodyScroll 是左栏正文的滚动偏移：TrackScroll 记下来，供「返回顶部」
 	// 判断正文是不是已经滚离顶部、以及把它直接写回 0 回顶。
 	bodyScroll ui.ScrollState
+	// bodyCollapsed 表示左栏正文已向左收起，评论区占满整行。它只是界面
+	// 状态，不落盘：每次进入详情都重置成展开（见 openDetail 与 closeDetail
+	// 的弹栈分支），下次打开不会继承上一次的收起。
+	bodyCollapsed bool
 
 	// 从评论列表点进来时要定位到具体某条评论。目标常常不落在第 1 页
 	// （扁平序按 flat_floor 排），所以首屏没找到时自动续拉后面的页，
@@ -238,6 +242,7 @@ func (a *app) openDetail(it Item) {
 		fallbackURL:  it.URL,
 		replyPage:    1,
 		flat:         it.CommentID != "", // 从评论列表进来用扁平序，更容易找到那层楼
+		// bodyCollapsed 不继承：每次进来都是双栏、正文展开（零值即展开）。
 	}
 	// 先摆上缓存里的正文和第一页评论：网络慢或断开时第一帧就有内容。
 	a.preloadDetailCache(a.detail)
@@ -290,6 +295,8 @@ func (a *app) closeDetail() {
 	if n := len(a.detailStack); n > 0 {
 		a.detail = a.detailStack[n-1]
 		a.detailStack = a.detailStack[:n-1]
+		// 退回上一篇同样是「进入详情」：正文重新展开，收起状态不跨页面保留。
+		a.detail.bodyCollapsed = false
 		return
 	}
 	a.detail = nil
@@ -523,21 +530,40 @@ func (a *app) detailView(c *ui.Context) {
 			// 双栏各自成卡片：正文占约 55%，评论占约 45%；MinWidth(0) 防止
 			// 长代码、长链接或嵌套评论把某一栏撑宽，中间用 12px 的空隙 +
 			// 圆角描边形成清楚的边界。
-			ui.Column(c).Grow(55).MinWidth(0).FillHeight().MinHeight(0).
-				Radius(12).Background(t.Background).Border(1, t.Border).Children(func() {
-				// 正文可滚动（Grow(1) 吃满左栏剩余高度，MinHeight(0) 允许
-				// 它收缩到比正文内容更矮，正文在框内滚动）；作者信息收在
-				// 标题下方，底部固定的是表态 / 打赏互动栏。
-				ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Padding(18, 24).Gap(12).
-					TrackScroll(&d.bodyScroll).Children(func() {
-					a.topicBody(c, d)
+			//
+			// 正文可以向左收起（见 bodyPaneToggle）：收起后整张卡片不画，
+			// 只在左边留一条窄栏放展开图标，评论区接管剩下的宽度。
+			if !d.bodyCollapsed {
+				ui.Column(c).Grow(55).MinWidth(0).FillHeight().MinHeight(0).
+					Radius(12).Background(t.Background).Border(1, t.Border).Children(func() {
+					// 收起图标悬浮在卡片右上角，不占一行：标题照旧贴着卡片
+					// 顶部开始，正文高度一点没少（标题右侧留了它的位置，见
+					// topicBody）。
+					a.bodyPaneToggle(c, d).Absolute().Top(8).Right(8)
+					// 正文可滚动（Grow(1) 吃满左栏剩余高度，MinHeight(0) 允许
+					// 它收缩到比正文内容更矮，正文在框内滚动）；作者信息收在
+					// 标题下方，底部固定的是表态 / 打赏互动栏。
+					ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Padding(18, 24).Gap(12).
+						TrackScroll(&d.bodyScroll).Children(func() {
+						a.topicBody(c, d)
+					})
+					a.topicInteractionBar(c, d)
 				})
-				a.topicInteractionBar(c, d)
-			})
+			} else {
+				// 收起后正文只剩左边缘这条窄栏：展开图标停在原来的高度，
+				// 只是跟着正文一起左移，看起来像被推到左边的那一栏。
+				ui.Column(c).Width(30).FillHeight().Padding(8, 0).Children(func() {
+					a.bodyPaneToggle(c, d)
+				})
+			}
 			// 评论卡片用比页面底色略深一点的中性色：浅色下是极浅的灰、
 			// 深色下比页面稍亮，两种外观都能把评论区从正文里分出来，又
-			// 不抢正文的注意力。
-			ui.Column(c).Grow(45).MinWidth(0).FillHeight().MinHeight(0).
+			// 不抢正文的注意力。正文收起时它是唯一的一栏，吃掉全部宽度。
+			replyGrow := float32(45)
+			if d.bodyCollapsed {
+				replyGrow = 1
+			}
+			ui.Column(c).Grow(replyGrow).MinWidth(0).FillHeight().MinHeight(0).
 				Radius(12).Background(detailReplySurface(t)).Border(1, t.Border).Children(func() {
 				a.replyPane(c, d)
 			})
@@ -573,8 +599,9 @@ func (a *app) detailToolBar(c *ui.Context, d *detailState) {
 		Shadow(0, 3, 12, 0, ui.RGBA(0, 0, 0, 0.16)).
 		Children(func() {
 			// 只有正文或评论滚离顶部时才出现：工具条始终可达，不会像旧版
-			// 页头那样为了放它固定占掉一行。
-			if first, _ := d.list.Visible(); d.bodyScroll.Y > 0 || first > 0 {
+			// 页头那样为了放它固定占掉一行。正文收起时不看它的偏移：那栏
+			// 根本没画出来，按钮留着也只会让人以为评论还能往上滚。
+			if first, _ := d.list.Visible(); (!d.bodyCollapsed && d.bodyScroll.Y > 0) || first > 0 {
 				a.detailToolButton(c, backTopIcon, "返回顶部", "正文与评论都回到顶部", func() {
 					// 直接把偏移写回 ScrollState 就是立即回顶（ScrollTo 会走一段
 					// 动画，回顶部不必拖时间）；评论列表按行号同样立即回顶。
@@ -667,9 +694,10 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 		return
 	}
 	// 标题在正文最上面：24px 加粗的标题与下面的作者行、副标题、正文拉开
-	// 字号差，读者第一眼就能抓住主题。
+	// 字号差，读者第一眼就能抓住主题。右侧留出悬浮的收起图标那 30px，
+	// 长标题换行时不会钻到图标底下（图标见 detailView 的 bodyPaneToggle）。
 	if title := strings.TrimSpace(p.Title); title != "" {
-		ui.Text(c, title).FontSize(24).Bold().MaxLines(3)
+		ui.Text(c, title).FontSize(24).Bold().MaxLines(3).Padding(0, 30, 0, 0)
 	}
 	// 作者行放在标题下面：头像缩到与正文同级的 20px，昵称、等级、徽章
 	// 跟在旁边，收藏按钮贴在这一行的最右侧。它不再单独占一条页头，随正文
@@ -956,6 +984,40 @@ func (a *app) replyHeader(c *ui.Context, d *detailState) {
 			a.saveReplyViewMode(d.flat)
 		}
 	})
+}
+
+// bodyPaneToggle 是正文的收起 / 展开图标：展开时悬浮在正文卡片右上角（由
+// 调用方摆位置），收起后画在左边缘那条窄栏上——同一个按钮，跟着正文一起
+// 左移，不会消失在一个摸不着的地方。它只负责这一次浏览，不落盘（见
+// openDetail 与 closeDetail 的弹栈分支）。
+func (a *app) bodyPaneToggle(c *ui.Context, d *detailState) ui.Element {
+	t := c.Theme()
+	icon := chevronLeftIcon
+	label := "收起正文"
+	tip := "把正文收到左边，评论占满整行"
+	if d.bodyCollapsed {
+		icon = chevronRightIcon
+		label = "展开正文"
+		tip = "重新显示左边的正文"
+	}
+	// 图标带一层浅底与描边，和右上角悬浮工具条同一种「按得下去」的观感：
+	// 纯描边箭头压在正文里太容易被当成装饰。
+	b := ui.Box(c).Size(30, 30).Radius(9).Center().
+		Background(t.Surface).Border(1, t.Border).
+		Shadow(0, 3, 12, 0, ui.RGBA(0, 0, 0, 0.16))
+	hovered := b.Hovered()
+	if hovered {
+		b.Background(t.SurfaceHover)
+	}
+	ink := t.TextMuted
+	if hovered {
+		ink = t.Text
+	}
+	b.Children(func() {
+		ui.Icon(c, icon).Size(17, 17).TextColor(ink)
+	})
+	b.Label(label).Tooltip(tip).OnClick(func() { d.bodyCollapsed = !d.bodyCollapsed })
+	return b
 }
 
 // replyCanLoadMore 汇报是否还能（且应）续拉下一页评论：已加载、未在读、未到底、
