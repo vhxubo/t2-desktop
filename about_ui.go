@@ -105,7 +105,7 @@ func (a *app) aboutWindowView(c *ui.Context) {
 				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, "T2 Desktop").FontSize(18).Bold().TextColor(t.Text)
 				})
-				ui.Text(c, "2Libra 第三方桌面客户端").
+				ui.Text(c, "第三方 2Libra 原生桌面端").
 					FontSize(12).TextColor(t.TextMuted).MaxLines(2)
 
 				ui.Divider(c)
@@ -117,6 +117,18 @@ func (a *app) aboutWindowView(c *ui.Context) {
 					"https://github.com/vhxubo/t2-desktop")
 				a.aboutRow(c, "2Libra 主页", "https://2libra.com/user/vhxubo/about",
 					"https://2libra.com/user/vhxubo/about")
+
+				ui.Divider(c)
+
+				// 技术栈：说明这是用 Go 与原生 UI 框架实现的桌面端，没有内嵌
+				// 浏览器。整段展示，让用户一眼看清运行环境与依赖。
+				ui.Text(c, "技术栈").FontSize(13).Bold().TextColor(t.Text)
+				ui.Text(c, "Go 语言，基于 mygo（github.com/egoist/mygo）原生 UI 框架构建，无内嵌浏览器；"+
+					"数据全部来自 2Libra 开放 API v1。").
+					FontSize(11).TextColor(t.TextMuted).MaxLines(4)
+				// 协议：以 MIT 协议开源，点一下跳到仓库里的 LICENSE 文件。
+				a.aboutRow(c, "协议", "MIT",
+					"https://github.com/vhxubo/t2-desktop/blob/main/LICENSE")
 
 				ui.Divider(c)
 

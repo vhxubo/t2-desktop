@@ -226,6 +226,8 @@ func TestAboutWindowShowsCredits(t *testing.T) {
 		"邮箱", "vhxubo@gmail.com",
 		"项目地址", "github.com/vhxubo/t2-desktop",
 		"2Libra 主页", "https://2libra.com/user/vhxubo/about",
+		"技术栈", "Go 语言", "mygo",
+		"协议", "MIT",
 		"条款", "第三方开发者 vhxubo",
 		"服务条款", "2Libra 第三方接入条款",
 	} {
@@ -243,7 +245,7 @@ func TestAboutWindowRowsAligned(t *testing.T) {
 	tt.Frame()
 
 	var lastX float32
-	for i, lab := range []string{"开发者", "邮箱", "项目地址", "2Libra 主页"} {
+	for i, lab := range []string{"开发者", "邮箱", "项目地址", "2Libra 主页", "协议"} {
 		r, ok := tt.Find(lab)
 		if !ok {
 			t.Fatalf("关于窗口缺少标签 %q：%q", lab, tt.Texts())
