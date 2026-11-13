@@ -151,6 +151,27 @@ func TestSidebarLoginStartsAndCancels(t *testing.T) {
 	}
 }
 
+// 未登录时侧边栏除了「登录」还要给出「注册」入口：注册是网页流程，点一下
+// 只打开系统浏览器，不进入等待授权、也不离开当前页。
+func TestSidebarOffersSignupWhenSignedOut(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	if _, ok := tt.Find("注册"); !ok {
+		t.Fatalf("未登录侧边栏没有「注册」入口：%q", tt.Texts())
+	}
+	if err := tt.Click("注册"); err != nil {
+		t.Fatal(err)
+	}
+	if a.pageName != "list" {
+		t.Errorf("点「注册」不该离开列表页，实际页面 = %q", a.pageName)
+	}
+	if a.loginPending {
+		t.Error("点「注册」不该进入等待授权状态")
+	}
+}
+
 // 登录后侧边栏的账号入口变成「退出登录」，点一下就退出，入口回到「登录」；
 // 标题栏只显示头像与昵称，不写「已登录」。
 func TestSidebarLogoutAfterLogin(t *testing.T) {

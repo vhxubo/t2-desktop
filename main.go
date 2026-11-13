@@ -759,6 +759,7 @@ func (a *app) sidebarAccount(c *ui.Context) {
 		a.sidebarButton(c, "退出登录", logoutIcon, "退出登录", func() { a.auth.Logout() })
 	default:
 		a.sidebarButton(c, "登录", loginIcon, "登录 2Libra", func() { a.startLogin() })
+		a.sidebarButton(c, "注册", signupIcon, "注册 2Libra 账号", a.openSignup)
 	}
 }
 
@@ -1180,6 +1181,9 @@ func (a *app) loginView(c *ui.Context) {
 		if ui.PrimaryButton(c, "打开浏览器授权").Clicked() {
 			a.startLoginWithScopes(a.pendingAuthScopes())
 		}
+		if ui.Button(c, "注册账号").Clicked() {
+			a.openSignup()
+		}
 		ui.Text(c, "浏览器没有自动跳回？把地址栏里的完整链接粘贴到这里，完成同一次授权：").
 			FontSize(12).TextColor(t.TextMuted)
 		ui.TextInput(c, &a.callbackURL).Label("回调链接").Placeholder(defaultRedirectURI + "?code=...&state=...").FillWidth()
@@ -1236,6 +1240,12 @@ func (a *app) handleCallbackURL(raw string) {
 // 系统回调（或用户粘贴的回调链接）完成授权后自行登录。
 func (a *app) startLogin() {
 	a.startLoginWithScopes(nil)
+}
+
+// openSignup 打开带邀请码的 2Libra 注册页：注册在网页完成，应用内不做。未
+// 登录用户点「注册」直接打开系统浏览器，注册成功后再回应用里「登录」授权。
+func (a *app) openSignup() {
+	a.srv.OpenURL(signupURL) // URL 服务在 UI 线程调用
 }
 
 // startLoginWithScopes 是上面那条流程的唯一实现：额外 scope 来自全局授权

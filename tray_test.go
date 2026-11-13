@@ -30,12 +30,12 @@ func trayItem(t *testing.T, menu *mygo.Menu, id string) *mygo.MenuItem {
 	return it
 }
 
-// 未登录时托盘菜单顶部是「未登录」，紧接着是登录按钮；通知、发帖、退出
-// 三个入口始终都在。
+// 未登录时托盘菜单顶部是「未登录」，紧接着是登录与注册两个入口；通知、
+// 发帖、退出三个入口始终都在。
 func TestTrayMenuOffersLoginWhenSignedOut(t *testing.T) {
 	a := testApp(t)
 	menu := a.trayMenu()
-	want := []string{"未登录", "登录", "", "通知", "发帖", "", "退出"}
+	want := []string{"未登录", "登录", "注册", "", "通知", "发帖", "", "退出"}
 	if got := trayLabels(menu); !reflect.DeepEqual(got, want) {
 		t.Fatalf("未登录时的托盘菜单 %q，期望 %q", got, want)
 	}
@@ -45,6 +45,20 @@ func TestTrayMenuOffersLoginWhenSignedOut(t *testing.T) {
 	}
 	if trayItem(t, menu, trayLoginID).Click == nil {
 		t.Error("「登录」没有接上动作")
+	}
+	if trayItem(t, menu, traySignupID).Click == nil {
+		t.Error("「注册」没有接上动作")
+	}
+}
+
+// 托盘菜单的可操作项都要带图标：和侧边栏入口同一套线性图标，系统菜单才会
+// 在图标列画出它们（Windows 任务栏、Linux 托盘的菜单都显示图标列）。
+func TestTrayMenuItemsCarryIcons(t *testing.T) {
+	a := testApp(t)
+	for _, id := range []string{trayLoginID, traySignupID, trayNotificationsID, trayComposeID, trayQuitID} {
+		if it := trayItem(t, a.trayMenu(), id); it.Icon == nil {
+			t.Errorf("托盘菜单项 %q 没有图标", id)
+		}
 	}
 }
 

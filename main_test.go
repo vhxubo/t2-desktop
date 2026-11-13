@@ -740,6 +740,26 @@ func TestLoginPageReportsSchemeRegistrationFailure(t *testing.T) {
 	}
 }
 
+// 登录回退页也要给未登录用户一条注册出路：除了「打开浏览器授权」之外，
+// 还摆着「注册账号」，点它只打开带邀请码的注册页，不进入授权等待、不跳页。
+func TestLoginPageOffersSignup(t *testing.T) {
+	a := testApp(t)
+	a.pageName = "login"
+	tt := ui.NewTester(a.view, 1100, 760)
+	if _, ok := tt.Find("注册账号"); !ok {
+		t.Fatalf("登录页没有「注册账号」入口：%q", tt.Texts())
+	}
+	if err := tt.Click("注册账号"); err != nil {
+		t.Fatal(err)
+	}
+	if a.pageName != "login" {
+		t.Errorf("点「注册账号」不该跳离登录页，实际页面 = %q", a.pageName)
+	}
+	if a.loginPending {
+		t.Error("点「注册账号」不该进入等待授权状态")
+	}
+}
+
 // Both UI pages must offer only the native-scheme PKCE flow. The paste box
 // on the login page belongs to that same flow (it takes the callback URL).
 func TestOnlyNativeSchemeLoginIsOffered(t *testing.T) {

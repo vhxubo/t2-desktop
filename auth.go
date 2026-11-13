@@ -35,6 +35,11 @@ const (
 	// the URL to the app. This is the same native callback, not a second
 	// login method, so it is accepted as a spelling variant only.
 	alternateCallbackURI = appIdentifier + "://callback"
+
+	// signupURL 是带邀请码的 2Libra 注册页。注册是网页流程，应用内不做；
+	// 未登录用户点「注册」直接打开系统浏览器，注册完成后再回应用里「登录」
+	// 授权即可。邀请码 7OzoT5x6M 由 2Libra 下发，绑定本应用的推广来源。
+	signupURL = "https://2libra.com/auth/signup/7OzoT5x6M"
 )
 
 type tokenData struct {
