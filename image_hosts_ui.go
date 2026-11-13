@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -15,14 +17,15 @@ import (
 // 落在 a.hosts 上（同一份内存配置也是编辑器和上传队列读的），点「保存」才
 // 校验并写入 localKV 的 imagehosts:v1，没保存就关窗口不会生效到下次启动。
 
-// imageHostsSection 一次只展开一条图库的字段：设置窗口只有 520 宽，把五条
+// imageHostsSection 一次只展开一条图库的字段：设置窗口只有 520 宽，把八条
 // 预设的所有输入框全铺开会变成一屏填不完的表单。
 func (a *app) imageHostsSection(c *ui.Context) {
 	t := c.Theme()
 	settingsSection(c, "图库（图床）", func() {
 		ui.Text(c, "写帖子或评论时拖入、选择、粘贴的图片会传到「当前使用」的图库。"+
-			"官方图床用 2Libra 登录态；第三方图床填接口地址、文件字段名与 Token 即可。").
-			FontSize(12).TextColor(t.TextMuted).MaxLines(3)
+			"Kappa / Catbox 这类图床免注册、免 Token；2Libra 官方图床只对 Pro 会员开放。"+
+			"免费图床变动频繁，可以点下面的「测试这个图床」确认还能不能用。").
+			FontSize(12).TextColor(t.TextMuted).MaxLines(4)
 		a.imageHostActivePicker(c)
 		ui.Divider(c)
 		a.imageHostEditor(c)
@@ -95,9 +98,7 @@ func (a *app) imageHostEditor(c *ui.Context) {
 	ui.Checkbox(c, &h.Enabled, "启用（不启用则不出现在编辑器里）")
 	ui.TextInput(c, &h.Name).Label("名称").FillWidth()
 	if h.Kind == imageHostOfficial {
-		ui.Text(c, "2Libra 官方图床：登录即可使用，需要 upload 权限，每人每天 20 张，"+
-			"单张不超过 10 MB。缺权限时应用会自动弹出授权。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		a.officialHostStatus(c)
 	} else {
 		ui.TextInput(c, &h.Endpoint).Label("上传接口地址").
 			Placeholder("https://example.com/api/v1/upload").FillWidth()
@@ -111,6 +112,9 @@ func (a *app) imageHostEditor(c *ui.Context) {
 			Placeholder("Authorization: Bearer {{token}}").FillWidth()
 		ui.TextInput(c, &h.Token).Label("Token（替换上面的 {{token}}）").
 			Password().FillWidth()
+		ui.TextArea(c, &h.Form).Label("附加表单字段（一行一个 name=value）").
+			Placeholder("reqtype=fileupload").FillWidth().Lines(2, 4)
+		ui.Checkbox(c, &h.TextResponse, "响应体直接就是图片地址（Catbox / x0.at 这类纯文本接口）")
 		ui.Text(c, "响应里图片地址的路径用点分隔，如 data.url；"+
 			"留空时会在 JSON 里自动找第一个 http(s) 图片地址。").
 			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
@@ -131,6 +135,19 @@ func (a *app) imageHostEditor(c *ui.Context) {
 		mb = maxImageMaxBytes >> 20
 	}
 	h.MaxBytes = mb << 20
+	// 免费图床经常悄悄下线：给一个当场验证的入口，比让用户拖一张真图去试
+	// 再回来看报错省事。测试图是 1×1 的 PNG，不会暴露用户自己的照片。
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		if ui.Button(c, "测试这个图床").Disabled(a.hostTesting != "").
+			Tooltip("上传一张 1×1 的测试图，确认接口地址、字段名与返回解析都对").
+			Clicked() {
+			a.testImageHost(h)
+		}
+		if a.hostTesting == h.ID {
+			ui.Text(c, "正在上传测试图…").FontSize(11).TextColor(t.TextMuted).SingleLine()
+		}
+		ui.Spacer(c).Grow(1)
+	})
 	if h.Note != "" {
 		ui.Text(c, h.Note).FontSize(11).TextColor(t.TextMuted).MaxLines(3)
 	}
@@ -140,10 +157,75 @@ func (a *app) imageHostEditor(c *ui.Context) {
 	} else if ui.Button(c, "删除此图库").Clicked() {
 		a.removeImageHost(h.ID)
 	}
-	if !a.hostReady(h) {
+	// 官方图床的门槛已经在 officialHostStatus 里说过了，这里只给通用图床
+	// 补一句「还不能用」的原因，免得同一件事说两遍。
+	if !a.hostReady(h) && h.Kind != imageHostOfficial {
 		ui.Text(c, "还不能用："+a.hostNotReadyReason(h)).
 			FontSize(11).TextColor(t.Danger).MaxLines(2)
 	}
+}
+
+// officialHostStatus 说明官方图床的门槛：它只对 Pro 会员开放，所以这里要
+// 明确告诉用户当前账号是不是 Pro、为什么还不能用，并留一个重新确认的入口
+// （登录状态是缓存来的，换会员后不一定马上更新）。
+func (a *app) officialHostStatus(c *ui.Context) {
+	t := c.Theme()
+	ui.Text(c, "2Libra 官方图床：需要 upload 权限，每人每天 20 张，单张不超过 10 MB；"+
+		"只对 Pro 会员开放，缺权限时应用会自动弹出授权。").
+		FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+	if a.auth == nil || !a.auth.loggedIn() {
+		ui.Text(c, "当前未登录：登录 2Libra 后会自动确认 Pro 状态。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		return
+	}
+	pro, known := a.proStatus()
+	switch {
+	case !known:
+		ui.Text(c, "还没确认当前账号的 Pro 状态，可以点下面的按钮重新确认。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+	case pro:
+		ui.Text(c, "当前账号是 Pro，可以直接使用。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+	default:
+		ui.Text(c, "当前账号不是 Pro，官方图床不可用；请在上面「当前使用」里换用免 Token 图床（Kappa / Catbox）。").
+			FontSize(11).TextColor(t.Danger).MaxLines(3)
+	}
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		if ui.Button(c, "重新确认 Pro 状态").Disabled(a.proChecking).Clicked() {
+			a.refreshProStatus(true)
+		}
+		ui.Spacer(c).Grow(1)
+	})
+}
+
+// testImageHost 往这条图床传一张 1×1 的测试图，当场验证接口地址、字段名与
+// 响应解析是否都对。结果用 toast 报告：成功时带上拿到的地址，失败时带上
+// 图床自己给的原因。同一时刻只测一条。
+func (a *app) testImageHost(h *imageHost) {
+	if h == nil || a.hostTesting != "" {
+		return
+	}
+	if !a.hostReady(h) {
+		a.toast(toastSettings, a.hostNotReadyReason(h))
+		return
+	}
+	a.hostTesting = h.ID
+	snapshot := *h
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), imageUploadTimeout+5*time.Second)
+		defer cancel()
+		u, err := a.uploadImage(ctx, snapshot, uploadSource{
+			Name: "t2-test.png", Mime: "image/png", Data: testUploadPNG(),
+		})
+		a.publish(func() {
+			a.hostTesting = ""
+			if err != nil {
+				a.toast(toastSettings, "「"+snapshot.Name+"」测试失败："+friendlyError(err))
+				return
+			}
+			a.toast(toastSettings, "「"+snapshot.Name+"」测试成功："+u)
+		})
+	}()
 }
 
 // ------------------------------------------------------------------
@@ -196,7 +278,9 @@ func (a *app) removeImageHost(id string) {
 		}
 		a.hosts.Hosts = append(a.hosts.Hosts[:i], a.hosts.Hosts[i+1:]...)
 		if a.hosts.Active == id {
-			a.hosts.Active = "2libra"
+			// 删掉的是当前使用的那条：落到第一条仍启用的图库，别默认跳回
+			// 官方图床 —— 非 Pro 账号跳过去也用不了。
+			a.hosts.Active = normalizedActiveID(a.hosts)
 		}
 		a.hostActiveLabel = a.hostLabelByID(a.hosts.Active)
 		a.hostEditLabel = ""

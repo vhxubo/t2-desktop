@@ -196,6 +196,12 @@ type app struct {
 	// 的工具面板直接把它绑到下拉框上。都只在 UI 线程读写，见 image_hosts.go。
 	hosts           imageHostConfig
 	hostActiveLabel string
+	// proChecking 表示正在读当前账号的 Pro 状态（官方图床只对 Pro 开放）。
+	// 同一时刻只发一次请求，结果写回 auth 的令牌缓存；只在 UI 线程读写。
+	proChecking bool
+	// hostTesting 是正在测试的那条图库 ID：设置里点「测试这个图床」会上传
+	// 一张 1×1 的测试图，结果用 toast 报告；只在 UI 线程读写。
+	hostTesting string
 	// 设置窗口「图库」一块的编辑草稿：hostEditLabel 是当前展开编辑的条目名字，
 	// hostMaxDraft / hostMaxFor 把 int64 的 MaxBytes 接到 NumberInput 的
 	// float64 上（切条目时重新读一次）。都只在 UI 线程读写。
@@ -583,6 +589,9 @@ func (a *app) onAuthChanged(err error) {
 		// 潘多拉入口也静默读一次今日状态：首页标题栏要能直接显示抽中的
 		// 事件名，不必先打开潘多拉窗口。
 		a.loadPandoraEntry()
+		// 官方图床只对 Pro 开放：登录后就把 Pro 状态读回来，别等用户拖图
+		// 片时才提示「还没确认」。
+		a.refreshProStatus(true)
 	} else {
 		a.stopNotificationWatch()
 		// 通知窗口只展示当前账号的消息：退出后立即关掉，别留一屏上一个
@@ -1341,6 +1350,9 @@ func main() {
 			// 令牌里已经缓存了用户名与头像地址；这里再校准一次，老会话
 			// 也能补上头像，并在加载完成后刷新标题栏。
 			a.ensureAvatar()
+			// Pro 状态同样属于老会话要补齐的信息：官方图床只对 Pro 开放，
+			// 令牌里还没记过就现在读一次。
+			a.refreshProStatus(false)
 			go func() {
 				ctx := context.Background()
 				token := a.auth.accessToken()

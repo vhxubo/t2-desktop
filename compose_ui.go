@@ -332,7 +332,7 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 		// 工具条窄了会把末尾的控件收进「»」菜单——模式切换不该被藏起来。
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Text(c, "正文").FontSize(12).TextColor(t.TextMuted).Grow(1)
-			a.editorPanelButtons(c, &st.mdEditor, "表情", "上传图片")
+			a.editorPanelButtons(c, &st.mdEditor, "表情", "上传图片", false)
 			ui.Segmented(c, &st.preview, "编辑", "预览").Label("正文视图")
 			count := ui.Text(c, fmt.Sprintf("%d / %d 字",
 				utf8.RuneCountInString(st.body), composeContentMax)).
@@ -353,10 +353,10 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 		zone.Children(func() {
 			// 工具条固定在输入框上方（「头部」），滚动正文时始终可见。
 			ui.Row(c).FillWidth().Padding(2, 4).Children(func() {
-				a.editorToolbar(c, &st.mdEditor, &st.body)
+				a.editorToolbar(c, &st.mdEditor, &st.body, false)
 			})
 			ui.Divider(c)
-			a.editorPanels(c, uploadTargetCompose, &st.mdEditor, &st.body, nil)
+			a.editorPanels(c, uploadTargetCompose, &st.mdEditor, &st.body, nil, false)
 			if over {
 				ui.Text(c, "松开即可把图片插入正文").FontSize(11).
 					TextColor(t.Accent).Padding(6, 10)
@@ -382,26 +382,28 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 	})
 }
 
-// markdownButton 是工具条上的一项：显示文案、悬停说明与它插入的标记。
+// markdownButton 是工具条上的一项：显示文案（图标模式下作无障碍名与
+// 悬停说明的回退）、悬停说明、它插入的标记，以及图标模式下的线性图标。
 type markdownButton struct {
 	label  string
 	hint   string
 	format composeFormat
+	icon   *ui.SVG
 }
 
 var markdownButtons = []markdownButton{
-	{"加粗", "**加粗**", composeBold},
-	{"斜体", "*斜体*", composeItalic},
-	{"删除线", "~~删除线~~", composeStrike},
-	{"代码", "`行内代码`", composeInlineCode},
-	{"标题", "## 标题", composeHeading},
-	{"引用", "> 引用", composeQuote},
-	{"代码块", "```代码块```", composeCodeBlock},
-	{"列表", "- 列表项", composeBulletList},
-	{"编号", "1. 编号列表", composeOrderedList},
-	{"链接", "[文字](url)", composeLink},
-	{"图片", "![说明](url)", composeImage},
-	{"分割线", "---", composeDivider},
+	{"加粗", "**加粗**", composeBold, boldIcon},
+	{"斜体", "*斜体*", composeItalic, italicIcon},
+	{"删除线", "~~删除线~~", composeStrike, strikeIcon},
+	{"代码", "`行内代码`", composeInlineCode, inlineCodeIcon},
+	{"标题", "## 标题", composeHeading, headingIcon},
+	{"引用", "> 引用", composeQuote, quoteIcon},
+	{"代码块", "```代码块```", composeCodeBlock, codeBlockIcon},
+	{"列表", "- 列表项", composeBulletList, bulletListIcon},
+	{"编号", "1. 编号列表", composeOrderedList, orderedListIcon},
+	{"链接", "[文字](url)", composeLink, linkIcon},
+	{"图片", "![说明](url)", composeImage, imageIcon},
+	{"分割线", "---", composeDivider, dividerIcon},
 }
 
 // composePreview 是正文的预览：与详情页同一套 Markdown 渲染（一个回车换行、

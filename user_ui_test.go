@@ -162,6 +162,9 @@ func TestPrefetchAvatarsLoadsEachURLOnce(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	// 位图就位不等于已经落盘：后台还会把文件写进缓存目录。等它写完再结束，
+	// 否则临时目录的清理会和写协程撞上（Windows 上会报「目录不是空的」）。
+	waitForDisk(t, a.images, u, imageCacheStable)
 	if got := atomic.LoadInt32(&hits); got != 1 {
 		t.Errorf("同一地址请求了 %d 次，期望 1 次", got)
 	}

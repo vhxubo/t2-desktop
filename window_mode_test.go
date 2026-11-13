@@ -177,7 +177,7 @@ func TestSettingsWindowCloseBehaviourSavesChoice(t *testing.T) {
 	a.autoLoad = false
 	a.trayReady = true
 	// 比真实窗口高：这一块在滚动区末尾，无头测试不滚动也能点到。
-	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1100)
+	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1400)
 	st.Frame()
 
 	for _, want := range []string{"窗口", "每次询问", "退出应用", "收进托盘", "关闭主窗口时"} {

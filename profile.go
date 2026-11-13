@@ -368,6 +368,11 @@ func (a *app) loadProfileInfo(name string) {
 			}
 			ps.user = p
 			ps.infoErr = ""
+			// 「我的」窗口读到的资料最权威：顺手把 Pro 状态写回令牌缓存，
+			// 图库设置里官方图床的可用性跟着一起更新。
+			if p.Name != "" && p.Name == a.auth.username() {
+				a.auth.setProStatus(p.IsPro)
+			}
 			a.prefetchAvatars(p.Avatar)
 		})
 	}()

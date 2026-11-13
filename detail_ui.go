@@ -39,13 +39,16 @@ type detailState struct {
 	replyTotalPages       int
 	replyNoMore           bool // 评论已到底（空页 / 无新增），停止无限滚动续拉
 	replyGen              uint64
-	flat                  bool
+	// flat 是评论区的视图：false 楼层视图、true 扁平时间序。它是账号级偏好，
+	// 切换时按账号落盘（见 reply_view.go 的 saveReplyViewMode），与具体帖子
+	// 无关，打开别的帖子也沿用。
+	flat bool
 	// 评论楼层视图的本地记忆（见 reply_view.go）。viewMem 是这次打开读到的
-	// 上一次状态；collapsed 是当前折叠的楼中楼父评论（运行态，来自 viewMem）；
-	// readBase 是「新评论」的基线时间；stayIdx / stayID 是评论区实时停留的
-	// 行号与评论 ID；display 是剔除折叠隐藏行后的显示列表，所有滚动定位与
-	// 列表行数都基于它，避免隐藏行打乱索引；hiddenCount 记录每个折叠父被
-	// 收起的后代条数，供「展开 N 条回复」使用。
+	// 上一次状态（按帖子记，不含视图模式）；collapsed 是当前折叠的楼中楼父
+	// 评论（运行态，来自 viewMem）；readBase 是「新评论」的基线时间；stayIdx /
+	// stayID 是评论区实时停留的行号与评论 ID；display 是剔除折叠隐藏行后的
+	// 显示列表，所有滚动定位与列表行数都基于它，避免隐藏行打乱索引；
+	// hiddenCount 记录每个折叠父被收起的后代条数，供「展开 N 条回复」使用。
 	viewMem     *replyViewMemory
 	collapsed   map[string]bool
 	readBase    time.Time
@@ -227,22 +230,26 @@ func (a *app) openDetail(it Item) {
 	}
 	// 先摆上缓存里的正文和第一页评论：网络慢或断开时第一帧就有内容。
 	a.preloadDetailCache(a.detail)
-	// 加载评论楼层视图的本地记忆：视图模式、折叠、停留位置与新评论基线。
-	// 从评论列表点进来要定位某条评论时不恢复折叠（展开全部便于定位），
-	// 视图仍按定位需要的扁平序（见下方 flat 的初始化）。
+	// 加载评论楼层视图的本地记忆：折叠、停留位置与新评论基线，都按帖子记。
+	// 从评论列表点进来要定位某条评论时不恢复折叠（展开全部便于定位）。
 	if mem, ok := a.loadReplyView(it.ShortID); ok {
 		a.detail.viewMem = &mem
 		a.detail.readBase = mem.ReadAt
 		a.detail.stayIdx = mem.ScrollIdx
 		a.detail.stayID = mem.ReadToID
-		if it.CommentID == "" {
-			if len(mem.Collapsed) > 0 {
-				a.detail.collapsed = make(map[string]bool, len(mem.Collapsed))
-				for _, id := range mem.Collapsed {
-					a.detail.collapsed[id] = true
-				}
+		if it.CommentID == "" && len(mem.Collapsed) > 0 {
+			a.detail.collapsed = make(map[string]bool, len(mem.Collapsed))
+			for _, id := range mem.Collapsed {
+				a.detail.collapsed[id] = true
 			}
-			a.detail.flat = mem.Flat
+		}
+	}
+	// 视图模式是账号级偏好，不跟帖子走：上次切到扁平，打开别的帖子也还是
+	// 扁平（见 reply_view.go 的 loadReplyViewMode）。从评论列表点进来要定位
+	// 某层楼时仍强制扁平，但不改动这个偏好。
+	if it.CommentID == "" {
+		if flat, ok := a.loadReplyViewMode(); ok {
+			a.detail.flat = flat
 		}
 	}
 	// 本地已读：点开即算读过，回到列表时这一行标题置灰（见 post_read.go）。
@@ -931,8 +938,8 @@ func (a *app) replyHeader(c *ui.Context, d *detailState) {
 			d.focusTries = 0
 			d.focusMiss = false
 			a.loadReplies(1)
-			// 视图偏好随切换立即落盘，下次打开同一篇沿用（见 reply_view.go）。
-			a.saveReplyView(d)
+			// 视图偏好按账号立即落盘：换一篇帖子打开也沿用（见 reply_view.go）。
+			a.saveReplyViewMode(d.flat)
 		}
 	})
 }
@@ -1338,16 +1345,22 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 			// 输入框里，光标与选区不动，插入标记后可以接着打字（见
 			// editorToolbar），输入框也不会因为这一下失焦而缩回去。
 			ui.Row(c).FillWidth().Padding(2, 4).KeepFocus().Children(func() {
-				a.editorToolbar(c, &d.mdEditor, &d.draft)
+				a.editorToolbar(c, &d.mdEditor, &d.draft, true)
 			})
 			ui.Divider(c).KeepFocus()
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).KeepFocus().Children(func() {
-				ui.Segmented(c, &d.preview, "编辑", "预览").Label("评论视图")
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).KeepFocus().
+				Label("评论视图").Children(func() {
+				// 编辑 / 预览：两个图标按钮代替文字 Segmented，平时只显示图标，
+				// 悬浮由 Tooltip 说明，选中项用底色区分；保留「评论视图」无障碍名。
+				a.editorIconToggle(c, d.preview == 0, editIcon, "编辑", "编辑模式",
+					func() { d.preview = 0 })
+				a.editorIconToggle(c, d.preview == 1, eyeIcon, "预览", "预览模式",
+					func() { d.preview = 1 })
 				ui.Spacer(c).Grow(1)
-				a.editorPanelButtons(c, &d.mdEditor, "插入表情", "插入图片")
+				a.editorPanelButtons(c, &d.mdEditor, "插入表情", "插入图片", true)
 			})
 			a.editorPanels(c, uploadTargetReply, &d.mdEditor, &d.draft,
-				a.replyCommunityEmojis(d))
+				a.replyCommunityEmojis(d), true)
 			if d.preview == 1 {
 				a.editorPreviewView(c, d.draft, a.replyEmojis(d),
 					a.commentMd, replyPreviewHeight)
@@ -1375,8 +1388,20 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				ui.Spinner(c).Size(16, 16)
 			}
 			// 未登录时把框内动作换成「登录后评论」；否则为集成在框内的发送按钮。
+			// 两个动作都只显示图标，文字说明交由 Tooltip（Label 仍保留文字
+			// 作无障碍名与点击测试的命中名）。
 			if !a.auth.loggedIn() {
-				if ui.Button(c, "登录后评论").Clicked() {
+				login := ui.Button(c, "").
+					Background(ui.Transparent).
+					Border(0, t.Border).
+					TextColor(t.Text).
+					Padding(4, 6).
+					Radius(6)
+				login.Children(func() {
+					ui.Icon(c, loginIcon).Size(16, 16).TextColor(t.Text)
+				})
+				login.Label("登录后评论").Tooltip("登录后才能发表评论")
+				if login.Clicked() {
 					var replay func()
 					if strings.TrimSpace(d.draft) != "" {
 						replay = func() {
@@ -1388,7 +1413,11 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 					a.requestLogin("登录后才能发表评论。", replay)
 				}
 			} else {
-				send := ui.PrimaryButton(c, "发送").Disabled(sendDisabled)
+				send := ui.PrimaryButton(c, "").Disabled(sendDisabled)
+				send.Children(func() {
+					ui.Icon(c, sendIcon).Size(16, 16).TextColor(t.AccentText)
+				})
+				send.Label("发送").Tooltip("发送评论")
 				if send.Clicked() {
 					a.submitReply()
 				}

@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -25,9 +28,31 @@ import (
 // 的 SM.MS / Imgur / 自建兰空图床给的，由这里的配置决定，界面和上传队列不
 // 关心。
 //
-// 内置预设覆盖几类常见协议，另外可以让用户手工添加任意「multipart 上传 +
-// JSON 响应」的图床：给接口地址、文件字段名、可选请求头与返回 URL 的取值
-// 路径即可；路径留空时会在响应里自动找第一个图片地址。
+// 预设按「免 Token 优先」排：Kappa、MJJ.Today、ImgBB、Photo.Lily、Appinn、
+// Tikolu、111666.best、Skyimg 都不用注册、不用填 Token，装好就能传，因此
+// 排在前面并默认启用；2Libra 官方图床排在其后，只对 Pro 会员开放（见
+// hostReady / hostNotReadyReason）；StarDots 要 Key + Secret、Imgur 要
+// Client-ID、SM.MS 与兰空要 Token，默认停用，填好再启用。Catbox / Litterbox
+// / x0.at 也免 Token，但分别受「国内直连不通」「只能留 72 小时」「拒绝部分
+// 网络」的限制，默认停用并在 Note 里写清。设置里可以点「测试这个图床」当场
+// 验证一条配置是否还能用。
+//
+// 上传协议有两条路：
+//
+//  1. 通用协议（Adapter 留空）：「multipart 上传 + 取回图片地址」，两种响应
+//     形态都支持——JSON 按「URL 路径」（如 data.url）取值，留空时自动在响应
+//     里找第一个 http(s) 图片地址；纯文本（TextResponse）则整个响应体就是
+//     地址，如 Catbox 与 x0.at。需要额外表单字段的接口（Catbox 的
+//     reqtype=fileupload）写在 Form 里，一行一个 name=value，值里可以写
+//     {{token}} 与 {{filename}}（当前这张图的名字）。
+//  2. 内置协议（Adapter 非空）：MJJ.Today / ImgBB 要先扒上传页里的
+//     auth_token，Skyimg 要先取 CSRF 令牌，Tikolu 只回图片 ID，StarDots 要
+//     现签一个 MD5 签名，Imgur 与 111666.best 在多个公开凭据之间轮换——通用
+//     字段拼不出这些，见 image_hosts_adapters.go。
+//
+// 两条路拿到的地址如果不是完整的 http(s)（Photo.Lily / Appinn / 111666.best
+// 会回 /img/xxx.png 这种站内路径），统一按接口地址补全，否则写进 Markdown
+// 就是死链。
 //
 // 官方接口（api-economy.md「上传」）：
 //
@@ -50,27 +75,42 @@ type imageHostKind string
 
 const (
 	// imageHostOfficial 走 2Libra 自己的 /v1/upload/image 与 {c,m,d,t} 信封，
-	// 令牌来自应用登录态，缺 upload scope 时由全局授权链路补上。
+	// 令牌来自应用登录态，缺 upload scope 时由全局授权链路补上。它只对 Pro
+	// 会员开放，判断见 app.hostReady。
 	imageHostOfficial imageHostKind = "official"
-	// imageHostGeneric 是通用的 multipart + JSON 图床。
+	// imageHostGeneric 是通用的 multipart + JSON / 纯文本图床。
 	imageHostGeneric imageHostKind = "generic"
 )
 
 // imageHost 是一条图库配置。Builtin 的内置项可以改字段 / 停用，但不能删除；
 // 用户手工添加的项 Builtin=false，可以改也可以删。
 type imageHost struct {
-	ID       string        `json:"id"`
-	Name     string        `json:"name"`
-	Kind     imageHostKind `json:"kind"`
-	Endpoint string        `json:"endpoint,omitempty"`
-	Field    string        `json:"field,omitempty"`
-	Header   string        `json:"header,omitempty"` // "Authorization: Bearer {{token}}"，一行一个
-	Token    string        `json:"token,omitempty"`
-	URLPath  string        `json:"url_path,omitempty"` // 点分路径，如 data.url
-	MaxBytes int64         `json:"max_bytes,omitempty"`
-	Enabled  bool          `json:"enabled,omitempty"`
-	Builtin  bool          `json:"builtin,omitempty"`
-	Note     string        `json:"note,omitempty"`
+	ID   string        `json:"id"`
+	Name string        `json:"name"`
+	Kind imageHostKind `json:"kind"`
+	// Adapter 选一套内置上传协议（见 image_hosts_adapters.go）。留空表示按
+	// 下面的通用字段拼一次 multipart 请求。
+	Adapter  string `json:"adapter,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+	Field    string `json:"field,omitempty"`
+	Header   string `json:"header,omitempty"` // "Authorization: Bearer {{token}}"，一行一个
+	Token    string `json:"token,omitempty"`
+	// Secret / Bucket 只有 StarDots 用：它要 API Key（Token）、API Secret 与
+	// 存储桶名三样才能签出上传请求。
+	Secret string `json:"secret,omitempty"`
+	Bucket string `json:"bucket,omitempty"`
+	// Form 是随文件一起提交的附加表单字段，一行一个 name=value。Catbox 这类
+	// 接口要靠 reqtype=fileupload 说明这是一次上传，值里可以写 {{token}} 与
+	// {{filename}}。
+	Form    string `json:"form,omitempty"`
+	URLPath string `json:"url_path,omitempty"` // 点分路径，如 data.url
+	// TextResponse 表示接口成功时直接返回图片地址本身（Catbox、0x0.st），
+	// 而不是 JSON。
+	TextResponse bool   `json:"text_response,omitempty"`
+	MaxBytes     int64  `json:"max_bytes,omitempty"`
+	Enabled      bool   `json:"enabled,omitempty"`
+	Builtin      bool   `json:"builtin,omitempty"`
+	Note         string `json:"note,omitempty"`
 }
 
 type imageHostConfig struct {
@@ -78,17 +118,108 @@ type imageHostConfig struct {
 	Hosts  []imageHost `json:"hosts"`
 }
 
-// defaultImageHostConfig 是首次运行时的一组预设：官方图床直接可用，其余几个
-// 默认停用，用户填上 Token / 地址再启用。这样「默认常用的几个」摆在设置里，
-// 又不会让没配好的图床出现在编辑器的选择框里。
+// defaultImageHostConfig 是首次运行时的一组预设，按「免 Token 优先」排：
+// 不用注册、不用 Token 的图床排在前面并默认启用，Kappa 当「当前使用」；
+// 官方图床排在其后（只对 Pro 开放，默认也启用，Pro 用户可以直接切过去）；
+// 需要 Key / Client-ID / Token 的 StarDots、Imgur、SM.MS 与兰空默认停用，
+// 填好再启用。
+//
+// 免费图床更迭很快：0x0.st 已停止上传、uguu.se 长期 502、catbox.moe 在
+// 国内直连不通，所以这里只保留实测能用的几家，并把临时 / 需要代理的情况
+// 写进 Note。用户还可以在设置里点「测试这个图床」当场验证。
+//
+// 带 Adapter 的几条来自「通用图片上传助手」脚本（utags/userscripts），接口
+// 形态与通用 multipart 不同，实现见 image_hosts_adapters.go；它们默认不带
+// 接口地址，留空即用内置地址，也可以在设置里改成镜像站。
 func defaultImageHostConfig() imageHostConfig {
 	return imageHostConfig{
-		Active: "2libra",
+		Active: "kappa",
 		Hosts: []imageHost{
+			{
+				ID: "kappa", Name: "Kappa（免 Token）", Kind: imageHostGeneric,
+				Endpoint: "https://kappa.lol/api/upload", Field: "file",
+				URLPath: "link", MaxBytes: defaultImageMaxBytes, Enabled: true, Builtin: true,
+				Note: "免注册、免 Token，响应里的 link 就是图片直链；站点在境外，国内网络可能需要代理。",
+			},
+			{
+				ID: "mjj", Name: "MJJ.Today（免 Token）", Kind: imageHostGeneric,
+				Adapter: adapterMJJ, MaxBytes: defaultImageMaxBytes, Enabled: true, Builtin: true,
+				Note: "免注册：先取上传页里的 auth_token 再提交，单张 10 MB 以内；站点在境外，国内网络可能需要代理。",
+			},
+			{
+				ID: "imgbb", Name: "ImgBB（免 Token）", Kind: imageHostGeneric,
+				Adapter: adapterImgBB, MaxBytes: maxImageMaxBytes, Enabled: true, Builtin: true,
+				Note: "免注册，与 MJJ.Today 同一套 Chevereto 接口，单张 32 MB 以内；站点在境外。",
+			},
+			{
+				ID: "photo_lily", Name: "Photo.Lily（免 Token）", Kind: imageHostGeneric,
+				Endpoint: "https://photo.lily.lat/upload", Field: "file",
+				URLPath: "0.src", MaxBytes: defaultImageMaxBytes, Enabled: true, Builtin: true,
+				Note: "免注册，响应是数组、src 有时是站内路径，应用会补成完整地址；小站，随时可能下线。",
+			},
+			{
+				ID: "appinn", Name: "Appinn 图床（免 Token）", Kind: imageHostGeneric,
+				Endpoint: "https://h1.appinn.me/upload?authCode=appinn2&serverCompress=false" +
+					"&uploadChannel=telegram&uploadNameType=default&autoRetry=true",
+				Field: "file", Form: "filename={{filename}}", URLPath: "0.src",
+				MaxBytes: maxImageMaxBytes, Enabled: true, Builtin: true,
+				Note: "小众软件论坛的图床，免注册，文件走 Telegram 通道，单张 20 MB 以内。",
+			},
+			{
+				ID: "tikolu", Name: "Tikolu（免 Token）", Kind: imageHostGeneric,
+				Adapter: adapterTikolu, MaxBytes: 8 << 20, Enabled: true, Builtin: true,
+				Note: "免注册，接口只回图片 ID，地址由应用拼成 https://tikolu.net/i/<ID>；单张 8 MB 以内。",
+			},
+			{
+				ID: "111666_best", Name: "111666.best（免 Token）", Kind: imageHostGeneric,
+				Adapter: adapter111666, MaxBytes: defaultImageMaxBytes, Enabled: true, Builtin: true,
+				Note: "免注册：内置了几个公共令牌，失败时自动换下一个；站点在境外。",
+			},
+			{
+				ID: "skyimg", Name: "Skyimg（免 Token）", Kind: imageHostGeneric,
+				Adapter: adapterSkyimg, MaxBytes: maxImageMaxBytes, Enabled: true, Builtin: true,
+				Note: "免注册：先取 CSRF 令牌再上传，单张 100 MB 以内（受应用上限约束）。",
+			},
+			{
+				ID: "skyimg_webp", Name: "Skyimg WebP（免 Token）", Kind: imageHostGeneric,
+				Adapter: adapterSkyimgWebp, MaxBytes: maxImageMaxBytes, Enabled: false, Builtin: true,
+				Note: "同一站点，上传时转成 WebP 再存；需要更小的图时启用这一条。",
+			},
+			{
+				ID: "litterbox", Name: "Litterbox（免 Token · 临时）", Kind: imageHostGeneric,
+				Endpoint: "https://litterbox.catbox.moe/resources/internals/api.php",
+				Field:    "fileToUpload", Form: "reqtype=fileupload\ntime=72h",
+				TextResponse: true, MaxBytes: defaultImageMaxBytes,
+				Enabled: false, Builtin: true,
+				Note: "Catbox 的临时区：免注册，响应体就是图片地址，但文件最多只留 72 小时。",
+			},
+			{
+				ID: "catbox", Name: "Catbox（免 Token）", Kind: imageHostGeneric,
+				Endpoint: "https://catbox.moe/user/api.php", Field: "fileToUpload",
+				Form: "reqtype=fileupload", TextResponse: true,
+				MaxBytes: defaultImageMaxBytes, Enabled: false, Builtin: true,
+				Note: "免注册、文件长期保存；国内直连通常不通（TLS 会被断开），需要走代理。",
+			},
+			{
+				ID: "x0", Name: "x0.at（免 Token）", Kind: imageHostGeneric,
+				Endpoint: "https://x0.at", Field: "file", TextResponse: true,
+				MaxBytes: defaultImageMaxBytes, Enabled: false, Builtin: true,
+				Note: "0x0.st 的镜像：免注册，响应体就是图片地址；部分网络（机房 IP）会被拒绝上传。",
+			},
 			{
 				ID: "2libra", Name: "2Libra 官方图床", Kind: imageHostOfficial,
 				Field: "file", MaxBytes: defaultImageMaxBytes, Enabled: true, Builtin: true,
-				Note: "登录 2Libra 即可使用；需要 upload 权限，每人每天 20 张。",
+				Note: "仅 Pro 会员可用；登录 2Libra 后自动确认身份，每人每天 20 张。",
+			},
+			{
+				ID: "stardots", Name: "StarDots", Kind: imageHostGeneric,
+				Adapter: adapterStarDots, MaxBytes: maxImageMaxBytes, Enabled: false, Builtin: true,
+				Note: "要 API Key、API Secret 与存储桶名（在 StarDots 控制台的「Key and Secret」页获取）；签名上传。",
+			},
+			{
+				ID: "imgur", Name: "Imgur", Kind: imageHostGeneric,
+				Adapter: adapterImgur, MaxBytes: maxImageMaxBytes, Enabled: false, Builtin: true,
+				Note: "填自己的 Client-ID 最稳；不填时用内置的几个公共 Client-ID 轮换，随时可能失效。",
 			},
 			{
 				ID: "smms", Name: "SM.MS", Kind: imageHostGeneric,
@@ -96,13 +227,6 @@ func defaultImageHostConfig() imageHostConfig {
 				Header: "Authorization: {{token}}", URLPath: "data.url",
 				MaxBytes: defaultImageMaxBytes, Enabled: false, Builtin: true,
 				Note: "在 SM.MS 账户页生成 API Token 后填入。",
-			},
-			{
-				ID: "imgur", Name: "Imgur", Kind: imageHostGeneric,
-				Endpoint: "https://api.imgur.com/3/image", Field: "image",
-				Header: "Authorization: Client-ID {{token}}", URLPath: "data.link",
-				MaxBytes: defaultImageMaxBytes, Enabled: false, Builtin: true,
-				Note: "填入应用的 Client-ID（匿名上传）。",
 			},
 			{
 				ID: "lsky", Name: "兰空图床 / Chevereto 兼容", Kind: imageHostGeneric,
@@ -120,6 +244,11 @@ func defaultImageHostConfig() imageHostConfig {
 	}
 }
 
+// retiredImageHostIDs 是已经下线的内置预设：0x0.st 停止上传、uguu.se 长期
+// 502，留着只会让用户白试一次。旧缓存里的这两条直接丢掉，既不变成用户删得
+// 掉的自定义项，「当前使用」也会回落到第一条可用的图床。
+var retiredImageHostIDs = map[string]bool{"0x0": true, "uguu": true}
+
 // normalizeImageHosts 把磁盘上读回的配置补全成当前版本认识的样子：
 // 内置项按 ID 补齐（用户改过的内置项保留他的修改），自定义项原样保留，
 // 上限与激活项都夹到合法范围。损坏的缓存不该让编辑器拿不到任何图床。
@@ -127,7 +256,7 @@ func normalizeImageHosts(cfg imageHostConfig) imageHostConfig {
 	defaults := defaultImageHostConfig()
 	byID := make(map[string]imageHost, len(cfg.Hosts))
 	for _, h := range cfg.Hosts {
-		if h.ID != "" {
+		if h.ID != "" && !retiredImageHostIDs[h.ID] {
 			byID[h.ID] = h
 		}
 	}
@@ -176,6 +305,11 @@ func normalizedActiveID(cfg imageHostConfig) string {
 			return h.ID
 		}
 	}
+	// 一条都没启用时也别返回一个不存在的 ID：界面的下拉框与标签都按 ID
+	// 取名字，退回第一条（预设里是免 Token 的 Kappa）。
+	if len(cfg.Hosts) > 0 {
+		return cfg.Hosts[0].ID
+	}
 	return "2libra"
 }
 
@@ -191,7 +325,51 @@ func clampImageHost(h imageHost) imageHost {
 	}
 	h.Name = strings.TrimSpace(h.Name)
 	h.Endpoint = strings.TrimSpace(h.Endpoint)
+	h.Form = normalizeFormLines(h.Form)
+	repairCatboxHost(&h)
 	return h
+}
+
+// repairCatboxHost 补齐 Catbox 系的必填项。这两条接口的响应体就是一个地址，
+// 而且必须带上 reqtype（Litterbox 还要 time），否则直接回 HTTP 412；老版本
+// 的配置里既没有「附加表单字段」也没有「纯文本响应」这两个开关，读回来时补
+// 上，用户才不会只看到一句 412 或者「返回的不是 JSON」。
+func repairCatboxHost(h *imageHost) {
+	if !strings.Contains(h.Endpoint, "catbox.moe") {
+		return
+	}
+	h.TextResponse = true
+	h.Form = ensureFormField(h.Form, "reqtype", "fileupload")
+	if strings.Contains(h.Endpoint, "litterbox.") {
+		h.Form = ensureFormField(h.Form, "time", "72h")
+	}
+}
+
+// ensureFormField 只在缺这个字段时追加一行，用户自己填过的值不动。
+func ensureFormField(form, name, value string) string {
+	for _, line := range strings.Split(form, "\n") {
+		if k, _, ok := strings.Cut(strings.TrimSpace(line), "="); ok &&
+			strings.EqualFold(strings.TrimSpace(k), name) {
+			return form
+		}
+	}
+	if strings.TrimSpace(form) == "" {
+		return name + "=" + value
+	}
+	return form + "\n" + name + "=" + value
+}
+
+// normalizeFormLines 把附加表单字段整理成一行一个 name=value：去掉首尾空白
+// 与空行，避免从别处粘贴时带进来多余换行。
+func normalizeFormLines(s string) string {
+	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+	out := lines[:0]
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 func sortStrings(s []string) {
@@ -284,6 +462,16 @@ func validateImageHost(h imageHost) error {
 			return errors.New("请求头要写成「名称: 值」，一行一个")
 		}
 	}
+	for _, line := range strings.Split(strings.ReplaceAll(h.Form, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		name, _, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(name) == "" {
+			return errors.New("附加表单字段要写成「名称=值」，一行一个")
+		}
+	}
 	if h.URLPath != "" {
 		for _, part := range strings.Split(h.URLPath, ".") {
 			if strings.TrimSpace(part) == "" {
@@ -295,18 +483,70 @@ func validateImageHost(h imageHost) error {
 }
 
 // hostReady 判断一条图床是否真的能发请求：没启用、没填地址、或请求头里
-// 要 Token 却没填，都不算就绪。
+// 要 Token 却没填，都不算就绪。官方图床还要求账号是 Pro 会员 —— 它只对 Pro
+// 开放，而 Pro 状态要等账号资料读回来，未确认时同样按不可用处理。
 func (a *app) hostReady(h *imageHost) bool {
 	if h == nil || !h.Enabled {
 		return false
 	}
 	if h.Kind == imageHostOfficial {
-		return a.auth != nil && a.auth.loggedIn()
+		if a.auth == nil || !a.auth.loggedIn() {
+			return false
+		}
+		pro, known := a.proStatus()
+		return known && pro
 	}
 	if strings.TrimSpace(h.Endpoint) == "" {
 		return false
 	}
 	return !strings.Contains(h.Header, "{{token}}") || strings.TrimSpace(h.Token) != ""
+}
+
+// proStatus 返回当前账号是不是 Pro，以及这个结论是否已经确认。官方图床只对
+// Pro 开放，但 Pro 状态来自账号资料，不能等用户打开「我的」窗口：登录时、
+// 启动后都会主动读一次，结果缓存在 token.json；「我的」窗口读过更新鲜的
+// 资料时以它为准。
+func (a *app) proStatus() (pro, known bool) {
+	// 只有真的读到资料才作数：加载失败时 infoLoaded 也是 true，但 user 还是
+	// 零值，照它的 IsPro 会把 Pro 用户误判成非 Pro。
+	if ps := a.profile; ps != nil && ps.infoLoaded && ps.infoErr == "" && ps.user.Name != "" {
+		return ps.user.IsPro, true
+	}
+	if a.auth == nil {
+		return false, false
+	}
+	return a.auth.proStatus()
+}
+
+// refreshProStatus 读一次当前账号的公开资料，把 is_pro 记进令牌缓存。force
+// 为 false 时只在还没确认过的情况下才发请求（启动时用），force 为 true 时
+// 不管缓存直接重读（刚登录、或用户在设置里点了「重新确认」）。
+func (a *app) refreshProStatus(force bool) {
+	if a.auth == nil || !a.autoLoad || a.proChecking || !a.auth.loggedIn() {
+		return
+	}
+	if !force {
+		if _, known := a.proStatus(); known {
+			return
+		}
+	}
+	name := a.auth.username()
+	if name == "" {
+		return
+	}
+	a.proChecking = true
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		p, err := a.client.fetchAccountProfile(ctx, name)
+		a.publish(func() {
+			a.proChecking = false
+			if err != nil || p.Name == "" {
+				return
+			}
+			a.auth.setProStatus(p.IsPro)
+		})
+	}()
 }
 
 func (a *app) activeHost() *imageHost {
@@ -436,11 +676,18 @@ func (s uploadSource) bytes() ([]byte, error) {
 // ------------------------------------------------------------------
 
 // postFile 发一次 multipart/form-data 上传，原样返回响应体与状态码。
-// 官方接口是 {c,m,d,t} 信封，第三方图床各有各的 JSON，所以解码交给调用方。
+// 官方接口是 {c,m,d,t} 信封，第三方图床各有各的 JSON（也有直接回地址的
+// 纯文本），所以解码交给调用方。form 是随文件一起提交的附加字段，按给定
+// 顺序写在文件之前：有的接口要求说明「这是一次上传」的字段先出现。
 func (c *Client) postFile(ctx context.Context, u, authorization string,
-	headers map[string]string, field, filename, contentType string, data []byte) ([]byte, int, error) {
+	headers map[string]string, form [][2]string, field, filename, contentType string, data []byte) ([]byte, int, error) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
+	for _, kv := range form {
+		if err := w.WriteField(kv[0], kv[1]); err != nil {
+			return nil, 0, err
+		}
+	}
 	// CreateFormFile 把 part 的 Content-Type 写死成 application/octet-stream，
 	// 有些第三方图床会据此拒绝 JPEG / WebP。这里自己建 part，带上 inspectImage
 	// 按文件头判出来的真实类型；字段名与文件名按 RFC 7578 转义。
@@ -508,6 +755,16 @@ func (a *app) uploadImage(ctx context.Context, h imageHost, src uploadSource) (s
 	return a.uploadToGeneric(ctx, h, src, data)
 }
 
+// testUploadPNG 是一张 1×1 的 PNG，只用于设置里的「测试这个图床」：上传一张
+// 最小的真图，既能验证接口地址与字段名，又不会往图床上塞用户的照片。
+func testUploadPNG() []byte {
+	var buf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	img.Set(0, 0, color.RGBA{R: 0x2c, G: 0x6f, B: 0xff, A: 0xff})
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
+
 // uploadToOfficial 沿用读端点的授权重试：401 会刷新一次令牌再重传。
 // 上传接口没有幂等键（文档没有标 🔑），刷新令牌重传是安全的。
 func (a *app) uploadToOfficial(ctx context.Context, src uploadSource, data []byte) (string, error) {
@@ -517,7 +774,7 @@ func (a *app) uploadToOfficial(ctx context.Context, src uploadSource, data []byt
 			auth = "Bearer " + token
 		}
 		body, status, err := a.client.postFile(ctx,
-			a.client.apiURL("/v1/upload/image"), auth, nil,
+			a.client.apiURL("/v1/upload/image"), auth, nil, nil,
 			"file", src.Name, src.Mime, data)
 		if err != nil {
 			return "", err
@@ -543,8 +800,9 @@ func (a *app) uploadToOfficial(ctx context.Context, src uploadSource, data []byt
 	})
 }
 
-// uploadToGeneric 是通用图床：请求头由配置拼出，返回 JSON 里按配置路径取
-// 地址；路径留空时自动找响应里第一个 http(s) 图片地址。
+// uploadToGeneric 是通用图床：请求头与附加表单字段由配置拼出，返回地址按
+// 配置取——纯文本接口直接拿响应体，JSON 接口按路径取值，路径留空时自动找
+// 响应里第一个 http(s) 图片地址。
 func (a *app) uploadToGeneric(ctx context.Context, h imageHost, src uploadSource, data []byte) (string, error) {
 	headers := make(map[string]string)
 	authorization := ""
@@ -563,12 +821,33 @@ func (a *app) uploadToGeneric(ctx context.Context, h imageHost, src uploadSource
 		headers[name] = value
 	}
 	body, status, err := a.client.postFile(ctx, h.Endpoint, authorization, headers,
-		h.Field, src.Name, src.Mime, data)
+		parseFormFields(h.Form, h.Token), h.Field, src.Name, src.Mime, data)
 	if err != nil {
-		return "", err
+		return "", uploadNetError(err)
+	}
+	// 纯文本接口失败时响应体也只有一句话，JSON 接口的报错留给下面的分支去
+	// 挑 success/message，这里只处理「不是 JSON 的失败」。
+	if status >= 400 && !json.Valid(body) {
+		if msg, ok := hostRejectionHint(status, body); ok {
+			return "", errors.New(msg)
+		}
+	}
+	if h.TextResponse {
+		// Catbox / 0x0.st 这类接口成功时整个响应体就是一个地址。
+		u := firstLine(string(body))
+		if !isImageURL(u) {
+			return "", hostBadBody(status, body)
+		}
+		return u, nil
 	}
 	var v any
 	if err := json.Unmarshal(body, &v); err != nil {
+		if status >= 400 {
+			return "", fmt.Errorf("图库返回 HTTP %d：%s", status, briefBody(body))
+		}
+		if looksLikeHTML(body) {
+			return "", hostBadBody(status, body)
+		}
 		return "", fmt.Errorf("图库返回的不是 JSON（HTTP %d）：%w", status, err)
 	}
 	if o, ok := v.(map[string]any); ok {
@@ -588,7 +867,7 @@ func (a *app) uploadToGeneric(ctx context.Context, h imageHost, src uploadSource
 		}
 	}
 	if status >= 400 {
-		return "", fmt.Errorf("图库返回 HTTP %d", status)
+		return "", fmt.Errorf("图库返回 HTTP %d：%s", status, briefBody(body))
 	}
 	u := jsonStringAt(v, h.URLPath)
 	if !isImageURL(u) {
@@ -598,6 +877,96 @@ func (a *app) uploadToGeneric(ctx context.Context, h imageHost, src uploadSource
 		return "", errors.New("图库响应里找不到图片地址，请检查「URL 路径」配置")
 	}
 	return u, nil
+}
+
+// parseFormFields 把「一行一个 name=value」的附加字段转成 multipart 字段，
+// 值里的 {{token}} 与请求头一样按 Token 替换。格式错的行走不到这里：
+// validateImageHost 已经拦下并给出了提示。
+func parseFormFields(form, token string) [][2]string {
+	var out [][2]string
+	for _, line := range strings.Split(strings.ReplaceAll(form, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		name, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		out = append(out, [2]string{strings.TrimSpace(name), strings.ReplaceAll(value, "{{token}}", token)})
+	}
+	return out
+}
+
+// firstLine 取响应体的第一行并去掉空白：纯文本图床可能带上结尾换行。
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	return s
+}
+
+// hostRejectionHint 把几个固定报错翻成「照着改就能好」的提示。Catbox 系缺
+// 字段时只回一句英文加 HTTP 412，原样抛给用户等于没说。
+func hostRejectionHint(status int, body []byte) (string, bool) {
+	s := strings.ToLower(string(body))
+	switch {
+	case strings.Contains(s, "no request type given"):
+		return "图库要求先说明上传类型：在「附加表单字段」里加一行 reqtype=fileupload", true
+	case strings.Contains(s, "no expire time specified"):
+		return "图库要求指定保存时长：在「附加表单字段」里加一行 time=72h（也可填 1h / 12h / 24h / 72h）", true
+	case status == 412:
+		return "图库返回 HTTP 412：请求被拒绝，多半是缺了必填字段（检查「附加表单字段」），也可能是站点风控拦截：" + briefBody(body), true
+	}
+	return "", false
+}
+
+// uploadNetError 把网络层错误翻成一句用户能看懂的话：第三方图床多是境外
+// 服务，被拦截时的原始错误（tls: server closed abruptly、EOF）对用户没有
+// 意义，只会让人以为是应用的问题。
+func uploadNetError(err error) error {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), strings.Contains(msg, "timeout"):
+		return errors.New("上传超时：图床没有在限定时间内响应，换一个图床试试")
+	case strings.Contains(msg, "tls:"), strings.Contains(msg, "eof"),
+		strings.Contains(msg, "connection reset"), strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "no such host"):
+		return errors.New("连不上图床：可能被网络拦截或服务已下线，换一个图床试试")
+	}
+	return err
+}
+
+// looksLikeHTML 判断响应体是不是一个网页。图床挂掉、被墙、或接口地址填成
+// 了首页时都会回一页 HTML，这种失败要单独说清楚，不然用户只会看到一长串
+// 标签，或者一句「不是 JSON」。
+func looksLikeHTML(b []byte) bool {
+	s := strings.TrimSpace(string(b))
+	return strings.HasPrefix(s, "<")
+}
+
+// hostBadBody 是「图库没有给出图片地址」时的统一说明：网页多半是接口地址
+// 不对或站点被拦截，其他内容就把响应体压成一句话带上。
+func hostBadBody(status int, body []byte) error {
+	if looksLikeHTML(body) {
+		return fmt.Errorf("图库返回的是网页而不是图片地址（HTTP %d），接口地址可能填错了，或站点被网络拦截", status)
+	}
+	return fmt.Errorf("图库没有返回图片地址（HTTP %d）：%s", status, briefBody(body))
+}
+
+// briefBody 把响应体压成一行短说明放进错误信息里：图床出错时常回一整页
+// HTML，原样抛给用户既看不懂也占满 toast。
+func briefBody(b []byte) string {
+	s := strings.Join(strings.Fields(string(b)), " ")
+	r := []rune(s)
+	if len(r) > 120 {
+		s = string(r[:120]) + "…"
+	}
+	if s == "" {
+		s = "空响应"
+	}
+	return s
 }
 
 // jsonStringAt 按点分路径取字符串；数组下标写成数字，如 data.0.url。

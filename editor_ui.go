@@ -23,12 +23,26 @@ const replyPreviewHeight = 180
 // 工具条窄时 MyGo 从末尾把放不下的按钮收进「»」菜单，所以表情 / 图片
 // 入口不放在这里，否则默认窗口宽度下这两项恰好是最先被藏起来的。
 //
-// 整条工具条带 KeepFocus：按标记按钮时焦点仍留在输入框里，选区不动，
-// 插入的标记落在光标处，插完可以直接接着打字；评论输入框也不会因为
-// 失焦而缩回一行。
-func (a *app) editorToolbar(c *ui.Context, e *mdEditor, body *string) {
+// iconMode 为 true 时（评论输入框）按钮只显示图标，文字说明交由 Tooltip；
+// 为 false 时（发帖窗口）仍显示文字文案，保持两个编辑器各自的观感。两种
+// 模式都带 KeepFocus：按标记按钮时焦点仍留在输入框里，选区不动，插入的
+// 标记落在光标处，插完可以直接接着打字；评论输入框也不会因为失焦而缩回一行。
+func (a *app) editorToolbar(c *ui.Context, e *mdEditor, body *string, iconMode bool) {
+	t := c.Theme()
 	ui.Toolbar(c, func() {
 		for _, b := range markdownButtons {
+			if iconMode && b.icon != nil {
+				// 图标按钮：平时只显示图标，悬浮由 Tooltip 给出标记说明。
+				// Label 保留文字作无障碍名，点击测试也能按名字命中。
+				btn := ui.Button(c, "").Label(b.label).Tooltip(b.hint).KeepFocus()
+				btn.Children(func() {
+					ui.Icon(c, b.icon).Size(16, 16).TextColor(t.Text)
+				})
+				if btn.Clicked() {
+					e.applyMarkdown(body, b.format)
+				}
+				continue
+			}
 			if ui.Button(c, b.label).Tooltip(b.hint).Clicked() {
 				e.applyMarkdown(body, b.format)
 			}
@@ -39,7 +53,44 @@ func (a *app) editorToolbar(c *ui.Context, e *mdEditor, body *string) {
 // editorPanelButtons 放在「编辑 / 预览」那一行，永远可见。emojiLabel /
 // imageLabel 由调用方给：详情页正文里已经有一个「表情」表态按钮，评论
 // 工具条改用别的名字，免得读屏与点击测试分不清两个入口。
-func (a *app) editorPanelButtons(c *ui.Context, e *mdEditor, emojiLabel, imageLabel string) {
+//
+// iconMode 为 true 时（评论输入框）两个入口只显示图标，说明交给定制
+// Tooltip；为 false 时（发帖窗口）显示文字文案。两种模式都带 KeepFocus。
+func (a *app) editorPanelButtons(c *ui.Context, e *mdEditor, emojiLabel, imageLabel string, iconMode bool) {
+	t := c.Theme()
+	if iconMode {
+		emoji := ui.Button(c, "").
+			Background(ui.Transparent).
+			Border(0, t.Border).
+			TextColor(t.Text).
+			FontSize(12).
+			Padding(4, 6).
+			Radius(6).
+			KeepFocus()
+		emoji.Children(func() {
+			ui.Icon(c, reactionIcon).Size(16, 16).TextColor(t.Text)
+		})
+		emoji.Label(emojiLabel).Tooltip("插入社区表情")
+		if emoji.Clicked() {
+			e.togglePanel("emoji")
+		}
+		img := ui.Button(c, "").
+			Background(ui.Transparent).
+			Border(0, t.Border).
+			TextColor(t.Text).
+			FontSize(12).
+			Padding(4, 6).
+			Radius(6).
+			KeepFocus()
+		img.Children(func() {
+			ui.Icon(c, imageIcon).Size(16, 16).TextColor(t.Text)
+		})
+		img.Label(imageLabel).Tooltip("拖入、选择或粘贴图片")
+		if img.Clicked() {
+			e.togglePanel("image")
+		}
+		return
+	}
 	if ui.Button(c, emojiLabel).Tooltip("插入社区表情").KeepFocus().Clicked() {
 		e.togglePanel("emoji")
 	}
@@ -48,15 +99,65 @@ func (a *app) editorPanelButtons(c *ui.Context, e *mdEditor, emojiLabel, imageLa
 	}
 }
 
+// editorIconButton 画一个「图标 + 无障碍名 + 悬浮提示」的按钮，用于编辑器的
+// 图标模式（评论输入框）。label 同时作无障碍名与点击测试的命中名，tip 是悬浮
+// 时给出的说明。调用方照常用返回值的 Clicked() 判断点击。
+func (a *app) editorIconButton(c *ui.Context, icon *ui.SVG, label, tip string) ui.Element {
+	t := c.Theme()
+	return ui.Button(c, "").
+		Background(ui.Transparent).
+		Border(0, t.Border).
+		TextColor(t.Text).
+		FontSize(12).
+		Padding(4, 6).
+		Radius(6).
+		KeepFocus().
+		Children(func() {
+			ui.Icon(c, icon).Size(16, 16).TextColor(t.Text)
+		}).
+		Label(label).
+		Tooltip(tip)
+}
+
+// editorIconToggle 是编辑器图标模式下的二选一开关（评论输入框的编辑 / 预览）。
+// 选中的一项用底色区分；label 作无障碍名、点击测试的命中名，tip 是悬浮说明。
+func (a *app) editorIconToggle(c *ui.Context, on bool, icon *ui.SVG,
+	label, tip string, onClick func()) {
+	t := c.Theme()
+	bg := ui.Transparent
+	fg := t.TextMuted
+	if on {
+		bg = t.SurfaceHover
+		fg = t.Text
+	}
+	b := ui.Button(c, "").
+		Background(bg).
+		Border(0, t.Border).
+		TextColor(fg).
+		FontSize(12).
+		Padding(4, 6).
+		Radius(6).
+		KeepFocus()
+	b.Children(func() {
+		ui.Icon(c, icon).Size(16, 16).TextColor(fg)
+	})
+	b.Label(label).Tooltip(tip)
+	if b.Clicked() {
+		onClick()
+	}
+}
+
 // editorPanels 画当前打开的那个面板。两个面板互斥，由 togglePanel 保证。
+// iconMode 为 true 时（评论输入框）面板里的动作入口只显示图标；为 false 时
+// （发帖窗口）显示文字文案。
 func (a *app) editorPanels(c *ui.Context, t uploadTarget, e *mdEditor,
-	body *string, extra map[string]string) {
+	body *string, extra map[string]string, iconMode bool) {
 	if e.emojiOpen {
-		a.editorEmojiPanel(c, e, body, extra)
+		a.editorEmojiPanel(c, e, body, extra, iconMode)
 		return
 	}
 	if e.imageOpen {
-		a.editorImagePanel(c, t)
+		a.editorImagePanel(c, t, iconMode)
 	}
 }
 
@@ -68,7 +169,7 @@ func (a *app) editorPanels(c *ui.Context, t uploadTarget, e *mdEditor,
 // 分批展示。插入的是 :code: 短码而不是图片链接：服务端正文认短码，预览与
 // 详情页正文会用同一套 replaceEmoji 把它换成行内图片。
 func (a *app) editorEmojiPanel(c *ui.Context, e *mdEditor, body *string,
-	extra map[string]string) {
+	extra map[string]string, iconMode bool) {
 	t := c.Theme()
 	list := editorEmojis(a.emojis, extra)
 	community := editorCommunityCodes(extra)
@@ -119,12 +220,25 @@ func (a *app) editorEmojiPanel(c *ui.Context, e *mdEditor, body *string,
 				strconv.Itoa(len(shown))+" 个").
 				FontSize(11).TextColor(t.TextMuted).SingleLine().Grow(1)
 			if len(filtered) > e.emojiShown {
-				if ui.Button(c, "显示更多表情").Clicked() {
-					e.emojiShown += emojiPageSize
+				if iconMode {
+					if a.editorIconButton(c, chevronDownIcon, "显示更多表情",
+						"显示更多表情").Clicked() {
+						e.emojiShown += emojiPageSize
+					}
+				} else {
+					if ui.Button(c, "显示更多表情").Clicked() {
+						e.emojiShown += emojiPageSize
+					}
 				}
 			}
-			if ui.Button(c, "收起表情").Clicked() {
-				e.emojiOpen = false
+			if iconMode {
+				if a.editorIconButton(c, closeIcon, "收起表情", "收起表情面板").Clicked() {
+					e.emojiOpen = false
+				}
+			} else {
+				if ui.Button(c, "收起表情").Clicked() {
+					e.emojiOpen = false
+				}
 			}
 		})
 	})
@@ -136,7 +250,8 @@ func (a *app) editorEmojiPanel(c *ui.Context, e *mdEditor, body *string,
 
 // editorImagePanel 是三条上传入口的说明与任务列表：切图库、选文件、粘贴
 // 剪贴板，以及每一张图的排队 / 上传 / 完成 / 失败状态与重试、移除。
-func (a *app) editorImagePanel(c *ui.Context, t uploadTarget) {
+// iconMode 为 true 时（评论输入框）三个入口只显示图标；为 false 时显示文字。
+func (a *app) editorImagePanel(c *ui.Context, t uploadTarget, iconMode bool) {
 	th := c.Theme()
 	ui.Column(c).FillWidth().Padding(8, 10).Gap(8).
 		Background(th.Surface).Children(func() {
@@ -157,22 +272,41 @@ func (a *app) editorImagePanel(c *ui.Context, t uploadTarget) {
 		})
 		ui.Text(c, "把图片直接拖进编辑区，或用下面的按钮。支持 JPEG / PNG / WebP，单张上限在图库设置里改。").
 			FontSize(11).TextColor(th.TextMuted).MaxLines(2)
+		// 当前图库不能用时先把原因说清楚：否则用户拖进图片只看到一句上传
+		// 失败，还得自己去设置里猜是没登录、不是 Pro 还是没填 Token。
+		if h := a.activeHost(); h != nil && !a.hostReady(h) {
+			ui.Text(c, "当前图库不可用："+a.hostNotReadyReason(h)).
+				FontSize(11).TextColor(th.Danger).MaxLines(2)
+		}
 		ui.Row(c).Gap(8).Wrap().KeepFocus().Children(func() {
-			if ui.Button(c, "选择图片").Clicked() {
-				a.pickImages(t)
-			}
-			if ui.Button(c, "粘贴剪贴板图片").Clicked() {
-				a.pasteImages(t)
-			}
-			if ui.Button(c, "图库设置").Clicked() {
-				a.showSettings()
+			if iconMode {
+				if a.editorIconButton(c, imageIcon, "选择图片", "选择图片").Clicked() {
+					a.pickImages(t)
+				}
+				if a.editorIconButton(c, clipboardIcon, "粘贴剪贴板图片",
+					"粘贴剪贴板图片").Clicked() {
+					a.pasteImages(t)
+				}
+				if a.editorIconButton(c, settingsIcon, "图库设置", "图库设置").Clicked() {
+					a.showSettings()
+				}
+			} else {
+				if ui.Button(c, "选择图片").Clicked() {
+					a.pickImages(t)
+				}
+				if ui.Button(c, "粘贴剪贴板图片").Clicked() {
+					a.pasteImages(t)
+				}
+				if ui.Button(c, "图库设置").Clicked() {
+					a.showSettings()
+				}
 			}
 		})
 		jobs := a.uploadsFor(t)
 		if len(jobs) > 0 {
 			ui.Divider(c)
 			for _, j := range jobs {
-				a.editorUploadRow(c, j)
+				a.editorUploadRow(c, j, iconMode)
 			}
 		}
 		if a.pendingUploadCount() > 0 {
@@ -183,7 +317,7 @@ func (a *app) editorImagePanel(c *ui.Context, t uploadTarget) {
 	})
 }
 
-func (a *app) editorUploadRow(c *ui.Context, j *uploadJob) {
+func (a *app) editorUploadRow(c *ui.Context, j *uploadJob, iconMode bool) {
 	t := c.Theme()
 	state, color := "排队中", t.TextMuted
 	switch j.State {
@@ -199,12 +333,25 @@ func (a *app) editorUploadRow(c *ui.Context, j *uploadJob) {
 			SingleLine().Grow(1).MinWidth(0)
 		ui.Text(c, state).FontSize(11).TextColor(color).MaxLines(2)
 		if j.State == uploadFailed {
-			if ui.Button(c, "重试 "+j.Name).Clicked() {
-				a.retryUpload(j.ID)
+			if iconMode {
+				if a.editorIconButton(c, refreshIcon, "重试 "+j.Name,
+					"重试上传 "+j.Name).Clicked() {
+					a.retryUpload(j.ID)
+				}
+			} else {
+				if ui.Button(c, "重试 "+j.Name).Clicked() {
+					a.retryUpload(j.ID)
+				}
 			}
 		}
-		if ui.Button(c, "移除 "+j.Name).Clicked() {
-			a.removeUpload(j.ID)
+		if iconMode {
+			if a.editorIconButton(c, trashIcon, "移除 "+j.Name, "移除 "+j.Name).Clicked() {
+				a.removeUpload(j.ID)
+			}
+		} else {
+			if ui.Button(c, "移除 "+j.Name).Clicked() {
+				a.removeUpload(j.ID)
+			}
 		}
 	})
 }

@@ -135,7 +135,10 @@ func toastTexts(a *app) []string {
 }
 
 func TestEnqueueUploadsRequiresReadyHost(t *testing.T) {
-	a := testApp(t) // 默认官方图床，未登录
+	a := testApp(t)
+	// 默认图库是免 Token 的 Kappa，本身就绪；切到需要登录的官方图床来
+	// 验证「不就绪就不入队」。
+	a.setActiveHostByLabel("2Libra 官方图床")
 	a.compose = newComposeState()
 	p := writeTestImage(t, "photo.png", pngHeadForUpload)
 	if n := a.enqueueUploads(uploadTargetCompose, []uploadSource{{Path: p}}); n != 0 {
@@ -416,18 +419,49 @@ func TestLateUploadResultAfterRemovalIsIgnored(t *testing.T) {
 	}
 }
 
-// 通用图床那一半的编辑表单（Password / NumberInput / Select）也要能画出来，
-// 官方图床分支覆盖不到这些控件。
+// 通用图床那一半的编辑表单（Password / NumberInput / Select / TextArea）也要
+// 能画出来，官方图床分支覆盖不到这些控件。
 func TestSettingsWindowRendersGenericHostEditor(t *testing.T) {
 	a := testApp(t)
 	a.hostEditLabel = "SM.MS"
 	tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
 	tt.Frame()
 	for _, want := range []string{"上传接口地址", "文件字段名", "返回 URL 路径",
-		"请求头（一行一个）", "Token（替换上面的 {{token}}）", "单张上限"} {
+		"请求头（一行一个）", "Token（替换上面的 {{token}}）",
+		"附加表单字段（一行一个 name=value）", "响应体直接就是图片地址", "单张上限"} {
 		if !tt.HasText(want) {
 			t.Errorf("通用图床表单缺少 %q：%q", want, tt.Texts())
 		}
+	}
+}
+
+// 官方图床只对 Pro 开放：设置里要按当前账号的状态给出不同说明。
+func TestSettingsWindowOfficialHostProNote(t *testing.T) {
+	a := testApp(t)
+	a.hostEditLabel = "2Libra 官方图床"
+	tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
+	tt.Frame()
+	if !tt.HasText("只对 Pro 会员开放") {
+		t.Errorf("没说明 Pro 门槛：%q", tt.Texts())
+	}
+	if !tt.HasText("当前未登录") {
+		t.Errorf("未登录时没说明会先确认 Pro 状态：%q", tt.Texts())
+	}
+
+	if err := a.auth.storeToken(tokenData{
+		AccessToken: "tok", Username: "jimmy", TokenType: "Bearer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.auth.setProStatus(false)
+	tt.Frame()
+	if !tt.HasText("当前账号不是 Pro") {
+		t.Errorf("非 Pro 账号没看到提示：%q", tt.Texts())
+	}
+	a.auth.setProStatus(true)
+	tt.Frame()
+	if !tt.HasText("当前账号是 Pro") {
+		t.Errorf("Pro 账号没看到提示：%q", tt.Texts())
 	}
 }
 

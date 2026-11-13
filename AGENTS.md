@@ -99,7 +99,7 @@ a pure white page.
 | oauth.md | `auth.go`、`auth_ui.go`、`auth_gate.go` |
 | api-read.md | `api.go`（列表与解码）、`detail.go`、`profile.go`、`attributes.go`（六维属性）、`badges.go`（徽章墙与佩戴状态）、`user_card.go`、`notifications.go` |
 | api-write.md | `compose.go`、`detail.go`（发评论）、`follow.go`、`interact.go` |
-| api-economy.md | `coins.go`、`coins_window.go`、`badges.go`（佩戴切换，scope `write:economy`） |
+| api-economy.md | `coins.go`、`coins_window.go`、`badges.go`（佩戴切换，scope `write:economy`）、`image_hosts.go`（上传；官方图床只对 Pro 开放） |
 | 搜索（`/v1/search`） | `search.go`、`search_ui.go` |
 | 节点（`/v1/nodes`） | `nodes.go`（请求、父子关系、本地缓存）、`compose.go`（两列选项）、`cascader.go`（级联选择组件） |
 

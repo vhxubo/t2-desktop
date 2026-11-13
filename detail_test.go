@@ -509,6 +509,10 @@ func TestClickOpensDetailView(t *testing.T) {
 	if !a.detail.flat {
 		t.Error("flat 视图未切换")
 	}
+	// 视图偏好按账号记：切一次就落盘，换帖子打开也沿用。
+	if flat, ok := a.loadReplyViewMode(); !ok || !flat {
+		t.Errorf("切换后没有按账号存下视图偏好：flat=%v ok=%v", flat, ok)
+	}
 	if err := view.Click("关闭详情"); err != nil {
 		t.Errorf("返回列表失败：%v", err)
 	}

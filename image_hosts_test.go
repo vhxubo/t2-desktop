@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 只校验文件头 sniff，不需要一张能解码的完整图：头 8 字节 + 填充即可。
@@ -30,11 +31,12 @@ func writeTestImage(t *testing.T, name string, data []byte) string {
 	return p
 }
 
-// 默认预设要摆齐「官方 + SM.MS + Imgur + 兰空 + 自定义」，且默认配置
-// 必须能直接保存：兰空 / 自定义是停用的空地址预设，校验不能把它们拦下。
+// 默认预设按「免 Token 优先」排：Kappa / Litterbox / Catbox / x0.at 在前，
+// 官方图床其后，要 Token 的 SM.MS / Imgur / 兰空与自定义排在最后。默认只
+// 启用实测可用的 Kappa 与官方图床（后者对 Pro 开放），「当前使用」落在 Kappa。
 func TestDefaultImageHostConfig(t *testing.T) {
 	a := testApp(t)
-	want := []string{"2libra", "smms", "imgur", "lsky", "custom"}
+	want := []string{"kappa", "litterbox", "catbox", "x0", "2libra", "smms", "imgur", "lsky", "custom"}
 	if len(a.hosts.Hosts) != len(want) {
 		t.Fatalf("默认图库数量 = %d，期望 %d", len(a.hosts.Hosts), len(want))
 	}
@@ -43,29 +45,31 @@ func TestDefaultImageHostConfig(t *testing.T) {
 			t.Errorf("第 %d 条图库 = %q，期望 %q", i, got, id)
 		}
 	}
-	if a.hosts.Active != "2libra" {
-		t.Errorf("默认图库 = %q，期望 2libra", a.hosts.Active)
+	if a.hosts.Active != "kappa" {
+		t.Errorf("默认图库 = %q，期望免 Token 的 kappa", a.hosts.Active)
 	}
-	if a.hosts.Hosts[0].Kind != imageHostOfficial || !a.hosts.Hosts[0].Enabled {
-		t.Error("官方图床应默认启用")
-	}
-	for i := 1; i < len(a.hosts.Hosts); i++ {
-		if a.hosts.Hosts[i].Enabled {
-			t.Errorf("预设 %q 没配好，不该默认启用", a.hosts.Hosts[i].ID)
+	enabled := map[string]bool{"kappa": true, "2libra": true}
+	for _, h := range a.hosts.Hosts {
+		if h.Enabled != enabled[h.ID] {
+			t.Errorf("预设 %q 的启用状态 = %v，期望 %v", h.ID, h.Enabled, enabled[h.ID])
 		}
+	}
+	// 免 Token 图床不填 Token 也要就绪；官方图床未登录时不行。
+	if !a.hostReady(hostByID(a.hosts, "kappa")) {
+		t.Error("Kappa 免 Token，填好地址就该就绪")
+	}
+	if a.hostReady(hostByID(a.hosts, "2libra")) {
+		t.Error("未登录时官方图床不该判定为就绪")
+	}
+	if r := a.hostNotReadyReason(hostByID(a.hosts, "2libra")); !strings.Contains(r, "登录") {
+		t.Errorf("未登录提示没有说清原因：%q", r)
 	}
 	if err := a.saveImageHosts(); err != nil {
 		t.Fatalf("默认配置应该能直接保存：%v", err)
 	}
 	names := a.hostNames()
-	if len(names) != 1 || names[0] != "2Libra 官方图床" {
-		t.Errorf("编辑器里只该看到官方图床：%v", names)
-	}
-	if a.hostReady(a.activeHost()) {
-		t.Error("未登录时官方图床不该判定为就绪")
-	}
-	if r := a.hostNotReadyReason(a.activeHost()); !strings.Contains(r, "登录") {
-		t.Errorf("未登录提示没有说清原因：%q", r)
+	if len(names) != 2 {
+		t.Errorf("编辑器里该看到两条启用的图库：%v", names)
 	}
 }
 
@@ -93,6 +97,7 @@ func TestValidateImageHostConfig(t *testing.T) {
 		{"不是 http 地址", func(h *imageHost) { h.Endpoint = "ftp://x.test/up" }, "接口地址"},
 		{"缺文件字段名", func(h *imageHost) { h.Field = "" }, "字段名"},
 		{"请求头格式错", func(h *imageHost) { h.Header = "Authorization" }, "请求头"},
+		{"表单字段格式错", func(h *imageHost) { h.Form = "reqtype" }, "表单字段"},
 		{"URL 路径有空段", func(h *imageHost) { h.URLPath = "data..url" }, "URL 路径"},
 	}
 	for _, c := range cases {
@@ -116,34 +121,63 @@ func TestValidateImageHostConfig(t *testing.T) {
 
 func TestNormalizeImageHostsRepairsSavedConfig(t *testing.T) {
 	cfg := defaultImageHostConfig()
-	cfg.Hosts = cfg.Hosts[:2] // 模拟旧版本缓存：少了后面几条预设
-	cfg.Hosts[1].Token = "my-smms-token"
+	cfg.Hosts = cfg.Hosts[:1] // 模拟旧版本缓存：只剩一条预设
+	cfg.Hosts[0].Name = "我的 Kappa"
 	cfg.Active = "smms" // 停用项不能当「当前使用」
 	cfg.Hosts = append(cfg.Hosts, imageHost{
 		ID: "user-9", Name: "我的图库", Kind: imageHostGeneric, Enabled: true,
 		Field: "file", Endpoint: "https://img.test/up", MaxBytes: 99 << 20,
 	})
 	out := normalizeImageHosts(cfg)
-	if len(out.Hosts) != 6 {
-		t.Fatalf("预设应补齐到 5 条 + 1 条自定义，实际 %d", len(out.Hosts))
+	if len(out.Hosts) != 10 {
+		t.Fatalf("预设应补齐到 9 条 + 1 条自定义，实际 %d", len(out.Hosts))
 	}
-	if out.Hosts[0].ID != "2libra" || out.Hosts[5].ID != "user-9" {
+	if out.Hosts[0].ID != "kappa" || out.Hosts[9].ID != "user-9" {
 		t.Errorf("内置项应在前、自定义项在后：%v", hostIDs(out))
 	}
-	if got := hostByID(out, "smms").Token; got != "my-smms-token" {
+	if got := hostByID(out, "kappa").Name; got != "我的 Kappa" {
 		t.Errorf("用户改过的内置项应保留：%q", got)
 	}
 	if got := hostByID(out, "user-9").MaxBytes; got != defaultImageMaxBytes {
 		t.Errorf("越界的上限应夹回默认值：%d", got)
 	}
-	if out.Active != "2libra" {
+	if out.Active != "kappa" {
 		t.Errorf("停用的激活项应回落到第一条启用的图库：%q", out.Active)
 	}
-	// 官方图床也停用时，落到第一条启用的自定义图床。
-	out.Hosts[0].Enabled = false
+	// 内置图床全停用时，落到第一条启用的自定义图床。
+	for i := range out.Hosts {
+		if out.Hosts[i].ID != "user-9" {
+			out.Hosts[i].Enabled = false
+		}
+	}
 	again := imageHostConfig{Active: "2libra", Hosts: out.Hosts}
 	if got := normalizedActiveID(again); got != "user-9" {
 		t.Errorf("应选中第一条启用的图库：%q", got)
+	}
+}
+
+// 旧缓存里已经下线的预设（0x0.st / uguu.se）要丢掉，别留成自定义项，
+// 也别让「当前使用」继续指向一条已经不能用的图床。
+func TestNormalizeImageHostsDropsRetiredPresets(t *testing.T) {
+	cfg := defaultImageHostConfig()
+	cfg.Active = "0x0"
+	cfg.Hosts = append(cfg.Hosts,
+		imageHost{ID: "0x0", Name: "0x0.st（免 Token）", Kind: imageHostGeneric,
+			Endpoint: "https://0x0.st", Field: "file", Enabled: true, Builtin: true},
+		imageHost{ID: "uguu", Name: "Uguu（免 Token · 临时）", Kind: imageHostGeneric,
+			Endpoint: "https://uguu.se/upload.php", Field: "files[]", Enabled: true, Builtin: true},
+	)
+	out := normalizeImageHosts(cfg)
+	if hostByID(out, "0x0") != nil || hostByID(out, "uguu") != nil {
+		t.Errorf("下线的预设不该留下：%v", hostIDs(out))
+	}
+	for _, h := range out.Hosts {
+		if h.Name == "0x0.st（免 Token）" || h.Name == "Uguu（免 Token · 临时）" {
+			t.Errorf("下线的预设不该变成自定义项：%+v", h)
+		}
+	}
+	if out.Active != "kappa" {
+		t.Errorf("当前使用应回落到可用的图床：%q", out.Active)
 	}
 }
 
@@ -209,9 +243,9 @@ func TestInspectImage(t *testing.T) {
 }
 
 // postFile 要真的把 sniff 出来的 Content-Type 写进 multipart part，
-// 并且带上 Authorization 与用户自定义请求头。
+// 并且带上 Authorization、用户自定义请求头与附加表单字段。
 func TestPostFileWritesMultipartHeaders(t *testing.T) {
-	var gotField, gotFilename, gotPartType, gotAuth, gotKey string
+	var gotField, gotFilename, gotPartType, gotAuth, gotKey, gotReqtype string
 	var gotBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -219,14 +253,23 @@ func TestPostFileWritesMultipartHeaders(t *testing.T) {
 			t.Errorf("Content-Type 不是 multipart：%v", err)
 		}
 		mr := multipart.NewReader(r.Body, params["boundary"])
-		part, err := mr.NextPart()
-		if err != nil {
-			t.Errorf("读 part 失败：%v", err)
-		} else {
+		// 附加字段写在文件之前，先把它们读完。
+		for {
+			part, err := mr.NextPart()
+			if err != nil {
+				t.Errorf("读 part 失败：%v", err)
+				break
+			}
+			if part.FormName() == "reqtype" {
+				b, _ := io.ReadAll(part)
+				gotReqtype = string(b)
+				continue
+			}
 			gotField = part.FormName()
 			gotFilename = part.FileName()
 			gotPartType = part.Header.Get("Content-Type")
 			gotBody, _ = io.ReadAll(part)
+			break
 		}
 		gotAuth = r.Header.Get("Authorization")
 		gotKey = r.Header.Get("X-Api-Key")
@@ -236,7 +279,8 @@ func TestPostFileWritesMultipartHeaders(t *testing.T) {
 
 	c := &Client{HTTP: srv.Client()}
 	body, status, err := c.postFile(context.Background(), srv.URL, "Bearer tok",
-		map[string]string{"X-Api-Key": "abc"}, "image", "my photo.png", "image/png", pngHeadForUpload)
+		map[string]string{"X-Api-Key": "abc"}, [][2]string{{"reqtype", "fileupload"}},
+		"image", "my photo.png", "image/png", pngHeadForUpload)
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("postFile 失败：status=%d err=%v", status, err)
 	}
@@ -245,6 +289,9 @@ func TestPostFileWritesMultipartHeaders(t *testing.T) {
 	}
 	if gotField != "image" || gotFilename != "my photo.png" {
 		t.Errorf("字段名 / 文件名 = %q / %q", gotField, gotFilename)
+	}
+	if gotReqtype != "fileupload" {
+		t.Errorf("附加表单字段 reqtype = %q，期望 fileupload", gotReqtype)
 	}
 	if gotPartType != "image/png" {
 		t.Errorf("part Content-Type = %q，期望 image/png", gotPartType)
@@ -311,6 +358,309 @@ func TestUploadToGenericExtractsURL(t *testing.T) {
 			t.Errorf("期望带上图库给的原因，得到 %v", err)
 		}
 	})
+}
+
+// 免 Token 的 Catbox / 0x0.st 成功时直接返回地址：纯文本响应要原样取出来，
+// 附加表单字段也要真的发出去。
+func TestUploadToGenericTextResponse(t *testing.T) {
+	var gotReqtype, gotField, gotFilename string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("解析 multipart 失败：%v", err)
+		}
+		gotReqtype = r.FormValue("reqtype")
+		if f, hdr, err := r.FormFile("fileToUpload"); err == nil {
+			f.Close()
+			gotField, gotFilename = "fileToUpload", hdr.Filename
+		}
+		_, _ = fmt.Fprint(w, "https://files.catbox.moe/a.png\n")
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	a.client.HTTP = srv.Client()
+	h := imageHost{
+		ID: "catbox", Name: "Catbox", Kind: imageHostGeneric, Endpoint: srv.URL,
+		Field: "fileToUpload", Form: "reqtype=fileupload", TextResponse: true,
+		MaxBytes: defaultImageMaxBytes, Enabled: true,
+	}
+	got, err := a.uploadImage(context.Background(), h,
+		uploadSource{Name: "a.png", Mime: "image/png", Data: pngHeadForUpload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://files.catbox.moe/a.png" {
+		t.Errorf("取到 URL = %q", got)
+	}
+	if gotReqtype != "fileupload" || gotField != "fileToUpload" || gotFilename != "a.png" {
+		t.Errorf("表单字段 = %q / %q / %q", gotReqtype, gotField, gotFilename)
+	}
+
+	// 纯文本接口报错时整段响应体是一句话，要原样带进错误里。
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, "413 File too large")
+	}))
+	defer bad.Close()
+	a.client.HTTP = bad.Client()
+	h.Endpoint = bad.URL
+	_, err = a.uploadImage(context.Background(), h,
+		uploadSource{Name: "a.png", Mime: "image/png", Data: pngHeadForUpload})
+	if err == nil || !strings.Contains(err.Error(), "File too large") {
+		t.Errorf("期望带上图库给的原因，得到 %v", err)
+	}
+}
+
+// 「测试这个图床」要真的传一张 1×1 的 PNG，并把结果用 toast 报出来。
+func TestTestImageHostUploadsTinyPNG(t *testing.T) {
+	var gotName, gotType string
+	var gotBytes []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("解析 multipart 失败：%v", err)
+		}
+		if f, hdr, err := r.FormFile("file"); err == nil {
+			gotName, gotType = hdr.Filename, hdr.Header.Get("Content-Type")
+			gotBytes, _ = io.ReadAll(f)
+			f.Close()
+		}
+		_, _ = fmt.Fprint(w, `{"link":"https://img.test/t2-test.png"}`)
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	a.client.HTTP = srv.Client()
+	h := hostByID(a.hosts, "kappa")
+	h.Endpoint = srv.URL
+	a.testImageHost(h)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for !hasToastContaining(a, "测试成功") {
+		if time.Now().After(deadline) {
+			t.Fatalf("没有报告测试结果：%v", toastTexts(a))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !hasToastContaining(a, "https://img.test/t2-test.png") {
+		t.Errorf("成功提示没带上地址：%v", toastTexts(a))
+	}
+	if gotName != "t2-test.png" || gotType != "image/png" {
+		t.Errorf("测试图 = %q / %q", gotName, gotType)
+	}
+	if !bytes.HasPrefix(gotBytes, []byte{0x89, 'P', 'N', 'G'}) {
+		t.Errorf("测试图不是 PNG：% x", gotBytes[:min(8, len(gotBytes))])
+	}
+}
+
+// 网络层错误要说人话：境外图床被拦截时，原始错误对用户没有意义。
+func TestUploadNetError(t *testing.T) {
+	if got := uploadNetError(errors.New(`Post "https://x.test": tls: server closed abruptly`)).
+		Error(); !strings.Contains(got, "连不上图床") {
+		t.Errorf("TLS 错误没有翻译：%q", got)
+	}
+	if got := uploadNetError(context.DeadlineExceeded).Error(); !strings.Contains(got, "超时") {
+		t.Errorf("超时没有翻译：%q", got)
+	}
+	if got := uploadNetError(errors.New("some other problem")).Error(); got != "some other problem" {
+		t.Errorf("其它错误应原样保留：%q", got)
+	}
+}
+
+// 图床回了网页（接口地址填错 / 被拦截）时要说清楚，而不是甩一串标签。
+func TestHostBadBodyExplainsHTML(t *testing.T) {
+	err := hostBadBody(200, []byte("<!DOCTYPE html><html><body>blocked</body></html>"))
+	if err == nil || !strings.Contains(err.Error(), "网页") {
+		t.Errorf("HTML 响应应提示接口地址可能不对：%v", err)
+	}
+	err = hostBadBody(503, []byte("uploads disabled"))
+	if err == nil || !strings.Contains(err.Error(), "uploads disabled") {
+		t.Errorf("纯文本错误应带上原文：%v", err)
+	}
+}
+
+// Catbox 系必须带 reqtype（Litterbox 还要 time），否则只回 HTTP 412。老版本
+// 的缓存里没有这两个开关，读回来时要自动补齐，用户不必手填。
+func TestNormalizeImageHostsRepairsCatboxFields(t *testing.T) {
+	old := imageHostConfig{
+		Active: "catbox",
+		Hosts: []imageHost{
+			// 旧版本存下来的 catbox：没有 Form，也没有 TextResponse。
+			{
+				ID: "catbox", Name: "Catbox", Kind: imageHostGeneric,
+				Endpoint: "https://catbox.moe/user/api.php", Field: "fileToUpload",
+				MaxBytes: defaultImageMaxBytes, Enabled: true, Builtin: true,
+			},
+			{
+				ID: "litterbox", Name: "Litterbox", Kind: imageHostGeneric,
+				Endpoint: "https://litterbox.catbox.moe/resources/internals/api.php",
+				Field:    "fileToUpload", Form: "time=1h", // 用户改过时长，不能被覆盖
+				MaxBytes: defaultImageMaxBytes, Enabled: false, Builtin: true,
+			},
+		},
+	}
+	out := normalizeImageHosts(old)
+	cat := hostByID(out, "catbox")
+	if cat.Form != "reqtype=fileupload" {
+		t.Errorf("catbox 缺 reqtype 时应自动补上：%q", cat.Form)
+	}
+	if !cat.TextResponse {
+		t.Error("catbox 的响应体就是地址，应自动打开纯文本模式")
+	}
+	lit := hostByID(out, "litterbox")
+	if lit.Form != "time=1h\nreqtype=fileupload" {
+		t.Errorf("应只补缺失字段、保留用户填的时长：%q", lit.Form)
+	}
+	// 用户自己添的、指向 Catbox 的图库同样要补齐。
+	custom := clampImageHost(imageHost{
+		ID: "user-1", Name: "我的 Catbox", Kind: imageHostGeneric,
+		Endpoint: "https://litterbox.catbox.moe/resources/internals/api.php",
+		Field:    "fileToUpload", MaxBytes: defaultImageMaxBytes, Enabled: true,
+	})
+	if custom.Form != "reqtype=fileupload\ntime=72h" || !custom.TextResponse {
+		t.Errorf("自定义的 Catbox 项也应补齐：%q %v", custom.Form, custom.TextResponse)
+	}
+	// 不是 Catbox 的图库不该被塞字段。
+	other := clampImageHost(imageHost{
+		ID: "user-2", Name: "Kappa", Kind: imageHostGeneric,
+		Endpoint: "https://kappa.lol/api/upload", Field: "file",
+		MaxBytes: defaultImageMaxBytes, Enabled: true,
+	})
+	if other.Form != "" || other.TextResponse {
+		t.Errorf("其它图库不该被改动：%q %v", other.Form, other.TextResponse)
+	}
+}
+
+// 412 这类固定报错要翻成能照着改的提示，而不是把英文原文甩给用户。
+func TestHostRejectionHint(t *testing.T) {
+	msg, ok := hostRejectionHint(412, []byte("No request type given."))
+	if !ok || !strings.Contains(msg, "reqtype=fileupload") {
+		t.Errorf("缺 reqtype 的提示 = %q %v", msg, ok)
+	}
+	msg, ok = hostRejectionHint(412, []byte("No expire time specified."))
+	if !ok || !strings.Contains(msg, "time=72h") {
+		t.Errorf("缺 time 的提示 = %q %v", msg, ok)
+	}
+	msg, ok = hostRejectionHint(412, []byte("Precondition Failed"))
+	if !ok || !strings.Contains(msg, "412") {
+		t.Errorf("其它 412 也要说清是缺字段：%q %v", msg, ok)
+	}
+	if _, ok := hostRejectionHint(500, []byte("boom")); ok {
+		t.Error("500 不该被当成缺字段")
+	}
+}
+
+// 走真实上传路径时，412 的错误信息里要出现「reqtype」，而不是裸的 HTTP 412。
+func TestUploadToGenericExplains412(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPreconditionFailed)
+		_, _ = fmt.Fprint(w, "No request type given.")
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	a.client.HTTP = srv.Client()
+	h := imageHost{
+		ID: "catbox", Name: "Catbox", Kind: imageHostGeneric, Endpoint: srv.URL,
+		Field: "fileToUpload", TextResponse: true,
+		MaxBytes: defaultImageMaxBytes, Enabled: true,
+	}
+	_, err := a.uploadImage(context.Background(), h,
+		uploadSource{Name: "a.png", Mime: "image/png", Data: pngHeadForUpload})
+	if err == nil || !strings.Contains(err.Error(), "reqtype") {
+		t.Errorf("412 应提示补 reqtype：%v", err)
+	}
+}
+
+// parseFormFields 的值也要能引用 Token，并把空行 / 坏行丢掉。
+func TestParseFormFields(t *testing.T) {
+	got := parseFormFields("reqtype=fileupload\n\nkey={{token}}\n  \nbroken", "tok")
+	if len(got) != 2 {
+		t.Fatalf("字段数 = %d，期望 2：%v", len(got), got)
+	}
+	if got[0][0] != "reqtype" || got[0][1] != "fileupload" {
+		t.Errorf("第一个字段 = %v", got[0])
+	}
+	if got[1][0] != "key" || got[1][1] != "tok" {
+		t.Errorf("Token 没有替换：%v", got[1])
+	}
+}
+
+// 官方图床只对 Pro 会员开放：未登录、非 Pro、还没确认都不能算就绪，
+// 提示要说清楚是哪一种。
+func TestOfficialImageHostRequiresPro(t *testing.T) {
+	a := testApp(t)
+	h := hostByID(a.hosts, "2libra")
+	if a.hostReady(h) {
+		t.Error("未登录时官方图床不该就绪")
+	}
+	if r := a.hostNotReadyReason(h); !strings.Contains(r, "登录") {
+		t.Errorf("未登录提示 = %q", r)
+	}
+	if err := a.auth.storeToken(tokenData{
+		AccessToken: "tok", Username: "jimmy", TokenType: "Bearer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if a.hostReady(h) {
+		t.Error("还没确认 Pro 状态时不该就绪")
+	}
+	if r := a.hostNotReadyReason(h); !strings.Contains(r, "Pro") {
+		t.Errorf("未确认提示 = %q", r)
+	}
+	a.auth.setProStatus(false)
+	if a.hostReady(h) {
+		t.Error("非 Pro 账号不该就绪")
+	}
+	if r := a.hostNotReadyReason(h); !strings.Contains(r, "Pro") || !strings.Contains(r, "Token") {
+		t.Errorf("非 Pro 提示应指向免 Token 图床：%q", r)
+	}
+	a.auth.setProStatus(true)
+	if !a.hostReady(h) {
+		t.Error("Pro 账号应能用官方图床")
+	}
+	// 「我的」窗口读到的资料优先于缓存；但加载失败时不能当成「非 Pro」。
+	a.profile.infoLoaded = true
+	a.profile.infoErr = "网络错误"
+	if !a.hostReady(h) {
+		t.Error("资料加载失败不该把 Pro 账号判成非 Pro")
+	}
+	a.profile.infoErr = ""
+	a.profile.user = accountProfile{Name: "jimmy", IsPro: false}
+	if a.hostReady(h) {
+		t.Error("资料说不是 Pro 时应以资料为准")
+	}
+}
+
+// Pro 状态跟着令牌落盘：重启后不必再问一次，刷新令牌也不能把它丢掉。
+func TestProStatusCachedWithToken(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(dir)
+	if err := a.auth.storeToken(tokenData{
+		AccessToken: "tok", RefreshToken: "r1", Username: "jimmy", TokenType: "Bearer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.auth.setProStatus(true)
+	if pro, known := a.auth.proStatus(); !known || !pro {
+		t.Fatalf("Pro 状态 = %v / %v", pro, known)
+	}
+	// 刷新令牌拿到的是新 tokenData，不带账号资料：Pro 结论要沿用。
+	if err := a.auth.storeToken(tokenData{
+		AccessToken: "tok2", RefreshToken: "r2", TokenType: "Bearer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if pro, known := a.auth.proStatus(); !known || !pro {
+		t.Errorf("刷新后 Pro 状态丢了：%v / %v", pro, known)
+	}
+
+	b := newApp(dir)
+	if pro, known := b.auth.proStatus(); !known || !pro {
+		t.Errorf("重开后 Pro 状态 = %v / %v", pro, known)
+	}
+	b.auth.Logout()
+	if _, known := b.auth.proStatus(); known {
+		t.Error("退出登录后不该还留着上一个账号的 Pro 状态")
+	}
 }
 
 func TestUploadToOfficialParsesEnvelope(t *testing.T) {
@@ -385,12 +735,12 @@ func TestImageHostConfigRoundTrip(t *testing.T) {
 		t.Errorf("下拉框标签 = %q", b.hostActiveLabel)
 	}
 	if got := b.hostConfigSummary(); !strings.Contains(got, "自定义图库") ||
-		!strings.Contains(got, "启用 3 / 5") {
+		!strings.Contains(got, "启用 4 / 9") {
 		t.Errorf("配置概览 = %q", got)
 	}
 	b.resetImageHosts()
 	c := newApp(dir)
-	if c.hosts.Active != "2libra" || len(c.hostNames()) != 1 {
+	if c.hosts.Active != "kappa" || len(c.hostNames()) != 2 {
 		t.Errorf("恢复默认失败：active=%q names=%v", c.hosts.Active, c.hostNames())
 	}
 }
@@ -417,6 +767,18 @@ func TestImageHostSettingsActions(t *testing.T) {
 	}
 	if !containsString(a.allHostNames(), "2Libra 官方图床") {
 		t.Errorf("编辑列表缺内置项：%v", a.allHostNames())
+	}
+	// 删掉当前使用的那条时落到第一条启用的图库（Kappa），不是官方图床：
+	// 非 Pro 账号跳过去也用不了。
+	mine := &a.hosts.Hosts[len(a.hosts.Hosts)-1]
+	mine.Enabled = true
+	a.setActiveHostByLabel(mine.Name)
+	if a.hosts.Active != mine.ID {
+		t.Fatalf("切换当前图库失败：%q", a.hosts.Active)
+	}
+	a.removeImageHost(mine.ID)
+	if a.hosts.Active != "kappa" || a.hostActiveLabel != "Kappa（免 Token）" {
+		t.Errorf("删除当前图库后 = %q / %q，期望落到 Kappa", a.hosts.Active, a.hostActiveLabel)
 	}
 }
 

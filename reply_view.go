@@ -9,20 +9,27 @@ import (
 // 评论楼层视图的本地记忆。
 //
 // 打开一篇帖子的评论区时，记住用户上次的浏览状态，下次回到同一篇时沿用：
-// 视图模式（楼层 / 扁平）、读到的位置（行号 + 那条评论的 ID）、离开时间
-// （用来把之后新增的评论标成「新」），以及哪些楼中楼被折叠收起。
+// 读到的位置（行号 + 那条评论的 ID）、离开时间（用来把之后新增的评论标成
+// 「新」），以及哪些楼中楼被折叠收起。
 //
-// 状态只记在本机（cache/offline.json 的 replyview:<scope>:<shortID>），服务端
-// 没有这类接口，也不去改动服务端数据。作用域与阅读记录相同（见
-// accountScope）：换账号后不会把上一个账号折叠 / 读到的位置套到自己的帖子上。
-// 已登录但还没拿到昵称（sessionScope）时不落盘，避免被下个账号复用。
+// 视图模式（楼层 / 扁平）不在这里：它是「这个人习惯怎么看评论」，与具体帖子
+// 无关，单独按账号记一份（见下面的 replyViewMode）。在一篇帖子里切到扁平，
+// 打开别的帖子也还是扁平。
+//
+// 状态只记在本机（cache/offline.json 的 replyview:<scope>:<shortID> 与
+// replyview-mode:<scope>），服务端没有这类接口，也不去改动服务端数据。作用域
+// 与阅读记录相同（见 accountScope）：换账号后不会把上一个账号的折叠 / 读到的
+// 位置 / 视图习惯套到自己身上。已登录但还没拿到昵称（sessionScope）时不落盘，
+// 避免被下个账号复用。
 
-const replyViewPrefix = "replyview:"
+const (
+	replyViewPrefix     = "replyview:"
+	replyViewModePrefix = "replyview-mode:"
+)
 
-// replyViewMemory 是一条记忆，全部字段按当前账号 + 帖子隔离。
+// replyViewMemory 是一条记忆，全部字段按当前账号 + 帖子隔离。视图模式不
+// 在这里（按账号记，见 replyViewMode）。
 type replyViewMemory struct {
-	// Flat 是楼层视图（false）/ 扁平时间序（true）的偏好。
-	Flat bool `json:"flat,omitempty"`
 	// ReadToID 是上次离开时视口顶部那条评论的 ID；scroll_idx 是它落在显示
 	// 列表里的行号。两者一起把评论区恢复到上次停的位置：优先按 ID 定位
 	// （列表变动后行号会漂移），行号作为兜底。
@@ -48,8 +55,56 @@ func (a *app) replyViewKey(shortID string) string {
 	return replyViewPrefix + scope + ":" + shortID
 }
 
+// replyViewMode 是评论区的视图偏好：flat=false 楼层视图，flat=true 扁平
+// 时间序。它跟帖子无关，只按账号记一份。
+type replyViewMode struct {
+	Flat bool `json:"flat"`
+	// SavedAt 是写入时间，用来判断读到的偏好是否损坏。
+	SavedAt time.Time `json:"saved_at"`
+}
+
+// replyViewModeKey 是视图偏好的存储键。键里没有 shortID：偏好属于这个人，
+// 不属于哪一篇帖子。
+func (a *app) replyViewModeKey() string {
+	scope := a.persistableScope()
+	if scope == "" {
+		return ""
+	}
+	return replyViewModePrefix + scope
+}
+
+// loadReplyViewMode 读回当前账号的视图偏好。没有记录或损坏时返回 ok=false，
+// 调用方按默认的楼层视图处理。
+func (a *app) loadReplyViewMode() (bool, bool) {
+	key := a.replyViewModeKey()
+	if key == "" || a.kv == nil {
+		return false, false
+	}
+	var mode replyViewMode
+	if _, ok := a.kv.get(key, &mode); !ok {
+		return false, false
+	}
+	if mode.SavedAt.IsZero() {
+		return false, false
+	}
+	return mode.Flat, true
+}
+
+// saveReplyViewMode 把视图偏好落到当前账号下。切换视图时立即写，之后打开
+// 任何一篇帖子都沿用，不必等离开评论区。
+func (a *app) saveReplyViewMode(flat bool) {
+	key := a.replyViewModeKey()
+	if key == "" || a.kv == nil {
+		return
+	}
+	now := time.Now()
+	if err := a.kv.put(key, replyViewMode{Flat: flat, SavedAt: now}, now); err != nil {
+		log.Printf("评论视图偏好写入失败：%v", err)
+	}
+}
+
 // loadReplyView 读回一篇帖子上次存下的评论记忆。没有缓存或损坏时返回
-// ok=false，调用方按默认行为（楼层视图、全部展开、不标新）处理。
+// ok=false，调用方按默认行为（全部展开、不标新、从顶部开始）处理。
 func (a *app) loadReplyView(shortID string) (replyViewMemory, bool) {
 	key := a.replyViewKey(shortID)
 	if key == "" || a.kv == nil {
@@ -65,9 +120,9 @@ func (a *app) loadReplyView(shortID string) (replyViewMemory, bool) {
 	return mem, true
 }
 
-// saveReplyView 把当前评论区的浏览状态落盘。所有状态都从 detailState 现成
-// 的字段收集：视图模式、实时停留位置、折叠集合；离开时间取现在。只写本机，
-// 不影响服务端。
+// saveReplyView 把当前评论区的浏览状态落盘。状态都从 detailState 现成的
+// 字段收集：实时停留位置与折叠集合；离开时间取现在。视图模式不在这里，
+// 切换时就按账号存了（见 saveReplyViewMode）。只写本机，不影响服务端。
 func (a *app) saveReplyView(d *detailState) {
 	if d == nil || d.shortID == "" || a.kv == nil {
 		return
@@ -78,7 +133,6 @@ func (a *app) saveReplyView(d *detailState) {
 	}
 	now := time.Now()
 	mem := replyViewMemory{
-		Flat:      d.flat,
 		ReadToID:  d.stayID,
 		ScrollIdx: d.stayIdx,
 		ReadAt:    now,
