@@ -154,6 +154,10 @@ type replyItem struct {
 	Deleted, Pinned                bool
 	Depth                          int
 	Children                       []replyItem
+	// HasChildren 标记这条评论在原始数据里带子树（楼中楼）。flattenReplies
+	// 把树摊平后 Children 被清空，但保留这个标志，供楼层视图在评论旁显示
+	// 折叠 / 展开入口，并据此隐藏被折叠的子回复。
+	HasChildren bool
 }
 
 type replyPage struct {
@@ -672,6 +676,9 @@ func flattenReplies(p replyPage) []replyItem {
 		for _, r := range list {
 			shown := r
 			shown.Children = nil
+			// 原始数据里有子树就标上，摊平后仍带这个标志，折叠功能据此
+			// 判断哪些评论能收起楼中楼。
+			shown.HasChildren = len(r.Children) > 0
 			out = append(out, shown)
 			walk(r.Children)
 		}

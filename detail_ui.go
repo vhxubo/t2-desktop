@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,7 +40,20 @@ type detailState struct {
 	replyNoMore           bool // 评论已到底（空页 / 无新增），停止无限滚动续拉
 	replyGen              uint64
 	flat                  bool
-	list                  ui.ListState
+	// 评论楼层视图的本地记忆（见 reply_view.go）。viewMem 是这次打开读到的
+	// 上一次状态；collapsed 是当前折叠的楼中楼父评论（运行态，来自 viewMem）；
+	// readBase 是「新评论」的基线时间；stayIdx / stayID 是评论区实时停留的
+	// 行号与评论 ID；display 是剔除折叠隐藏行后的显示列表，所有滚动定位与
+	// 列表行数都基于它，避免隐藏行打乱索引；hiddenCount 记录每个折叠父被
+	// 收起的后代条数，供「展开 N 条回复」使用。
+	viewMem     *replyViewMemory
+	collapsed   map[string]bool
+	readBase    time.Time
+	stayIdx     int
+	stayID      string
+	display     []replyItem
+	hiddenCount map[string]int
+	list        ui.ListState
 	// bodyScroll 是左栏正文的滚动偏移：TrackScroll 记下来，供「返回顶部」
 	// 判断正文是不是已经滚离顶部、以及把它直接写回 0 回顶。
 	bodyScroll ui.ScrollState
@@ -209,6 +223,24 @@ func (a *app) openDetail(it Item) {
 	}
 	// 先摆上缓存里的正文和第一页评论：网络慢或断开时第一帧就有内容。
 	a.preloadDetailCache(a.detail)
+	// 加载评论楼层视图的本地记忆：视图模式、折叠、停留位置与新评论基线。
+	// 从评论列表点进来要定位某条评论时不恢复折叠（展开全部便于定位），
+	// 视图仍按定位需要的扁平序（见下方 flat 的初始化）。
+	if mem, ok := a.loadReplyView(it.ShortID); ok {
+		a.detail.viewMem = &mem
+		a.detail.readBase = mem.ReadAt
+		a.detail.stayIdx = mem.ScrollIdx
+		a.detail.stayID = mem.ReadToID
+		if it.CommentID == "" {
+			if len(mem.Collapsed) > 0 {
+				a.detail.collapsed = make(map[string]bool, len(mem.Collapsed))
+				for _, id := range mem.Collapsed {
+					a.detail.collapsed[id] = true
+				}
+			}
+			a.detail.flat = mem.Flat
+		}
+	}
 	// 本地已读：点开即算读过，回到列表时这一行标题置灰（见 post_read.go）。
 	// 正文没加载出来也算读过，用户已经打开过它了。
 	a.markPostRead(it.ShortID)
@@ -225,6 +257,11 @@ func (a *app) openDetail(it Item) {
 
 func (a *app) closeDetail() {
 	a.status = ""
+	// 离开评论区前把浏览状态（视图、停留位置、折叠、新评论基线）落盘，下次
+	// 回到同一篇时沿用。inline 跳转（压栈）和真正回到列表都会走到这里。
+	if a.detail != nil {
+		a.saveReplyView(a.detail)
+	}
 	if n := len(a.detailStack); n > 0 {
 		a.detail = a.detailStack[n-1]
 		a.detailStack = a.detailStack[:n-1]
@@ -327,8 +364,18 @@ func (a *app) loadReplies(page int) {
 			rows := flattenReplies(res)
 			if page == 1 {
 				d.replyList = rows
-				d.list.ScrollTo(0, ui.Start)
+				d.rebuildDisplay()
 				d.replyNoMore = len(rows) == 0
+				// 恢复本地记忆的停留位置：没有定位目标时滚回上次读到的行；
+				// 有定位目标（从评论列表点进来）时交给下面的 focus 逻辑，
+				// 此时不恢复折叠、按扁平序展开全部，便于定位。
+				if d.focusID != "" {
+					d.list.ScrollTo(0, ui.Start)
+				} else if d.viewMem != nil && d.stayIdx > 0 && d.stayIdx < len(d.display) {
+					d.list.ScrollTo(d.stayIdx, ui.Start)
+				} else {
+					d.list.ScrollTo(0, ui.Start)
+				}
 			} else {
 				seen := make(map[string]bool, len(d.replyList))
 				for _, r := range d.replyList {
@@ -344,6 +391,7 @@ func (a *app) loadReplies(page int) {
 				}
 				// 服务端返回空页或没有新增条目：标记到底，避免无限加载。
 				d.replyNoMore = added == 0
+				d.rebuildDisplay()
 			}
 			d.replyTotal = res.Total
 			d.replyTotalPages = res.TotalPages
@@ -357,7 +405,7 @@ func (a *app) loadReplies(page int) {
 			// 经清掉，不会把用户刚滚到的位置拽走。
 			at := -1
 			if d.focusID != "" {
-				at = replyIndexByID(d.replyList, d.focusID)
+				at = replyIndexByID(d.display, d.focusID)
 			}
 			if at >= 0 {
 				d.list.ScrollTo(at, ui.Start)
@@ -787,18 +835,29 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 			ui.Text(c, "暂无评论").TextColor(t.TextMuted)
 		})
 	default:
-		rows := d.replyList
+		// display 是剔除折叠隐藏行后的显示列表；rebuildDisplay 在折叠为空时
+		// 直接复用 replyList，索引与现有行为一致。所有滚动定位、列表行数都
+		// 基于它。
+		d.rebuildDisplay()
+		rows := d.display
 		d.list.Key = func(i int) any {
 			if i >= 0 && i < len(rows) && rows[i].ID != "" {
 				return rows[i].ID
 			}
 			return i
 		}
+		// 实时记录停留位置：视口顶部的行号与评论 ID，供离开时落盘恢复。
+		if first, _ := d.list.Visible(); first >= 0 && first < len(rows) {
+			d.stayIdx = first
+			if rows[first].ID != "" {
+				d.stayID = rows[first].ID
+			}
+		}
 		// MyGo 的 ui.List 是虚拟化滚动区：只构建可视行，长帖也不会一次
 		// 排完所有评论；Grow(1) + MinHeight(0) 让它吃满卡片中间，输入栏
 		// 始终固定在卡片底部。
 		ui.List(c, &d.list, len(rows), func(i int) {
-			a.replyRow(c, rows[i], d.focusID)
+			a.replyRow(c, rows[i], d.focusID, isNewReply(rows[i].CreatedAt, d.readBase))
 		}).Grow(1).MinHeight(0).Padding(4, 10).Gap(10)
 		a.loadMoreFooter(c, d.replyMoreErr, d.replyLoading, func() {
 			a.loadReplies(d.replyPage)
@@ -868,6 +927,8 @@ func (a *app) replyHeader(c *ui.Context, d *detailState) {
 			d.focusTries = 0
 			d.focusMiss = false
 			a.loadReplies(1)
+			// 视图偏好随切换立即落盘，下次打开同一篇沿用（见 reply_view.go）。
+			a.saveReplyView(d)
 		}
 	})
 }
@@ -881,7 +942,7 @@ func replyCanLoadMore(d *detailState) bool {
 	return d.replyTotalPages == 0 || d.replyPage < d.replyTotalPages
 }
 
-func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
+func (a *app) replyRow(c *ui.Context, r replyItem, focusID string, isNew bool) {
 	t := c.Theme()
 	bg := t.Surface
 	border := t.Border
@@ -903,6 +964,42 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 		// 头部行只放身份信息，固定 18 高：作者、徽章与时间靠左，楼层号吸在
 		// 右端。回复 / 表态 / 打赏都在下面的固定底行里。
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Height(18).Children(func() {
+			// 带楼中楼的评论可以折叠 / 展开：收起后只留这条本身，子回复
+			// 藏起来（见 rebuildDisplay）。折叠入口只在有子树时出现。
+			if r.HasChildren && a.detail != nil {
+				collapsed := a.detail.collapsed[r.ID]
+				fold := ui.Button(c, "").
+					Background(ui.Transparent).Border(0, t.Border).
+					TextColor(t.TextMuted).FontSize(10).Padding(0, 0).Radius(4)
+				if collapsed {
+					fold.Children(func() {
+						ui.Icon(c, chevronRightIcon).Size(12, 12).TextColor(t.TextMuted)
+					})
+					fold.Tooltip("展开楼中楼")
+				} else {
+					fold.Children(func() {
+						ui.Icon(c, chevronDownIcon).Size(12, 12).TextColor(t.TextMuted)
+					})
+					fold.Tooltip("折叠楼中楼")
+				}
+				if fold.Clicked() {
+					if a.detail.collapsed == nil {
+						a.detail.collapsed = make(map[string]bool)
+					}
+					a.detail.collapsed[r.ID] = !collapsed
+					a.detail.rebuildDisplay()
+					if at := replyIndexByID(a.detail.display, r.ID); at >= 0 {
+						a.detail.list.ScrollTo(at, ui.Start)
+					}
+					a.saveReplyView(a.detail)
+				}
+			}
+			// 新评论标记：上次离开之后新增的回复，头部最左给一个 accent 小标签。
+			if isNew {
+				ui.Text(c, "新").FontSize(9).Bold().
+					TextColor(t.AccentText).Background(t.Accent).
+					Padding(3, 4).Radius(3)
+			}
 			// 评论作者统一由 userTag 渲染：头像跟着 12px 的昵称大小走，
 			// 头部行固定 18 高时头像恰好与昵称齐平。
 			a.userTag(c, userTagSpec{
@@ -955,7 +1052,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 		if label := replyParentLabel(r); label != "" {
 			at := -1
 			if a.detail != nil {
-				at = replyIndexByID(a.detail.replyList, r.ParentID)
+				at = replyIndexByID(a.detail.display, r.ParentID)
 			}
 			if at >= 0 {
 				// 父评论还在已加载的列表里：点一下跳过去并高亮它。
@@ -977,6 +1074,25 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string) {
 		// 都不会改变评论高度。
 		if !r.Deleted {
 			a.replyFooter(c, r, closed)
+		}
+		// 被折叠的评论在底部补一行「展开 N 条回复」，点一下就展开楼中楼。
+		if r.HasChildren && a.detail != nil && a.detail.collapsed[r.ID] {
+			n := a.detail.hiddenCount[r.ID]
+			expand := ui.Button(c, fmt.Sprintf("展开 %d 条回复", n)).
+				Background(ui.Transparent).Border(0, t.Border).
+				TextColor(t.Accent).FontSize(11).Padding(2, 4).Radius(4)
+			expand.Tooltip("展开楼中楼")
+			if expand.Clicked() {
+				if a.detail.collapsed == nil {
+					a.detail.collapsed = make(map[string]bool)
+				}
+				a.detail.collapsed[r.ID] = false
+				a.detail.rebuildDisplay()
+				if at := replyIndexByID(a.detail.display, r.ID); at >= 0 {
+					a.detail.list.ScrollTo(at, ui.Start)
+				}
+				a.saveReplyView(a.detail)
+			}
 		}
 		// 评论里的应用内链接是次级操作：仅悬浮整条评论时出现，保持默认
 		// 状态的清爽；其所在行固定高度占位，出现时同样不会撑高整条评论。
@@ -1253,6 +1369,10 @@ func (a *app) submitReply() {
 		a.toast(toastMain, "评论内容不能为空")
 		return
 	}
+	if n := editorPendingUploads(d.draft); n > 0 {
+		a.toast(toastMain, "还有 "+strconv.Itoa(n)+" 张图片未处理完，请等上传结束或移除后再发送")
+		return
+	}
 	if !a.auth.loggedIn() {
 		a.toast(toastMain, "请先登录后再评论")
 		return
@@ -1265,8 +1385,8 @@ func (a *app) submitReply() {
 	parentFloor := d.replyToFloor
 	parentName := d.replyToName
 	parentSummary := ""
-	if at := replyIndexByID(d.replyList, parentID); at >= 0 {
-		parentSummary = truncate(commentExcerpt(d.replyList[at].Content), 60)
+	if at := replyIndexByID(d.display, parentID); at >= 0 {
+		parentSummary = truncate(commentExcerpt(d.display[at].Content), 60)
 		if parentName == "" {
 			parentName = d.replyList[at].Author
 		}
@@ -1329,9 +1449,13 @@ func (a *app) submitReply() {
 			d.composerIdle = true // 发送后折回一行，把空间还给评论列表
 			// 按当前视图放到正确的位置：楼中楼落在父评论的子树后面，
 			// 顶层与扁平时间序接在已加载评论之后，而不是插到最顶端。
-			var at int
-			d.replyList, at = insertReply(d.replyList, created, parentID, d.flat)
-			d.list.ScrollTo(at, ui.End)
+			// 插到正确位置后再重建显示列表，并在显示空间里定位刚发的评论
+			// 滚到视口底部（折叠会把行号打乱，必须用 display 而非 replyList）。
+			d.replyList, _ = insertReply(d.replyList, created, parentID, d.flat)
+			d.rebuildDisplay()
+			if at := replyIndexByID(d.display, created.ID); at >= 0 {
+				d.list.ScrollTo(at, ui.End)
+			}
 			d.replyTotal++
 			a.prefetchAvatars(created.Avatar)
 			// 评论会扣金币：发出全局金币刷新事件，标题栏与金币窗口一起更新。
