@@ -31,12 +31,16 @@ func writeTestImage(t *testing.T, name string, data []byte) string {
 	return p
 }
 
-// 默认预设按「免 Token 优先」排：Kappa / Litterbox / Catbox / x0.at 在前，
-// 官方图床其后，要 Token 的 SM.MS / Imgur / 兰空与自定义排在最后。默认只
-// 启用实测可用的 Kappa 与官方图床（后者对 Pro 开放），「当前使用」落在 Kappa。
+// 默认预设按「免 Token 优先」排：Kappa 与几家免注册的第三方图床在前，官方
+// 图床其后，要 Key / Client-ID / Token 的 StarDots / Imgur / SM.MS / 兰空与
+// 自定义排在最后。免 Token 的默认启用，「当前使用」落在 Kappa。
 func TestDefaultImageHostConfig(t *testing.T) {
 	a := testApp(t)
-	want := []string{"kappa", "litterbox", "catbox", "x0", "2libra", "smms", "imgur", "lsky", "custom"}
+	want := []string{
+		"kappa", "mjj", "imgbb", "photo_lily", "appinn", "tikolu", "111666_best",
+		"skyimg", "skyimg_webp", "litterbox", "catbox", "x0", "2libra",
+		"stardots", "imgur", "smms", "lsky", "custom",
+	}
 	if len(a.hosts.Hosts) != len(want) {
 		t.Fatalf("默认图库数量 = %d，期望 %d", len(a.hosts.Hosts), len(want))
 	}
@@ -48,15 +52,21 @@ func TestDefaultImageHostConfig(t *testing.T) {
 	if a.hosts.Active != "kappa" {
 		t.Errorf("默认图库 = %q，期望免 Token 的 kappa", a.hosts.Active)
 	}
-	enabled := map[string]bool{"kappa": true, "2libra": true}
+	enabled := map[string]bool{
+		"kappa": true, "imgbb": true, "photo_lily": true, "appinn": true,
+		"tikolu": true, "skyimg": true, "2libra": true,
+	}
 	for _, h := range a.hosts.Hosts {
 		if h.Enabled != enabled[h.ID] {
 			t.Errorf("预设 %q 的启用状态 = %v，期望 %v", h.ID, h.Enabled, enabled[h.ID])
 		}
 	}
-	// 免 Token 图床不填 Token 也要就绪；官方图床未登录时不行。
-	if !a.hostReady(hostByID(a.hosts, "kappa")) {
-		t.Error("Kappa 免 Token，填好地址就该就绪")
+	// 免 Token 图床不填 Token 也要就绪；官方图床未登录时不行；StarDots 要凭据。
+	for _, id := range []string{"kappa", "imgbb", "photo_lily", "appinn",
+		"tikolu", "skyimg"} {
+		if !a.hostReady(hostByID(a.hosts, id)) {
+			t.Errorf("%s 免 Token，默认配置就该就绪", id)
+		}
 	}
 	if a.hostReady(hostByID(a.hosts, "2libra")) {
 		t.Error("未登录时官方图床不该判定为就绪")
@@ -64,12 +74,42 @@ func TestDefaultImageHostConfig(t *testing.T) {
 	if r := a.hostNotReadyReason(hostByID(a.hosts, "2libra")); !strings.Contains(r, "登录") {
 		t.Errorf("未登录提示没有说清原因：%q", r)
 	}
+	// 启用后免 Token 的 Skyimg WebP / MJJ / 111666 同样就绪；StarDots 还差
+	// Key / Secret。
+	for _, id := range []string{"mjj", "111666_best"} {
+		h := hostByID(a.hosts, id)
+		h.Enabled = true
+		if !a.hostReady(h) {
+			t.Errorf("%s 免 Token，启用后就该就绪", id)
+		}
+		h.Enabled = false
+	}
+	webp := hostByID(a.hosts, "skyimg_webp")
+	webp.Enabled = true
+	if !a.hostReady(webp) {
+		t.Error("Skyimg WebP 免 Token，启用后就该就绪")
+	}
+	dots := hostByID(a.hosts, "stardots")
+	dots.Enabled = true
+	if a.hostReady(dots) {
+		t.Error("没填 Key / Secret 时 StarDots 不该就绪")
+	}
+	if r := a.hostNotReadyReason(dots); !strings.Contains(r, "Secret") {
+		t.Errorf("StarDots 未配置的提示 = %q", r)
+	}
+	dots.Token, dots.Secret = "key", "secret"
+	if !a.hostReady(dots) {
+		t.Error("填好 Key / Secret 后 StarDots 应就绪")
+	}
+	// 还原成默认的启用状态，下面的「启用了哪几条」才作数。
+	webp.Enabled, dots.Enabled = false, false
+	dots.Token, dots.Secret = "", ""
 	if err := a.saveImageHosts(); err != nil {
 		t.Fatalf("默认配置应该能直接保存：%v", err)
 	}
 	names := a.hostNames()
-	if len(names) != 2 {
-		t.Errorf("编辑器里该看到两条启用的图库：%v", names)
+	if len(names) != len(enabled) {
+		t.Errorf("编辑器里该看到 %d 条启用的图库：%v", len(enabled), names)
 	}
 }
 
@@ -129,10 +169,11 @@ func TestNormalizeImageHostsRepairsSavedConfig(t *testing.T) {
 		Field: "file", Endpoint: "https://img.test/up", MaxBytes: 99 << 20,
 	})
 	out := normalizeImageHosts(cfg)
-	if len(out.Hosts) != 10 {
-		t.Fatalf("预设应补齐到 9 条 + 1 条自定义，实际 %d", len(out.Hosts))
+	presets := len(defaultImageHostConfig().Hosts)
+	if len(out.Hosts) != presets+1 {
+		t.Fatalf("预设应补齐到 %d 条 + 1 条自定义，实际 %d", presets, len(out.Hosts))
 	}
-	if out.Hosts[0].ID != "kappa" || out.Hosts[9].ID != "user-9" {
+	if out.Hosts[0].ID != "kappa" || out.Hosts[len(out.Hosts)-1].ID != "user-9" {
 		t.Errorf("内置项应在前、自定义项在后：%v", hostIDs(out))
 	}
 	if got := hostByID(out, "kappa").Name; got != "我的 Kappa" {
@@ -178,6 +219,38 @@ func TestNormalizeImageHostsDropsRetiredPresets(t *testing.T) {
 	}
 	if out.Active != "kappa" {
 		t.Errorf("当前使用应回落到可用的图床：%q", out.Active)
+	}
+}
+
+// 老缓存里的 Imgur 预设是通用 multipart 配置：升级后要改走内置协议，但用户
+// 填过的 Client-ID（Token）与接口地址要留着，不能把已经能用的配置打断。
+func TestNormalizeImageHostsAdoptsImgurAdapter(t *testing.T) {
+	cfg := imageHostConfig{
+		Active: "imgur",
+		Hosts: []imageHost{{
+			ID: "imgur", Name: "Imgur", Kind: imageHostGeneric,
+			Endpoint: "https://api.imgur.com/3/image", Field: "image",
+			Header: "Authorization: Client-ID {{token}}", Token: "my-client-id",
+			URLPath: "data.link", MaxBytes: defaultImageMaxBytes,
+			Enabled: true, Builtin: true,
+		}},
+	}
+	out := normalizeImageHosts(cfg)
+	h := hostByID(out, "imgur")
+	if h.Adapter != adapterImgur {
+		t.Errorf("旧 Imgur 预设应改走内置协议：%q", h.Adapter)
+	}
+	if h.Token != "my-client-id" || h.Endpoint != "https://api.imgur.com/3/image" {
+		t.Errorf("用户填过的 Client-ID / 地址被改了：%+v", h)
+	}
+	a := testApp(t)
+	if !a.hostReady(h) {
+		t.Error("有 Client-ID 的内置 Imgur 应该就绪")
+	}
+	// 没填 Client-ID 的旧配置同样能用了：内置协议会轮换公共 ID。
+	cfg.Hosts[0].Token = ""
+	if !a.hostReady(hostByID(normalizeImageHosts(cfg), "imgur")) {
+		t.Error("没填 Client-ID 时内置协议应靠公共 ID 就绪")
 	}
 }
 
@@ -570,17 +643,20 @@ func TestUploadToGenericExplains412(t *testing.T) {
 	}
 }
 
-// parseFormFields 的值也要能引用 Token，并把空行 / 坏行丢掉。
+// parseFormFields 的值也要能引用 Token 与文件名，并把空行 / 坏行丢掉。
 func TestParseFormFields(t *testing.T) {
-	got := parseFormFields("reqtype=fileupload\n\nkey={{token}}\n  \nbroken", "tok")
-	if len(got) != 2 {
-		t.Fatalf("字段数 = %d，期望 2：%v", len(got), got)
+	got := parseFormFields("reqtype=fileupload\n\nkey={{token}}\nfilename={{filename}}\n  \nbroken", "tok", "a.png")
+	if len(got) != 3 {
+		t.Fatalf("字段数 = %d，期望 3：%v", len(got), got)
 	}
 	if got[0][0] != "reqtype" || got[0][1] != "fileupload" {
 		t.Errorf("第一个字段 = %v", got[0])
 	}
 	if got[1][0] != "key" || got[1][1] != "tok" {
 		t.Errorf("Token 没有替换：%v", got[1])
+	}
+	if got[2][0] != "filename" || got[2][1] != "a.png" {
+		t.Errorf("文件名没有替换：%v", got[2])
 	}
 }
 
@@ -735,12 +811,12 @@ func TestImageHostConfigRoundTrip(t *testing.T) {
 		t.Errorf("下拉框标签 = %q", b.hostActiveLabel)
 	}
 	if got := b.hostConfigSummary(); !strings.Contains(got, "自定义图库") ||
-		!strings.Contains(got, "启用 4 / 9") {
+		!strings.Contains(got, "启用 9 / 18") {
 		t.Errorf("配置概览 = %q", got)
 	}
 	b.resetImageHosts()
 	c := newApp(dir)
-	if c.hosts.Active != "kappa" || len(c.hostNames()) != 2 {
+	if c.hosts.Active != "kappa" || len(c.hostNames()) != 7 {
 		t.Errorf("恢复默认失败：active=%q names=%v", c.hosts.Active, c.hostNames())
 	}
 }

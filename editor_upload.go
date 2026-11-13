@@ -130,6 +130,10 @@ func (a *app) hostNotReadyReason(h *imageHost) string {
 		default:
 			return "图库「" + h.Name + "」暂时不可用，请到「设置 → 图库」里检查"
 		}
+	case h.Adapter == adapterStarDots:
+		return "图库「" + h.Name + "」需要 StarDots 的 API Key 与 API Secret，请到「设置 → 图库」里填写"
+	case h.Adapter != "":
+		return "图库「" + h.Name + "」暂时不可用，请到「设置 → 图库」里检查"
 	case strings.TrimSpace(h.Endpoint) == "":
 		return "图库「" + h.Name + "」还没填接口地址，请到「设置 → 图库」里配置"
 	default:

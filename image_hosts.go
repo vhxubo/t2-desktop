@@ -28,14 +28,14 @@ import (
 // 的 SM.MS / Imgur / 自建兰空图床给的，由这里的配置决定，界面和上传队列不
 // 关心。
 //
-// 预设按「免 Token 优先」排：Kappa、MJJ.Today、ImgBB、Photo.Lily、Appinn、
-// Tikolu、111666.best、Skyimg 都不用注册、不用填 Token，装好就能传，因此
-// 排在前面并默认启用；2Libra 官方图床排在其后，只对 Pro 会员开放（见
-// hostReady / hostNotReadyReason）；StarDots 要 Key + Secret、Imgur 要
-// Client-ID、SM.MS 与兰空要 Token，默认停用，填好再启用。Catbox / Litterbox
-// / x0.at 也免 Token，但分别受「国内直连不通」「只能留 72 小时」「拒绝部分
-// 网络」的限制，默认停用并在 Note 里写清。设置里可以点「测试这个图床」当场
-// 验证一条配置是否还能用。
+// 预设按「免 Token 优先」排：Kappa、ImgBB、Photo.Lily、Appinn、Tikolu、
+// Skyimg 都不用注册、不用填 Token，装好就能传，因此排在前面并默认启用；
+// MJJ.Today 与 111666.best 同样免 Token，但国内直连被拦，默认停用。2Libra
+// 官方图床排在其后，只对 Pro 会员开放（见 hostReady / hostNotReadyReason）；
+// StarDots 要 Key + Secret、Imgur 要 Client-ID、SM.MS 与兰空要 Token，默认
+// 停用，填好再启用。Catbox / Litterbox / x0.at 也免 Token，但分别受「国内
+// 直连不通」「只能留 72 小时」「拒绝部分网络」的限制，默认停用并在 Note 里
+// 写清。设置里可以点「测试这个图床」当场验证一条配置是否还能用。
 //
 // 上传协议有两条路：
 //
@@ -119,10 +119,12 @@ type imageHostConfig struct {
 }
 
 // defaultImageHostConfig 是首次运行时的一组预设，按「免 Token 优先」排：
-// 不用注册、不用 Token 的图床排在前面并默认启用，Kappa 当「当前使用」；
-// 官方图床排在其后（只对 Pro 开放，默认也启用，Pro 用户可以直接切过去）；
-// 需要 Key / Client-ID / Token 的 StarDots、Imgur、SM.MS 与兰空默认停用，
-// 填好再启用。
+// 不用注册、不用 Token 的图床排在前面，其中实测国内能直连的（Kappa / ImgBB /
+// Photo.Lily / Appinn / Tikolu / Skyimg）默认启用，Kappa 当「当前使用」；
+// MJJ.Today 与 111666.best 也免 Token，但国内直连被拦，默认停用并在 Note
+// 里写明要开代理。官方图床排在其后（只对 Pro 开放，默认也启用，Pro 用户
+// 可以直接切过去）；需要 Key / Client-ID / Token 的 StarDots、Imgur、SM.MS
+// 与兰空默认停用，填好再启用。
 //
 // 免费图床更迭很快：0x0.st 已停止上传、uguu.se 长期 502、catbox.moe 在
 // 国内直连不通，所以这里只保留实测能用的几家，并把临时 / 需要代理的情况
@@ -143,8 +145,9 @@ func defaultImageHostConfig() imageHostConfig {
 			},
 			{
 				ID: "mjj", Name: "MJJ.Today（免 Token）", Kind: imageHostGeneric,
-				Adapter: adapterMJJ, MaxBytes: defaultImageMaxBytes, Enabled: true, Builtin: true,
-				Note: "免注册：先取上传页里的 auth_token 再提交，单张 10 MB 以内；站点在境外，国内网络可能需要代理。",
+				Adapter: adapterMJJ, MaxBytes: defaultImageMaxBytes, Enabled: false, Builtin: true,
+				Note: "免注册：先取上传页里的 auth_token 再提交，单张 10 MB 以内；" +
+					"站点在境外，国内直连多半不通（实测 TLS 被断开），要开代理再用。",
 			},
 			{
 				ID: "imgbb", Name: "ImgBB（免 Token）", Kind: imageHostGeneric,
@@ -172,8 +175,9 @@ func defaultImageHostConfig() imageHostConfig {
 			},
 			{
 				ID: "111666_best", Name: "111666.best（免 Token）", Kind: imageHostGeneric,
-				Adapter: adapter111666, MaxBytes: defaultImageMaxBytes, Enabled: true, Builtin: true,
-				Note: "免注册：内置了几个公共令牌，失败时自动换下一个；站点在境外。",
+				Adapter: adapter111666, MaxBytes: defaultImageMaxBytes, Enabled: false, Builtin: true,
+				Note: "免注册：内置了几个公共令牌，失败时自动换下一个；" +
+					"站点在境外，国内直连多半不通（实测 TLS 被断开），要开代理再用。",
 			},
 			{
 				ID: "skyimg", Name: "Skyimg（免 Token）", Kind: imageHostGeneric,
@@ -270,6 +274,7 @@ func normalizeImageHosts(cfg imageHostConfig) imageHostConfig {
 			if strings.TrimSpace(saved.Name) == "" {
 				saved.Name = d.Name
 			}
+			saved.Adapter = adoptAdapter(d, saved)
 			h = saved
 		}
 		out = append(out, clampImageHost(h))
@@ -292,6 +297,20 @@ func normalizeImageHosts(cfg imageHostConfig) imageHostConfig {
 	cfg.Hosts = out
 	cfg.Active = normalizedActiveID(cfg)
 	return cfg
+}
+
+// adoptAdapter 给旧缓存里的内置项补上 Adapter。老版本的 Imgur 预设是通用
+// multipart（Authorization: Client-ID {{token}}），没填 Client-ID 就传不了；
+// 升级后改走内置协议，用户填过的 Token 与接口地址都沿用 —— 适配器读的是
+// Token 本身，旧地址 /3/image 同样能上传，所以已经能用的配置不会被打断。
+func adoptAdapter(preset, saved imageHost) string {
+	if saved.Adapter != "" || preset.Adapter == "" {
+		return saved.Adapter
+	}
+	if preset.ID == "imgur" {
+		return preset.Adapter
+	}
+	return ""
 }
 
 // normalizedActiveID 保证「当前使用」指向一条确实启用的图库。官方图床被
@@ -317,11 +336,17 @@ func clampImageHost(h imageHost) imageHost {
 	if h.Kind == "" {
 		h.Kind = imageHostGeneric
 	}
-	if h.Field == "" {
+	// 内置协议的字段名由适配器自己决定，通用图床才需要「文件字段名」。
+	if h.Field == "" && h.Adapter == "" {
 		h.Field = "file"
 	}
 	if h.MaxBytes < minImageMaxBytes || h.MaxBytes > maxImageMaxBytes {
 		h.MaxBytes = defaultImageMaxBytes
+	}
+	// 各家协议自己的上限（Tikolu 8 MB、MJJ 10 MB…）比应用上限更严时按它来，
+	// 否则用户会看到一张「配置上没超限、上传却被拒」的图。
+	if cap := adapterMaxBytes(h.Adapter); cap > 0 && h.MaxBytes > cap {
+		h.MaxBytes = cap
 	}
 	h.Name = strings.TrimSpace(h.Name)
 	h.Endpoint = strings.TrimSpace(h.Endpoint)
@@ -440,18 +465,32 @@ func validateImageHost(h imageHost) error {
 	if h.Kind == imageHostOfficial {
 		return nil
 	}
+	if h.Adapter != "" && adapterEndpoint(h.Adapter) == "" {
+		return errors.New("未知的内置上传协议，请恢复默认后重配")
+	}
 	// 停用的内置预设（兰空 / 自定义）接口地址本来就是空的，要等用户填好再
 	// 启用。只校验已启用的项，否则默认配置一打开设置就永远保存不了。
 	if !h.Enabled {
 		return nil
 	}
+	// 内置协议自带接口地址，填了才校验：用户可以把它们指到镜像站。
+	if h.Adapter != "" && strings.TrimSpace(h.Endpoint) == "" {
+		return validateImageHostHeaders(h)
+	}
 	u, err := url.Parse(strings.TrimSpace(h.Endpoint))
 	if err != nil || u.Scheme != "https" && u.Scheme != "http" || u.Host == "" {
 		return errors.New("接口地址要写成 https://… 这样的完整地址")
 	}
-	if strings.TrimSpace(h.Field) == "" {
+	if h.Adapter == "" && strings.TrimSpace(h.Field) == "" {
 		return errors.New("文件字段名不能为空")
 	}
+	return validateImageHostHeaders(h)
+}
+
+// validateImageHostHeaders 校验请求头与附加表单字段的「一行一个」写法。
+// 内置协议的请求头由适配器自己拼，这两项只可能是用户覆盖的，格式错了同样
+// 要拦下——否则只会在上传时才炸。
+func validateImageHostHeaders(h imageHost) error {
 	for _, line := range strings.Split(strings.ReplaceAll(h.Header, "\r\n", "\n"), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -484,7 +523,8 @@ func validateImageHost(h imageHost) error {
 
 // hostReady 判断一条图床是否真的能发请求：没启用、没填地址、或请求头里
 // 要 Token 却没填，都不算就绪。官方图床还要求账号是 Pro 会员 —— 它只对 Pro
-// 开放，而 Pro 状态要等账号资料读回来，未确认时同样按不可用处理。
+// 开放，而 Pro 状态要等账号资料读回来，未确认时同样按不可用处理。内置协议
+// 自带地址，只差凭据的（StarDots）按凭据判断。
 func (a *app) hostReady(h *imageHost) bool {
 	if h == nil || !h.Enabled {
 		return false
@@ -495,6 +535,9 @@ func (a *app) hostReady(h *imageHost) bool {
 		}
 		pro, known := a.proStatus()
 		return known && pro
+	}
+	if h.Adapter != "" {
+		return adapterReady(h)
 	}
 	if strings.TrimSpace(h.Endpoint) == "" {
 		return false
@@ -681,6 +724,22 @@ func (s uploadSource) bytes() ([]byte, error) {
 // 顺序写在文件之前：有的接口要求说明「这是一次上传」的字段先出现。
 func (c *Client) postFile(ctx context.Context, u, authorization string,
 	headers map[string]string, form [][2]string, field, filename, contentType string, data []byte) ([]byte, int, error) {
+	return c.sendMultipart(ctx, http.MethodPost, u, authorization, headers, form,
+		field, filename, contentType, data)
+}
+
+// sendMultipart 是 postFile 的完整版：StarDots 的上传接口只收 PUT，其余都
+// 是 POST，方法由调用方给。
+func (c *Client) sendMultipart(ctx context.Context, method, u, authorization string,
+	headers map[string]string, form [][2]string, field, filename, contentType string, data []byte) ([]byte, int, error) {
+	return c.sendMultipartWith(ctx, c.httpClient(), method, u, authorization, headers,
+		form, field, filename, contentType, data)
+}
+
+// sendMultipartWith 允许调用方指定 HTTP 客户端：Skyimg 的 CSRF 令牌和它下发
+// 的 Cookie 是一对，两次请求必须共用一个带 cookie jar 的客户端。
+func (c *Client) sendMultipartWith(ctx context.Context, hc *http.Client, method, u, authorization string,
+	headers map[string]string, form [][2]string, field, filename, contentType string, data []byte) ([]byte, int, error) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	for _, kv := range form {
@@ -708,7 +767,7 @@ func (c *Client) postFile(ctx context.Context, u, authorization string,
 	if err := w.Close(); err != nil {
 		return nil, 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &buf)
+	req, err := http.NewRequestWithContext(ctx, method, u, &buf)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -725,13 +784,51 @@ func (c *Client) postFile(ctx context.Context, u, authorization string,
 	if authorization != "" {
 		req.Header.Set("Authorization", authorization)
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	return body, resp.StatusCode, err
+}
+
+// getText 发一次 GET 并原样返回响应体：MJJ.Today / ImgBB 的上传令牌在另一个
+// 页面里，Skyimg 的 CSRF 令牌在另一个接口里，取不到就没法上传。这类响应不
+// 是 {c,m,d,t} 信封，所以不走 getJSON。
+func (c *Client) getText(ctx context.Context, u string, headers map[string]string) ([]byte, int, error) {
+	return c.getTextWith(ctx, c.httpClient(), u, headers)
+}
+
+func (c *Client) getTextWith(ctx context.Context, hc *http.Client, u string, headers map[string]string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	ua := c.UA
+	if ua == "" {
+		ua = "2libra-native-reader/0.1 (+mygo)"
+	}
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "*/*")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	return body, resp.StatusCode, err
+}
+
+// clientWithJar 复制一份共用同一个 transport 的客户端，只多一个 cookie jar。
+// 复制的是配置（Transport / Timeout 指针），请求本身仍走原来的连接池与代理。
+func (c *Client) clientWithJar(jar http.CookieJar) *http.Client {
+	cp := *c.httpClient()
+	cp.Jar = jar
+	return &cp
 }
 
 // CRLF 要放在 \r / \n 前面：Replacer 按参数顺序匹配，先处理整组换行才
@@ -751,6 +848,9 @@ func (a *app) uploadImage(ctx context.Context, h imageHost, src uploadSource) (s
 	}
 	if h.Kind == imageHostOfficial {
 		return a.uploadToOfficial(ctx, src, data)
+	}
+	if h.Adapter != "" {
+		return a.uploadToAdapter(ctx, h, src, data)
 	}
 	return a.uploadToGeneric(ctx, h, src, data)
 }
@@ -821,7 +921,7 @@ func (a *app) uploadToGeneric(ctx context.Context, h imageHost, src uploadSource
 		headers[name] = value
 	}
 	body, status, err := a.client.postFile(ctx, h.Endpoint, authorization, headers,
-		parseFormFields(h.Form, h.Token), h.Field, src.Name, src.Mime, data)
+		parseFormFields(h.Form, h.Token, src.Name), h.Field, src.Name, src.Mime, data)
 	if err != nil {
 		return "", uploadNetError(err)
 	}
@@ -834,7 +934,7 @@ func (a *app) uploadToGeneric(ctx context.Context, h imageHost, src uploadSource
 	}
 	if h.TextResponse {
 		// Catbox / 0x0.st 这类接口成功时整个响应体就是一个地址。
-		u := firstLine(string(body))
+		u := absoluteImageURL(firstLine(string(body)), h.Endpoint)
 		if !isImageURL(u) {
 			return "", hostBadBody(status, body)
 		}
@@ -869,7 +969,9 @@ func (a *app) uploadToGeneric(ctx context.Context, h imageHost, src uploadSource
 	if status >= 400 {
 		return "", fmt.Errorf("图库返回 HTTP %d：%s", status, briefBody(body))
 	}
-	u := jsonStringAt(v, h.URLPath)
+	// Photo.Lily / Appinn 这类接口会回 /img/xxx.png 这种站内路径，直接写进
+	// Markdown 就是死链，先按接口地址补全再判。
+	u := absoluteImageURL(jsonStringAt(v, h.URLPath), h.Endpoint)
 	if !isImageURL(u) {
 		u = findImageURL(v)
 	}
@@ -880,9 +982,9 @@ func (a *app) uploadToGeneric(ctx context.Context, h imageHost, src uploadSource
 }
 
 // parseFormFields 把「一行一个 name=value」的附加字段转成 multipart 字段，
-// 值里的 {{token}} 与请求头一样按 Token 替换。格式错的行走不到这里：
-// validateImageHost 已经拦下并给出了提示。
-func parseFormFields(form, token string) [][2]string {
+// 值里的 {{token}} 与 {{filename}} 分别换成 Token 和这张图的名字（Appinn 要
+// 单独提交 filename）。格式错的行走不到这里：validateImageHost 已经拦下。
+func parseFormFields(form, token, filename string) [][2]string {
 	var out [][2]string
 	for _, line := range strings.Split(strings.ReplaceAll(form, "\r\n", "\n"), "\n") {
 		line = strings.TrimSpace(line)
@@ -893,7 +995,9 @@ func parseFormFields(form, token string) [][2]string {
 		if !ok {
 			continue
 		}
-		out = append(out, [2]string{strings.TrimSpace(name), strings.ReplaceAll(value, "{{token}}", token)})
+		value = strings.ReplaceAll(value, "{{token}}", token)
+		value = strings.ReplaceAll(value, "{{filename}}", filename)
+		out = append(out, [2]string{strings.TrimSpace(name), value})
 	}
 	return out
 }
@@ -1035,4 +1139,40 @@ func isImageURL(s string) bool {
 		return false
 	}
 	return !strings.ContainsAny(s, " \t\r\n\\\"") && len(s) < 2048
+}
+
+// absoluteImageURL 把图床回的半截地址补成完整地址：Photo.Lily / Appinn /
+// 111666.best / Skyimg 有时只给 /img/xxx.png 或 //cdn/xxx.png。只补「以 / 或
+// // 开头」的站内路径——其它值（报错文案之类）原样返回，交给 isImageURL 判
+// 死，不能拿 base 去拼一个看着像地址的垃圾。
+func absoluteImageURL(raw, base string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "//") {
+		return "https:" + raw
+	}
+	if !strings.HasPrefix(raw, "/") {
+		return raw
+	}
+	b, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || b.Scheme == "" || b.Host == "" {
+		return raw
+	}
+	ref, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	return b.ResolveReference(ref).String()
+}
+
+// endpointOrigin 取接口地址的协议 + 主机部分，用于把「同一站点的另一个路径」
+// 拼出来：MJJ.Today 的令牌在上传页、Skyimg 的令牌在 /csrf-token。
+func endpointOrigin(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }

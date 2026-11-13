@@ -435,6 +435,39 @@ func TestSettingsWindowRendersGenericHostEditor(t *testing.T) {
 	}
 }
 
+// 内置协议的图床画的是另一套字段：StarDots 要 Key / Secret / 存储桶，Imgur
+// 可以填自己的 Client-ID，其余几家只说明「不用填 Token」，不该露出通用的
+// 字段名 / URL 路径这些输入框。
+func TestSettingsWindowRendersAdapterHostEditor(t *testing.T) {
+	cases := []struct {
+		label string
+		want  []string
+	}{
+		{"StarDots", []string{"上传接口地址（留空用内置地址）", "API Key",
+			"API Secret", "存储桶（Bucket）"}},
+		{"Imgur", []string{"Client-ID（留空用内置公共 ID）"}},
+		{"MJJ.Today（免 Token）", []string{"这条内置协议不用填 Token"}},
+	}
+	for _, c := range cases {
+		t.Run(c.label, func(t *testing.T) {
+			a := testApp(t)
+			a.hostEditLabel = c.label
+			tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
+			tt.Frame()
+			for _, want := range c.want {
+				if !tt.HasText(want) {
+					t.Errorf("内置协议表单缺少 %q：%q", want, tt.Texts())
+				}
+			}
+			for _, unwanted := range []string{"文件字段名", "返回 URL 路径", "附加表单字段"} {
+				if tt.HasText(unwanted) {
+					t.Errorf("内置协议不该显示 %q：%q", unwanted, tt.Texts())
+				}
+			}
+		})
+	}
+}
+
 // 官方图床只对 Pro 开放：设置里要按当前账号的状态给出不同说明。
 func TestSettingsWindowOfficialHostProNote(t *testing.T) {
 	a := testApp(t)

@@ -12,19 +12,21 @@ import (
 
 // 设置窗口里的「图库（图床）」一块。
 //
-// 内置预设（官方 / SM.MS / Imgur / 兰空 / 自定义）默认摆在这里，可以直接改
-// 字段、停用或启用，但不能删除；用户自己加的项可以改也可以删。所有编辑直接
-// 落在 a.hosts 上（同一份内存配置也是编辑器和上传队列读的），点「保存」才
-// 校验并写入 localKV 的 imagehosts:v1，没保存就关窗口不会生效到下次启动。
+// 内置预设（官方 / Kappa / MJJ.Today / ImgBB / Appinn / Skyimg / StarDots …）
+// 默认摆在这里，可以直接改字段、停用或启用，但不能删除；用户自己加的项可以
+// 改也可以删。所有编辑直接落在 a.hosts 上（同一份内存配置也是编辑器和上传
+// 队列读的），点「保存」才校验并写入 localKV 的 imagehosts:v1，没保存就关
+// 窗口不会生效到下次启动。
 
-// imageHostsSection 一次只展开一条图库的字段：设置窗口只有 520 宽，把八条
+// imageHostsSection 一次只展开一条图库的字段：设置窗口只有 520 宽，把十几条
 // 预设的所有输入框全铺开会变成一屏填不完的表单。
 func (a *app) imageHostsSection(c *ui.Context) {
 	t := c.Theme()
 	settingsSection(c, "图库（图床）", func() {
 		ui.Text(c, "写帖子或评论时拖入、选择、粘贴的图片会传到「当前使用」的图库。"+
-			"Kappa / Catbox 这类图床免注册、免 Token；2Libra 官方图床只对 Pro 会员开放。"+
-			"免费图床变动频繁，可以点下面的「测试这个图床」确认还能不能用。").
+			"Kappa / MJJ.Today / ImgBB / Appinn / Skyimg 这类图床免注册、免 Token；"+
+			"2Libra 官方图床只对 Pro 会员开放。免费图床变动频繁，可以点下面的"+
+			"「测试这个图床」确认还能不能用。").
 			FontSize(12).TextColor(t.TextMuted).MaxLines(4)
 		a.imageHostActivePicker(c)
 		ui.Divider(c)
@@ -99,6 +101,8 @@ func (a *app) imageHostEditor(c *ui.Context) {
 	ui.TextInput(c, &h.Name).Label("名称").FillWidth()
 	if h.Kind == imageHostOfficial {
 		a.officialHostStatus(c)
+	} else if h.Adapter != "" {
+		a.adapterHostFields(c, h)
 	} else {
 		ui.TextInput(c, &h.Endpoint).Label("上传接口地址").
 			Placeholder("https://example.com/api/v1/upload").FillWidth()
@@ -116,7 +120,8 @@ func (a *app) imageHostEditor(c *ui.Context) {
 			Placeholder("reqtype=fileupload").FillWidth().Lines(2, 4)
 		ui.Checkbox(c, &h.TextResponse, "响应体直接就是图片地址（Catbox / x0.at 这类纯文本接口）")
 		ui.Text(c, "响应里图片地址的路径用点分隔，如 data.url；"+
-			"留空时会在 JSON 里自动找第一个 http(s) 图片地址。").
+			"留空时会在 JSON 里自动找第一个 http(s) 图片地址。"+
+			"附加字段的值里可以写 {{token}} 与 {{filename}}。").
 			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
 	}
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
@@ -133,6 +138,10 @@ func (a *app) imageHostEditor(c *ui.Context) {
 	}
 	if mb > maxImageMaxBytes>>20 {
 		mb = maxImageMaxBytes >> 20
+	}
+	// 各家协议自己的上限更严时按它来，界面上显示的就是真能传的大小。
+	if cap := adapterMaxBytes(h.Adapter); cap > 0 && mb<<20 > cap {
+		mb = cap >> 20
 	}
 	h.MaxBytes = mb << 20
 	// 免费图床经常悄悄下线：给一个当场验证的入口，比让用户拖一张真图去试
@@ -162,6 +171,34 @@ func (a *app) imageHostEditor(c *ui.Context) {
 	if !a.hostReady(h) && h.Kind != imageHostOfficial {
 		ui.Text(c, "还不能用："+a.hostNotReadyReason(h)).
 			FontSize(11).TextColor(t.Danger).MaxLines(2)
+	}
+}
+
+// adapterHostFields 画内置协议那几家的字段：接口地址可以留空（用内置地址），
+// 只有 StarDots 要 Key + Secret + 存储桶，Imgur 可以填自己的 Client-ID。
+func (a *app) adapterHostFields(c *ui.Context, h *imageHost) {
+	t := c.Theme()
+	ui.TextInput(c, &h.Endpoint).Label("上传接口地址（留空用内置地址）").
+		Placeholder(adapterEndpoint(h.Adapter)).FillWidth()
+	switch h.Adapter {
+	case adapterStarDots:
+		ui.Row(c).FillWidth().Gap(8).Children(func() {
+			ui.TextInput(c, &h.Token).Label("API Key").Grow(1).MinWidth(0)
+			ui.TextInput(c, &h.Secret).Label("API Secret").Password().Grow(1).MinWidth(0)
+		})
+		ui.TextInput(c, &h.Bucket).Label("存储桶（Bucket）").FillWidth()
+		ui.Text(c, "Key 与 Secret 在 StarDots 控制台的「Key and Secret」页生成；"+
+			"上传时应用按官方规则现签一个 MD5 签名。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+	case adapterImgur:
+		ui.TextInput(c, &h.Token).Label("Client-ID（留空用内置公共 ID）").FillWidth()
+		ui.Text(c, "填自己的 Client-ID 最稳；留空时在内置的几个公共 Client-ID 之间轮换，"+
+			"随时可能被限流。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+	default:
+		ui.Text(c, "这条内置协议不用填 Token：令牌、签名、请求头都由应用按站点规则处理，"+
+			"接口地址留空就用内置地址。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
 	}
 }
 
