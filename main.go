@@ -5,6 +5,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -119,8 +120,10 @@ type app struct {
 	readFor    string
 	readLoaded bool
 	// toasts 是等着显示的窗口内提示（见 toasts.go）：操作结果先排队，等到
-	// 对应窗口下一次重建时再交给 c.Toast。只在 UI 线程读写。
-	toasts []toastNote
+	// 对应窗口下一次重建时再交给 c.Toast。可能由后台 goroutine（经 publish）
+	// 写入，也由渲染帧读取，所以用 toastMu 保护，避免竞态。
+	toasts  []toastNote
+	toastMu sync.Mutex
 	// schemeWarn 是「系统没有把回调协议关联到本应用」的说明，仅在这种情况下
 	// 非空：它决定了浏览器授权后能不能自动跳回，得让用户在登录页看见。
 	schemeWarn string

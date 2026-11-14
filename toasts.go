@@ -64,13 +64,16 @@ func (a *app) toastWindow(target toastTarget) *mygo.Window {
 	return a.win
 }
 
-// toast 记下一条提示，并让将来显示它的那个窗口重画。只在 UI 线程调用：
-// 它要读窗口对象。
+// toast 记下一条提示，并让将来显示它的那个窗口重画。可能由后台 goroutine
+// （经 publish，例如清空缓存后）调用，所以用 toastMu 保护队列；读窗口对象
+// 仍假定在 UI 线程附近发生。
 func (a *app) toast(target toastTarget, text string) {
 	if text == "" {
 		return
 	}
+	a.toastMu.Lock()
 	a.toasts = append(a.toasts, toastNote{target: target, text: text})
+	a.toastMu.Unlock()
 	// 目标窗口开着就只重画它；不在了就由主窗口下一帧显示，规则与
 	// mainClaimsToasts 一致。
 	if win := a.toastWindow(target); win != nil {
@@ -85,7 +88,9 @@ func (a *app) toast(target toastTarget, text string) {
 // drainToasts 把这一帧归本窗口的提示交给 c.Toast，其余留在队列里等自己的
 // 窗口。claims 回答「这条提示归不归本窗口」。
 func (a *app) drainToasts(c *ui.Context, claims func(toastTarget) bool) {
+	a.toastMu.Lock()
 	if len(a.toasts) == 0 {
+		a.toastMu.Unlock()
 		return
 	}
 	kept := a.toasts[:0]
@@ -99,6 +104,7 @@ func (a *app) drainToasts(c *ui.Context, claims func(toastTarget) bool) {
 	}
 	clear(a.toasts[len(kept):])
 	a.toasts = kept
+	a.toastMu.Unlock()
 	for _, text := range show {
 		c.Toast(text)
 	}
