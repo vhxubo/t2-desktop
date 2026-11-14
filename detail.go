@@ -118,8 +118,10 @@ type weatherInfo struct {
 }
 
 type voteBlock struct {
-	// ID 是投票 uuid：投票接口的 voteId 必填。
-	ID        string
+	// ID 是投票 uuid：提交时作为 voteId（见 vote.go）。
+	ID   string
+	Type string // pk（单选）/ multiple（多选），与 MaxChoice 一起决定走哪个端点
+	// 标题与选项都可能有缺失，投票块按「有标题或有选项」判断是否存在。
 	Title     string
 	Finished  bool
 	Options   []voteOption
@@ -127,7 +129,7 @@ type voteBlock struct {
 }
 
 type voteOption struct {
-	// ID 是选项 uuid：投票接口的 optionId / optionIds 必填。
+	// ID 是选项 uuid：提交时作为 optionId / optionIds（见 vote.go）。
 	ID    string
 	Text  string
 	Votes int
@@ -342,6 +344,7 @@ func decodePostscripts(raw json.RawMessage) []postscript {
 func decodeVote(o object) *voteBlock {
 	v := &voteBlock{
 		ID:        o.str("id"),
+		Type:      o.str("type"),
 		Title:     o.str("title"),
 		Finished:  o.flag("voting_finished"),
 		MaxChoice: o.num("max_choices"),

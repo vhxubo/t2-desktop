@@ -74,9 +74,11 @@ type detailState struct {
 	focusMiss    bool
 
 	// fav 是标题下方作者行收藏按钮的状态；react 是表态条与选择器的状态
-	// （见 interact.go）。两者都只在 UI 线程读写，网络结果通过 publish 回来。
+	// （见 interact.go），vote 是正文末尾投票块的状态（见 vote.go）。三者
+	// 都只在 UI 线程读写，网络结果通过 publish 回来。
 	fav   favoriteState
 	react reactionState
+	vote  voteUIState
 
 	// composer: write a comment (optionally as a nested reply to replyTo).
 	// 发送失败的原因不落在页面上，用主窗口的 toast 说明（见 submitReply）。
@@ -369,6 +371,8 @@ func (a *app) loadTopic() {
 			a.prefetchAvatars(topic.Avatar)
 			// 收藏状态随详情下发（带上令牌才有意义）；交给作者行的收藏按钮。
 			syncFavorite(d, topic, a.auth.username())
+			// 投票选项可能随刷新变化，勾选框的行数跟着对齐。
+			syncVote(d, topic)
 			// 正文拿到后写一份本机缓存，并补全阅读记录里打开时还缺的字段。
 			a.updateReadingTopic(d.shortID, &topic)
 			a.saveCachedDetail(d)
@@ -758,16 +762,86 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 		ui.Column(c).FillWidth().Padding(12, 14).Gap(6).Radius(10).
 			Background(t.Surface).Border(1, t.Border).Children(func() {
 			ui.Text(c, "投票 · "+v.Title).FontSize(commentFontSize).Bold()
-			for _, o := range v.Options {
-				ui.Textf(c, "%s · %d 票", o.Text, o.Votes).FontSize(metaFontSize)
-			}
-			if v.Finished {
-				ui.Text(c, "投票已结束").FontSize(metaSmallFontSize).TextColor(t.TextMuted)
-			}
+			a.voteSection(c, d, v)
 		})
 	}
 	// 正文末尾不再画互动行：表态与打赏固定在左栏底部的互动栏里
 	// （见 detailView 的 topicInteractionBar），正文再长也始终可达。
+}
+
+// voteSection 画正文末尾的投票块：单选时点某一项就直接投，多选时先勾选
+// 再点「投票」。提交中页面里只留一行进度，成功与失败都由主窗口 toast 报告
+// （见 submitVote）。已结束 / 已投过时整块禁用，避免重复提交。
+func (a *app) voteSection(c *ui.Context, d *detailState, v *voteBlock) {
+	t := c.Theme()
+	multi := voteIsMulti(v)
+	locked := v.Finished || d.vote.voted || d.vote.busy
+	// 详情刷新可能换掉选项列表：勾选框按当前行数绑定，syncVote 在下一份
+	// 详情回来时还会再对齐一次。
+	if len(d.vote.checks) != len(v.Options) {
+		d.vote.checks = make([]bool, len(v.Options))
+	}
+	for i, o := range v.Options {
+		i, o := i, o
+		label := fmt.Sprintf("%s · %d 票", o.Text, o.Votes)
+		// 勾选框是有状态的控件，构造前用 Context.Key 固定身份。
+		c.Key("vote-option-" + o.ID)
+		if multi {
+			ui.Checkbox(c, &d.vote.checks[i], label).
+				FontSize(metaFontSize).Disabled(locked)
+			continue
+		}
+		btn := ui.Button(c, label).FontSize(metaFontSize).
+			FillWidth().Disabled(locked)
+		if btn.Clicked() {
+			a.submitVote(d, []string{o.ID}, false)
+		}
+	}
+	switch {
+	case d.vote.busy:
+		ui.Text(c, "正在提交投票…").FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+	case v.Finished:
+		ui.Text(c, "投票已结束").FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+	case d.vote.voted:
+		ui.Text(c, "已投票，感谢参与").FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+	case multi:
+		btn := ui.Button(c, "投票").Disabled(!anyVoteChecked(d.vote.checks))
+		if btn.Clicked() {
+			a.submitVoteMulti(d, v)
+		}
+	}
+}
+
+func anyVoteChecked(checks []bool) bool {
+	for _, on := range checks {
+		if on {
+			return true
+		}
+	}
+	return false
+}
+
+// submitVoteMulti 收集勾选的选项并检查多选上限，然后走同一条提交链路。
+func (a *app) submitVoteMulti(d *detailState, v *voteBlock) {
+	var ids []string
+	for i, on := range d.vote.checks {
+		if on && i < len(v.Options) {
+			ids = append(ids, v.Options[i].ID)
+		}
+	}
+	if len(ids) == 0 {
+		a.toast(toastMain, "请先选择投票选项")
+		return
+	}
+	max := v.MaxChoice
+	if max <= 0 {
+		max = voteOptionMax
+	}
+	if len(ids) > max {
+		a.toast(toastMain, fmt.Sprintf("最多选 %d 项", max))
+		return
+	}
+	a.submitVote(d, ids, true)
 }
 
 // topicNotice 是正文顶部的一条状态说明：评论定位、离线缓存与内联浏览层级。
