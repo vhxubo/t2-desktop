@@ -475,7 +475,7 @@ func TestAppConfigDeclaresNativeScheme(t *testing.T) {
 // configurable client_id/scope, no redirect/port, no local server, no
 // manual-token entry point.
 func TestSingleLoginFlowStructure(t *testing.T) {
-	if clientID != "e471281af4d84ecfae77c39f94bcf372" {
+	if clientID != "e3cf9b14c5104d85af2c2b2a8ce2da36" {
 		t.Fatalf("client_id 未固定为项目内的常量：%q", clientID)
 	}
 	if _, ok := reflect.TypeOf(AuthManager{}).FieldByName("settings"); ok {

@@ -28,7 +28,7 @@ import (
 const (
 	appIdentifier      = "com.vhxubo.t2-desktop"
 	defaultRedirectURI = appIdentifier + ":/callback"
-	clientID           = "e471281af4d84ecfae77c39f94bcf372"
+	clientID           = "e3cf9b14c5104d85af2c2b2a8ce2da36"
 	defaultScopes      = "read profile read:me write:comment interact read:economy"
 
 	// Some platforms normalise :/callback into ://callback before handing
