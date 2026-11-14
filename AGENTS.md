@@ -55,6 +55,9 @@ a pure white page.
 - 应用状态里不要保存 `ui.Element` 或 `*ui.Context`：元素每次构建都会失效。
   后台结果通过 `Window.Update` / `app.publish` 回到 UI 线程。
 - 改 UI 前先按 `.agents/skills/mygo-maintenance/SKILL.md` 的约定核对 mygo 版本与 API。
+- 桌面宠物（t2-pet）是同一进程里的第二个窗口，不是独立应用。动 `pet*.go` 前先读
+  `docs/t2-pet.md`：里面记着为什么不能拆进程、透明窗口与指针穿透的硬约束、
+  以及 P1 起的任务分解与验收标准。
 
 ## 2Libra 开放 API 文档
 
@@ -98,7 +101,7 @@ a pure white page.
 | --- | --- |
 | oauth.md | `auth.go`、`auth_ui.go`、`auth_gate.go` |
 | api-read.md | `api.go`（列表与解码）、`detail.go`、`profile.go`、`attributes.go`（六维属性）、`badges.go`（徽章墙与佩戴状态）、`user_card.go`、`notifications.go` |
-| api-write.md | `compose.go`、`detail.go`（发评论）、`follow.go`、`interact.go` |
+| api-write.md | `compose.go`、`vote.go`（投票）、`detail.go`（发评论）、`follow.go`、`interact.go` |
 | api-economy.md | `coins.go`、`coins_window.go`、`badges.go`（佩戴切换，scope `write:economy`）、`image_hosts.go`（上传；官方图床只对 Pro 开放）、`image_hosts_adapters.go`（第三方图床协议：Imgur / Tikolu / MJJ.Today / ImgBB / Skyimg / 111666.best / StarDots，来自「通用图片上传助手」脚本） |
 | 搜索（`/v1/search`） | `search.go`、`search_ui.go` |
 | 节点（`/v1/nodes`） | `nodes.go`（请求、父子关系、本地缓存）、`compose.go`（两列选项）、`cascader.go`（级联选择组件） |
