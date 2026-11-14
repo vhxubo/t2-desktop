@@ -26,6 +26,12 @@ func testApp(t *testing.T) *app {
 	dir := t.TempDir()
 	a := newApp(dir)
 	a.autoLoad = false // 测试中不发真实网络请求
+	// 桌面宠物现在是默认关闭的实验功能（见 experiment.go）。测试里主动打开
+	// 它的实验开关，让既有的宠物与托盘用例照常可测；默认关闭的行为由
+	// TestPetExperimentOffHidesPet 单独覆盖。
+	if a.experiment != nil {
+		a.experiment.pet = true
+	}
 	return a
 }
 

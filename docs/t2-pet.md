@@ -354,3 +354,10 @@ type aiProvider struct {
   绘制全用 `Painter.FillPath` / `StrokePath`：**`Painter.Line` 只画水平或垂直
   线**，斜的吊绳和指针用它会被折成一条直角边（实测是「从天上垂下来的竖
   条」），见 `pet_ui.go` 里的 `stroke` 辅助函数。
+- 2026-11-14 把桌面宠物抽成**默认关闭的实验功能**，单独在分支
+  `feat/pet-experimental` 上做，不影响 main 的既有逻辑。新增 `experiment.go`
+  （`experimentStore`，落盘 `experiment.json`，当前只有 `pet` 一项，默认
+  false）；`petExperimentOn()` 是宠物被放出来 / 开口说话的总闸，比 `petStore.on()`
+  （用户的具体开关）高一级。设置窗口新增「实验功能」一块，勾选「桌面宠物
+  （实验功能）」才打开它；实验没开时托盘菜单里不出现「桌面宠物」，启动也不
+  放宠物。开启后按用户在 `pet.json` 里的原选择恢复，关闭时只收起、不抹掉选择。

@@ -266,6 +266,12 @@ type app struct {
 	petBubble *mygo.Window
 	petShown  bool
 	petTimer  *time.Timer
+	// experiment 是「实验功能」的总开关（见 experiment.go），落盘在
+	// experiment.json；当前只有桌面宠物这一项，默认关闭。expPetOn 是设置窗口
+	// 里那个勾选项的临时绑定值，每次打开设置时从 experiment 同步过来。都只在
+	// 主线程读写。
+	experiment *experimentStore
+	expPetOn   bool
 	// closePromptOpen / closeRemember 是关闭提示弹窗的状态：是否正在询问
 	// 「退出还是收进托盘」，以及这次要不要记住选择。只在主线程读写。
 	closePromptOpen bool
@@ -357,6 +363,7 @@ func newApp(dir string) *app {
 		profile:      newProfileState(),
 		closeMode:    newCloseModeStore(dir),
 		petStore:     newPetStore(dir),
+		experiment:   newExperimentStore(dir),
 	}
 	// 托盘的「退出」与窗口关闭走同一条退出流程；测试里换成记录调用，无头
 	// 环境没有主循环，不能真的退出。先立 quitting：退出时主窗口的 OnClose

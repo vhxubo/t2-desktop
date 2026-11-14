@@ -121,9 +121,10 @@ func (s *petStore) on() bool { return s != nil && s.enabled }
    开关、窗口与气泡
 ---------------------------------------------------------------- */
 
-// startPet 在应用就绪后按上次的选择决定要不要把宠物放出来。
+// startPet 在应用就绪后按上次的选择决定要不要把宠物放出来。实验功能没开时
+// 不放大任何宠物窗口——这是宠物被放出来的总闸（见 experiment.go）。
 func (a *app) startPet() {
-	if !a.petStore.on() {
+	if !a.petExperimentOn() || !a.petStore.on() {
 		return
 	}
 	a.showPetWindow()
@@ -139,9 +140,10 @@ func (a *app) hidePet() { a.publish(func() { a.setPetEnabled(false) }) }
 func (a *app) togglePet() { a.publish(func() { a.setPetEnabled(!a.petShown) }) }
 
 // setPetEnabled 是「桌面宠物」开关的唯一入口：托盘菜单（以后还有设置窗口）
-// 都走这里，所以落盘与结果提示只写一份。只在主线程调用。
+// 都走这里，所以落盘与结果提示只写一份。只在主线程调用。实验功能没开时它
+// 直接返回：用户的具体开关（petStore）只在实验开关之上才有效。
 func (a *app) setPetEnabled(on bool) {
-	if a.petStore == nil {
+	if !a.petExperimentOn() {
 		return
 	}
 	if on == a.petShown && on == a.petStore.enabled {
@@ -245,7 +247,7 @@ func (a *app) redrawPetWindow() {
 // 宠物有自己的开关（托盘里的「桌面宠物」），和系统通知的开关互不影响：关掉
 // 系统通知、只留宠物的人来说，这一条路是通的。
 func (a *app) petAnnounce(notices []nativeNotice) {
-	if !a.petStore.on() || len(notices) == 0 {
+	if !a.petExperimentOn() || !a.petStore.on() || len(notices) == 0 {
 		return
 	}
 	n := notices[len(notices)-1]

@@ -142,6 +142,55 @@ func TestPetIgnoresNativeNotificationSwitch(t *testing.T) {
 	}
 }
 
+// 桌面宠物是默认关闭的实验功能：实验开关没开时，托盘菜单里不该出现「桌面
+// 宠物」，应用启动也不会把宠物放出来（即便用户之前开着它）。这是把宠物抽成
+// 实验功能后的关键不变量。
+func TestPetExperimentOffHidesPet(t *testing.T) {
+	a := testApp(t)
+	// 关掉实验开关：模拟一个还没在设置里开启桌面宠物的用户。
+	a.experiment.pet = false
+
+	// 托盘菜单里没有「桌面宠物」这一项。
+	if it := a.trayMenu().ItemByID(trayPetID); it != nil {
+		t.Errorf("实验功能关闭时托盘菜单仍出现了「桌面宠物」：%q", trayLabels(a.trayMenu()))
+	}
+
+	// 即便用户之前开着宠物（pet.json 记着 enabled=true），启动也不该放出来。
+	a.petStore.enabled = true
+	a.startPet()
+	if a.petShown {
+		t.Error("实验功能关闭时 startPet 仍把宠物放了出来")
+	}
+
+	// 来通知也不该冒泡。
+	a.petAnnounce([]nativeNotice{{ID: "n1", Title: "@小明 回复了你", Body: "在吗"}})
+	if a.pet != nil && a.pet.open {
+		t.Error("实验功能关闭时宠物仍对通知冒泡")
+	}
+}
+
+// 实验功能打开后，宠物恢复到原来的行为：托盘菜单里有「桌面宠物」，启动按
+// 用户选择放出来，通知也会冒泡。
+func TestPetExperimentOnRestoresPet(t *testing.T) {
+	a := testApp(t)
+	a.experiment.pet = true
+
+	if it := a.trayMenu().ItemByID(trayPetID); it == nil {
+		t.Fatal("实验功能开启时托盘菜单缺少「桌面宠物」")
+	}
+
+	a.petStore.enabled = true
+	a.startPet()
+	if !a.petShown {
+		t.Error("实验功能开启且用户开着宠物时，startPet 没有放出来")
+	}
+
+	a.petAnnounce([]nativeNotice{{ID: "n1", Title: "@小明 回复了你", Body: "在吗"}})
+	if a.pet == nil || !a.pet.open {
+		t.Error("实验功能开启时宠物没有对通知冒泡")
+	}
+}
+
 // 「要不要显示桌面宠物」落盘在 pet.json：重开应用要记得上次的选择，否则
 // 每次启动都得去托盘里点一次。
 func TestPetStorePersistsChoice(t *testing.T) {

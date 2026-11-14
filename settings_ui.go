@@ -149,6 +149,8 @@ func (a *app) settingsWindowView(c *ui.Context) {
 				a.imageHostsSection(c)
 				ui.Divider(c)
 				a.windowSettingsSection(c)
+				ui.Divider(c)
+				a.experimentSettingsSection(c)
 			})
 		})
 	})
@@ -199,6 +201,26 @@ func (a *app) windowSettingsSection(c *ui.Context) {
 		if !a.trayReady {
 			ui.Text(c, "系统托盘当前不可用，关闭主窗口仍会退出应用。").
 				FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		}
+	})
+}
+
+/* ------------------------------------------------------------------
+   实验功能一块：默认关闭，开启后可能有不稳定
+---------------------------------------------------------------- */
+
+// experimentSettingsSection 是「实验功能」一块：每一项都是独立的实验开关，
+// 默认关闭。当前只有桌面宠物这一项——开启后它才会出现在托盘菜单里，并按上
+// 次的选择放出来。结果用窗口内 toast 说明，这一块只留出「正在做什么」的余地。
+func (a *app) experimentSettingsSection(c *ui.Context) {
+	t := c.Theme()
+	// 每次重建都从实验开关同步一次，保证勾选项的勾选状态跟上落盘的真值。
+	a.expPetOn = a.experiment.petOn()
+	settingsSection(c, "实验功能", func() {
+		ui.Text(c, "以下功能属于实验性质，默认关闭；开启后可能不稳定，仅供提前试用。如有问题，回到这里关掉即可恢复原有行为。").
+			FontSize(12).TextColor(t.TextMuted).MaxLines(4)
+		if ui.Checkbox(c, &a.expPetOn, "桌面宠物（实验功能）").Changed() {
+			a.setPetExperiment(a.expPetOn)
 		}
 	})
 }

@@ -148,15 +148,20 @@ func (a *app) trayMenu() *mygo.Menu {
 			Icon:  trayComposeMI,
 			Click: func(*mygo.MenuItem, *mygo.Window) { a.showCompose() },
 		},
-		// 桌面宠物的开关。勾选状态读的是偏好而不是窗口对象：宠物可能因为
-		// 主窗口退出而暂时不在，用户的「开着」不该被一次意外改写。
-		&mygo.MenuItem{
+	)
+	// 桌面宠物是实验功能：实验开关没开时不在托盘菜单里出现，免得用户点了一个
+	// 打不开的东西。勾选状态读的是偏好而不是窗口对象：宠物可能因为主窗口退出
+	// 而暂时不在，用户的「开着」不该被一次意外改写。
+	if a.petExperimentOn() {
+		items = append(items, &mygo.MenuItem{
 			ID:      trayPetID,
 			Label:   "桌面宠物",
 			Type:    mygo.MenuItemCheckbox,
 			Checked: a.petStore.on(),
 			Click:   func(*mygo.MenuItem, *mygo.Window) { a.togglePet() },
-		},
+		})
+	}
+	items = append(items,
 		mygo.Separator(),
 		&mygo.MenuItem{
 			ID:    trayQuitID,
