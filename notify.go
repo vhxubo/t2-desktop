@@ -254,9 +254,6 @@ func (a *app) pollNotifications() {
 			// 检定等），emit 一次全局金币刷新；合并窗口会把同一批消息收敛成
 			// 一次请求。
 			a.coinsChanged(coinEventIncoming)
-			if !a.nativeNotify {
-				return
-			}
 			// 一次事件最多弹 3 条，避免同一批消息刷屏。
 			if len(fresh) > 3 {
 				fresh = fresh[:3]
@@ -264,6 +261,13 @@ func (a *app) pollNotifications() {
 			notices := make([]nativeNotice, 0, len(fresh))
 			for _, n := range fresh {
 				notices = append(notices, notificationNative(n))
+			}
+			// 桌面宠物是通知的第二个出口，它有自己的开关（托盘里的「桌面
+			// 宠物」），所以排在上面那个 nativeNotify 判断之外：关掉系统通知
+			// 的人，往往正是想让宠物来说的那一个。
+			a.petAnnounce(notices)
+			if !a.nativeNotify {
+				return
 			}
 			a.showNotices(notices)
 		})

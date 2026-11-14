@@ -31,11 +31,11 @@ func trayItem(t *testing.T, menu *mygo.Menu, id string) *mygo.MenuItem {
 }
 
 // 未登录时托盘菜单顶部是「未登录」，紧接着是登录与注册两个入口；通知、
-// 发帖、退出三个入口始终都在。
+// 发帖、桌面宠物与退出四个入口始终都在。
 func TestTrayMenuOffersLoginWhenSignedOut(t *testing.T) {
 	a := testApp(t)
 	menu := a.trayMenu()
-	want := []string{"未登录", "登录", "注册", "", "通知", "发帖", "", "退出"}
+	want := []string{"未登录", "登录", "注册", "", "通知", "发帖", "桌面宠物", "", "退出"}
 	if got := trayLabels(menu); !reflect.DeepEqual(got, want) {
 		t.Fatalf("未登录时的托盘菜单 %q，期望 %q", got, want)
 	}
@@ -69,7 +69,7 @@ func TestTrayMenuShowsAccountAndLogoutWhenSignedIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	menu := a.trayMenu()
-	want := []string{"已登录：jimmy", "退出登录", "", "通知", "发帖", "", "退出"}
+	want := []string{"已登录：jimmy", "退出登录", "", "通知", "发帖", "桌面宠物", "", "退出"}
 	if got := trayLabels(menu); !reflect.DeepEqual(got, want) {
 		t.Fatalf("登录后的托盘菜单 %q，期望 %q", got, want)
 	}
