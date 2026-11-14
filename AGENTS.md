@@ -55,9 +55,6 @@ a pure white page.
 - 应用状态里不要保存 `ui.Element` 或 `*ui.Context`：元素每次构建都会失效。
   后台结果通过 `Window.Update` / `app.publish` 回到 UI 线程。
 - 改 UI 前先按 `.agents/skills/mygo-maintenance/SKILL.md` 的约定核对 mygo 版本与 API。
-- 桌面宠物（t2-pet）是同一进程里的第二个窗口，不是独立应用。动 `pet*.go` 前先读
-  `docs/t2-pet.md`：里面记着为什么不能拆进程、透明窗口与指针穿透的硬约束、
-  以及 P1 起的任务分解与验收标准。
 
 ## 2Libra 开放 API 文档
 

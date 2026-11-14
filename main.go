@@ -255,17 +255,6 @@ type app struct {
 	// closeMode 是「关闭主窗口时」的偏好（见 window_mode.go），落盘在
 	// window.json。只在主线程读写。
 	closeMode *closeModeStore
-	// pet 是桌面宠物（见 pet.go）：一个透明、置顶、不进任务栏的小窗口，画一杆
-	// 会随未读消息摇摆的黄铜天平；通知到达时以「它自己说话」的气泡讲一句。
-	// petStore 记「要不要显示」的偏好，
-	// 落盘在 pet.json；petShown 表示它此刻是否在屏幕上；petBubble 是气泡的
-	// flyout，挂在宠物窗口上，跟着它移动。都只在主线程读写。
-	pet       *petState
-	petStore  *petStore
-	petWin    *mygo.Window
-	petBubble *mygo.Window
-	petShown  bool
-	petTimer  *time.Timer
 	// closePromptOpen / closeRemember 是关闭提示弹窗的状态：是否正在询问
 	// 「退出还是收进托盘」，以及这次要不要记住选择。只在主线程读写。
 	closePromptOpen bool
@@ -315,9 +304,6 @@ type app struct {
 	onCoinsChanged func(event coinEvent)
 	// onNodesLoaded 是节点表刷新完成（成功或失败）后的测试钩子，原因同上。
 	onNodesLoaded func(err error)
-	// onPetBubbleHidden 是宠物气泡收起后的测试钩子：自动收起走的是真实定时器，
-	// headless 测试没有主循环，靠它确认气泡确实到点收了。生产为 nil。
-	onPetBubbleHidden func()
 }
 
 // tabID / tabFromID 把 tab 序号与侧边栏条目的 id 互相映射。
@@ -356,7 +342,6 @@ func newApp(dir string) *app {
 		pandora:      newPandoraState(),
 		profile:      newProfileState(),
 		closeMode:    newCloseModeStore(dir),
-		petStore:     newPetStore(dir),
 	}
 	// 托盘的「退出」与窗口关闭走同一条退出流程；测试里换成记录调用，无头
 	// 环境没有主循环，不能真的退出。先立 quitting：退出时主窗口的 OnClose
@@ -406,7 +391,6 @@ func (a *app) publish(fn func()) {
 		a.redrawReplyWindow()
 		a.redrawUserCardWindow()
 		a.redrawSearchWindow()
-		a.redrawPetWindow()
 	})
 }
 
@@ -1411,8 +1395,6 @@ func main() {
 			a.closeReplyWindow()
 			a.closeSearchWindow()
 			a.closeAboutWindow()
-			// 桌面宠物不在这里：主窗口「收进托盘」时它要留在桌面上，而真正
-			// 退出时整个进程一起结束，窗口不用单独关（见 pet.go）。
 		})
 		// 关闭按钮（自绘标题栏、Alt+F4、任务栏右键都一样）先问设置：默认
 		// 照常关闭，选了「收进托盘」就拦下来藏起窗口，见 window_mode.go。
@@ -1420,9 +1402,6 @@ func main() {
 		// 托盘图标：应用就绪后才有原生通知区域，见 tray.go。创建失败只记
 		// 日志，主窗口照常使用。
 		a.startTray()
-		// 桌面宠物：上次开着就放出来（见 pet.go）。它和托盘是两件事——托盘
-		// 是入口，宠物是常驻的显示；两者都失败也不影响主窗口。
-		a.startPet()
 		// 表情表启动时就拉一次（文档同样建议启动时取并缓存）：等到第一次打开
 		// 详情再拉，正文会先按 :code: 短码排一遍，短码变成图片时整段重排。
 		// 放在主窗口创建之后，结果才能经 publish 回到 UI 线程。

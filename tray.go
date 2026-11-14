@@ -30,7 +30,6 @@ const (
 	trayLogoutID        = "tray-logout"
 	trayNotificationsID = "tray-notifications"
 	trayComposeID       = "tray-compose"
-	trayPetID           = "tray-pet"
 	trayQuitID          = "tray-quit"
 )
 
@@ -147,15 +146,6 @@ func (a *app) trayMenu() *mygo.Menu {
 			Label: "发帖",
 			Icon:  trayComposeMI,
 			Click: func(*mygo.MenuItem, *mygo.Window) { a.showCompose() },
-		},
-		// 桌面宠物的开关。勾选状态读的是偏好而不是窗口对象：宠物可能因为
-		// 主窗口退出而暂时不在，用户的「开着」不该被一次意外改写。
-		&mygo.MenuItem{
-			ID:      trayPetID,
-			Label:   "桌面宠物",
-			Type:    mygo.MenuItemCheckbox,
-			Checked: a.petStore.on(),
-			Click:   func(*mygo.MenuItem, *mygo.Window) { a.togglePet() },
 		},
 		mygo.Separator(),
 		&mygo.MenuItem{

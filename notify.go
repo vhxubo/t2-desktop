@@ -262,10 +262,6 @@ func (a *app) pollNotifications() {
 			for _, n := range fresh {
 				notices = append(notices, notificationNative(n))
 			}
-			// 桌面宠物是通知的第二个出口，它有自己的开关（托盘里的「桌面
-			// 宠物」），所以排在上面那个 nativeNotify 判断之外：关掉系统通知
-			// 的人，往往正是想让宠物来说的那一个。
-			a.petAnnounce(notices)
 			if !a.nativeNotify {
 				return
 			}

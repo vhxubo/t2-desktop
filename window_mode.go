@@ -152,10 +152,6 @@ func (a *app) chooseCloseMode(mode int) {
 // hideMainWindowToTray 收起主窗口与它的附属窗口。主窗口只 Hide 不 Close：
 // 窗口对象还在，应用才不会因为「最后一个窗口关了」而退出，点托盘图标就能
 // 原样回来。附属窗口是主窗口的一部分，留着它们等于留了一屏孤岛。
-//
-// 桌面宠物（pet.go）不在这份名单里：它不是主窗口的一部分，而是「主窗口收起
-// 之后仍然留在桌面上」的那一个。把它一起收掉，用户选了「收进托盘」就等于
-// 连宠物也没了。
 func (a *app) hideMainWindowToTray() {
 	win := a.win
 	if win == nil {
