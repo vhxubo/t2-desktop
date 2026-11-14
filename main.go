@@ -1337,6 +1337,11 @@ func (a *app) cancelLogin() {
 func main() {
 	a := newApp("")
 	a.autoLoad = true
+	// 先把代理规则接到进程内所有 HTTP 出口，再装更新插件：更新插件自己
+	// 发请求（检查更新、下载更新包），不经过本应用的 Client。接好之后，
+	// 手动代理 / 直连 / 跟随系统三种模式与「不走代理的地址」对它同样生效，
+	// 设置窗口里改完代理立刻就能检查更新。
+	installGlobalProxy(a.proxy)
 	// 自动更新：更新包来自 github.com/vhxubo/t2-desktop 的 release，由
 	// mygo build 用 mygo.json 里 updates.publicKey 对应的私钥签名。native
 	// 更新窗口不需要 WebView，与本应用的原生 UI 一致：启动后检查一次，之后

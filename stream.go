@@ -106,6 +106,7 @@ func (c *Client) streamHTTPClient() *http.Client {
 	if c.Proxy != nil {
 		return c.Proxy.Client(0)
 	}
+	// 同上：无注入客户端时依赖 installGlobalProxy 换过的默认 transport。
 	return &http.Client{}
 }
 

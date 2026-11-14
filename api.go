@@ -268,6 +268,9 @@ func (c *Client) httpClient() *http.Client {
 	if c.Proxy != nil {
 		return c.Proxy.Client(20 * time.Second)
 	}
+	// 只给测试用的裸客户端：Transport 为 nil 时走 http.DefaultTransport，
+	// 而生产启动阶段 installGlobalProxy 已经把它换成应用代理，所以这条
+	// 兜底路径也不会绕过代理。
 	return &http.Client{Timeout: 20 * time.Second}
 }
 

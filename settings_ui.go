@@ -168,7 +168,7 @@ func settingsSection(c *ui.Context, title string, body func()) {
 func (a *app) updateSettingsSection(c *ui.Context) {
 	t := c.Theme()
 	settingsSection(c, "更新", func() {
-		ui.Text(c, "应用每天自动检查一次 GitHub Release。现在想确认版本可以手动检查，更新窗口会说明结果或列出新版本。").
+		ui.Text(c, "应用每天自动检查一次 GitHub Release；检查更新和下载更新包都会走上方设置的网络代理。现在想确认版本可以手动检查，更新窗口会说明结果或列出新版本。").
 			FontSize(12).TextColor(t.TextMuted).MaxLines(3)
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			if ui.Button(c, "检查更新").Clicked() {

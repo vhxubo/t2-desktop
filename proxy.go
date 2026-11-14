@@ -19,8 +19,9 @@ import (
 // 代理模式。默认跟随系统：先看 HTTP(S)_PROXY / ALL_PROXY 环境变量，再看
 // 系统代理（Windows 的 WinHTTP、macOS 的 CFNetwork、Linux 的 GIO，含 PAC
 // 与自动检测）。手动模式只认应用内填写的地址，直连模式跳过所有代理。三种
-// 模式都通过同一个 http.Transport 生效，所以 API、OAuth、SSE 长连接和图片
-// 下载不会有漏网之鱼。
+// 模式都通过同一个 http.Transport 生效；启动时 installGlobalProxy 还会把
+// 这套规则接到 mygo 的更新插件和 http.DefaultTransport 上，让检查更新、
+// 更新包下载与所有默认客户端也一起走配置的代理。
 const (
 	proxyFollowSystem = iota
 	proxyManual
@@ -104,6 +105,10 @@ type proxyManager struct {
 	fn        func(*url.URL) (*url.URL, error)
 	status    string
 	transport *http.Transport
+	// global 是 mygo 内部（更新插件等）共用的 transport。它的 Proxy 由
+	// installGlobalProxy 换成本管理器的 proxyFor，改配置时也要断开它上面
+	// 的空闲连接，否则检查更新可能继续复用连着旧代理的连接。
+	global *http.Transport
 }
 
 func newProxyManager(dir string) *proxyManager {
@@ -123,7 +128,7 @@ func newProxyManager(dir string) *proxyManager {
 // 这样用户在 Clash 之类工具里改了系统代理后不必重启应用。
 func (p *proxyManager) Reload() {
 	p.reload()
-	p.Transport().CloseIdleConnections()
+	p.closeIdleConnections()
 }
 
 func (p *proxyManager) reload() {
@@ -150,6 +155,49 @@ func (p *proxyManager) Transport() *http.Transport {
 		p.transport = tr
 	}
 	return p.transport
+}
+
+// closeIdleConnections 断开所有共享 transport 上的空闲连接。换代理地址后
+// 连接池里连着旧代理的连接必须作废，否则检查更新这类复用连接的请求会绕过
+// 新配置，看起来像「保存了没生效」。
+func (p *proxyManager) closeIdleConnections() {
+	p.Transport().CloseIdleConnections()
+	p.mu.Lock()
+	global := p.global
+	p.mu.Unlock()
+	if global != nil {
+		global.CloseIdleConnections()
+	}
+}
+
+// installGlobalProxy 把应用配置的代理规则接到进程里其余的 HTTP 出口。
+// 必须在启动阶段、任何请求发出之前、以及装载更新插件之前调用一次。
+//
+// 应用自己的 Client / AuthManager / SSE / 图床上传 / 图片下载都显式使用
+// proxyManager.Transport()，但还有两类请求拿不到它：
+//
+//   - mygo 的更新插件：检查更新时读 GitHub Release 的 manifest 与 prerelease
+//     列表、以及下载更新包，内部固定用
+//     (&http.Client{Transport: netproxy.Transport()}).Do(...)。那个 transport
+//     只认系统代理和环境变量，应用里填的手动代理、账号密码和「不走代理的
+//     地址」对它完全无效 —— 这正是「配了代理却检查不了更新」的原因；
+//   - http.DefaultClient，以及任何 Transport 为 nil 的 http.Client（本项目
+//     的兜底客户端、第三方库的默认客户端）：它们走 http.DefaultTransport。
+//
+// 默认 transport 直接换成共享 transport；netproxy 的共享 transport 换成同
+// 一个 Proxy 函数。proxyFor 每次请求都读当前规则，所以在设置窗口保存代理、
+// 点「重新检测」之后，检查更新也立即跟着切换，不用重启应用。
+//
+// 注意这里依赖 mygo v0.8.3 的 updater.go 用 netproxy.Transport() 这个共享
+// 单例；升级 mygo 时要重新核对那一行，并跑 TestUpdateCheckUsesConfiguredProxy。
+func installGlobalProxy(p *proxyManager) {
+	http.DefaultTransport = p.Transport()
+
+	nt := netproxy.Transport()
+	nt.Proxy = p.proxyFor
+	p.mu.Lock()
+	p.global = nt
+	p.mu.Unlock()
 }
 
 func (p *proxyManager) proxyFor(req *http.Request) (*url.URL, error) {

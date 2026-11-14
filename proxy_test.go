@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/egoist/mygo/netproxy"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -238,6 +240,11 @@ func TestProxySharedByAPIStreamAndOAuth(t *testing.T) {
 	if got := m.http.Transport; got != shared {
 		t.Errorf("OAuth 请求没有使用共享 transport：%T", got)
 	}
+	// Skyimg 这类要先取 CSRF 令牌再上传的适配器会复制一份客户端加 cookie
+	// jar，复制品必须继续共用同一个 transport（也就是同一个代理）。
+	if got := c.clientWithJar(nil).Transport; got != shared {
+		t.Errorf("带 cookie jar 的图床客户端没有使用共享 transport：%T", got)
+	}
 }
 
 func TestManualProxyURLNormalization(t *testing.T) {
@@ -456,10 +463,303 @@ func TestSettingsCheckForUpdatesWired(t *testing.T) {
 	if !st.HasText("检查更新") {
 		t.Fatalf("设置窗口没有检查更新：%q", st.Texts())
 	}
+	if !st.HasText("都会走上方设置的网络代理") {
+		t.Errorf("设置窗口没有说明检查更新也走代理：%q", st.Texts())
+	}
 	if err := st.Click("检查更新"); err != nil {
 		t.Fatal(err)
 	}
 	if !clicked {
 		t.Fatal("点击「检查更新」没有触发更新检查")
+	}
+}
+
+/* ------------------------------------------------------------------
+   全局出口：检查更新、默认客户端、图床与图片链接
+---------------------------------------------------------------- */
+
+// 更新插件不用本应用的 Client：mygo v0.8.3 的 updater.go/httpGet 固定用
+// (&http.Client{Transport: netproxy.Transport()}).Do(...)，只认系统代理与
+// 环境变量。installGlobalProxy 把那个共享 transport 的 Proxy 换成应用配置。
+// 下面几条用例都按更新插件的真实客户端发请求，验证「配好代理就能检查更新」。
+
+// installGlobalProxyForTest 安装后还原两个进程级变量，避免污染其它用例。
+// 用例内没有并发请求，替换 transport 的 Proxy 字段是安全的。
+func installGlobalProxyForTest(t *testing.T, p *proxyManager) {
+	t.Helper()
+	oldDefault := http.DefaultTransport
+	nt := netproxy.Transport()
+	oldProxy := nt.Proxy
+	t.Cleanup(func() {
+		http.DefaultTransport = oldDefault
+		nt.Proxy = oldProxy
+	})
+	installGlobalProxy(p)
+}
+
+const updateManifestJSON = `{"version":"9.9.9","date":"2026-11-14T00:00:00Z","url":"https://github.com/vhxubo/t2-desktop/releases/download/v9.9.9/t2-desktop-windows-amd64.tar.gz","signature":"AAAA"}`
+
+func TestUpdateCheckUsesConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var hits atomic.Int32
+	var connectHost atomic.Value
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodConnect {
+			connectHost.Store(r.Host)
+			// 假代理不真的开隧道；这条请求只用来确认 HTTPS 流量到了代理。
+			http.Error(w, "tunnel closed", http.StatusBadGateway)
+			return
+		}
+		hits.Add(1)
+		_, _ = fmt.Fprint(w, updateManifestJSON)
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	installGlobalProxyForTest(t, p)
+
+	wantHost := strings.TrimPrefix(proxySrv.URL, "http://")
+	// 更新插件只发 HTTPS 请求（mygo 的 httpGet 拒绝非 HTTPS 目标）：直接问
+	// transport 的 Proxy 函数，确认 manifest 与 GitHub API 的 prerelease
+	// 列表这两个真实地址都会落到应用里填的代理上。
+	for _, raw := range []string{
+		"https://github.com/vhxubo/t2-desktop/releases/latest/download/update-windows-amd64.json",
+		"https://api.github.com/repos/vhxubo/t2-desktop/releases?per_page=100&page=1",
+	} {
+		req, err := http.NewRequest(http.MethodGet, raw, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, err := netproxy.Transport().Proxy(req)
+		if err != nil {
+			t.Fatalf("检查更新请求 %s 的代理解析失败：%v", raw, err)
+		}
+		if u == nil || u.Host != wantHost {
+			t.Fatalf("检查更新请求 %s 没有走配置的代理：%v", raw, u)
+		}
+	}
+
+	// 再按更新插件 httpGet 的方式真正发一次请求并读回 manifest：证明这条
+	// 链路不只是「接上了」，而是能经代理完成一次完整的检查。这里用 http
+	// 假域名让 httptest 假代理直接应答；HTTPS 走 CONNECT 用的是同一个
+	// Proxy 决策，上面已经断言过。
+	resp, err := (&http.Client{Transport: netproxy.Transport()}).Get(
+		"http://upstream.invalid/releases/latest/download/update-windows-amd64.json")
+	if err != nil {
+		t.Fatalf("经代理检查更新失败：%v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"version":"9.9.9"`) {
+		t.Errorf("没有读回更新 manifest：%q", body)
+	}
+	if hits.Load() != 1 {
+		t.Errorf("代理收到 %d 个更新请求，期望 1", hits.Load())
+	}
+
+	// 真实的检查更新地址是 HTTPS：Go transport 会先向代理发 CONNECT。
+	// 假代理故意拒绝隧道，只断言这条 CONNECT 确实打到了配置的代理。
+	httpsClient := &http.Client{Transport: netproxy.Transport()}
+	_, _ = httpsClient.Get(
+		"https://github.com/vhxubo/t2-desktop/releases/latest/download/update-windows-amd64.json")
+	httpsClient.CloseIdleConnections()
+	if got, _ := connectHost.Load().(string); got != "github.com:443" {
+		t.Errorf("HTTPS 检查更新没有向代理发起 CONNECT，代理看到 %q", got)
+	}
+}
+
+// 跟随系统模式读环境变量时，检查更新同样要跟着走代理。
+func TestEnvironmentProxyAlsoCoversUpdateCheck(t *testing.T) {
+	clearProxyEnv(t)
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, updateManifestJSON)
+	}))
+	defer proxySrv.Close()
+	t.Setenv("HTTPS_PROXY", proxySrv.URL)
+
+	p := newProxyManager(t.TempDir())
+	installGlobalProxyForTest(t, p)
+	req, err := http.NewRequest(http.MethodGet,
+		"https://github.com/vhxubo/t2-desktop/releases/latest/download/update-windows-amd64.json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := netproxy.Transport().Proxy(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u == nil || u.Host != strings.TrimPrefix(proxySrv.URL, "http://") {
+		t.Errorf("环境变量代理没有覆盖检查更新：%v", u)
+	}
+}
+
+// http.DefaultClient 以及任何 Transport 为 nil 的 http.Client 都走默认
+// transport；换过之后这些兜底路径也不会绕过代理。
+func TestDefaultTransportUsesConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var hits atomic.Int32
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_, _ = fmt.Fprint(w, "ok")
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	installGlobalProxyForTest(t, p)
+
+	resp, err := http.Get("http://upstream.invalid/ping")
+	if err != nil {
+		t.Fatalf("默认客户端经代理请求失败：%v", err)
+	}
+	resp.Body.Close()
+	if hits.Load() != 1 {
+		t.Errorf("默认 transport 没走代理，代理收到 %d 个请求", hits.Load())
+	}
+}
+
+// 设置窗口保存新代理后，检查更新必须立即改走新地址，且不再复用连着旧代理
+// 的空闲连接。
+func TestSavingProxyReroutesUpdateCheck(t *testing.T) {
+	clearProxyEnv(t)
+	var hitsA, hitsB atomic.Int32
+	newProxy := func(hits *atomic.Int32) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hits.Add(1)
+			_, _ = fmt.Fprint(w, updateManifestJSON)
+		}))
+	}
+	srvA, srvB := newProxy(&hitsA), newProxy(&hitsB)
+	defer srvA.Close()
+	defer srvB.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: srvA.URL}); err != nil {
+		t.Fatal(err)
+	}
+	installGlobalProxyForTest(t, p)
+	client := &http.Client{Transport: netproxy.Transport()}
+	check := func() {
+		t.Helper()
+		resp, err := client.Get("http://upstream.invalid/update.json")
+		if err != nil {
+			t.Fatalf("检查更新失败：%v", err)
+		}
+		resp.Body.Close()
+	}
+	check()
+	if hitsA.Load() != 1 || hitsB.Load() != 0 {
+		t.Fatalf("第一次检查更新没有走旧代理：A=%d B=%d", hitsA.Load(), hitsB.Load())
+	}
+
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: srvB.URL}); err != nil {
+		t.Fatal(err)
+	}
+	check()
+	if hitsB.Load() != 1 {
+		t.Errorf("保存新代理后检查更新没有走新代理：B=%d", hitsB.Load())
+	}
+	if hitsA.Load() != 1 {
+		t.Errorf("旧代理还收到 %d 次请求，期望 1", hitsA.Load())
+	}
+}
+
+func TestDirectModeUpdateCheckBypassesProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var proxyHits atomic.Int32
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxyHits.Add(1)
+		_, _ = fmt.Fprint(w, updateManifestJSON)
+	}))
+	defer proxySrv.Close()
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, updateManifestJSON)
+	}))
+	defer target.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	installGlobalProxyForTest(t, p)
+	if err := p.Save(proxyConfig{Mode: proxyDirect}); err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet,
+		"https://github.com/vhxubo/t2-desktop/releases/latest/download/update-windows-amd64.json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u, err := netproxy.Transport().Proxy(req); err != nil || u != nil {
+		t.Errorf("直连模式下检查更新仍被送进代理：%v，错误 %v", u, err)
+	}
+	resp, err := (&http.Client{Transport: netproxy.Transport()}).Get(target.URL + "/update.json")
+	if err != nil {
+		t.Fatalf("直连模式下检查更新失败：%v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), `"version"`) || proxyHits.Load() != 0 {
+		t.Errorf("直连模式结果不对：代理收到 %d 次，响应 %q", proxyHits.Load(), body)
+	}
+}
+
+// 图床上传（第三方 multipart 接口）和图床返回的图片链接（正文里渲染时
+// 下载）都必须经过代理，不能出现「列表走代理、传图与看图直连」的漏口。
+func TestImageHostAndImageURLUseConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var uploads, downloads atomic.Int32
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/upload"):
+			uploads.Add(1)
+			_, _ = fmt.Fprint(w, "https://img.example/pic.png\n")
+		case strings.Contains(r.URL.Path, "/pic.png"):
+			downloads.Add(1)
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(testUploadPNG())
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	a := &app{client: &Client{Proxy: p}}
+	h := imageHost{
+		ID: "proxy-host", Name: "代理图床", Kind: imageHostGeneric,
+		Endpoint: "http://upstream.invalid/upload", Field: "file",
+		TextResponse: true, MaxBytes: defaultImageMaxBytes, Enabled: true,
+	}
+	u, err := a.uploadImage(context.Background(), h,
+		uploadSource{Name: "p.png", Mime: "image/png", Data: testUploadPNG()})
+	if err != nil {
+		t.Fatalf("经代理上传图片失败：%v", err)
+	}
+	if u != "https://img.example/pic.png" {
+		t.Errorf("图床返回的地址 = %q", u)
+	}
+
+	data, err := a.fetchImage("http://img.example/pic.png")
+	if err != nil {
+		t.Fatalf("经代理下载图片链接失败：%v", err)
+	}
+	if len(data) == 0 {
+		t.Error("图片内容为空")
+	}
+	if uploads.Load() != 1 || downloads.Load() != 1 {
+		t.Errorf("代理收到上传 %d 次、图片下载 %d 次，期望各 1 次", uploads.Load(), downloads.Load())
 	}
 }

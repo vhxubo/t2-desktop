@@ -56,6 +56,31 @@ a pure white page.
   后台结果通过 `Window.Update` / `app.publish` 回到 UI 线程。
 - 改 UI 前先按 `.agents/skills/mygo-maintenance/SKILL.md` 的约定核对 mygo 版本与 API。
 
+## 网络请求：一律走配置的代理
+
+**所有出站 HTTP(S) 请求都必须走 `proxy.json` 里配置的代理**，跟随系统 / 手动 /
+直连三种模式与「不走代理的地址」一并生效。不允许出现「列表走代理、某个功能
+直连」的漏口；新加端点、图床、图片链接、第三方库或插件时同样适用。
+
+- 应用自己的请求统一用 `Client.httpClient()` / `AuthManager.http` /
+  `Client.streamHTTPClient()`，它们都来自 `proxyManager.Transport()` 这一个共享
+  transport（见 `proxy.go`、`api.go`、`stream.go`）。不要写 `http.Get`、
+  `http.Post`、`&http.Client{}` 或自建 `http.Client` / `http.Transport`。
+- `main()` 在装载更新插件之前调 `installGlobalProxy`，把规则接到
+  `http.DefaultTransport` 与 mygo 的 `netproxy.Transport()` 上：检查更新、
+  GitHub Release manifest / 更新包下载、裸客户端兜底与第三方库默认客户端
+  因此都走代理。接新插件或依赖时先确认它用这两条全局出口之一，否则显式把
+  `a.proxy.Client(...)` 传进去（例如插件选项里的 `Options.Client`）。
+- 检查更新由 mygo updater 内部发请求，依赖 `netproxy.Transport()` 的共享单例；
+  升级 mygo 前重核 `updater.go` 的 `httpGet`，并跑
+  `TestUpdateCheckUsesConfiguredProxy`。
+- `Save` / `Reload` 已经断开所有共享 transport 的空闲连接；新加的 transport
+  要接进 `closeIdleConnections`，否则切换代理后会复用连着旧代理的连接。
+- 例外：`a.srv.OpenURL` 打开系统浏览器（登录、注册、外链），由浏览器自己的
+  代理设置决定，不是应用内请求。
+- 新增网络出口要补一条 `httptest` 假代理用例，断言请求确实经过代理
+  （写法见 `proxy_test.go`）。
+
 ## 2Libra 开放 API 文档
 
 应用里的数据全部来自 2Libra 开放 API v1。文档入口：
@@ -116,3 +141,5 @@ a pure white page.
 - `gofmt -l .` 不应输出任何文件。
 - 改 UI 时用 `ui.NewTester` 复现：它的无头渲染与真实窗口一致，可用
   `Find` / `Texts` / `Image` 断言布局与像素。
+- 新增或改动网络请求时，补一条 `proxy_test.go` 的假代理用例并跑通，
+  确认这个出口确实经过配置的代理。
