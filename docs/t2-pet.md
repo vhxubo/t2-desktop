@@ -41,6 +41,14 @@
   **DirectComposition 不可用时会退回不透明位图**——这是唯一必须在真机上验的点。
 - 必须 `c.Root().Background(ui.Transparent)`，否则整窗被主题底色填满。
 - `DisableShadow: true`：窗口是一整块透明，系统阴影只会画出一个方框。
+- **Windows 11 的 DWM 会给窗口画一圈 1 DIP 的描边，外加贴着圆角的阴影**（
+  `DWMWA_BORDER_COLOR` 深色主题下约 `#404040`；Panel 窗口被 mygo 的 `roundFlyout`
+  设成小圆角，阴影就绕着那圈圆角长）。不透明窗口看不出来，透明窗口上就是空心方框
+  加一圈灰雾。mygo 没有关掉它们的出口（`frameBorder` 只处理 Windows 10 那条白线），
+  所以建窗后调 `removeWindowChrome`（`window_chrome_windows.go`）：圆角设成
+  `DWMWCP_DONOTROUND`、边框色设成 `DWMWA_COLOR_NONE`。
+  **两样要一起关**：只关描边，阴影还在（实测白底上窗口外仍是 255 → 225 的渐变）；
+  圆角一关，窗口外立刻回到纯白。
 
 ### 2.2 指针
 
@@ -323,3 +331,6 @@ type aiProvider struct {
 
 - 2026-11-14 建立本文；P0 落地（`pet.go`、`pet_ui.go`、`pet_test.go`，托盘开关，
   通知气泡，主窗口收进托盘时宠物留守）。真机透明与置顶待验（P0.5）。
+- 2026-11-14 去掉宠物窗口的描边与阴影：Windows 11 的 DWM 把窗口当圆角有框的窗口
+  渲染，透明窗口上就成了空心方框加灰雾。新增 `window_chrome_windows.go`（`!windows`
+  为空实现），建窗后调一次 `removeWindowChrome`：关圆角 + 关边框色，两样缺一不可。

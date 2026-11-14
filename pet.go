@@ -186,6 +186,9 @@ func (a *app) showPetWindow() {
 		Content:           ui.View(a.petView),
 	})
 	a.petWin = win
+	// 宠物窗口整块透明，Windows 11 给窗口画的那圈描边和贴着圆角的阴影，在桌面
+	// 上就是一个空心方框加一圈灰雾，所以两样都让它别画（见 window_chrome_windows.go）。
+	removeWindowChrome(win.NativeHandle())
 	// 关掉宠物窗口等于「收起宠物」，不退出应用：主窗口还在（可能收在托盘里）。
 	win.OnClose(func(e *mygo.CloseEvent) {
 		if a.quitting {
