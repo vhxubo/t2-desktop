@@ -1275,6 +1275,25 @@ func (a *app) handleCallbackURL(raw string) {
 	a.loginMsg = "已收到系统回调，正在用授权码换取令牌…"
 }
 
+// raiseMainWindow 把主窗口放到最前面。系统投来深链（OAuth 回调）时，窗口可能
+// 处于最小化、收进托盘（Hide）或只是被别的窗口盖住三种状态：用户刚在浏览器里
+// 点了这个链接，期望本窗口立即出现，所以统一拉起。Windows/Linux 上深链是浏览器
+// 拉起的新进程转发过来的，那个新进程退出前已经把前台权限让给本进程
+// （AllowForeground），因此这次抢前台是被系统允许的。各附属窗口的「打开即拉起」
+// 用的也是这套 IsMinimized→Restore / Show / Focus / Invalidate 写法。
+func (a *app) raiseMainWindow() {
+	win := a.win
+	if win == nil {
+		return
+	}
+	if win.IsMinimized() {
+		win.Restore()
+	}
+	win.Show()
+	win.Focus()
+	win.Invalidate()
+}
+
 // startLogin 打开系统浏览器并进入等待状态：不回登录页、不需要第二次点击，
 // 系统回调（或用户粘贴的回调链接）完成授权后自行登录。
 func (a *app) startLogin() {
@@ -1331,6 +1350,8 @@ func main() {
 	// 它把命令行转给第一个实例，转发可能早于下面几行执行。mygo 的
 	// OnOpenURL 只在投递那一刻有监听者时才送达，注册晚了链接就被丢掉。
 	mygo.App.OnOpenURL(func(raw string) {
+		// 系统投来深链（OAuth 回调）：先把主窗口拉到最前面，再处理回调。
+		a.raiseMainWindow()
 		a.publish(func() { a.handleCallbackURL(raw) })
 	})
 	// On Windows/Linux the custom-scheme callback starts a second process;
