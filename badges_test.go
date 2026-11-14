@@ -171,11 +171,10 @@ func TestDecodeBadgesFromEveryUserObject(t *testing.T) {
 		t.Errorf("通知操作者徽章错误：%+v", v.ActorBadges)
 	}
 
-	groups := notificationReactionGroups(mustObject(t, `{"relations":[{`+
+	overview := notificationReactionOverviewOf(mustObject(t, `{"relations":[{`+
 		`"emoji":"👍","username":"jimmy","equipped_badges":[`+yearStreak+`]}]}`))
-	if len(groups) != 1 || len(groups[0].Users) != 1 ||
-		len(groups[0].Users[0].Badges) != 1 {
-		t.Errorf("表态用户徽章错误：%+v", groups)
+	if len(overview.People) != 1 || len(overview.People[0].Badges) != 1 {
+		t.Errorf("表态用户徽章错误：%+v", overview.People)
 	}
 
 	ranks := decodeCoinRanking([]byte(`[{"username":"jimmy","balance":10,"equipped_badges":[` + yearStreak + `]}]`))

@@ -250,24 +250,73 @@ func TestNotificationViewReactionAggregates(t *testing.T) {
 	if v.ActorName != "" {
 		t.Errorf("表态是聚合事件，不该把 from_user 当操作者：%q", v.ActorName)
 	}
-	if v.Action != "你的评论收到了新表态" {
+	if v.Action != "表态了你的评论" {
 		t.Errorf("action = %q", v.Action)
 	}
-	if v.Reactions != "👍3（@a、@b）" {
-		t.Errorf("表态汇总 = %q", v.Reactions)
+	// 每种表情一条计数，人名单独去重一份：界面据此把表情合成一行、名字只写
+	// 一次，不再按表情各套一对括号。
+	if len(v.Reaction.Groups) != 1 || v.Reaction.Groups[0].Emoji != "👍" ||
+		v.Reaction.Groups[0].Count != 3 {
+		t.Errorf("表态计数 = %+v", v.Reaction.Groups)
 	}
-	// 界面用结构化视图给点名的用户画头像：relations 里带头像地址时一并保留。
-	if len(v.ReactionGroups) != 1 || v.ReactionGroups[0].Emoji != "👍" ||
-		v.ReactionGroups[0].Count != 3 || len(v.ReactionGroups[0].Users) != 2 ||
-		v.ReactionGroups[0].Users[0].Name != "a" ||
-		v.ReactionGroups[0].Users[0].Avatar != "https://r2.2libra.com/a.png" ||
-		v.ReactionGroups[0].Users[1].Name != "b" {
-		t.Errorf("表态聚合视图 = %+v", v.ReactionGroups)
+	if len(v.Reaction.People) != 2 ||
+		v.Reaction.People[0].Name != "a" ||
+		v.Reaction.People[0].Avatar != "https://r2.2libra.com/a.png" ||
+		v.Reaction.People[1].Name != "b" {
+		t.Errorf("表态人 = %+v", v.Reaction.People)
+	}
+	// relations 只点了两个人，计数说有三个：剩下的人用「等 3 人」带过。
+	if got := notificationReactionText(v.Reaction); got != "👍3 @a、@b 等 3 人" {
+		t.Errorf("表态汇总 = %q", got)
 	}
 	// related_id 是评论 id，但没有帖子 short_id 可拼：回到消息中心而不是
 	// 拼出一个打不开的链接。
 	if v.TargetURL != siteBaseURL+"/notifications" {
 		t.Errorf("缺少帖子定位时应回到消息中心：%q", v.TargetURL)
+	}
+}
+
+// 一条通知里只有一个人表态时，表情合并成一句、用户名只写一次：这正是
+// 「👍1（@张三）· 😂1（@张三）」要消掉的样子。
+func TestNotificationReactionMergesOnePerson(t *testing.T) {
+	v := notificationViewOf(decodeNotificationObject(mustObject(t, `{
+		"id":"n4","type":"reaction",
+		"payload":{"reactionType":"post","postTitle":"一条帖子",
+			"relations":[{"emoji":"👍","username":"jimmy"},
+				{"emoji":"😂","username":"jimmy"}],
+			"reactions":{"👍":1,"😂":1}}
+	}`)))
+	if got := notificationReactionText(v.Reaction); got != "👍 😂 @jimmy" {
+		t.Errorf("一个人的两种表情应合并成一句：%q", got)
+	}
+	if len(v.Reaction.People) != 1 || v.Reaction.People[0].Name != "jimmy" {
+		t.Errorf("表态人应去重：%+v", v.Reaction.People)
+	}
+	if others := notificationReactionOthers(v.Reaction, 1); others != 0 {
+		t.Errorf("同一个人的两种表情不算「还有别人」：%d", others)
+	}
+	if v.Action != "表态了你的帖子" {
+		t.Errorf("action = %q", v.Action)
+	}
+}
+
+// 表态的人多于上限时：名字仍然只写一遍，多出来的人用「等 N 人」收尾。
+func TestNotificationReactionOthersCapped(t *testing.T) {
+	v := notificationViewOf(decodeNotificationObject(mustObject(t, `{
+		"id":"n5","type":"reaction","payload":{"reactionType":"post",
+			"relations":[{"emoji":"👍","username":"a"},{"emoji":"👍","username":"b"},
+				{"emoji":"👍","username":"c"},{"emoji":"👍","username":"d"}],
+			"reactions":{"👍":4}}
+	}`)))
+	names := v.Reaction.People
+	if len(names) != 4 {
+		t.Fatalf("四个人都该被点到：%+v", names)
+	}
+	if got := notificationReactionText(v.Reaction); got != "👍4 @a、@b、@c 等 4 人" {
+		t.Errorf("表态汇总 = %q", got)
+	}
+	if others := notificationReactionOthers(v.Reaction, notificationReactionNamesMax); others != 4 {
+		t.Errorf("还有别人时应按真实人数概括：%d", others)
 	}
 }
 
@@ -582,6 +631,174 @@ func TestNotificationWindowView(t *testing.T) {
 	for _, label := range []string{"最小化", "关闭"} {
 		if _, ok := tt.Find(label); !ok {
 			t.Errorf("通知窗口缺少「%s」按钮：%q", label, tt.Texts())
+		}
+	}
+}
+
+// 一条消息就是一张和列表同宽的卡片：未读行的勾选框与「标为已读」都在卡片里，
+// 已读行不再比未读行窄，也没有为按钮留出的空列。
+func TestNotificationRowActionInsideCard(t *testing.T) {
+	a := notificationWindowApp(t)
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+
+	unread, ok := tt.Find("打开消息：提到了你")
+	if !ok {
+		t.Fatalf("找不到未读消息卡片：%q", tt.Texts())
+	}
+	read, ok := tt.Find("打开消息：回复了你")
+	if !ok {
+		t.Fatalf("找不到已读消息卡片：%q", tt.Texts())
+	}
+	if unread.X != read.X || unread.W != read.W {
+		t.Errorf("已读 / 未读卡片没有对齐：未读 %v，已读 %v", unread, read)
+	}
+	action, ok := tt.Find("标为已读")
+	if !ok {
+		t.Fatalf("未读消息上没有「标为已读」：%q", tt.Texts())
+	}
+	if action.X < unread.X || action.X+action.W > unread.X+unread.W {
+		t.Errorf("「标为已读」落在卡片外面：按钮 %v，卡片 %v", action, unread)
+	}
+	if action.X < unread.X+unread.W/2 {
+		t.Errorf("「标为已读」应在卡片右上角：按钮 %v，卡片 %v", action, unread)
+	}
+	if action.Y+action.H > unread.Y+unread.H {
+		t.Errorf("「标为已读」超出卡片高度：按钮 %v，卡片 %v", action, unread)
+	}
+}
+
+// 未读行里的勾选框也在卡片内部：点它只改勾选，不会连带打开消息。
+func TestNotificationCheckboxInsideCard(t *testing.T) {
+	a := notificationWindowApp(t)
+	st := a.tabs[notificationTabIndex()]
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+
+	card, ok := tt.Find("打开消息：提到了你")
+	if !ok {
+		t.Fatalf("找不到未读消息卡片：%q", tt.Texts())
+	}
+	box, ok := tt.Find("勾选这条消息")
+	if !ok {
+		t.Fatalf("未读消息上没有勾选框：%q", tt.Texts())
+	}
+	if box.X < card.X || box.X+box.W > card.X+card.W {
+		t.Errorf("勾选框落在卡片外面：勾选框 %v，卡片 %v", box, card)
+	}
+	a.pageName = "list"
+	if err := tt.Click("勾选这条消息"); err != nil {
+		t.Fatalf("点不到勾选框：%v", err)
+	}
+	if a.pageName != "list" {
+		t.Errorf("点勾选框不该打开消息：%q", a.pageName)
+	}
+	if st.selected["n1"] {
+		t.Error("点一下应当取消这条消息的勾选")
+	}
+}
+
+// 点「标为已读」只标记这一条，不会连带打开消息卡片。
+func TestNotificationReadActionDoesNotOpenCard(t *testing.T) {
+	srv, calls := readRecorder(t)
+	a := notificationWindowApp(t)
+	a.autoLoad = true
+	a.client = readClient(srv)
+	// 一页就到底：别让列表的无限滚动在测试里顺手再拉一页，把行换掉。
+	st := a.tabs[notificationTabIndex()]
+	st.page, st.totalPages, st.noMore = 1, 1, true
+	read := make(chan []string, 1)
+	a.onNotificationsRead = func(ids []string) { read <- ids }
+
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	a.pageName = "list"
+	if err := tt.Click("标为已读"); err != nil {
+		t.Fatalf("点不到「标为已读」：%v：%q", err, tt.Texts())
+	}
+	select {
+	case ids := <-read:
+		if len(ids) != 1 || ids[0] != "n1" {
+			t.Errorf("只应标记这一条：%v", ids)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("点「标为已读」没有发起已读请求")
+	}
+	if a.pageName != "list" {
+		t.Errorf("点「标为已读」不该打开消息：%q", a.pageName)
+	}
+	if got := calls(); len(got) != 1 || got[0].body != `{"id":["n1"]}` {
+		t.Errorf("已读请求 = %+v", got)
+	}
+}
+
+// 表态消息的界面：一个人的两种表情合并成一行，用户名只出现一次，不套括号。
+func TestNotificationReactionRowNamesOnce(t *testing.T) {
+	a := notificationWindowApp(t)
+	st := a.tabs[notificationTabIndex()]
+	st.items = []Item{{Key: "r1", Notif: &notification{
+		ID: "r1", Type: "reaction",
+		Payload: mustObject(t, `{"reactionType":"post","postTitle":"一条帖子",
+			"relations":[{"emoji":"👍","username":"jimmy"},
+				{"emoji":"😂","username":"jimmy"}],
+			"reactions":{"👍":1,"😂":1}}`),
+	}}}
+	a.unread = 1
+
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	texts := tt.Texts()
+	mentions := 0
+	for _, text := range texts {
+		mentions += strings.Count(text, "@jimmy")
+		if strings.ContainsAny(text, "（）") {
+			t.Errorf("表态不该套括号：%q", text)
+		}
+	}
+	if mentions != 1 {
+		t.Errorf("用户名出现了 %d 次，应只写一次：%q", mentions, texts)
+	}
+	if !tt.HasText("👍") || !tt.HasText("😂") {
+		t.Errorf("两种表情应合并显示在行内：%q", texts)
+	}
+	if tt.HasText("👍 1") {
+		t.Errorf("只有一次表态时不该写数字：%q", texts)
+	}
+	if !tt.HasText("表态了你的帖子") {
+		t.Errorf("表态消息缺少动词：%q", texts)
+	}
+}
+
+// 多个人表态：名字用顿号连起来写在一处，超出上限的人用「等 N 人」概括，
+// 仍然不套括号。
+func TestNotificationReactionRowOthers(t *testing.T) {
+	a := notificationWindowApp(t)
+	st := a.tabs[notificationTabIndex()]
+	st.items = []Item{{Key: "r2", Notif: &notification{
+		ID: "r2", Type: "reaction",
+		Payload: mustObject(t, `{"reactionType":"comment","postTitle":"一条帖子",
+			"relations":[{"emoji":"👍","username":"a"},{"emoji":"👍","username":"b"},
+				{"emoji":"👍","username":"c"},{"emoji":"👍","username":"d"}],
+			"reactions":{"👍":4}}`),
+	}}}
+
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	texts := tt.Texts()
+	for _, want := range []string{"@a", "@b", "@c", "等 4 人"} {
+		if !tt.HasText(want) {
+			t.Errorf("表态行缺少 %q：%q", want, texts)
+		}
+	}
+	if tt.HasText("@d") {
+		t.Errorf("超出上限的人不该单独点名：%q", texts)
+	}
+	if !tt.HasText("👍 4") {
+		t.Errorf("表情胶囊应带上次数：%q", texts)
+	}
+	for _, text := range texts {
+		if strings.ContainsAny(text, "（）") {
+			t.Errorf("表态不该套括号：%q", text)
 		}
 	}
 }

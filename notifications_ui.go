@@ -457,9 +457,9 @@ func (a *app) reloadNotifications() {
 	a.load(idx, 1)
 }
 
-// notificationRow renders one message: type + time on top, the action
-// sentence, the target title, the comment body and additional details. The
-// whole card opens the target; unread messages get a separate 「已读」 button.
+// notificationRow 一条消息就是一张和列表同宽的卡片：勾选框、未读点与「标为
+// 已读」都在卡片里，表态的表情与人名写在同一行。整张卡片可点，点开的是这条
+// 消息的目标。
 func (a *app) notificationRow(c *ui.Context, it Item) {
 	n := it.Notif
 	if n == nil {
@@ -471,106 +471,149 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 	st := a.tabs[notificationTabIndex()]
 	reading := st != nil && st.reading[n.ID]
 
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Start).Children(func() {
-		// 未读行左侧的勾选框：勾中的消息由「已读选中」一次提交，和站点 Web
-		// 的勾选批量是同一个接口、同一种语义。
-		if unread && st != nil {
-			checked := st.selected[n.ID]
-			ui.Checkbox(c, &checked, "").Shrink(0).Tooltip("勾选后可批量标记已读")
-			if checked != st.selected[n.ID] {
-				setNotificationSelected(st, n.ID, checked)
-			}
-		}
-		card := ui.ButtonBase(c).Grow(1).MinWidth(0).Padding(10, 12).Radius(10).
-			Background(t.Background).Border(1, t.Border)
-		if card.Hovered() {
-			card.Background(t.SurfaceHover)
-		}
-		card.Children(func() {
-			ui.Column(c).Grow(1).Gap(4).Children(func() {
-				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					if unread {
-						ui.Text(c, "●").FontSize(9).TextColor(t.Accent)
+	card := ui.ButtonBase(c).FillWidth().Padding(10, 12).Radius(10).
+		Background(t.Background).Border(1, t.Border)
+	if card.Hovered() {
+		card.Background(t.SurfaceHover)
+	}
+	card.Children(func() {
+		ui.Column(c).FillWidth().Gap(4).Children(func() {
+			// 卡片头：勾选框（仅未读）、未读点、类型、时间，未读时右上角是
+			// 「标为已读」。这些都在卡片内，每行不再为它们各留一条竖带——旧
+			// 写法把勾选框和「已读」摆在卡片外面，正文被挤成窄窄一条。
+			ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+				if unread && st != nil {
+					checked := st.selected[n.ID]
+					ui.Checkbox(c, &checked, "").Shrink(0).
+						Label("勾选这条消息").Tooltip("勾选后可批量标记已读")
+					if checked != st.selected[n.ID] {
+						setNotificationSelected(st, n.ID, checked)
 					}
-					ui.Text(c, v.TypeLabel).FontSize(11).Bold().TextColor(notificationToneColor(t, v.Tone))
-					if v.ActorIsAlias {
-						ui.Text(c, "匿名").FontSize(11).TextColor(t.TextMuted)
-					}
-					if when := relativeTime(n.CreatedAt); when != "" {
-						ui.Text(c, when).FontSize(11).TextColor(t.TextMuted)
-					}
-					ui.Spacer(c).Grow(1)
-					if len(v.ReactionGroups) > 0 {
-						a.notificationReactionLine(c, v.ReactionGroups)
-					}
-				})
-				// 操作者昵称在句首：统一用户标识把头像画在 @昵称前，头像跟着
-				// 13px 的标题字号走；聚合表态等没有操作者的消息保持纯文字。
-				if v.ActorName != "" {
-					a.userTag(c, userTagSpec{
-						Name:     v.ActorName,
-						Avatar:   v.ActorAvatar,
-						Label:    "@" + v.ActorName + " " + v.Action,
-						Size:     13,
-						Bold:     true,
-						MaxLines: 2,
-						Badges:   v.ActorBadges,
-					})
-				} else {
-					ui.Text(c, v.Action).FontSize(13).Bold().MaxLines(2)
 				}
-				if v.TargetTitle != "" {
-					ui.Text(c, "《"+v.TargetTitle+"》").FontSize(12).TextColor(t.Text).SingleLine()
+				if unread {
+					ui.Text(c, "●").FontSize(9).TextColor(t.Accent)
 				}
-				if v.Excerpt != "" {
-					ui.Text(c, v.Excerpt).FontSize(12).TextColor(t.Text).MaxLines(3)
+				ui.Text(c, v.TypeLabel).FontSize(11).Bold().TextColor(notificationToneColor(t, v.Tone))
+				if v.ActorIsAlias {
+					ui.Text(c, "匿名").FontSize(11).TextColor(t.TextMuted)
 				}
-				if v.Detail != "" {
-					ui.Text(c, v.Detail).FontSize(12).TextColor(notificationToneColor(t, v.DetailTone)).MaxLines(2)
+				if when := relativeTime(n.CreatedAt); when != "" {
+					ui.Text(c, when).FontSize(11).TextColor(t.TextMuted)
 				}
-				if len(v.Meta) > 0 {
-					ui.Text(c, strings.Join(v.Meta, " · ")).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+				ui.Spacer(c).Grow(1)
+				if unread {
+					a.notificationReadAction(c, reading, func() { a.markNotificationRead(n.ID) })
 				}
 			})
+			switch {
+			case len(v.Reaction.Groups) > 0:
+				// 表态消息：表情合到一行，人名只写一次（见 notificationReactionLine）。
+				a.notificationReactionLine(c, v.Reaction, v.Action)
+			case v.ActorName != "":
+				// 操作者昵称在句首：统一用户标识把头像画在 @昵称前，头像跟着
+				// 13px 的标题字号走；聚合表态等没有操作者的消息保持纯文字。
+				a.userTag(c, userTagSpec{
+					Name:     v.ActorName,
+					Avatar:   v.ActorAvatar,
+					Label:    "@" + v.ActorName + " " + v.Action,
+					Size:     13,
+					Bold:     true,
+					MaxLines: 2,
+					Badges:   v.ActorBadges,
+				})
+			default:
+				action := v.Action
+				if v.Kind == "reaction" {
+					// 表态消息但服务端没给表情和人名：补一个主语，句子不能只剩动词。
+					action = "有人" + action
+				}
+				ui.Text(c, action).FontSize(13).Bold().MaxLines(2)
+			}
+			if v.TargetTitle != "" {
+				ui.Text(c, "《"+v.TargetTitle+"》").FontSize(12).TextColor(t.Text).SingleLine()
+			}
+			if v.Excerpt != "" {
+				ui.Text(c, v.Excerpt).FontSize(12).TextColor(t.Text).MaxLines(3)
+			}
+			if v.Detail != "" {
+				ui.Text(c, v.Detail).FontSize(12).TextColor(notificationToneColor(t, v.DetailTone)).MaxLines(2)
+			}
+			if len(v.Meta) > 0 {
+				ui.Text(c, strings.Join(v.Meta, " · ")).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+			}
 		})
-		card.OnClick(func() { a.openNotificationTarget(v.TargetURL) })
+	})
+	// 可访问名说明这一下点开的是什么：读屏读得到，测试也按它取卡片的位置。
+	card.Label("打开消息：" + v.Action)
+	card.OnClick(func() { a.openNotificationTarget(v.TargetURL) })
+}
 
-		if unread {
-			a.smallAction(c, "已读", reading, func() { a.markNotificationRead(n.ID) })
+// notificationReadAction 是未读消息卡片右上角的「标为已读」。它只是卡片里的
+// 一个小动作，不占一整列：字小、悬停换强调色，点它不会连带打开消息。
+func (a *app) notificationReadAction(c *ui.Context, busy bool, onClick func()) {
+	t := c.Theme()
+	label := "标为已读"
+	if busy {
+		label = "正在标记…"
+	}
+	b := ui.Button(c, label).Background(ui.Transparent).FontSize(11).
+		Padding(1, 6).Radius(6).TextColor(t.TextMuted)
+	if b.Hovered() {
+		b.TextColor(t.Accent)
+	}
+	b.Disabled(busy).Tooltip("只把这一条标为已读")
+	if b.Clicked() {
+		onClick()
+	}
+}
+
+// notificationReactionLine 画表态消息的「用了什么表情、都有谁」：表情合并成
+// 一行胶囊，不同表情不再各占一组括号；人名去重后只出现一次——同一个人用了两
+// 种表情也只写一个名字——名字之间用顿号相连，超出上限的人用「等 N 人」收尾。
+// 这一行后面接着的就是这条消息要说什么（「表态了你的帖子」）。
+func (a *app) notificationReactionLine(c *ui.Context, o notificationReactionOverview, action string) {
+	t := c.Theme()
+	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
+		for _, g := range o.Groups {
+			a.notificationReactionChip(c, g)
 		}
+		names := o.People
+		if len(names) > notificationReactionNamesMax {
+			names = names[:notificationReactionNamesMax]
+		}
+		for i, u := range names {
+			if i > 0 {
+				ui.Text(c, "、").FontSize(11).TextColor(t.TextMuted)
+			}
+			a.userTag(c, userTagSpec{
+				Name:   u.Name,
+				Avatar: u.Avatar,
+				Label:  "@" + u.Name,
+				Size:   11,
+				Color:  t.TextMuted,
+				Badges: u.Badges,
+			})
+		}
+		if others := notificationReactionOthers(o, len(names)); others > 0 {
+			ui.Textf(c, "等 %d 人", others).FontSize(11).TextColor(t.TextMuted)
+		}
+		ui.Text(c, action).FontSize(12).TextColor(t.Text)
 	})
 }
 
-// notificationReactionLine 是通知头部右侧的聚合表态：每种表情一个计数，
-// 点名的用户用统一用户标识带上头像（11px 昵称 → 16.5px 头像）。最多三组
-// 名单、每组最多三人；宽度受限时折行，不把左侧的类型与时间挤出卡片。
-func (a *app) notificationReactionLine(c *ui.Context, groups []notificationReactionGroup) {
+// notificationReactionChip 是一枚表情胶囊：与详情页的表态摘要是同一套圆角
+// 胶囊。只有一次表态时不写数字，「👍 1」比「👍」更吵。
+func (a *app) notificationReactionChip(c *ui.Context, g notificationReactionGroup) {
 	t := c.Theme()
-	ui.Row(c).Gap(4).AlignItems(ui.Center).Wrap().MaxWidthPercent(60).Children(func() {
-		for gi, g := range groups {
-			if gi > 0 {
-				ui.Text(c, " · ").FontSize(11).TextColor(t.TextMuted)
-			}
-			ui.Textf(c, "%s%d", g.Emoji, g.Count).FontSize(11).TextColor(t.TextMuted)
-			if len(g.Users) == 0 {
-				continue
-			}
-			ui.Text(c, "（").FontSize(11).TextColor(t.TextMuted)
-			for i, u := range g.Users {
-				if i > 0 {
-					ui.Text(c, "、").FontSize(11).TextColor(t.TextMuted)
-				}
-				a.userTag(c, userTagSpec{
-					Name:   u.Name,
-					Avatar: u.Avatar,
-					Label:  "@" + u.Name,
-					Size:   11,
-					Color:  t.TextMuted,
-					Badges: u.Badges,
-				})
-			}
-			ui.Text(c, "）").FontSize(11).TextColor(t.TextMuted)
-		}
+	label := g.Emoji
+	if g.Count > 1 {
+		label = fmt.Sprintf("%s %d", g.Emoji, g.Count)
+	}
+	chip := ui.Box(c).Padding(1, 7).Radius(999).Shrink(0).Center().
+		Background(t.Background).Border(1, t.Border)
+	chip.Label(fmt.Sprintf("%s，%d 次表态", g.Emoji, g.Count))
+	chip.Children(func() {
+		ui.Text(c, label).FontSize(11).TextColor(t.TextMuted).SingleLine()
 	})
 }
 

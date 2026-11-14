@@ -271,7 +271,7 @@ func TestNotificationReactionNamesGetAvatars(t *testing.T) {
 			t.Errorf("%q 的头像宽 %.1f，期望 %.1f", name, got, want)
 		}
 	}
-	if !tt.HasText("👍3") || !tt.HasText("@alice") || !tt.HasText("@bob") {
+	if !tt.HasText("👍 3") || !tt.HasText("@alice") || !tt.HasText("@bob") {
 		t.Errorf("表态文案没有保留：%q", tt.Texts())
 	}
 }

@@ -286,10 +286,9 @@ type notificationView struct {
 	Detail       string
 	DetailTone   string
 	Meta         []string
-	// Reactions 是聚合表态的纯文本（原生通知用）；ReactionGroups 是同一条
-	// 数据的结构化形式，界面据此在点名的用户名旁画头像。
-	Reactions      string
-	ReactionGroups []notificationReactionGroup
+	// Reaction 是表态消息合并后的视图：表情合到一行、点名的人去重后只写一次。
+	// 非表态消息是零值（Groups 为空）。
+	Reaction notificationReactionOverview
 }
 
 var notificationTypeLabels = map[string]string{
@@ -392,8 +391,7 @@ func notificationViewOf(n *notification) notificationView {
 	v.Detail, v.DetailTone = notificationDetail(kind, payload)
 	v.Meta = notificationMeta(kind, payload)
 	if kind == "reaction" {
-		v.ReactionGroups = notificationReactionGroups(payload)
-		v.Reactions = notificationReactionText(v.ReactionGroups)
+		v.Reaction = notificationReactionOverviewOf(payload)
 	}
 	return v
 }
@@ -434,13 +432,15 @@ func notificationAction(kind string, p object) string {
 	case "pandora":
 		return "潘多拉事件已生效"
 	case "reaction":
+		// 表态消息的句首是表情与人名（见界面），这里只留动词，接在「谁」后面
+		// 就是「张三 表态了你的评论」。
 		switch p.str("reactionType") {
 		case "post":
-			return "你的帖子收到了新表态"
+			return "表态了你的帖子"
 		case "comment":
-			return "你的评论收到了新表态"
+			return "表态了你的评论"
 		}
-		return "你的内容收到了新表态"
+		return "表态了你的内容"
 	case "get_reward":
 		switch rewardType {
 		case "post":
@@ -617,31 +617,50 @@ func notificationTargetURL(n *notification, p object, actor string) string {
 	return siteBaseURL + "/notifications"
 }
 
-// notificationReactionUser 是聚合表态里点名的一个用户；头像地址可能为空，
-// 界面会退回昵称首字母。
+// notificationReactionUser 是给这条内容表态的一个人；头像地址可能为空，界面
+// 退回昵称首字母。
 type notificationReactionUser struct {
 	Name   string
 	Avatar string
 	Badges []badgeInfo
 }
 
-// notificationReactionGroup 是一种表情的聚合：数量与点名（最多 3 个）的用户。
+// notificationReactionGroup 是一种表情的表态计数。
 type notificationReactionGroup struct {
 	Emoji string
 	Count int
-	Users []notificationReactionUser
 }
 
-// notificationReactionGroups 把 payload.relations（逐条表态，可能带头像）与
-// payload.reactions（服务端计数）汇总成分表情的聚合视图。
-func notificationReactionGroups(p object) []notificationReactionGroup {
-	counts := map[string]int{}
-	users := map[string][]notificationReactionUser{}
-	var order []string
+// notificationReactionNamesMax 是一条表态消息里最多点名几个人；多出来的人用
+// 「等 N 人」概括，不把昵称铺满整行。
+const notificationReactionNamesMax = 3
 
-	addOrder := func(emoji string) {
+// notificationReactionOverview 是一条表态消息合并后的视图。服务端按表情分别
+// 给计数和点名，同一个人可以用好几种表情；按表情分开展示就得把同一个名字写
+// 好几遍（旧写法是「👍1（@张三）· 😂1（@张三）」）。这里把表情合成一组、人名
+// 去重，界面才写得出一句「👍 😂 张三」。
+type notificationReactionOverview struct {
+	Groups []notificationReactionGroup // 每种表情一条，按表情排序
+	People []notificationReactionUser  // 去重后的表态人，按首次出现排序
+	Total  int                         // 各表情计数之和
+	// Records 是 relations 里逐条表态的条数。Total 比它多说明服务端只给了部分
+	// 点名（relations 被截断），界面据此补一句「等 N 人」，而不是假装已经点全。
+	Records int
+}
+
+// notificationReactionOverviewOf 把 payload.relations（逐条表态，可能带头像）
+// 与 payload.reactions（服务端计数）汇总成合并视图：两个来源都要认，前者给出
+// 人名与头像，后者给出 relations 可能截断后的真实次数。
+func notificationReactionOverviewOf(p object) notificationReactionOverview {
+	var out notificationReactionOverview
+	if p == nil {
+		return out
+	}
+	counts := map[string]int{}
+	seen := map[string]bool{}
+	var order []string
+	note := func(emoji string) {
 		if _, ok := counts[emoji]; !ok {
-			counts[emoji] = 0
 			order = append(order, emoji)
 		}
 	}
@@ -654,15 +673,20 @@ func notificationReactionGroups(p object) []notificationReactionGroup {
 		if emoji == "" {
 			continue
 		}
-		addOrder(emoji)
+		note(emoji)
 		counts[emoji]++
-		if u := r.str("username"); u != "" && !hasReactionUser(users[emoji], u) {
-			users[emoji] = append(users[emoji], notificationReactionUser{
-				Name:   u,
-				Avatar: authorAvatar(r),
-				Badges: decodeBadges(r),
-			})
+		out.Records++
+		name := r.str("username")
+		if name == "" || seen[name] {
+			// 同一个人的第二条表态只算次数，不再写一遍名字。
+			continue
 		}
+		seen[name] = true
+		out.People = append(out.People, notificationReactionUser{
+			Name:   name,
+			Avatar: authorAvatar(r),
+			Badges: decodeBadges(r),
+		})
 	}
 	if ro := p.sub("reactions"); ro != nil {
 		for emoji, raw := range ro {
@@ -670,53 +694,65 @@ func notificationReactionGroups(p object) []notificationReactionGroup {
 			if emoji == "" || n <= 0 {
 				continue
 			}
-			if _, ok := counts[emoji]; !ok {
-				order = append(order, emoji)
-			}
+			note(emoji)
 			counts[emoji] = n
 		}
 	}
 
 	sort.Strings(order)
-	out := make([]notificationReactionGroup, 0, len(order))
 	for _, emoji := range order {
-		count := counts[emoji]
-		if count <= 0 {
-			continue
+		if c := counts[emoji]; c > 0 {
+			out.Groups = append(out.Groups, notificationReactionGroup{Emoji: emoji, Count: c})
+			out.Total += c
 		}
-		shown := users[emoji]
-		if len(shown) > 3 {
-			shown = shown[:3]
-		}
-		out = append(out, notificationReactionGroup{Emoji: emoji, Count: count, Users: shown})
 	}
 	return out
 }
 
-// notificationReactionText 是聚合表态的纯文本形式，原生通知与兼容读取用。
-func notificationReactionText(groups []notificationReactionGroup) string {
-	parts := make([]string, 0, len(groups))
-	for _, g := range groups {
-		part := g.Emoji + strconv.Itoa(g.Count)
-		if len(g.Users) > 0 {
-			names := make([]string, len(g.Users))
-			for i, u := range g.Users {
-				names[i] = u.Name
-			}
-			part += "（@" + strings.Join(names, "、@") + "）"
-		}
-		parts = append(parts, part)
+// notificationReactionOthers 返回还要用「等 N 人」概括的人数，两名以内的表态
+// 用不着它：点名超过上限时按点到的真实人数算，relations 被截断（少于计数）
+// 时退回用计数，都看不出还有别人时返回 0。
+func notificationReactionOthers(o notificationReactionOverview, shown int) int {
+	if len(o.People) > shown {
+		return len(o.People)
 	}
-	return strings.Join(parts, " · ")
+	if o.Records > 0 && o.Total > o.Records {
+		return o.Total
+	}
+	return 0
 }
 
-func hasReactionUser(users []notificationReactionUser, name string) bool {
-	for _, u := range users {
-		if u.Name == name {
-			return true
-		}
+// notificationReactionText 是合并视图的一行纯文本，原生通知用：表情合在一起，
+// 人名用顿号相连、只写一遍，剩下的人用「等 N 人」收尾，不套括号。
+func notificationReactionText(o notificationReactionOverview) string {
+	names := o.People
+	if len(names) > notificationReactionNamesMax {
+		names = names[:notificationReactionNamesMax]
 	}
-	return false
+	var parts []string
+	for _, g := range o.Groups {
+		if g.Count > 1 {
+			parts = append(parts, g.Emoji+strconv.Itoa(g.Count))
+			continue
+		}
+		parts = append(parts, g.Emoji)
+	}
+	text := strings.Join(parts, " ")
+	if len(names) == 0 {
+		return text
+	}
+	list := make([]string, len(names))
+	for i, u := range names {
+		list[i] = "@" + u.Name
+	}
+	who := strings.Join(list, "、")
+	if others := notificationReactionOthers(o, len(names)); others > 0 {
+		who += " 等 " + strconv.Itoa(others) + " 人"
+	}
+	if text == "" {
+		return who
+	}
+	return text + " " + who
 }
 
 // nativeNotice is what the platform actually shows. Target is where a click
@@ -731,11 +767,20 @@ type nativeNotice struct {
 
 // notificationNative turns a message into the native notification text:
 // "@谁 做了什么" as the title, then the target title and the comment body.
+// 表态消息没有单一操作者，句首换成合并后的「表情 + 人名」。
 func notificationNative(n *notification) nativeNotice {
 	v := notificationViewOf(n)
 	title := v.Action
-	if v.ActorName != "" {
+	switch {
+	case v.ActorName != "":
 		title = "@" + v.ActorName + " " + v.Action
+	case len(v.Reaction.Groups) > 0:
+		if summary := notificationReactionText(v.Reaction); summary != "" {
+			title = summary + " " + v.Action
+		}
+	case v.Kind == "reaction":
+		// 没有表情也没有点名：补一个主语，标题不能只剩动词。
+		title = "有人" + v.Action
 	}
 	var lines []string
 	if v.TargetTitle != "" {

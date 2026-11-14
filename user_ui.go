@@ -261,10 +261,8 @@ func (a *app) prefetchItemAvatars(items []Item) {
 		if it.Notif != nil {
 			v := notificationViewOf(it.Notif)
 			urls = append(urls, v.ActorAvatar)
-			for _, g := range v.ReactionGroups {
-				for _, u := range g.Users {
-					urls = append(urls, u.Avatar)
-				}
+			for _, u := range v.Reaction.People {
+				urls = append(urls, u.Avatar)
 			}
 		}
 	}
