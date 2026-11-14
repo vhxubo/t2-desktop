@@ -654,6 +654,9 @@ func TestPandoraEntryTooltipShowsEffect(t *testing.T) {
 
 // 事件名过长时截断：标题栏里的金币数与账号标识不能被挤出窗口。
 func TestPandoraEntryNameTruncates(t *testing.T) {
+	// 事件名里的 expire_at 是固定日期，不冻结「现在」的话过一天这个用例
+	// 就会因为事件过期而看不到事件名（返回的只是默认「潘多拉」）。
+	freezePandoraNow(t)
 	a := pandoraTestApp(t, false)
 	a.pandora = &pandoraState{
 		entryKnown: true,
