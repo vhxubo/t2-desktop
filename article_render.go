@@ -29,9 +29,18 @@ func (a *app) articleBlockAt(size float32) func(c *ui.Context, d *parser.Documen
 	}
 }
 
-// articleBlock 接管含表情或配图的段落 / 标题，size 见 articleBlockAt。
+// articleBlock 接管含表情或配图的段落 / 标题 / 表格，size 见 articleBlockAt。
 func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float32) bool {
 	b := d.Block(i)
+	if b.Kind == parser.Table {
+		// 表格单元格不会经过 Options.Block：Markdown 画表格时直接排每一格。
+		// 所以含图片的表格要整张接管，否则单元格里的图片只剩 [说明]。
+		if !a.tableHasImage(d, i) {
+			return false
+		}
+		a.articleTable(c, d, i, size)
+		return true
+	}
 	if b.Kind != parser.Paragraph && b.Kind != parser.Heading {
 		return false
 	}
@@ -129,13 +138,16 @@ type articleStyle struct {
 }
 
 // articleRenderer 把一个文字片段收成 RichText，并在字符坐标上记录其中
-// 每个表情该画什么。
+// 每个表情该画什么。measure 为真时只收集 span、不创建元素：表格用它量列宽。
 type articleRenderer struct {
 	a       *app
 	th      *markdown.Theme
 	pending []ui.Span
 	runes   int
 	objects map[int]ui.ImageSource
+	measure bool
+	// measured 是测量模式下收到的全部 span，按出现顺序，供调用方整体度量。
+	measured []ui.Span
 }
 
 // articleBaseStyle 返回段落的基准字号、字重与颜色，标题按标题样式，
@@ -190,7 +202,12 @@ func (a *app) articleParagraph(c *ui.Context, d *parser.Document, i int, b *pars
 // 片段仍是可换行的 RichText，配图作为片段之间的独立图片。
 func (a *app) articleMixedParagraph(c *ui.Context, d *parser.Document, i int, size float32) {
 	base := articleBaseStyle(c, d, i, d.Block(i), size)
-	in := d.Inlines(i)
+	a.articleMixedInlines(c, d.Inlines(i), base, ui.Start)
+}
+
+// articleMixedInlines 是 articleMixedParagraph 的实现，也用于表格单元格：
+// 一段内联按顶层配图切成若干段文字，配图在段落内部独占一行。
+func (a *app) articleMixedInlines(c *ui.Context, in []parser.Inline, base articleStyle, align ui.Align) {
 	col := ui.Column(c).Gap(4)
 	col.Children(func() {
 		from := 0
@@ -199,16 +216,16 @@ func (a *app) articleMixedParagraph(c *ui.Context, d *parser.Document, i int, si
 			if n.Kind != parser.Image || a.isEmojiImage(n.Dest) {
 				continue
 			}
-			a.articleTextSegment(c, in, from, k, base)
+			a.articleTextSegment(c, in, from, k, base, align)
 			a.articlePicture(c, n.Dest, parser.PlainText(in[k+1:n.Next]))
 			from = n.Next
 		}
-		a.articleTextSegment(c, in, from, len(in), base)
+		a.articleTextSegment(c, in, from, len(in), base, align)
 	})
 }
 
 // articleTextSegment 渲染段落里的一段连续文字；片段里可能还有表情。
-func (a *app) articleTextSegment(c *ui.Context, in []parser.Inline, from, to int, base articleStyle) {
+func (a *app) articleTextSegment(c *ui.Context, in []parser.Inline, from, to int, base articleStyle, align ui.Align) {
 	if from >= to || articleSegmentEmpty(in, from, to) {
 		return
 	}
@@ -216,6 +233,9 @@ func (a *app) articleTextSegment(c *ui.Context, in []parser.Inline, from, to int
 	root := ui.RichText(c).FontSize(base.size).TextColor(base.color).FillWidth()
 	if base.weight != 0 {
 		root.FontWeight(base.weight)
+	}
+	if align != ui.Start {
+		root.TextAlign(align)
 	}
 	r := &articleRenderer{a: a, th: th, objects: map[int]ui.ImageSource{}}
 	root.Children(func() {
@@ -283,6 +303,197 @@ func (a *app) articlePicture(c *ui.Context, dest, alt string) {
 	}
 }
 
+// tableHasImage 报告表格里是否有图片：单元格里的配图与行内 :code: 表情
+// 都算。只有这样的表格才需要接管，其余仍交给 Markdown 自己排。
+func (a *app) tableHasImage(d *parser.Document, i int) bool {
+	end := d.Block(i).Next
+	for r := i + 1; r < end; r = d.Block(r).Next {
+		cend := d.Block(r).Next
+		for cell := r + 1; cell < cend; cell = d.Block(cell).Next {
+			in := d.Inlines(cell)
+			if a.articleHasImage(in, 0, len(in)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// articleHasImage 递归查找任意图片，包括强调、链接里的图片。与 hasEmojiImageIn
+// 同一套下标规则：Next 是整段内联数组里的绝对下标，递归时传区间。
+func (a *app) articleHasImage(in []parser.Inline, from, to int) bool {
+	for k := from; k < to; k = in[k].Next {
+		n := &in[k]
+		if n.Kind == parser.Image {
+			return true
+		}
+		switch n.Kind {
+		case parser.Emphasis, parser.Strong, parser.Strikethrough, parser.Link:
+			if a.articleHasImage(in, k+1, n.Next) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// articleTable 排一张含图片的表格。版式与 Markdown 自带的表格一致：列宽按
+// 内容测量（上限 TableMaxColumn），单元格内边距、表头底色、隔行底色、列之间
+// 的竖线都由主题决定，整张表比栏宽更宽时横向滚动。
+//
+// 与默认实现的唯一区别是单元格内容由 article_render.go 自己画，因此配图和
+// :code: 表情在表格里也能显示成图片。
+func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size float32) {
+	th := markdown.DefaultTheme(c.Theme())
+	b := d.Block(i)
+	cols := len(b.Align)
+	padX, padY := th.TableCellPadding[0]*th.FontSize, th.TableCellPadding[1]*th.FontSize
+	maxW := th.TableMaxColumn * th.FontSize
+	// 列宽取这一列所有单元格里最宽的一个，表格每次重排都重新量。
+	widths := make([]float32, cols)
+	end := d.Block(i).Next
+	for r := i + 1; r < end; r = d.Block(r).Next {
+		row := d.Block(r)
+		k := 0
+		for cell := r + 1; cell < d.Block(r).Next; cell = d.Block(cell).Next {
+			if k >= cols {
+				break
+			}
+			s := articleBaseStyle(c, d, cell, d.Block(cell), size)
+			if row.Header {
+				s.weight = th.StrongWeight
+			}
+			w := a.articleCellWidth(c, d.Inlines(cell), s, maxW)
+			widths[k] = max(widths[k], min(w, maxW)+2*padX+1)
+			k++
+		}
+	}
+	scroll := ui.ScrollHorizontal(c).AlignSelf(ui.Stretch)
+	scroll.Children(func() {
+		grid := ui.Column(c).Border(1, th.TableBorder).Radius(0.3 * th.FontSize).
+			Clip().Shrink(0).Role(ui.RoleTable)
+		grid.Children(func() {
+			n := 0
+			for r := i + 1; r < end; r = d.Block(r).Next {
+				row := d.Block(r)
+				rowEl := ui.Row(c).Role(ui.RoleRow).AlignItems(ui.Stretch)
+				if row.Header {
+					rowEl.Background(th.TableHeader)
+				} else if n%2 == 1 && th.TableStripe.A > 0 {
+					rowEl.Background(th.TableStripe)
+				}
+				if n > 0 {
+					rowEl.BorderWidth(1, 0, 0, 0).BorderColor(th.TableBorder)
+				}
+				header := row.Header
+				rowEl.Children(func() {
+					k := 0
+					for cell := r + 1; cell < d.Block(r).Next; cell = d.Block(cell).Next {
+						if k >= cols {
+							break
+						}
+						s := articleBaseStyle(c, d, cell, d.Block(cell), size)
+						role := ui.RoleCell
+						if header {
+							s.weight = th.StrongWeight
+							role = ui.RoleColumnHeader
+						}
+						align := ui.Start
+						switch b.Align[k] {
+						case parser.AlignCenter:
+							align = ui.Center
+						case parser.AlignRight:
+							align = ui.End
+						}
+						box := ui.Column(c).Width(widths[k]).Padding(padY, padX).Role(role)
+						if k > 0 {
+							box.BorderWidth(0, 0, 0, 1).BorderColor(th.TableBorder)
+						}
+						box.Children(func() { a.articleCell(c, d, cell, s, align) })
+						k++
+					}
+				})
+				n++
+			}
+		})
+	})
+}
+
+// articleCell 画一格内容：有顶层配图时按「文字 + 图片 + 文字」排，否则就是
+// 一段可换行的文字（其中的表情仍是行内图片）。
+func (a *app) articleCell(c *ui.Context, d *parser.Document, cell int, base articleStyle, align ui.Align) {
+	in := d.Inlines(cell)
+	if a.hasTopLevelPicture(in) {
+		a.articleMixedInlines(c, in, base, align)
+		return
+	}
+	a.articleTextSegment(c, in, 0, len(in), base, align)
+}
+
+// articleCellWidth 估算一格内容需要的宽度：文字按硬换行拆行后取最宽的一行，
+// 配图按已知的自然宽度（还不知道时按列宽上限占位）。
+func (a *app) articleCellWidth(c *ui.Context, in []parser.Inline, base articleStyle, maxW float32) float32 {
+	w := float32(0)
+	for k := 0; k < len(in); k = in[k].Next {
+		if n := &in[k]; n.Kind == parser.Image && !a.isEmojiImage(n.Dest) {
+			// 顶层配图独占一行，它比文字宽时整格按它算。
+			w = max(w, a.articlePictureWidth(n.Dest, maxW))
+		}
+	}
+	th := markdown.DefaultTheme(c.Theme())
+	r := &articleRenderer{a: a, th: th, objects: map[int]ui.ImageSource{}, measure: true}
+	r.inlines(c, in, 0, len(in), base)
+	r.flush(c)
+	return max(w, articleLinesWidth(c, r.measured))
+}
+
+// articlePictureWidth 返回配图在表格里需要的宽度：尺寸已知就用它，还没下载
+// 或解出来时按列宽上限占位（图片到位后表格重排一次，宽度随之收紧）。
+func (a *app) articlePictureWidth(dest string, maxW float32) float32 {
+	if src := a.images.source(dest); src != nil {
+		if w, _ := ui.ImageSize(src); w > 0 {
+			return min(w, maxW)
+		}
+	}
+	if w, _, ok := a.images.cachedSize(dest, imageCacheTemporary); ok && w > 0 {
+		return min(w, maxW)
+	}
+	return maxW
+}
+
+// articleLinesWidth 返回这一串 span 按硬换行拆开后最宽的一行。测量用的是
+// 与绘制同一个 RichText 的度量，所以强调、行内代码与表情对象的宽度都算在内。
+func articleLinesWidth(c *ui.Context, spans []ui.Span) float32 {
+	widest := float32(0)
+	var line []ui.Span
+	flush := func() {
+		if len(line) > 0 {
+			w, _ := c.MeasureText(0, line...)
+			widest = max(widest, w)
+		}
+		line = line[:0]
+	}
+	for _, sp := range spans {
+		if !strings.Contains(sp.Text, "\n") {
+			line = append(line, sp)
+			continue
+		}
+		for i, part := range strings.Split(sp.Text, "\n") {
+			if i > 0 {
+				flush()
+			}
+			if part == "" {
+				continue
+			}
+			p := sp
+			p.Text = part
+			line = append(line, p)
+		}
+	}
+	flush()
+	return widest
+}
+
 func articleInQuote(d *parser.Document, i int) bool {
 	for p := d.Block(i).Parent; p > 0; p = d.Block(p).Parent {
 		if d.Block(p).Kind == parser.Quote {
@@ -323,6 +534,13 @@ func (r *articleRenderer) inlines(c *ui.Context, in []parser.Inline, from, to in
 		case parser.Link:
 			if st.inLink || !articleLinkSafe(n.Dest) {
 				r.inlines(c, in, k+1, n.Next, st)
+				continue
+			}
+			if r.measure {
+				// 量宽度时不建设链接元素，只把里面的文字接着收进 span。
+				ls := st
+				ls.inLink = true
+				r.inlines(c, in, k+1, n.Next, ls)
 				continue
 			}
 			r.flush(c)
@@ -457,5 +675,9 @@ func (r *articleRenderer) flush(c *ui.Context) {
 	}
 	pending := r.pending
 	r.pending = nil
+	if r.measure {
+		r.measured = append(r.measured, pending...)
+		return
+	}
 	ui.RichText(c, pending...)
 }
