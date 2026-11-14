@@ -92,6 +92,9 @@ func TestEnqueueUploadsReplacesPlaceholder(t *testing.T) {
 		t.Errorf("未完成图片数 = %d", got)
 	}
 	a.compose.title = "标题"
+	// node_id 必填：给一个能发出去的节点，下面只考察图片占位符这条拦阻。
+	a.compose.nodes = []composeNode{{ID: "uuid-node", Name: "社区讨论"}}
+	a.compose.nodeID = "uuid-node"
 	if _, err := a.compose.payload(); err == nil ||
 		!strings.Contains(err.Error(), "未处理完") {
 		t.Errorf("发布前应拦住未传完的图片：%v", err)

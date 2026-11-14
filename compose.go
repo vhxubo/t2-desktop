@@ -23,10 +23,9 @@ import (
 // access_guard_*（可见性门槛）。文档明确「随时可以新增字段」，所以解码
 // 一律忽略不认识的字段，不做严格结构体绑定。
 //
-// 文档把 node_id 标成必填，但界面上默认不指定节点：发帖后由站点的 AI
-// 判定分类，请求体里不带 node_id。想发到特定节点时可以在「手动指定节点」
-// 里选，选中才发送；站点若确实要求节点，会把原因作为普通错误显示出来
-// （见 compose_ui.go 的回执区），而不是在本地先拦一道。
+// node_id 按文档必填：客户端发帖必须带节点 uuid，没选节点时在本地就拦住
+// （见 payload），不发出去等站点 400。节点在写作区最下面用两列级联选择，
+// 打开窗口就开始读节点列表，首个可用节点自动预选，用户再按需改选。
 //
 // 付费墙的隐藏内容（restricted_*）没有做：文档只写了「付费 / D20 检定 /
 // 竞拍」这些中文说法，没给 restricted_access_type 的机器可读取值，猜一个
@@ -164,12 +163,10 @@ type composeState struct {
 	// 否则视图每帧重建都会再发一次注定失败的请求（「重试」按钮会清掉它）。
 	nodeFailedAt time.Time
 	// nodePick 是第一列的展开状态；nodeID 是选中的节点 uuid，提交时直接用。
-	// 默认空串：不发送 node_id，发帖后由站点 AI 判定分类，见 payload。
+	// node_id 在文档里必填，所以节点列表一到就自动预选第一个节点（见
+	// autoPickNode），用户改选后不再覆盖。
 	nodePick cascaderState
 	nodeID   string
-	// nodeManual 是「手动指定节点」是否展开。默认收起：界面不展示级联选择，
-	// 也不去拉节点列表，节点这件事不该占发帖时的注意力。
-	nodeManual bool
 
 	// 基础字段：界面只留标题与正文；匿名开关在右侧栏的「发布设置」里。
 	// 文档里 title_prefix / tip / contact / status 这类补充字段不再展示，
@@ -288,8 +285,9 @@ func (a *app) ensureComposeNodes() {
 	// 1) 缓存优先：首帧就有可选项，不用先看一屏「正在读取节点…」。
 	if len(st.nodes) == 0 {
 		if nodes, at, ok := a.nodeSnapshot(); ok {
-			// 只把列表摆进级联选择，不预选：默认由站点 AI 判定分类。
+			// 只把列表摆进级联选择；node_id 必填，顺手预选第一个节点。
 			st.nodes, st.nodesAt, st.nodeLoaded = nodes, at, true
+			st.autoPickNode()
 		}
 	}
 	// 2) 新鲜期内直接用，不再请求。
@@ -334,6 +332,7 @@ func (a *app) ensureComposeNodes() {
 			st.nodes = nodes
 			st.nodeLoaded = true
 			st.nodesAt = a.nodes.at
+			st.autoPickNode()
 			a.notifyNodesLoaded(nil)
 		})
 	}()
@@ -357,8 +356,8 @@ func (a *app) hasAuthScope(want string) bool {
 	return false
 }
 
-// selectedNode 返回级联选择当前选中的节点；没选中时为 nil。默认就是没选中：
-// 不指定节点时发帖后由站点 AI 判定分类。
+// selectedNode 返回级联选择当前选中的节点；没选中时为 nil。node_id 必填，
+// 所以没选中时 payload 会拦下发布。
 func (st *composeState) selectedNode() *composeNode {
 	if st == nil || st.nodeID == "" {
 		return nil
@@ -366,6 +365,58 @@ func (st *composeState) selectedNode() *composeNode {
 	for i := range st.nodes {
 		if st.nodes[i].ID == st.nodeID {
 			return &st.nodes[i]
+		}
+	}
+	return nil
+}
+
+// firstPostableNode 返回可以发帖的节点：nodeID 有效就返回它，否则退回节点表
+// 里第一个可选节点。节点表为空时返回零值。
+//
+// 节点表里顶层分类也可能没有子节点（叶子分类），这种节点自己就是可发的，
+// 所以这里按级联选择的同一套规则挑，不另写一条判定。
+func firstPostableNode(nodes []composeNode, nodeID string) composeNode {
+	for i := range nodes {
+		if nodeID != "" && nodes[i].ID == nodeID {
+			return nodes[i]
+		}
+	}
+	if len(nodes) == 0 {
+		return composeNode{}
+	}
+	opts := nodeCascaderOptions(nodes)
+	for _, o := range opts {
+		if len(o.Children) == 0 {
+			if n := nodeByID(nodes, o.Value); n != nil {
+				return *n
+			}
+		}
+		for _, ch := range o.Children {
+			if n := nodeByID(nodes, ch.Value); n != nil {
+				return *n
+			}
+		}
+	}
+	return nodes[0]
+}
+
+// autoPickNode 在节点列表到位后预选节点：node_id 必填，列表一到就替用户选
+// 第一个，省得每次发帖都从两列目录里翻。已经有有效选择时不动（用户改过就
+// 不再覆盖）。
+func (st *composeState) autoPickNode() {
+	if st == nil || st.selectedNode() != nil {
+		return
+	}
+	if n := firstPostableNode(st.nodes, ""); n.ID != "" {
+		st.nodeID = n.ID
+	}
+}
+
+// nodeByID 按 uuid 找节点；找不到返回 nil。
+func nodeByID(nodes []composeNode, id string) *composeNode {
+	for i := range nodes {
+		if nodes[i].ID == id {
+			return &nodes[i]
 		}
 	}
 	return nil
@@ -570,11 +621,13 @@ func (st *composeState) payload() (map[string]any, error) {
 	}
 
 	p := map[string]any{"title": title}
-	// 默认不指定节点：不发 node_id，发帖后由站点 AI 判定分类。只有手动
-	// 选中了节点才带上 uuid，本地不拦着发布。
-	if node := st.selectedNode(); node != nil {
-		p["node_id"] = node.ID
+	// node_id 是文档里的必填项，而且要是节点 uuid（不是 slug）。没选节点时
+	// 直接拦住：不发出去让站点用 400 回一句「缺少节点」。
+	node := st.selectedNode()
+	if node == nil {
+		return nil, fmt.Errorf("请选择节点")
 	}
+	p["node_id"] = node.ID
 	if st.body != "" {
 		p["content"] = st.body
 	}
@@ -821,14 +874,18 @@ func (c *Client) createTopic(ctx context.Context, payload map[string]any, key st
 }
 
 // resetComposeForm 在发表成功后清空正文与各组件。节点列表与手动指定的节点
-// 都留着：默认本来就不指定（由 AI 判定），而用户特意选过节点时，连着发两篇
-// 通常还是发到同一个节点，不该被一次发布悄悄改回去。
+// 都留着：连着发两篇通常还是发到同一个节点，不该被一次发布悄悄改回去。
 func (st *composeState) resetComposeForm() {
-	nodes, nodesAt, loaded := st.nodes, st.nodesAt, st.nodeLoaded
-	id, pick, manual := st.nodeID, st.nodePick, st.nodeManual
+	nodes, nodesAt, loaded, pick := st.nodes, st.nodesAt, st.nodeLoaded, st.nodePick
+	id := st.nodeID
 	*st = *newComposeState()
-	st.nodes, st.nodesAt, st.nodeLoaded = nodes, nodesAt, loaded
-	st.nodeID, st.nodePick, st.nodeManual = id, pick, manual
+	st.nodes, st.nodesAt, st.nodeLoaded, st.nodePick = nodes, nodesAt, loaded, pick
+	// 节点现在必填：清空表单后若手里还有节点列表，就沿用上一篇的节点，不留空。
+	if st.selectedNode() == nil {
+		st.nodeID = firstPostableNode(nodes, id).ID
+	} else {
+		st.nodeID = id
+	}
 }
 
 // ------------------------------------------------------------------
