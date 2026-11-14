@@ -267,28 +267,46 @@ func articleSegmentEmpty(in []parser.Inline, from, to int) bool {
 	return true
 }
 
-// articlePicture 显示一张正文配图：加载中先占位，加载后按原比例缩到栏宽。
-// 配图是帖子里的外部图片，进临时缓存，过期后自动清理。
+// 配图占位里的说明文案：加载中与失败各一句，测试也据此判断进度有没有退场。
+// 尺寸还不知道的第一张图给一条固定高度的空框，让转圈有个位置。
+const (
+	imageLoadingText                     = "图片加载中…"
+	imageFailedText                      = "图片加载失败"
+	imageUnknownSizePlaceholderH float32 = 72
+)
+
+// articlePicture 显示一张正文配图：仍在下载时转圈并说明，失败后给一句说明，
+// 加载完成后按原比例缩到栏宽。配图是帖子里的外部图片，进临时缓存，过期后
+// 自动清理。
 //
 // 占位按图片的真实宽高来：图片已经在磁盘缓存里时（读文件头，见
 // imageCache.cachedSize），先画一个同样大小的空框，图片解好后原地替换，
-// 下方的文字不会被顶下去。宽高都还不知道的第一张图仍用一行文字占位。
+// 下方的文字不会被顶下去。没有登记过加载的图（无头测试不联网、地址不合法）
+// 沿用原来的静态占位，不假装有一张正在下载的图。
 func (a *app) articlePicture(c *ui.Context, dest, alt string) {
 	th := markdown.DefaultTheme(c.Theme())
 	if alt == "" {
 		alt = "图片"
 	}
+	dest = strings.TrimSpace(dest)
 	src := a.articleImage(dest, imageCacheTemporary)
 	w, h := ui.ImageSize(src)
 	if w <= 0 || h <= 0 {
 		w, h, _ = a.images.cachedSize(dest, imageCacheTemporary)
 	}
-	if src == nil {
+	if src != nil {
+		img := ui.Image(c, src).MaxWidthPercent(100).Radius(4).Label(alt)
+		if w > 0 && h > 0 {
+			img.AspectRatio(w / h)
+		}
+		return
+	}
+	state := a.images.state(dest)
+	if state == imageIdle {
 		if w <= 0 || h <= 0 {
 			ui.Text(c, "["+alt+"]").FontSize(12).TextColor(th.Muted)
 			return
 		}
-		// 尺寸已知、图片还在解：占住和加载后完全相同的版面。
 		ph := ui.Box(c).Width(w).MaxWidthPercent(100).AspectRatio(w / h).
 			Radius(4).Background(th.CodeBackground).Center().Clip()
 		ph.Role(ui.RoleImage).Label(alt)
@@ -297,10 +315,44 @@ func (a *app) articlePicture(c *ui.Context, dest, alt string) {
 		})
 		return
 	}
-	img := ui.Image(c, src).MaxWidthPercent(100).Radius(4).Label(alt)
+	a.articlePicturePending(c, alt, w, h, state)
+}
+
+// articlePicturePending 画「加载中」或「加载失败」的配图占位。尺寸已知时仍
+// 按真实宽高留白，图片到达后下面的文字不会跳；尺寸未知时用固定高度的空框。
+// 失败态不转圈也不重发请求，只说明是哪张图没加载出来。
+//
+// 占位框只设 Label、不设 RoleImage：mygo 会把显式 RoleImage 盒的子树在访问树
+// 里压平，导致里面的转圈（RoleProgress）无法被读取；加载完成后真正的
+// ui.Image 自带图片角色，这里不必抢。
+func (a *app) articlePicturePending(c *ui.Context, alt string, w, h float32, state imageLoadState) {
+	th := markdown.DefaultTheme(c.Theme())
+	box := ui.Box(c).Radius(4).Background(th.CodeBackground).Center().Clip()
 	if w > 0 && h > 0 {
-		img.AspectRatio(w / h)
+		box.Width(w).MaxWidthPercent(100).AspectRatio(w / h)
+	} else {
+		box.FillWidth().Height(imageUnknownSizePlaceholderH)
 	}
+	box.Label(alt)
+	loading := state == imageLoading
+	if loading {
+		box.Busy(true)
+	}
+	box.Children(func() {
+		ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
+			if loading {
+				ui.Spinner(c).Size(16, 16).Label("图片加载中")
+			}
+			text := imageFailedText
+			if loading {
+				text = imageLoadingText
+			}
+			ui.Text(c, text).FontSize(12).TextColor(th.Muted).SingleLine()
+			if !loading {
+				ui.Text(c, alt).FontSize(11).TextColor(th.Muted).MaxLines(2)
+			}
+		})
+	})
 }
 
 // tableHasImage 报告表格里是否有图片：单元格里的配图与行内 :code: 表情

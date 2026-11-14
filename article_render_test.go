@@ -242,3 +242,154 @@ func TestArticleMixedParagraphImageRenders(t *testing.T) {
 	}
 	waitForMarker(t, tt, "段内配图")
 }
+
+// loadingDetailApp 打开一个只有一张配图的详情，图片从调用方给的服务器按需
+// 下载。界面第一帧会停在加载中的占位上。
+func loadingDetailApp(t *testing.T, srv *httptest.Server, picURL string) *app {
+	t.Helper()
+	a := testApp(t)
+	a.openDetail(Item{ShortID: "LOAD001", URL: "https://2libra.com/post/work/LOAD001"})
+	a.detail.topic = &topicDetail{
+		ShortID: "LOAD001", Title: "图片加载", Author: "jimmy",
+		Content: "看图：\n\n![配图](" + picURL + ")\n\n结尾段落标记XYZ。",
+		URL:     "https://2libra.com/post/work/LOAD001",
+	}
+	a.detail.replyLoaded = true
+	a.client.HTTP = srv.Client()
+	a.autoLoad = true
+	return a
+}
+
+// hasImageSpinner 报告当前帧里是否还有配图的转圈：Spinner 在 mygo 里是带
+// RoleProgress 的进度指示器，按角色找（不限定名称）比依赖 Min/Max/Now 或标签
+// 文本更稳——无头测试里这些字段默认是 0，而标签又会被渲染成可见文本。
+func hasImageSpinner(tt *ui.Tester) bool {
+	_, ok := tt.AccessByRole(ui.RoleProgress, "")
+	return ok
+}
+
+// 图片还在下载时占位要显示转圈和中文说明，图片到位后进度一起退场。
+func TestArticlePictureShowsLoadingWhileDownloading(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	pixels := solidPNG(t, 2000, 1000, marker)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release // 卡住响应，让界面停在加载中
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(pixels)
+	}))
+	t.Cleanup(srv.Close)
+	picURL := srv.URL + "/pic.png"
+
+	a := loadingDetailApp(t, srv, picURL)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame() // 这一帧才登记缓存项并发出后台请求
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("配图请求没有发出")
+	}
+	tt.Frame()
+	if !tt.HasText(imageLoadingText) {
+		t.Errorf("加载中没有进度说明：%q", tt.Texts())
+	}
+	if !hasImageSpinner(tt) {
+		t.Errorf("加载中没有转圈：%q", tt.Texts())
+	}
+	if n := countMarker(tt.Image()); n != 0 {
+		t.Errorf("图片还没返回就画了出来：%d 个绿色像素", n)
+	}
+
+	close(release)
+	waitForMarker(t, tt, "加载完成后的配图")
+	tt.Frame()
+	if tt.HasText(imageLoadingText) {
+		t.Errorf("图片到位后仍停在加载中：%q", tt.Texts())
+	}
+	if hasImageSpinner(tt) {
+		t.Error("图片到位后转圈没有退场")
+	}
+}
+
+// 下载失败时占位换成人能看懂的失败说明，不再无限转圈。
+func TestArticlePictureShowsFailureAfterDownloadError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	picURL := srv.URL + "/broken.png"
+
+	a := loadingDetailApp(t, srv, picURL)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	// 无头测试里 publish 不会自己触发重绘，等后台把失败态写好再重建一帧。
+	deadline := time.Now().Add(3 * time.Second)
+	for a.images.state(picURL) != imageFailed {
+		if time.Now().After(deadline) {
+			t.Fatalf("配图没有进入失败状态：%q", tt.Texts())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	tt.Frame()
+	if !tt.HasText(imageFailedText) {
+		t.Errorf("加载失败没有说明：%q", tt.Texts())
+	}
+	if tt.HasText(imageLoadingText) {
+		t.Errorf("失败后仍在转圈：%q", tt.Texts())
+	}
+	if hasImageSpinner(tt) {
+		t.Error("失败后转圈没有退场")
+	}
+}
+
+// 尺寸已知但图片还在加载时，占住真实宽高的空框并显示进度；图片到达后下方
+// 文字不移动，与原来的静态占位一样稳定。
+func TestArticlePictureLoadingKeepsLayout(t *testing.T) {
+	const picURL = "https://example.com/pending.png"
+	a := testApp(t)
+	a.openDetail(Item{ShortID: "LOAD002", URL: "https://2libra.com/post/work/LOAD002"})
+	if err := a.images.writeDisk(picURL, imageCacheTemporary, a.images.generation(),
+		solidPNG(t, 800, 400, marker)); err != nil {
+		t.Fatalf("写入图片缓存失败：%v", err)
+	}
+	// 只登记缓存项、不启动后台下载，把界面停在加载中。
+	a.images.begin(picURL)
+	a.detail.topic = &topicDetail{
+		ShortID: "LOAD002", Title: "图片排版", Author: "jimmy",
+		Content: "看图：\n\n![配图](" + picURL + ")\n\n结尾段落标记XYZ。",
+		URL:     "https://2libra.com/post/work/LOAD002",
+	}
+	a.detail.replyLoaded = true
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if !tt.HasText(imageLoadingText) {
+		t.Errorf("加载中没有进度说明：%q", tt.Texts())
+	}
+	ph, ok := tt.Access("配图")
+	if !ok {
+		t.Fatalf("找不到配图占位：%q", tt.Texts())
+	}
+	if ph.Bounds.H < 100 {
+		t.Errorf("加载中占位没有按真实高度留白：%+v", ph.Bounds)
+	}
+	before, ok := tt.Find("结尾段落标记XYZ。")
+	if !ok {
+		t.Fatalf("找不到配图后面的段落：%q", tt.Texts())
+	}
+
+	a.images.put(picURL, solidBitmap(800, 400, marker))
+	tt.Frame()
+	after, ok := tt.Find("结尾段落标记XYZ。")
+	if !ok {
+		t.Fatalf("配图到达后找不到段落：%q", tt.Texts())
+	}
+	shiftY(t, "配图加载", before.Y, after.Y)
+	if tt.HasText(imageLoadingText) {
+		t.Errorf("图片到达后仍停在加载中：%q", tt.Texts())
+	}
+}

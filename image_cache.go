@@ -40,6 +40,18 @@ const (
 
 type imageCategory int
 
+// imageLoadState 是一个地址的加载阶段。以前缓存只用 src 是否为 nil 区分
+// 「有图」和「没图」，界面分不出「还在下载」与「已经失败」，只能一律留白。
+// 阶段记在缓存项里：加载中才转圈，失败后给一句说明，二者都不会重发请求。
+type imageLoadState uint8
+
+const (
+	imageIdle    imageLoadState = iota // 没登记过：未开启自动加载或地址不合法
+	imageLoading                       // 后台正在下载 / 解码
+	imageLoaded                        // 已解码，source() 能取到图
+	imageFailed                        // 加载失败，本轮不再重试
+)
+
 // imageCacheTTL 是帖子图片的保留时长。头像与表情不看这个时间。
 const imageCacheTTL = 7 * 24 * time.Hour
 
@@ -69,17 +81,31 @@ type imageSize struct {
 	ok   bool
 }
 
-// imageEntry 是一个地址的下载 / 解码状态。src 为 nil 表示还没加载完或加载
-// 失败；失败也记在这里，避免每帧重发注定失败的请求。
+// imageEntry 是一个地址的下载 / 解码状态。src 与 state 一起读：src 为 nil
+// 时 state 说明是仍在加载还是已经失败；失败也记在这里，避免每帧重发注定
+// 失败的请求。
 type imageEntry struct {
-	mu  sync.Mutex
-	src ui.ImageSource
+	mu    sync.Mutex
+	src   ui.ImageSource
+	state imageLoadState
 }
 
+// set 记下最终结果与阶段：解码成功才有图，nil 一律算失败。
 func (e *imageEntry) set(src ui.ImageSource) {
 	e.mu.Lock()
 	e.src = src
+	if src == nil {
+		e.state = imageFailed
+	} else {
+		e.state = imageLoaded
+	}
 	e.mu.Unlock()
+}
+
+func (e *imageEntry) loadState() imageLoadState {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.state
 }
 
 func (e *imageEntry) source() ui.ImageSource {
@@ -135,7 +161,7 @@ func (c *imageCache) begin(raw string) (*imageEntry, bool) {
 	if e, ok := c.entries[raw]; ok {
 		return e, false
 	}
-	e := &imageEntry{}
+	e := &imageEntry{state: imageLoading}
 	c.entries[raw] = e
 	return e, true
 }
@@ -151,6 +177,15 @@ func (c *imageCache) source(raw string) ui.ImageSource {
 		return e.source()
 	}
 	return nil
+}
+
+// state 返回某个地址的加载阶段，没登记过返回 imageIdle。界面只用它决定占位
+// 里要不要转圈，自身不发起任何请求。
+func (c *imageCache) state(raw string) imageLoadState {
+	if e := c.get(strings.TrimSpace(raw)); e != nil {
+		return e.loadState()
+	}
+	return imageIdle
 }
 
 func (c *imageCache) bitmap(raw string) *ui.Bitmap {
@@ -400,11 +435,13 @@ func (c *imageCache) clear() (imageCacheStats, error) {
 // ---- 应用侧的取图入口 ----
 
 // prefetchImage 启动一次后台加载。同一个地址只下一次：成功、失败还是仍在
-// 下载都记在缓存里，不会因为每帧渲染而重发。
+// 下载都记在缓存项的 state 里，不会因为每帧渲染而重发。
 func (a *app) prefetchImage(raw string, cat imageCategory) {
 	if !a.autoLoad {
 		return
 	}
+	// 界面查状态用的是 trim 过的地址，登记缓存项也用同一个键。
+	raw = strings.TrimSpace(raw)
 	if _, err := parseImageURL(raw); err != nil {
 		return
 	}
@@ -470,12 +507,15 @@ func (a *app) loadImageEntry(raw string, cat imageCategory) {
 	if err != nil {
 		e.set(nil)
 		log.Printf("图片加载失败：%v", err)
+		// 失败也要重建界面：否则占位会一直停在「加载中」的转圈上。
+		a.publish(func() {})
 		return
 	}
 	src, err := decodeImageData(raw, data)
 	if err != nil {
 		e.set(nil)
 		log.Printf("图片加载失败：%v", err)
+		a.publish(func() {})
 		return
 	}
 	e.set(src)

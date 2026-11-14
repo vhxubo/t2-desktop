@@ -201,8 +201,8 @@ func (a *app) profileBadgeCard(c *ui.Context, ps *profileState, b badgeWallEntry
 }
 
 // profileBadgeIcon 画徽章墙里的大图标。大图缺失时用小图，但缩小到槽位的
-// 七成，避免把 22×15 的小图放大到 48px 糊成一团。图片还没到就先画名字首字，
-// 加载完成后由图片缓存重绘。
+// 七成，避免把 22×15 的小图放大到 48px 糊成一团。图片还在下载时先转圈，
+// 没登记过加载或加载失败时仍画名字首字，加载完成后由图片缓存重绘。
 func (a *app) profileBadgeIcon(c *ui.Context, b badgeWallEntry, size float32) {
 	t := c.Theme()
 	url, iconSize := b.IconURLLarge, size
@@ -214,6 +214,10 @@ func (a *app) profileBadgeIcon(c *ui.Context, b badgeWallEntry, size float32) {
 	box.Children(func() {
 		if src := a.articleImage(url, imageCacheStable); src != nil {
 			ui.Image(c, src).Size(iconSize, iconSize).Fit(ui.Contain)
+			return
+		}
+		if a.images.state(url) == imageLoading {
+			ui.Spinner(c).Size(size*0.4, size*0.4).Label("徽章图标加载中")
 			return
 		}
 		ui.Text(c, avatarInitials(profileBadgeDisplayName(b))).

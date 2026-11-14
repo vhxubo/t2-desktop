@@ -65,6 +65,36 @@ func imageTestServer(t *testing.T, hits *int32) (*httptest.Server, []byte) {
 	return srv, pixels
 }
 
+// 缓存项要能区分「还在加载」「已解码」「失败」：界面据此决定转圈还是给说明，
+// 三种状态都不会让同一地址重复下载。
+func TestImageCacheTracksLoadState(t *testing.T) {
+	c := newImageCache(t.TempDir())
+	u := "https://example.com/pic.png"
+	if got := c.state(u); got != imageIdle {
+		t.Errorf("没登记过的地址状态 = %v，期望 imageIdle", got)
+	}
+	e, created := c.begin(u)
+	if !created {
+		t.Fatal("第一次登记没有返回 created")
+	}
+	if got := c.state(u); got != imageLoading {
+		t.Errorf("刚登记的状态 = %v，期望 imageLoading", got)
+	}
+	src := solidBitmap(8, 8, marker)
+	e.set(src)
+	if got := c.state(u); got != imageLoaded || c.source(u) != src {
+		t.Errorf("解码成功后状态 = %v，source 是否就位 = %v", got, c.source(u) == src)
+	}
+	e.set(nil)
+	if got := c.state(u); got != imageFailed {
+		t.Errorf("加载失败后状态 = %v，期望 imageFailed", got)
+	}
+	// 状态查询按 trim 后的地址命中，与界面登记缓存项时用的键一致。
+	if got := c.state("  " + u + "  "); got != imageFailed {
+		t.Errorf("带空白的地址状态 = %v，没有命中同一项", got)
+	}
+}
+
 // 头像、表情和帖子配图共用一份全局缓存：同一个地址不管从哪条路径来，
 // 都只下载一次。
 func TestGlobalImageCacheDownloadsEachURLOnce(t *testing.T) {
