@@ -163,6 +163,7 @@ func TestImageCacheCleansExpiredPostImagesOnly(t *testing.T) {
 // 设置窗口的「图片缓存」一块要能看到两类缓存的大小，并且能一键清空。
 func TestSettingsShowsCacheSizeAndClearsIt(t *testing.T) {
 	a := testApp(t)
+	a.settingsTab = settingsTabCache
 	c := a.images
 	postData := strings.Repeat("p", 2048)
 	avatarData := strings.Repeat("a", 1024)

@@ -176,6 +176,7 @@ func TestSettingsWindowCloseBehaviourSavesChoice(t *testing.T) {
 	a := newApp(dir)
 	a.autoLoad = false
 	a.trayReady = true
+	a.settingsTab = settingsTabWindow
 	// 比真实窗口高：这一块在滚动区末尾，无头测试不滚动也能点到。
 	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1400)
 	st.Frame()
@@ -222,6 +223,7 @@ func TestSettingsWindowCloseBehaviourSavesChoice(t *testing.T) {
 // 一定能藏到后台。
 func TestSettingsWindowExplainsUnavailableTray(t *testing.T) {
 	a := testApp(t)
+	a.settingsTab = settingsTabWindow
 	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1100)
 	st.Frame()
 	if !st.HasText("系统托盘当前不可用") {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/netproxy"
 	"github.com/egoist/mygo/ui"
@@ -456,6 +457,7 @@ func TestSettingsProxySectionSaves(t *testing.T) {
 // 确认接线，不碰更新插件的主循环）。
 func TestSettingsCheckForUpdatesWired(t *testing.T) {
 	a := testApp(t)
+	a.settingsTab = settingsTabUpdates
 	clicked := false
 	a.onUpdateCheck = func() { clicked = true }
 	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
@@ -463,7 +465,7 @@ func TestSettingsCheckForUpdatesWired(t *testing.T) {
 	if !st.HasText("检查更新") {
 		t.Fatalf("设置窗口没有检查更新：%q", st.Texts())
 	}
-	if !st.HasText("都会走上方设置的网络代理") {
+	if !st.HasText("都会走「网络代理」里设置的代理") {
 		t.Errorf("设置窗口没有说明检查更新也走代理：%q", st.Texts())
 	}
 	if err := st.Click("检查更新"); err != nil {
@@ -471,6 +473,171 @@ func TestSettingsCheckForUpdatesWired(t *testing.T) {
 	}
 	if !clicked {
 		t.Fatal("点击「检查更新」没有触发更新检查")
+	}
+}
+
+/* ------------------------------------------------------------------
+   设置窗口分栏与代理连通性测试
+---------------------------------------------------------------- */
+
+// 设置按分类分页：首帧只画「网络代理」这一块，其它分类的按钮不再把页面
+// 撑成一条要滚很久的长列表；切页之后只显示新分类的内容。
+func TestSettingsTabsShowOneSectionAtATime(t *testing.T) {
+	a := testApp(t)
+	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
+	st.Frame()
+	for _, want := range []string{"网络代理", "测试连通性", "保存代理设置", "当前生效"} {
+		if !st.HasText(want) {
+			t.Errorf("默认分类缺少 %q：%q", want, st.Texts())
+		}
+	}
+	for _, hidden := range []string{"保存图库设置", "清理缓存", "检查更新", "关闭主窗口时"} {
+		if st.HasText(hidden) {
+			t.Errorf("默认分类不该显示其它页的 %q：%q", hidden, st.Texts())
+		}
+	}
+
+	if err := st.Click("图库"); err != nil {
+		t.Fatal(err)
+	}
+	st.Frame()
+	if a.settingsTab != settingsTabHosts {
+		t.Fatalf("点「图库」后分类 = %d", a.settingsTab)
+	}
+	if !st.HasText("保存图库设置") || st.HasText("保存代理设置") {
+		t.Errorf("切到图库页后内容不对：%q", st.Texts())
+	}
+
+	if err := st.Click("图片缓存"); err != nil {
+		t.Fatal(err)
+	}
+	st.Frame()
+	if !st.HasText("清理缓存") || st.HasText("保存图库设置") {
+		t.Errorf("切到图片缓存页后内容不对：%q", st.Texts())
+	}
+}
+
+// 连通性测试用的是「草稿」配置：不必先保存，请求也必须经过填的代理，
+// 账号密码照常带到代理上。
+func TestProxyCheckUsesConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var hits atomic.Int32
+	var auth atomic.Value
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if v := r.Header.Get("Proxy-Authorization"); v != "" {
+			auth.Store(v)
+		}
+		_, _ = fmt.Fprint(w, proxyTestEnvelope)
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	res := p.Check(proxyConfig{
+		Mode: proxyManual, URL: proxySrv.URL,
+		Username: "alice", Password: "secret",
+	}, "http://upstream.invalid/api/v1/topics/latest?limit=1")
+	if res.Err != nil {
+		t.Fatalf("经代理测试失败：%v", res.Err)
+	}
+	if hits.Load() != 1 {
+		t.Errorf("代理收到 %d 个请求，期望 1", hits.Load())
+	}
+	if res.Status != http.StatusOK || !strings.Contains(res.Via, "手动代理") {
+		t.Errorf("结果 = %+v", res)
+	}
+	if !strings.Contains(res.Message(), "连接正常") {
+		t.Errorf("成功文案 = %q", res.Message())
+	}
+	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("alice:secret"))
+	if got, _ := auth.Load().(string); got != wantAuth {
+		t.Errorf("Proxy-Authorization = %q，期望 %q", got, wantAuth)
+	}
+}
+
+// 直连模式不该把测试请求送进代理；「当前生效」也要说明这次走的是直连。
+func TestProxyCheckDirectModeSkipsProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var proxyHits atomic.Int32
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxyHits.Add(1)
+		_, _ = fmt.Fprint(w, proxyTestEnvelope)
+	}))
+	defer proxySrv.Close()
+	var targetHits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits.Add(1)
+		_, _ = fmt.Fprint(w, proxyTestEnvelope)
+	}))
+	defer target.Close()
+
+	p := newProxyManager(t.TempDir())
+	res := p.Check(proxyConfig{Mode: proxyDirect}, target.URL)
+	if res.Err != nil || res.Status != http.StatusOK {
+		t.Fatalf("直连测试结果 = %+v", res)
+	}
+	if proxyHits.Load() != 0 || targetHits.Load() != 1 {
+		t.Errorf("代理命中 %d 次、目标命中 %d 次", proxyHits.Load(), targetHits.Load())
+	}
+	if !strings.Contains(res.Via, "直连") {
+		t.Errorf("线路说明 = %q", res.Via)
+	}
+}
+
+// 代理连不上时明确报失败，不能把超时或拒绝连接当成「线路可用」。
+func TestProxyCheckReportsUnreachableProxy(t *testing.T) {
+	clearProxyEnv(t)
+	p := newProxyManager(t.TempDir())
+	res := p.Check(proxyConfig{Mode: proxyManual, URL: "http://127.0.0.1:1"},
+		"http://upstream.invalid/api/v1/topics/latest?limit=1")
+	if res.Err == nil || res.Status != 0 {
+		t.Fatalf("连不上的代理却得到结果：%+v", res)
+	}
+	if !strings.Contains(res.Message(), "连通性测试失败") {
+		t.Errorf("失败文案 = %q", res.Message())
+	}
+}
+
+// 无头窗口里点「测试连通性」：进度在页面里，结果用窗口内 toast 报告。
+func TestSettingsProxyCheckButtonReportsResult(t *testing.T) {
+	clearProxyEnv(t)
+	var hits atomic.Int32
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_, _ = fmt.Fprint(w, proxyTestEnvelope)
+	}))
+	defer proxySrv.Close()
+	old := proxyCheckTarget
+	proxyCheckTarget = "http://upstream.invalid/api/v1/topics/latest?limit=1"
+	t.Cleanup(func() { proxyCheckTarget = old })
+
+	a := testApp(t)
+	a.proxyMode = proxyManual
+	a.proxyURL = proxySrv.URL
+	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
+	st.Frame()
+	if !st.HasText("测试连通性") {
+		t.Fatalf("代理页没有测试入口：%q", st.Texts())
+	}
+	if err := st.Click("测试连通性"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if busy, _ := a.proxyCheck.snapshot(); !busy {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("连通性测试没有结束")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	st.Frame()
+	if hits.Load() != 1 {
+		t.Errorf("代理收到 %d 个请求，期望 1", hits.Load())
+	}
+	if !st.HasText("连接正常") {
+		t.Errorf("没有弹出成功 toast：%q", st.Texts())
 	}
 }
 

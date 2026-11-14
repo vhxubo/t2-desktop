@@ -17,6 +17,18 @@ const (
 	settingsWindowMinH   = 420
 )
 
+// 设置窗口按分类分页：五块内容各占一页，不再堆成一条要滚很久的长页面。
+// 标签固定在内容区上方；每页的草稿都绑在 app 字段上，切页不会丢。
+const (
+	settingsTabProxy = iota
+	settingsTabHosts
+	settingsTabCache
+	settingsTabUpdates
+	settingsTabWindow
+)
+
+var settingsTabLabels = []string{"网络代理", "图库", "图片缓存", "更新", "窗口"}
+
 /* ------------------------------------------------------------------
    设置窗口：全局入口、显示与关闭
 ---------------------------------------------------------------- */
@@ -51,6 +63,8 @@ func (a *app) showSettingsWindow() {
 		return
 	}
 	a.reloadImageHostSettings()
+	// 重新开窗口时回到第一页；已经开着的窗口只带到前台，保留用户当前所在页。
+	a.settingsTab = settingsTabProxy
 	win := mygo.NewWindow(mygo.WindowOptions{
 		Title:             "设置",
 		Width:             settingsWindowWidth,
@@ -138,23 +152,36 @@ func (a *app) settingsWindowView(c *ui.Context) {
 		})
 		ui.Divider(c)
 
+		// 分类标签固定在内容区上方：切页只换下面的 section，页面高度跟着
+		// 当前这块内容走，不再由五块加起来决定。
+		ui.Row(c).FillWidth().Padding(2, 12).Children(func() {
+			c.Key("settings-tabs")
+			ui.Tabs(c, &a.settingsTab, settingsTabLabels...)
+		})
+		ui.Divider(c)
+
+		// 每页给一个独立的 key，避免不同分类复用彼此的输入框 / 分段控件状态。
+		c.Key(fmt.Sprintf("settings-page-%d", a.settingsTab))
 		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-			ui.Column(c).FillWidth().Padding(18, 20).Gap(16).Children(func() {
-				a.proxySettingsSection(c)
-				ui.Divider(c)
-				a.updateSettingsSection(c)
-				ui.Divider(c)
-				a.imageCacheSection(c)
-				ui.Divider(c)
-				a.imageHostsSection(c)
-				ui.Divider(c)
-				a.windowSettingsSection(c)
+			ui.Column(c).FillWidth().Padding(18, 20).Children(func() {
+				switch a.settingsTab {
+				case settingsTabHosts:
+					a.imageHostsSection(c)
+				case settingsTabCache:
+					a.imageCacheSection(c)
+				case settingsTabUpdates:
+					a.updateSettingsSection(c)
+				case settingsTabWindow:
+					a.windowSettingsSection(c)
+				default:
+					a.proxySettingsSection(c)
+				}
 			})
 		})
 	})
 }
 
-// settingsSection 画一块带标题的设置区域，三块内容共用同一套版式。
+// settingsSection 画一块带标题的设置区域，各分类共用同一套版式。
 func settingsSection(c *ui.Context, title string, body func()) {
 	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
@@ -168,7 +195,7 @@ func settingsSection(c *ui.Context, title string, body func()) {
 func (a *app) updateSettingsSection(c *ui.Context) {
 	t := c.Theme()
 	settingsSection(c, "更新", func() {
-		ui.Text(c, "应用每天自动检查一次 GitHub Release；检查更新和下载更新包都会走上方设置的网络代理。现在想确认版本可以手动检查，更新窗口会说明结果或列出新版本。").
+		ui.Text(c, "应用每天自动检查一次 GitHub Release；检查更新和下载更新包都会走「网络代理」里设置的代理。现在想确认版本可以手动检查，更新窗口会说明结果或列出新版本。").
 			FontSize(12).TextColor(t.TextMuted).MaxLines(3)
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			if ui.Button(c, "检查更新").Clicked() {

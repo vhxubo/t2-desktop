@@ -57,6 +57,12 @@ type app struct {
 	proxyUser    string
 	proxyPass    string
 	proxyNoProxy string
+	// proxyCheck 是「测试连通性」的进行状态；结果走窗口内 toast，不留在页面里。
+	proxyCheck proxyCheckStatus
+
+	// settingsTab 是设置窗口当前显示的分类。原来五块内容全堆在一个滚动区，
+	// 页面长到要滚很久；分栏后每页只画一块，切换分类不丢已填的草稿。
+	settingsTab int
 
 	// settingsWin 是设置窗口：代理、检查更新与图片缓存都收在这一个窗口里，
 	// 不再是标题栏上的两个按钮。入口在主页侧边栏底部，见 sidebarFooter

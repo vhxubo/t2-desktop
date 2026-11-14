@@ -571,7 +571,8 @@ func TestReplyEmojiPanelUsesPostEmojis(t *testing.T) {
 
 func TestSettingsWindowShowsImageHostsSection(t *testing.T) {
 	a := testApp(t)
-	// 图库 section 排在图片缓存后面，用高一点的无头窗口让按钮落在可视区内。
+	a.settingsTab = settingsTabHosts
+	// 图库一页字段较多，用高一点的无头窗口让按钮落在可视区内。
 	tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
 	tt.Frame()
 	for _, want := range []string{"图库（图床）", "当前使用", "添加自定义图库", "恢复默认", "保存图库设置"} {
@@ -660,6 +661,7 @@ func TestLateUploadResultAfterRemovalIsIgnored(t *testing.T) {
 // 能画出来，官方图床分支覆盖不到这些控件。
 func TestSettingsWindowRendersGenericHostEditor(t *testing.T) {
 	a := testApp(t)
+	a.settingsTab = settingsTabHosts
 	a.hostEditLabel = "SM.MS"
 	tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
 	tt.Frame()
@@ -688,6 +690,7 @@ func TestSettingsWindowRendersAdapterHostEditor(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.label, func(t *testing.T) {
 			a := testApp(t)
+			a.settingsTab = settingsTabHosts
 			a.hostEditLabel = c.label
 			tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
 			tt.Frame()
@@ -708,6 +711,7 @@ func TestSettingsWindowRendersAdapterHostEditor(t *testing.T) {
 // 官方图床只对 Pro 开放：设置里要按当前账号的状态给出不同说明。
 func TestSettingsWindowOfficialHostProNote(t *testing.T) {
 	a := testApp(t)
+	a.settingsTab = settingsTabHosts
 	a.hostEditLabel = "2Libra 官方图床"
 	tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
 	tt.Frame()

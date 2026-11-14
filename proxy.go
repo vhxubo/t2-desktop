@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -360,6 +362,115 @@ func redactedProxy(raw string) string {
 		return raw
 	}
 	return u.Redacted()
+}
+
+/* ------------------------------------------------------------------
+   连通性测试（设置窗口「测试连通性」按钮）
+---------------------------------------------------------------- */
+
+// proxyCheckTimeout 是单次测试的上限：代理不通时不要让用户干等。
+const proxyCheckTimeout = 8 * time.Second
+
+// proxyCheckTarget 是测试访问的地址：公开读端点，不需要登录、响应也很小。
+// 用例会把它换成不可解析的域名，用来确认请求只到达假代理。
+var proxyCheckTarget = apiBaseURL + "/v1/topics/latest?limit=1"
+
+// proxyCheckResult 是一次测试的结果。Status 为 0 表示没拿到 HTTP 响应。
+type proxyCheckResult struct {
+	Via     string        // 这次用的线路说明，和「当前生效」是同一句话
+	Status  int           // 目标或代理返回的 HTTP 状态码
+	Elapsed time.Duration // 从发起请求到拿到响应头
+	Err     error         // 连接 / 传输失败的原因
+}
+
+// proxyForURL 把按目标 URL 解析的规则包成 http.Transport 需要的形状；
+// 直连模式的规则为 nil，transport 的 Proxy 也保持 nil。
+func proxyForURL(fn func(*url.URL) (*url.URL, error)) func(*http.Request) (*url.URL, error) {
+	if fn == nil {
+		return nil
+	}
+	return func(req *http.Request) (*url.URL, error) { return fn(req.URL) }
+}
+
+// Check 用 cfg（可以是设置窗口里还没保存的草稿）解析出的规则访问 target。
+// 它不改正在生效的配置：transport 从共享 transport 复制一份，只换 Proxy，
+// 于是账号密码、「不走代理的地址」等规则照样生效，测试用的连接也不会留在
+// 共享连接池里。没有自建裸客户端，请求不会绕过配置的代理。
+func (p *proxyManager) Check(cfg proxyConfig, target string) proxyCheckResult {
+	cfg = cfg.normalized()
+	if err := cfg.validate(); err != nil {
+		return proxyCheckResult{Err: err}
+	}
+	fn, via := resolveProxy(cfg)
+	tr := p.Transport().Clone()
+	tr.Proxy = proxyForURL(fn)
+	defer tr.CloseIdleConnections()
+
+	ctx, cancel := context.WithTimeout(context.Background(), proxyCheckTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return proxyCheckResult{Via: via, Err: err}
+	}
+	req.Header.Set("User-Agent", "2libra-native-reader/0.1 (+mygo)")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Cache-Control", "no-cache")
+
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   proxyCheckTimeout,
+		// 重定向本身也算一次响应，不再往新地址发第二轮请求。
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	start := time.Now()
+	resp, err := client.Do(req)
+	elapsed := time.Since(start)
+	if err != nil {
+		return proxyCheckResult{Via: via, Elapsed: elapsed, Err: err}
+	}
+	defer resp.Body.Close()
+	// 只读一小段就把连接还回去：测试不需要整页内容。
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
+	return proxyCheckResult{Via: via, Status: resp.StatusCode, Elapsed: elapsed}
+}
+
+// Message 把结果写成一句窗口内 toast 文案。
+func (r proxyCheckResult) Message() string {
+	if r.Err != nil {
+		reason := proxyCheckErrorText(r.Err)
+		if r.Via == "" {
+			return "连通性测试失败：" + reason
+		}
+		return "连通性测试失败 · " + r.Via + " · " + reason
+	}
+	cost := r.Elapsed.Round(time.Millisecond)
+	if cost < time.Millisecond {
+		cost = time.Millisecond
+	}
+	switch {
+	case r.Status >= 500:
+		return fmt.Sprintf("连接失败 · HTTP %d · 用时 %s · %s", r.Status, cost, r.Via)
+	case r.Status >= 400:
+		return fmt.Sprintf("线路已通但接口返回 HTTP %d · 用时 %s · %s", r.Status, cost, r.Via)
+	default:
+		return fmt.Sprintf("连接正常 · HTTP %d · 用时 %s · %s", r.Status, cost, r.Via)
+	}
+}
+
+// proxyCheckErrorText 把传输错误说成人能看懂的原因。
+func proxyCheckErrorText(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "连接超时，请检查代理地址与网络"
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return "连接超时，请检查代理地址与网络"
+	}
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return "域名解析失败：" + dns.Name
+	}
+	return friendlyError(err)
 }
 
 // splitNoProxy 统一处理逗号/分号分隔的例外列表，并识别 Windows 的
