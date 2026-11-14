@@ -255,8 +255,9 @@ type app struct {
 	// closeMode 是「关闭主窗口时」的偏好（见 window_mode.go），落盘在
 	// window.json。只在主线程读写。
 	closeMode *closeModeStore
-	// pet 是桌面宠物（见 pet.go）：一个透明、置顶、不进任务栏的小窗口，通知
-	// 到达时以「它自己说话」的气泡讲一句。petStore 记「要不要显示」的偏好，
+	// pet 是桌面宠物（见 pet.go）：一个透明、置顶、不进任务栏的小窗口，画一杆
+	// 会随未读消息摇摆的黄铜天平；通知到达时以「它自己说话」的气泡讲一句。
+	// petStore 记「要不要显示」的偏好，
 	// 落盘在 pet.json；petShown 表示它此刻是否在屏幕上；petBubble 是气泡的
 	// flyout，挂在宠物窗口上，跟着它移动。都只在主线程读写。
 	pet       *petState

@@ -9,8 +9,13 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 桌面宠物（t2-pet）：一个透明的、始终在最前的小窗口，收到通知时以「它自己
-// 说话」的对话框形式讲一句，右键有菜单，拖动能换位置。
+// 桌面宠物（t2-pet）：一个透明的、始终在最前的小窗口，画的是一杆黄铜天平；
+// 收到通知时以「它自己说话」的对话框形式讲一句，右键有菜单，拖动能换位置。
+//
+// 天平不是静态图标：平时横梁轻轻摇摆，右盘的砝码数跟着未读消息走，未读
+// 越多右边越沉；来消息或说句话时以说话时刻为起点叠一段阻尼摆动，像刚被
+// 放上一颗砝码。姿态全在 pet_ui.go 的 petMotion 里按时间算，不往状态里存
+// 动画中间量。
 //
 // 为什么是同一个进程里的第二个窗口，而不是单独的 t2-pet 应用：
 //   - 刷新令牌每次刷新都会轮换（见 auth.go 的 refreshLocked）：两个进程各存
@@ -48,7 +53,7 @@ const (
 // petBubbleShowFor 是气泡自己收起的时间。提成变量是为了测试能把它缩短。
 var petBubbleShowFor = 12 * time.Second
 
-// petMood 是宠物此刻的表情：平时发呆，说话时张嘴。
+// petMood 是宠物此刻的状态：平时静置，说话时支点上的宝石亮起来。
 type petMood int
 
 const (
@@ -56,7 +61,7 @@ const (
 	petTalk
 )
 
-// petState 是宠物显示的状态：心情、气泡里的标题与正文、点气泡要打开的目标。
+// petState 是宠物显示的状态：当前状态、气泡里的标题与正文、点气泡要打开的目标。
 // 只在主线程读写。
 type petState struct {
 	mood  petMood
@@ -64,7 +69,7 @@ type petState struct {
 	line  string
 	// target 是点气泡时要打开的地方（帖子 / 评论），空表示只读的一句话。
 	target string
-	// at 是气泡出现的时刻，界面上的「刚刚」之类以后从这里算。
+	// at 是气泡出现的时刻，也是天平那一下倾摆的起点（见 petMotion）。
 	at time.Time
 	// open 表示气泡此刻是否在屏幕上。
 	open bool
