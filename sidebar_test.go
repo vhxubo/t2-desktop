@@ -1,7 +1,12 @@
 package main
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -204,6 +209,120 @@ func TestSidebarLogoutAfterLogin(t *testing.T) {
 	}
 	if _, ok := tt.Find("退出登录"); ok {
 		t.Errorf("退出后不该还留着「退出登录」：%q", tt.Texts())
+	}
+}
+
+// 再点一次当前所在的导航项就刷新这一页：回到第一页重新请求，列表换成新内容。
+// 当前页还在加载时不重发，免得两次请求抢结果。
+func TestSidebarReclickRefreshesCurrentPage(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		// 「首页」的列表字段是 posts（见 tabSpecs）。
+		_, _ = io.WriteString(w, envelopeJSON(`{"posts":[{"id":"n1","short_id":"NEW1","title":"再点一次之后的内容"}],"total":1,"page":1,"limit":50,"total_pages":1}`))
+	}))
+	defer srv.Close()
+
+	a := loginApp(t, srv)
+	a.tabs[0].items = []Item{{Key: "old", Title: "旧内容"}}
+	a.tabs[0].loaded = true
+	a.tabs[0].total = 1
+	// 已翻到第 2 页：刷新要回到第 1 页。noMore 挡住无限滚动，
+	// 让这里只有「再点一次」发出的请求。
+	a.tabs[0].page = 2
+	a.tabs[0].noMore = true
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if !tt.HasText("旧内容") {
+		t.Fatalf("开始时应显示旧内容：%q", tt.Texts())
+	}
+
+	label := tabSpecs[0].Label
+	if err := tt.Click(label); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		st := a.tabs[0]
+		if len(st.items) == 1 && st.items[0].Title == "再点一次之后的内容" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("再点「%s」没有重新加载（请求 %d 次，err=%q，items=%d）",
+				label, calls.Load(), st.err, len(st.items))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls.Load() != 1 {
+		t.Errorf("刷新应当只发一次请求，实际 %d 次", calls.Load())
+	}
+	if a.tab != 0 {
+		t.Errorf("再点当前项不该切页：tab=%d", a.tab)
+	}
+	if a.tabs[0].page != 1 {
+		t.Errorf("刷新应回到第 1 页：page=%d", a.tabs[0].page)
+	}
+
+	// 正在加载时再点一次不发新请求。
+	a.tabs[0].loading = true
+	if err := tt.Click(label); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	time.Sleep(20 * time.Millisecond)
+	if calls.Load() != 1 {
+		t.Errorf("加载中再点不该重发请求，实际 %d 次", calls.Load())
+	}
+	a.tabs[0].loading = false
+}
+
+// 点另一个导航项进入那一页时也自动刷新一次：即使这一页之前已经显示过，
+// 进去仍然重新拉第一页；刷新期间旧内容先留着，不闪成空白。
+func TestSidebarSwitchRefreshesEnteredPage(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path != "/v1/topics/hot" {
+			t.Errorf("刷新应当拉当前页的接口，实际 %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, envelopeJSON(`{"posts":[{"id":"h1","short_id":"HOT1","title":"进入热榜后的内容"}],"total":1,"page":1,"limit":50,"total_pages":1}`))
+	}))
+	defer srv.Close()
+
+	a := loginApp(t, srv)
+	// 热榜之前已经显示过（旧内容），进去要换成新内容。
+	hot := 1
+	a.tabs[hot].items = []Item{{Key: "old", Title: "热榜旧内容"}}
+	a.tabs[hot].loaded = true
+	a.tabs[hot].total = 1
+	a.tabs[hot].noMore = true
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	label := tabSpecs[hot].Label
+	if err := tt.Click(label); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		st := a.tabs[hot]
+		if len(st.items) == 1 && st.items[0].Title == "进入热榜后的内容" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("进入「%s」没有自动刷新（请求 %d 次，err=%q，items=%d）",
+				label, calls.Load(), st.err, len(st.items))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls.Load() != 1 {
+		t.Errorf("进入一页应当只刷新一次，实际 %d 次", calls.Load())
+	}
+	if a.tab != hot {
+		t.Errorf("没有切到热榜：tab=%d", a.tab)
+	}
+	if st := a.tabs[hot]; !st.loaded || st.page != 1 {
+		t.Errorf("刷新后应停在第 1 页并标记已加载：page=%d loaded=%v", st.page, st.loaded)
 	}
 }
 

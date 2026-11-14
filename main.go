@@ -526,6 +526,36 @@ func (a *app) reloadCurrent() {
 	a.load(a.tab, 1)
 }
 
+// refreshTab 把某一页的第一页内容重新拉一遍，对应「进入这一页就刷新一次」。
+// 不先清空列表：切页时先看到上一次的内容，新数据到了再整体换掉并回到顶部，
+// 不会闪一下空白。正在加载、正在等授权时不动，免得两次请求抢同一份结果。
+func (a *app) refreshTab(idx int) {
+	if idx < 0 || idx >= len(a.tabs) {
+		return
+	}
+	st := a.tabs[idx]
+	if st == nil || st.loading || st.authWait {
+		return
+	}
+	if spec := tabSpecs[idx]; spec.NeedsAuth && !a.auth.loggedIn() {
+		// 需要登录的页交给选中处理去弹授权，这里不发注定失败的请求。
+		return
+	}
+	st.err = ""
+	st.moreErr = ""
+	a.load(idx, 1)
+}
+
+// reclickTab 是侧边栏一行的点击：点的不是当前这一页就交给选中变化去切页，
+// 点的正是当前这一页就再刷新一次——选中值没变时 Sidebar 不报 Changed，
+// 所以这一下挂在这一行自己的点击上。
+func (a *app) reclickTab(idx int) {
+	if idx != a.tab {
+		return
+	}
+	a.refreshTab(idx)
+}
+
 func (a *app) onAuthChanged(err error) {
 	a.loginPending = false
 	switch {
@@ -682,7 +712,12 @@ func (a *app) view(c *ui.Context) {
 							if s.Kind == kindNotification {
 								continue
 							}
-							ui.SidebarItem(c, tabID(i), tabIcons[i], s.Label)
+							idx := i
+							// 再点一次已经在看的这一页就刷新：回到第一页重新
+							// 拉一遍。选中值没变时 Sidebar 不报 Changed，所以
+							// 刷新挂在这一行自己的点击上。
+							ui.SidebarItem(c, tabID(i), tabIcons[i], s.Label).
+								OnClick(func() { a.reclickTab(idx) })
 						}
 					})
 				}).Grow(1)
@@ -690,12 +725,16 @@ func (a *app) view(c *ui.Context) {
 				if sb.Changed() {
 					if i, ok := tabFromID(a.navSel); ok && i != a.tab {
 						a.tab = i
-						// 点上需要登录的页面（动态）而没登录：统一弹授权窗，
+						// 点到需要登录的页面（动态）而没登录：统一弹授权窗，
 						// 登录成功后自动把这一页拉出来，不用再点一次。
 						if spec := tabSpecs[i]; spec.NeedsAuth && !a.auth.loggedIn() {
 							idx := i
 							a.requestLogin("「"+spec.Label+"」需要登录 2Libra 后才能查看。",
 								func() { a.load(idx, 1) })
+						} else {
+							// 进入这一页就刷新一次：显示过的页换成最新内容，
+							// 没显示过的页也由这一次请求当首屏加载。
+							a.refreshTab(i)
 						}
 					}
 				}
