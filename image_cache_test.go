@@ -293,7 +293,7 @@ func TestBadgeSVGDecodesEmbeddedRaster(t *testing.T) {
 <defs><pattern id="p" width="1" height="1"><use xlink:href="#i"/></pattern>
 <image id="i" width="512" height="512" xlink:href="data:image/png;base64,` + enc + `"/></defs></svg>`)
 
-	src, err := decodeImageData("https://r2.2libra.com/badge/svg/test.svg", svg)
+	src, err := decodeImageData("https://r2.2libra.com/badge/svg/test.svg", imageCacheStable, svg)
 	if err != nil {
 		t.Fatalf("徽章 SVG 解码失败：%v", err)
 	}
@@ -309,7 +309,7 @@ func TestBadgeSVGDecodesEmbeddedRaster(t *testing.T) {
 // 没有内嵌位图的普通 SVG（天气图标、站内线性图标）仍按 SVG 解码。
 func TestPlainSVGStillDecodes(t *testing.T) {
 	svg := []byte(`<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg"><path d="M0 0h22v22H0z"/></svg>`)
-	src, err := decodeImageData("https://r2.2libra.com/weather/svg/fog.svg", svg)
+	src, err := decodeImageData("https://r2.2libra.com/weather/svg/fog.svg", imageCacheStable, svg)
 	if err != nil {
 		t.Fatalf("普通 SVG 解码失败：%v", err)
 	}
@@ -378,5 +378,126 @@ func TestWebPSizeFromHeader(t *testing.T) {
 	}
 	if _, _, ok := webpSize([]byte("not a webp file")); ok {
 		t.Error("非 WebP 数据不应读出尺寸")
+	}
+}
+
+// 解码前先看尺寸：站上的原图常是 3000 像素以上的手机照片，按原样解成
+// RGBA 一张就要几十 MB。头像与正文配图各有上限，超出的等比缩下来。
+func TestDecodeImageScalesDownOversizedBitmap(t *testing.T) {
+	data := solidPNG(t, 3000, 2000, marker)
+
+	src, err := decodeImageData("https://example.com/big.png", imageCacheStable, data)
+	if err != nil {
+		t.Fatalf("头像图解码失败：%v", err)
+	}
+	bmp, ok := src.(*ui.Bitmap)
+	if !ok {
+		t.Fatalf("解出来的是 %T，期望位图", src)
+	}
+	if w, h := bmp.Size(); w != imageDecodeMaxSideStable || h != 171 {
+		t.Errorf("头像缩到 %dx%d，期望 %dx171", w, h, imageDecodeMaxSideStable)
+	}
+
+	src, err = decodeImageData("https://example.com/big.png", imageCacheTemporary, data)
+	if err != nil {
+		t.Fatalf("正文配图解码失败：%v", err)
+	}
+	bmp, ok = src.(*ui.Bitmap)
+	if !ok {
+		t.Fatalf("解出来的是 %T，期望位图", src)
+	}
+	if w, h := bmp.Size(); w != imageDecodeMaxSideTemporary || h != 1067 {
+		t.Errorf("配图缩到 %dx%d，期望 %dx1067", w, h, imageDecodeMaxSideTemporary)
+	}
+}
+
+// 没超上限的小图原样解码，不因为缩放损失清晰度。
+func TestDecodeImageKeepsSmallBitmap(t *testing.T) {
+	data := solidPNG(t, 64, 48, marker)
+	src, err := decodeImageData("https://example.com/small.png", imageCacheStable, data)
+	if err != nil {
+		t.Fatalf("小图解码失败：%v", err)
+	}
+	bmp, ok := src.(*ui.Bitmap)
+	if !ok {
+		t.Fatalf("解出来的是 %T，期望位图", src)
+	}
+	if w, h := bmp.Size(); w != 64 || h != 48 {
+		t.Errorf("小图尺寸 = %dx%d，期望 64x48", w, h)
+	}
+}
+
+// 内存预算兜住「一直滚、一直看新图」：超过预算就淘汰最久没显示的，
+// 最新的一张必须留着，否则下一帧又要重新解码。
+func TestImageCacheTrimsMemoryOverBudget(t *testing.T) {
+	c := newImageCache(t.TempDir())
+	c.budget = 4 << 20 // 4 MB：两张 800x800 的位图就超
+	c.keepWarm = 0     // 测试里不保护「刚显示过」的图
+
+	for _, raw := range []string{"a", "b", "c"} {
+		time.Sleep(2 * time.Millisecond) // 拉开最后使用时间，淘汰顺序才确定
+		c.put(raw, solidBitmap(800, 800, marker))
+	}
+
+	if c.source("a") != nil || c.source("b") != nil {
+		t.Error("超预算后最久没显示的两张应当被淘汰")
+	}
+	if c.source("c") == nil {
+		t.Error("最新的一张被误淘汰了")
+	}
+	if c.bytes > c.memoryBudget() {
+		t.Errorf("淘汰后仍占 %d 字节，超过预算 %d", c.bytes, c.memoryBudget())
+	}
+}
+
+// 头像与表情的长期缓存不参与定期清理，但帖子配图过期删盘时，内存里的
+// 那一份也要跟着丢掉，否则浏览过的图会一直留在内存里。
+func TestCleanExpiredForgetsMemoryEntries(t *testing.T) {
+	c := newImageCache(t.TempDir())
+	const raw = "https://example.com/old.png"
+	c.put(raw, solidBitmap(16, 16, marker))
+	if err := c.writeDisk(raw, imageCacheTemporary, c.generation(), solidPNG(t, 16, 16, marker)); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(c.categoryDir(imageCacheTemporary), imageKey(raw))
+	old := time.Now().Add(-imageCacheTTL - time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	if files, _ := c.cleanExpired(time.Now()); files != 1 {
+		t.Fatalf("清理了 %d 个文件，期望 1 个", files)
+	}
+	if c.source(raw) != nil {
+		t.Error("磁盘上的过期图片删掉了，内存里还留着")
+	}
+	if c.bytes != 0 {
+		t.Errorf("清理后内存占用 = %d，期望 0", c.bytes)
+	}
+}
+
+// EXIF 方向解析：只认 JPEG 的 APP1 段里 tag 0x0112，别的数据一律按正向。
+func TestJPEGOrientationParsesEXIF(t *testing.T) {
+	tiff := []byte{
+		'I', 'I', 42, 0, 8, 0, 0, 0, // 小端 TIFF 头，IFD 在偏移 8
+		1, 0, // 一个 entry
+		0x12, 0x01, // tag 0x0112 = Orientation
+		3, 0, // 类型 SHORT
+		1, 0, 0, 0, // 数量 1
+		6, 0, 0, 0, // 值 6（顺时针 90°）
+		0, 0, 0, 0, // 没有下一个 IFD
+	}
+	segLen := len(tiff) + 2 + 6
+	app1 := []byte{0xFF, 0xE1, byte(segLen >> 8), byte(segLen), 'E', 'x', 'i', 'f', 0, 0}
+	data := append([]byte{0xFF, 0xD8}, append(app1, tiff...)...)
+
+	if got := jpegOrientation(data); got != 6 {
+		t.Errorf("EXIF 方向 = %d，期望 6", got)
+	}
+	if got := jpegOrientation([]byte("not a jpeg")); got != 1 {
+		t.Errorf("非 JPEG 数据的方向 = %d，期望 1", got)
+	}
+	if got := jpegOrientation([]byte{0xFF, 0xD8, 0xFF, 0xD9}); got != 1 {
+		t.Errorf("没有 EXIF 的 JPEG 方向 = %d，期望 1", got)
 	}
 }

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,15 +14,20 @@ import (
 	_ "image/png"
 	"io"
 	"log"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"golang.org/x/image/draw"
+	_ "golang.org/x/image/webp"
 )
 
 // 全应用只有这一份图片缓存：列表与详情里的用户头像、正文与评论里的行内
@@ -59,6 +66,33 @@ const imageCacheTTL = 7 * 24 * time.Hour
 // 会先清一次，之后按这个间隔再清，长期开着的窗口也不会一直堆别人的图。
 const imageCacheCleanupInterval = 6 * time.Hour
 
+// 解码后允许的最长边（像素）。站上的原图常是 3000～4000 像素的手机照片，
+// 磁盘上只有几百 KB，解码成 RGBA 却要 30～48 MB：缓存几十张就是几百 MB。
+// 界面里正文配图最宽约 700 DIP，2 倍屏 1400 像素就够；头像最大显示 56 DIP
+// （用户卡片），3 倍屏 168 像素，256 留了一倍余量。超出的一律等比缩到这个
+// 上限再进缓存。
+const (
+	imageDecodeMaxSideStable    = 256
+	imageDecodeMaxSideTemporary = 1600
+)
+
+// imageDecodeMaxSide 按用途给出解码尺寸上限。
+func imageDecodeMaxSide(cat imageCategory) int {
+	if cat == imageCacheStable {
+		return imageDecodeMaxSideStable
+	}
+	return imageDecodeMaxSideTemporary
+}
+
+// imageCacheMemoryBudget 是内存里已解码图片的估算总量上限。尺寸上限把单张
+// 图压到几 MB 之后，这个预算只用来兜住「一直滚、一直看新图」的情况：
+// 超过就按最后显示时间淘汰最久没露面的，磁盘缓存还在，再看时重新解码即可。
+const imageCacheMemoryBudget int64 = 192 << 20
+
+// imageCacheKeepWarm 是淘汰时跳过的时间窗：这一屏正在画的图刚被取用，
+// 不能淘汰，否则下一帧又要重新解码，画面会闪。
+const imageCacheKeepWarm = 10 * time.Second
+
 // imageCache 是缓存本体。entries 由 UI 线程读写；无窗口测试里 publish 直接
 // 在网络协程执行，所以 map 也必须加锁。
 type imageCache struct {
@@ -72,6 +106,11 @@ type imageCache struct {
 	// gen 在清理缓存时递增：清理前发出的下载即使晚到，也不再写回磁盘，
 	// 否则刚清空的大小会立刻被在途请求补回来。
 	gen uint64
+	// bytes 是 entries 里所有已解码图片的估算占用，超过 budget 时按最后
+	// 显示时间淘汰。budget 默认 imageCacheMemoryBudget，测试里调小来验证淘汰。
+	bytes    int64
+	budget   int64
+	keepWarm time.Duration
 }
 
 // imageSize 是图片的宽高（像素）。ok 为 false 表示磁盘上还没有这张图，
@@ -88,18 +127,50 @@ type imageEntry struct {
 	mu    sync.Mutex
 	src   ui.ImageSource
 	state imageLoadState
+	// size 是这张图解码后的大致字节数，供内存预算统计；lastUsed 是最后一次
+	// 被界面取用的时间（Unix 纳秒），淘汰时按它从旧到新排。两者都用原子量：
+	// 界面每帧都会读 lastUsed，不值得为它加锁。
+	size     atomic.Int64
+	lastUsed atomic.Int64
+	// cache 是登记这张图的那份缓存，set 时把占用变化报回去；key 是它在
+	// entries 里的键，用来确认自己还没被淘汰。测试里手工造出来的条目可以为空。
+	cache *imageCache
+	key   string
 }
 
 // set 记下最终结果与阶段：解码成功才有图，nil 一律算失败。
 func (e *imageEntry) set(src ui.ImageSource) {
+	size := imageSourceBytes(src)
 	e.mu.Lock()
+	old := e.size.Load()
+	// 先记大小再置状态：淘汰逻辑看到 imageLoaded 时读到的必须是最新的大小，
+	// 否则会把这张图按 0 字节「免费」留在内存里。
+	e.size.Store(size)
 	e.src = src
 	if src == nil {
 		e.state = imageFailed
 	} else {
 		e.state = imageLoaded
+		e.lastUsed.Store(time.Now().UnixNano())
 	}
 	e.mu.Unlock()
+	if e.cache != nil {
+		e.cache.adjustMemory(e, old, size)
+	}
+}
+
+// imageSourceBytes 估算一张图在内存里占多少字节：位图按 4 字节/像素算，
+// 再乘 1.33 —— mygo 为缩小绘制会留各级减半的副本，合计约多三分之一。
+// SVG 是矢量，本身只有一份路径数据，按一个小常数计。
+func imageSourceBytes(src ui.ImageSource) int64 {
+	switch s := src.(type) {
+	case *ui.Bitmap:
+		w, h := s.Size()
+		return int64(float64(w) * float64(h) * 4 * 1.33)
+	case *ui.SVG:
+		return 8 << 10
+	}
+	return 0
 }
 
 func (e *imageEntry) loadState() imageLoadState {
@@ -110,8 +181,16 @@ func (e *imageEntry) loadState() imageLoadState {
 
 func (e *imageEntry) source() ui.ImageSource {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.src
+	src := e.src
+	e.mu.Unlock()
+	if src != nil {
+		// 每帧都会走到这里：隔一秒记一次就够，不必为每次取图都写原子量。
+		now := time.Now().UnixNano()
+		if now-e.lastUsed.Load() > int64(time.Second) {
+			e.lastUsed.Store(now)
+		}
+	}
+	return src
 }
 
 // bitmap 只在解码结果是位图时返回它（头像要的是位图）；SVG 表情对头像没有
@@ -129,10 +208,20 @@ func newImageCache(dir string) *imageCache {
 		dir = configDir()
 	}
 	return &imageCache{
-		dir:     filepath.Join(dir, "cache", "images"),
-		entries: make(map[string]*imageEntry),
-		sizes:   make(map[string]imageSize),
+		dir:      filepath.Join(dir, "cache", "images"),
+		entries:  make(map[string]*imageEntry),
+		sizes:    make(map[string]imageSize),
+		budget:   imageCacheMemoryBudget,
+		keepWarm: imageCacheKeepWarm,
 	}
+}
+
+// memoryBudget 返回当前缓存的内存预算，未设置时用默认值。
+func (c *imageCache) memoryBudget() int64 {
+	if c.budget > 0 {
+		return c.budget
+	}
+	return imageCacheMemoryBudget
 }
 
 func (c *imageCache) categoryDir(cat imageCategory) string {
@@ -162,9 +251,63 @@ func (c *imageCache) begin(raw string) (*imageEntry, bool) {
 	if e, ok := c.entries[raw]; ok {
 		return e, false
 	}
-	e := &imageEntry{state: imageLoading}
+	e := &imageEntry{state: imageLoading, cache: c, key: raw}
 	c.entries[raw] = e
 	return e, true
+}
+
+// adjustMemory 把一张图解码后的占用变化记进总量，超出预算时顺手淘汰。
+// 条目在解码期间可能已被淘汰：那时它不再是表里那一个，这笔占用没有主人，
+// 直接丢掉，否则 c.bytes 只涨不落，淘汰会越跑越无效。
+func (c *imageCache) adjustMemory(e *imageEntry, old, size int64) {
+	if old == size {
+		return
+	}
+	c.mu.Lock()
+	if c.entries[e.key] != e {
+		c.mu.Unlock()
+		return
+	}
+	c.bytes += size - old
+	c.trimMemoryLocked()
+	c.mu.Unlock()
+}
+
+// trimMemoryLocked 把内存占用压回预算内：按最后显示时间从旧到新淘汰，
+// imageCacheKeepWarm 内刚取用过的留着，免得把这一屏正在画的图丢掉。
+// 淘汰只是从内存里移除，磁盘缓存还在，再次显示时重新解码即可。
+func (c *imageCache) trimMemoryLocked() {
+	budget := c.memoryBudget()
+	if c.bytes <= budget {
+		return
+	}
+	type candidate struct {
+		key string
+		at  int64
+	}
+	cands := make([]candidate, 0, len(c.entries))
+	for key, e := range c.entries {
+		// 走 loadState 而不是直接读 e.state：state 由 set 在解码协程里改，
+		// 这里在别的协程上读，不取锁就是数据竞争。
+		if e.loadState() != imageLoaded {
+			continue
+		}
+		cands = append(cands, candidate{key: key, at: e.lastUsed.Load()})
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].at < cands[j].at })
+	cutoff := time.Now().Add(-c.keepWarm).UnixNano()
+	target := budget * 3 / 4
+	for _, cd := range cands {
+		if c.bytes <= target || cd.at > cutoff {
+			break
+		}
+		e := c.entries[cd.key]
+		if e == nil {
+			continue
+		}
+		c.bytes -= e.size.Load()
+		delete(c.entries, cd.key)
+	}
 }
 
 // put 直接记下一张已解码的图片，供同步加载与测试注入使用。
@@ -392,6 +535,7 @@ func (c *imageCache) cleanExpired(now time.Time) (files int, bytes int64) {
 	if err != nil {
 		return 0, 0
 	}
+	removed := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -410,9 +554,30 @@ func (c *imageCache) cleanExpired(now time.Time) (files int, bytes int64) {
 		if err := os.Remove(filepath.Join(dir, name)); err == nil {
 			files++
 			bytes += info.Size()
+			removed[name] = true
 		}
 	}
+	c.forgetTemporary(removed)
 	return files, bytes
+}
+
+// forgetTemporary 把磁盘上已经删掉的临时图片对应的内存项一起丢掉。只删
+// 文件不管内存的话，浏览过的帖子配图会一直留在内存里，过期清理等于白做。
+// 键是地址的 SHA-256 文件名，这里反查一遍；清理每 6 小时才跑一次，代价可忽略。
+func (c *imageCache) forgetTemporary(names map[string]bool) {
+	if len(names) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for raw, e := range c.entries {
+		if !names[imageKey(raw)] {
+			continue
+		}
+		c.bytes -= e.size.Load()
+		delete(c.entries, raw)
+		delete(c.sizes, raw)
+	}
 }
 
 // clear 清空内存与磁盘缓存，返回被释放的空间。清理后递增 gen，让在途的
@@ -423,6 +588,7 @@ func (c *imageCache) clear() (imageCacheStats, error) {
 	c.gen++
 	c.entries = make(map[string]*imageEntry)
 	c.sizes = make(map[string]imageSize)
+	c.bytes = 0
 	c.mu.Unlock()
 	var errs []error
 	for _, cat := range []imageCategory{imageCacheStable, imageCacheTemporary} {
@@ -460,13 +626,164 @@ var embeddedRasterPattern = regexp.MustCompile(`data:image/(?:png|jpe?g|gif|webp
 // 而站内徽章小图正是「SVG 包一张位图」：直接交给 ui.DecodeImage 会得到一张
 // 尺寸正确但什么都没有的 SVG。这里先把内嵌位图抽出来解码，抽不到再按普通
 // SVG / 位图处理（天气图标就是普通矢量 SVG）。
-func decodeImageData(raw string, data []byte) (ui.ImageSource, error) {
+func decodeImageData(raw string, cat imageCategory, data []byte) (ui.ImageSource, error) {
 	if strings.Contains(raw, "/badge/svg/") || strings.Contains(raw, "/weather/svg/") {
 		if src := embeddedRasterImage(data); src != nil {
 			return src, nil
 		}
 	}
-	return ui.DecodeImage(data)
+	return decodeBoundedImage(data, imageDecodeMaxSide(cat))
+}
+
+// decodeBoundedImage 解码一张位图，并把超过 maxSide 的图等比缩下来再交给
+// mygo 建位图。原图有多大就解多大是内存暴涨的根源：一张 3072×4096 的
+// JPEG 在磁盘上只有 300 KB，解成 RGBA 要 48 MB，缓存十几张就是几百 MB。
+//
+// 标准库认不出的数据（例如 SVG）交回 ui.DecodeImage，它还会再试一次 SVG，
+// 与改造前的行为一致。
+func decodeBoundedImage(data []byte, maxSide int) (ui.ImageSource, error) {
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return ui.DecodeImage(data)
+	}
+	if maxSide > 0 {
+		img = scaleToMaxSide(img, maxSide)
+	}
+	// 先缩再转：EXIF 只影响方向，缩放不改变长边，顺序换过来结果一样，
+	// 但转置放在小图上做能省一个数量级的像素操作。
+	img = applyJPEGOrientation(img, data)
+	return ui.NewBitmap(img), nil
+}
+
+// scaleToMaxSide 把长边超过 maxSide 的图等比缩到 maxSide，没超的原样返回。
+func scaleToMaxSide(img image.Image, maxSide int) image.Image {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	long := max(w, h)
+	if long <= maxSide || long == 0 {
+		return img
+	}
+	scale := float64(maxSide) / float64(long)
+	nw := max(1, int(math.Round(float64(w)*scale)))
+	nh := max(1, int(math.Round(float64(h)*scale)))
+	dst := image.NewRGBA(image.Rect(0, 0, nw, nh))
+	// ApproxBiLinear 在这个尺寸上的画质与速度最平衡：双三次对照片没有
+	// 肉眼可见的提升，却要慢好几倍。
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, b, draw.Src, nil)
+	return dst
+}
+
+// applyJPEGOrientation 按 JPEG 的 EXIF 方向把图转正。mygo 的 DecodeImage
+// 内部会做这件事，我们自己解码后要补上，否则手机竖拍的照片会横过来。
+func applyJPEGOrientation(img image.Image, data []byte) image.Image {
+	if o := jpegOrientation(data); o > 1 {
+		return orientImage(img, o)
+	}
+	return img
+}
+
+// jpegOrientation 读 JPEG 的 EXIF Orientation（1～8），不是 JPEG、没有
+// EXIF 或解析失败都返回 1（正向）。只扫到图像数据之前，不做整图解析。
+func jpegOrientation(data []byte) int {
+	if len(data) < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+		return 1
+	}
+	for i := 2; i+4 <= len(data); {
+		if data[i] != 0xFF {
+			return 1
+		}
+		marker := data[i+1]
+		// 无长度字段的标记：填充、RSTn 与 SOI 直接跳过。
+		if marker == 0xFF || marker == 0x01 || (marker >= 0xD0 && marker <= 0xD8) {
+			i += 2
+			continue
+		}
+		if marker == 0xDA { // 到了压缩数据，EXIF 只可能在前面的段里
+			return 1
+		}
+		segLen := int(data[i+2])<<8 | int(data[i+3])
+		if segLen < 2 || i+2+segLen > len(data) {
+			return 1
+		}
+		if marker == 0xE1 && segLen >= 8 && string(data[i+4:i+8]) == "Exif" {
+			// "Exif" 之后两个 0 字节，再往后才是 TIFF 头。
+			return tiffOrientation(data[i+10 : i+2+segLen])
+		}
+		i += 2 + segLen
+	}
+	return 1
+}
+
+// tiffOrientation 在 TIFF 头里找 Orientation（tag 0x0112）。
+func tiffOrientation(t []byte) int {
+	if len(t) < 8 {
+		return 1
+	}
+	var bo binary.ByteOrder
+	switch string(t[:2]) {
+	case "II":
+		bo = binary.LittleEndian
+	case "MM":
+		bo = binary.BigEndian
+	default:
+		return 1
+	}
+	if bo.Uint16(t[2:4]) != 42 {
+		return 1
+	}
+	off := int(bo.Uint32(t[4:8]))
+	if off < 8 || off+2 > len(t) {
+		return 1
+	}
+	n := int(bo.Uint16(t[off : off+2]))
+	for k := 0; k < n; k++ {
+		e := off + 2 + k*12
+		if e+12 > len(t) {
+			return 1
+		}
+		if bo.Uint16(t[e:e+2]) == 0x0112 {
+			if o := int(bo.Uint16(t[e+8 : e+10])); o >= 1 && o <= 8 {
+				return o
+			}
+			return 1
+		}
+	}
+	return 1
+}
+
+// orientImage 按 EXIF 方向值（2～8）把图摆正。只在解码协程里调用，图已经
+// 缩到上限以内，逐像素转置的代价可以接受。
+func orientImage(img image.Image, o int) image.Image {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	dw, dh := w, h
+	if o >= 5 { // 5～8 要旋转 90°，宽高互换
+		dw, dh = h, w
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			var nx, ny int
+			switch o {
+			case 2:
+				nx, ny = w-1-x, y
+			case 3:
+				nx, ny = w-1-x, h-1-y
+			case 4:
+				nx, ny = x, h-1-y
+			case 5:
+				nx, ny = y, x
+			case 6:
+				nx, ny = h-1-y, x
+			case 7:
+				nx, ny = h-1-y, w-1-x
+			case 8:
+				nx, ny = y, w-1-x
+			}
+			dst.Set(nx, ny, img.At(b.Min.X+x, b.Min.Y+y))
+		}
+	}
+	return dst
 }
 
 // embeddedRasterImage 解码 SVG 里第一张内嵌位图。没有内嵌位图或 base64 坏了
@@ -482,7 +799,9 @@ func embeddedRasterImage(data []byte) ui.ImageSource {
 	if err != nil {
 		return nil
 	}
-	src, err := ui.DecodeImage(raster)
+	// 内嵌位图同样按头像那一档压尺寸：徽章图标是 512×512 的 PNG，徽章墙
+	// 一屏几十个，按原样解出来就是几十 MB。
+	src, err := decodeBoundedImage(raster, imageDecodeMaxSideStable)
 	if err != nil {
 		return nil
 	}
@@ -497,7 +816,7 @@ func (a *app) loadImageEntry(raw string, cat imageCategory) {
 	}
 	gen := a.images.generation()
 	if data, ok := a.images.readDisk(raw, cat); ok {
-		if src, err := decodeImageData(raw, data); err == nil {
+		if src, err := decodeImageData(raw, cat, data); err == nil {
 			e.set(src)
 			a.publish(func() {})
 			return
@@ -512,7 +831,7 @@ func (a *app) loadImageEntry(raw string, cat imageCategory) {
 		a.publish(func() {})
 		return
 	}
-	src, err := decodeImageData(raw, data)
+	src, err := decodeImageData(raw, cat, data)
 	if err != nil {
 		e.set(nil)
 		log.Printf("图片加载失败：%v", err)
@@ -543,7 +862,7 @@ func (a *app) loadImageNow(raw string, cat imageCategory) (ui.ImageSource, error
 			return nil, err
 		}
 	}
-	src, err := decodeImageData(raw, data)
+	src, err := decodeImageData(raw, cat, data)
 	if err != nil {
 		if cached {
 			a.images.forgetDisk(raw, cat)
