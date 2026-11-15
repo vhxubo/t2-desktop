@@ -217,3 +217,28 @@ a pure white page.
 - [ ] `CGO_ENABLED=0 go test ./...` 全绿
 - [ ] `go tool mygo vet .` 与 `gofmt -l .` 干净
 - [ ] UI 文案与测试、API 字段与文档一致
+
+## 发版步骤（本地优先，远程人工）
+
+代理可独立完成「本地准备」，但**触发 CI 公开发版的远程推送必须由人工执行**——
+推 tag 即触发构建并对外发布，不是代理该替人做的决定。
+
+1. **本地先过发布门禁**：在本地跑与 `release-gate` 一致的命令，全绿才继续——
+   `CGO_ENABLED=0 go build ./...`、`gofmt -l .` 无输出、
+   `go tool mygo vet .`、`CGO_ENABLED=0 go test ./...`、且无
+   `TODO`/`FIXME`/`panic("not implemented")` 占位。门禁不过先修，不进下一步。
+2. **改版本号**：`mygo.json` 的 `version` 递增（如 `0.2.0` → `0.3.0`）；预发布带
+   `-beta.1` 之类的后缀（只发 prerelease，不占 `latest`）。
+3. **写更新日志**：把 `CHANGELOG.md` 顶部「未发布」小节改成 `## <version>`，并
+   在其上新开一个空的「未发布」占位（lead-in 文案保留）。
+4. **本地提交**：英文信息 `chore: release vX.Y.Z`（见上方「提交信息」硬规则）。
+5. **本地打 tag**：`git tag v<version>`，tag 必须与 `mygo.json` 的 `version` 完全
+   相等（含预发布后缀），否则 release 工作流会在校验步 `exit 1`。
+6. **推远程交由人工**：代理**不**自动 `git push`。由人在本地确认后执行
+   `git push origin main && git push origin v<version>`，推送 tag 即触发 CI：
+   `release-gate` 门禁 → 多平台构建并签名更新包 → 自动发布为 `latest`
+   （带预发布后缀则只发 prerelease）。仓库须为 Public，且配置了
+   `MYGO_UPDATER_PRIVATE_KEY` secret，否则构建作业会报错退出。
+
+> 详细 CI 机制见 `RELEASE.md`；`CHANGELOG.md` 的 `<version>` 小节同时作为 GitHub
+> Release 说明与应用内更新窗口的发布说明，写清本次改动。
