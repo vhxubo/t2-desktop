@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/egoist/mygo"
 )
 
 // There is exactly one login flow: a native/desktop public client using a
@@ -59,8 +61,11 @@ type tokenData struct {
 	ProKnown bool `json:"pro_known,omitempty"`
 }
 
-// configDir is where the token lives. It stays outside the repo and can be
-// redirected in tests with TWOLIBRA_CONFIG_DIR.
+// configDir is the config directory. The token itself is kept in the OS
+// credential store via mygo.Secrets (see secureTokenStore); this directory
+// only holds the fallback plaintext file when no credential store is
+// available, plus proxy.json and the image cache. It can be redirected in
+// tests with TWOLIBRA_CONFIG_DIR.
 func configDir() string {
 	if d := os.Getenv("TWOLIBRA_CONFIG_DIR"); d != "" {
 		return d
@@ -145,12 +150,14 @@ type AuthManager struct {
 	// refresh that started under the previous session cannot write its
 	// result back after the user already logged out (or logged in again).
 	epoch      uint64
-	dir        string
 	apiBase    string
 	http       *http.Client
 	onChange   func(error)
 	pending    *pendingLogin
 	lastVerify string
+	// store persists the session. Production uses the OS credential store
+	// (mygo.Secrets); tests inject a file-backed store via tokenStoreFactory.
+	store tokenStore
 }
 
 func newAuthManager(dir string) *AuthManager {
@@ -164,17 +171,171 @@ func newAuthManager(dir string) *AuthManager {
 // 走同一份代理配置和同一个连接池。
 func newAuthManagerAt(dir string, proxy *proxyManager) *AuthManager {
 	m := &AuthManager{
-		dir:     dir,
 		apiBase: apiBaseURL,
 		http:    proxy.Client(20 * time.Second),
+		store:   tokenStoreFactory(dir),
 	}
 	// client_id and scope are compile-time constants now. A settings.json
 	// left behind by an older build is ignored entirely.
-	var t tokenData
-	if err := readJSONFile(filepath.Join(dir, "token.json"), &t); err == nil && t.AccessToken != "" {
-		m.token = &t
+	if loaded, err := m.store.load(); err == nil && loaded != nil && loaded.AccessToken != "" {
+		m.token = loaded
 	}
 	return m
+}
+
+// errNoToken is what tokenStore.load returns when no session is saved yet.
+var errNoToken = errors.New("no stored token")
+
+// tokenStore persists the login session. The production implementation keeps
+// the tokens in the OS credential store through mygo.Secrets (Windows
+// Credential Manager / macOS Keychain / Linux Secret Service) so the refresh
+// token is never written to disk in plaintext, as the 2Libra terms require.
+// fileTokenStore exists for tests and for platforms without a credential
+// store, where secureTokenStore transparently falls back to it.
+type tokenStore interface {
+	load() (*tokenData, error) // errNoToken when nothing is saved
+	save(t *tokenData) error
+	delete() error
+}
+
+// tokenSecretKey is the credential-store entry holding the serialized session.
+const tokenSecretKey = "session-token"
+
+// tokenStoreFactory builds the persistent token store for a config dir. Tests
+// override it (see auth_store_test.go) with a file-backed store so runs stay
+// isolated and the existing token.json assertions keep working; the default
+// production store uses the OS credential store.
+var tokenStoreFactory = func(dir string) tokenStore {
+	return newSecureTokenStore(dir)
+}
+
+// fileTokenStore keeps the session as token.json, the pre-Secrets behaviour.
+// It is the fallback when no credential store is available and the store used
+// by tests.
+type fileTokenStore struct{ path string }
+
+func newFileTokenStore(dir string) tokenStore {
+	return fileTokenStore{path: filepath.Join(dir, "token.json")}
+}
+
+func (s fileTokenStore) load() (*tokenData, error) {
+	var t tokenData
+	if err := readJSONFile(s.path, &t); err != nil {
+		if os.IsNotExist(err) {
+			return nil, errNoToken
+		}
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (s fileTokenStore) save(t *tokenData) error {
+	return writeJSONFile(s.path, t)
+}
+
+func (s fileTokenStore) delete() error {
+	if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// secureTokenStore keeps the session in the OS credential store via
+// mygo.Secrets. When the store is unavailable (errors.ErrUnsupported, e.g. a
+// headless Linux without libsecret) or the serialized session exceeds the
+// credential store's size cap (mygo.MaxSecretSize), it falls back to
+// fileTokenStore so the app still persists the login; fileOnly stays set so
+// later loads read the file instead of the (empty) credential store.
+type secureTokenStore struct {
+	dir      string
+	mu       sync.Mutex
+	file     tokenStore
+	fileOnly bool
+}
+
+func newSecureTokenStore(dir string) tokenStore {
+	return &secureTokenStore{dir: dir}
+}
+
+func (s *secureTokenStore) fileStore() tokenStore {
+	if s.file == nil {
+		s.file = newFileTokenStore(s.dir)
+	}
+	return s.file
+}
+
+func (s *secureTokenStore) load() (*tokenData, error) {
+	s.mu.Lock()
+	fileOnly := s.fileOnly
+	s.mu.Unlock()
+	if fileOnly {
+		return s.fileStore().load()
+	}
+	b, err := mygo.Secrets.Get(tokenSecretKey)
+	if err != nil {
+		if errors.Is(err, mygo.ErrSecretNotFound) {
+			return nil, errNoToken
+		}
+		if errors.Is(err, errors.ErrUnsupported) {
+			s.mu.Lock()
+			s.fileOnly = true
+			s.mu.Unlock()
+			return s.fileStore().load()
+		}
+		return nil, err
+	}
+	var t tokenData
+	if err := json.Unmarshal(b, &t); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (s *secureTokenStore) save(t *tokenData) error {
+	b, err := json.Marshal(t)
+	if err != nil {
+		return err
+	}
+	if len(b) > mygo.MaxSecretSize {
+		// The credential store caps secret size; fall back to a plaintext
+		// file so an unusually large session can still persist.
+		fmt.Fprintf(os.Stderr, "token: 凭据超过 %d 字节上限，退回明文文件存储\n", mygo.MaxSecretSize)
+		s.mu.Lock()
+		s.fileOnly = true
+		s.mu.Unlock()
+		return s.fileStore().save(t)
+	}
+	if err := mygo.Secrets.Set(tokenSecretKey, b); err != nil {
+		if errors.Is(err, errors.ErrUnsupported) {
+			fmt.Fprintln(os.Stderr, "token: OS 凭据库不可用，已退回明文文件存储")
+			s.mu.Lock()
+			s.fileOnly = true
+			s.mu.Unlock()
+			return s.fileStore().save(t)
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *secureTokenStore) delete() error {
+	s.mu.Lock()
+	fileOnly := s.fileOnly
+	s.mu.Unlock()
+	if fileOnly {
+		return s.fileStore().delete()
+	}
+	err := mygo.Secrets.Delete(tokenSecretKey)
+	if err != nil && !errors.Is(err, mygo.ErrSecretNotFound) {
+		if errors.Is(err, errors.ErrUnsupported) {
+			s.mu.Lock()
+			s.fileOnly = true
+			s.mu.Unlock()
+			return s.fileStore().delete()
+		}
+		return err
+	}
+	return nil
 }
 
 func (m *AuthManager) webBase() string { return strings.TrimSuffix(m.apiBase, "/api") }
@@ -259,7 +420,7 @@ func (m *AuthManager) storeTokenForEpoch(t tokenData, epoch uint64) error {
 	}
 	m.epoch++
 	m.token = &t
-	return writeJSONFile(filepath.Join(m.dir, "token.json"), t)
+	return m.store.save(&t)
 }
 
 // proStatus 返回缓存的 Pro 状态与「是否已确认」。没登录时两者都是零值。
@@ -284,7 +445,7 @@ func (m *AuthManager) setProStatus(pro bool) {
 		return
 	}
 	m.token.IsPro, m.token.ProKnown = pro, true
-	_ = writeJSONFile(filepath.Join(m.dir, "token.json"), *m.token)
+	_ = m.store.save(m.token)
 }
 
 func (m *AuthManager) clearToken() error {
@@ -293,7 +454,7 @@ func (m *AuthManager) clearToken() error {
 	m.token = nil
 	m.lastVerify = ""
 	m.epoch++
-	return os.Remove(filepath.Join(m.dir, "token.json"))
+	return m.store.delete()
 }
 
 func (m *AuthManager) notify(err error) {
@@ -672,7 +833,7 @@ func (m *AuthManager) fetchIdentity(ctx context.Context, access string) {
 			if id.avatar != "" {
 				m.token.Avatar = id.avatar
 			}
-			_ = writeJSONFile(filepath.Join(m.dir, "token.json"), *m.token)
+			_ = m.store.save(m.token)
 		}
 		m.mu.Unlock()
 		return

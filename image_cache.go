@@ -121,8 +121,9 @@ func (e *imageEntry) bitmap() *ui.Bitmap {
 	return b
 }
 
-// newImageCache 把缓存目录定在配置目录下的 cache/images：与 token.json、
-// proxy.json 同一处，测试通过 TWOLIBRA_CONFIG_DIR 或临时目录隔离。
+// newImageCache 把缓存目录定在配置目录下的 cache/images：与令牌（OS 凭据库，
+// 无凭据库时退回 token.json）、proxy.json 同一处，测试通过 TWOLIBRA_CONFIG_DIR
+// 或临时目录隔离。
 func newImageCache(dir string) *imageCache {
 	if dir == "" {
 		dir = configDir()

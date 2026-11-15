@@ -547,8 +547,8 @@ func (a *app) hostReady(h *imageHost) bool {
 
 // proStatus 返回当前账号是不是 Pro，以及这个结论是否已经确认。官方图床只对
 // Pro 开放，但 Pro 状态来自账号资料，不能等用户打开「我的」窗口：登录时、
-// 启动后都会主动读一次，结果缓存在 token.json；「我的」窗口读过更新鲜的
-// 资料时以它为准。
+// 启动后都会主动读一次，结果缓存在令牌里（OS 凭据库，无凭据库时退回
+// token.json）；「我的」窗口读过更新鲜的资料时以它为准。
 func (a *app) proStatus() (pro, known bool) {
 	// 只有真的读到资料才作数：加载失败时 infoLoaded 也是 true，但 user 还是
 	// 零值，照它的 IsPro 会把 Pro 用户误判成非 Pro。
