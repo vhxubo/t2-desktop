@@ -466,7 +466,11 @@ func TestClipboardImagePath(t *testing.T) {
 	if got := clipboardImagePath(`"` + p + `"`); got != p {
 		t.Errorf("带引号的路径 = %q，应为 %q", got, p)
 	}
-	u := (&url.URL{Scheme: "file", Path: "/" + filepath.ToSlash(p)}).String()
+	raw := filepath.ToSlash(p)
+	if !strings.HasPrefix(raw, "/") {
+		raw = "/" + raw // Windows 盘符路径需要前导斜杠：file:///C:/...
+	}
+	u := (&url.URL{Scheme: "file", Path: raw}).String()
 	if got := clipboardImagePath(u); got != p {
 		t.Errorf("file:// URI = %q，应为 %q", got, p)
 	}

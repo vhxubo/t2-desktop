@@ -90,6 +90,11 @@ jobs:
             echo "发现未完成的占位标记（见上方），发版前必须清理。" >&2
             exit 1
           fi
+      - name: 安装中文字体（UI 像素测试需要 CJK 字形）
+        # ubuntu-latest 默认不带中文字体：帖子标题等中文在标题栏外的像素断言
+        # 会因此留白，导致已读置灰等依赖文字着色的测试误判。装上后中文才能
+        # 真正落盘成像素，渲染结果与 Windows/macOS 一致。
+        run: sudo apt-get update && sudo apt-get install -y fonts-wqy-zenhei
       - name: 回归测试
         run: go test ./...
 
