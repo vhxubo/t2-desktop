@@ -315,3 +315,71 @@ func TestAuthChangedDistinguishesLogout(t *testing.T) {
 		t.Error("退出后仍有令牌")
 	}
 }
+
+// wrapAuthError 把登录链路的超时/网络错误说成人话，并附上当前生效的代理线路。
+func TestWrapAuthErrorShowsProxyAndFallback(t *testing.T) {
+	withProxy := &AuthManager{proxy: newProxyManager(t.TempDir())}
+	msg := withProxy.wrapAuthError(context.DeadlineExceeded).Error()
+	if !strings.Contains(msg, "超时") || !strings.Contains(msg, "直连") {
+		t.Fatalf("期望超时并提示改为直连，实际：%s", msg)
+	}
+	if !strings.Contains(msg, withProxy.proxy.Status()) {
+		t.Fatalf("期望带上当前代理线路，实际：%s", msg)
+	}
+
+	// 没有代理管理器时也不能 panic，仍要给出通用提示。
+	noProxy := &AuthManager{}
+	msg2 := noProxy.wrapAuthError(context.DeadlineExceeded).Error()
+	if !strings.Contains(msg2, "超时") || !strings.Contains(msg2, "直连") {
+		t.Fatalf("无代理时也应有超时+直连提示，实际：%s", msg2)
+	}
+
+	// 已是直连时不能再叫用户「改为直连」，应引导去查防火墙。
+	direct := &AuthManager{proxy: newProxyManager(t.TempDir())}
+	if err := direct.proxy.Save(proxyConfig{Mode: proxyDirect}); err != nil {
+		t.Fatal(err)
+	}
+	msg3 := direct.wrapAuthError(context.DeadlineExceeded).Error()
+	if !strings.Contains(msg3, "已是直连") || strings.Contains(msg3, "改为「直连」") {
+		t.Fatalf("直连模式不应再建议改直连，实际：%s", msg3)
+	}
+
+	// 普通（非超时、非网络）错误原样返回，不画蛇添足。
+	if withProxy.wrapAuthError(nil) != nil {
+		t.Fatal("nil 应原样返回 nil")
+	}
+	if err := errors.New("boom"); withProxy.wrapAuthError(err) != err {
+		t.Fatal("普通错误应原样返回")
+	}
+}
+
+// 令牌响应体读到一半才超时（"Client Timeout ... while reading body"），
+// 是打包后登录报错的真实现场。确认 postForm 在这个阶段也套上了诊断提示，
+// 而不是把裸的 context deadline exceeded 直接抛给界面。
+func TestPostFormBodyReadTimeoutIsExplained(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// 先把响应头发回去，然后卡住 body，逼 client 在读 body 阶段超时。
+		time.Sleep(200 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	p := newProxyManager(t.TempDir())
+	m := &AuthManager{
+		apiBase: srv.URL,
+		http:    p.Client(50 * time.Millisecond),
+		proxy:   p,
+	}
+	_, err := m.postForm(context.Background(), url.Values{})
+	if err == nil {
+		t.Fatal("期望读响应体超时，实际没有报错")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "令牌请求超时") || !strings.Contains(msg, "直连") {
+		t.Fatalf("期望读 body 超时也被包装成诊断提示，实际：%s", msg)
+	}
+}

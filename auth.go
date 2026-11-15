@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -155,6 +156,9 @@ type AuthManager struct {
 	onChange   func(error)
 	pending    *pendingLogin
 	lastVerify string
+	// proxy 只在登录链路用来把「当前生效的代理线路」写进网络错误提示，
+	// 让用户一眼看出令牌请求走的是哪条线、该去设置里改成直连还是放行。
+	proxy *proxyManager
 	// store persists the session. Production uses the OS credential store
 	// (mygo.Secrets); tests inject a file-backed store via tokenStoreFactory.
 	store tokenStore
@@ -172,8 +176,11 @@ func newAuthManager(dir string) *AuthManager {
 func newAuthManagerAt(dir string, proxy *proxyManager) *AuthManager {
 	m := &AuthManager{
 		apiBase: apiBaseURL,
-		http:    proxy.Client(20 * time.Second),
-		store:   tokenStoreFactory(dir),
+		// 令牌交换在打包后可能走代理/系统防火墙，读响应体比开发机慢。给
+		// 30s 余量（原 20s），超时则经 wrapAuthError 说清走的哪条线路。
+		http:  proxy.Client(30 * time.Second),
+		proxy: proxy,
+		store: tokenStoreFactory(dir),
 	}
 	// client_id and scope are compile-time constants now. A settings.json
 	// left behind by an older build is ignored entirely.
@@ -689,12 +696,15 @@ func (m *AuthManager) postForm(ctx context.Context, form url.Values) (tokenData,
 	req.Header.Set("Accept", "application/json")
 	resp, err := m.http.Do(req)
 	if err != nil {
-		return empty, err
+		return empty, m.wrapAuthError(err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return empty, err
+		// "Client Timeout ... while reading body" 是在这里读 Body 时触发的，
+		// 不在上面的 Do() 里；这里也要包装，否则用户看到的就是那句含糊的
+		// context deadline exceeded，正是打包后登录报错的现场。
+		return empty, m.wrapAuthError(err)
 	}
 	// The token endpoint uses the same envelope; tokens live in d, and it
 	// does not return a `code` field (that only exists under /api/v1/*).
@@ -726,6 +736,42 @@ func (m *AuthManager) postForm(ctx context.Context, form url.Values) (tokenData,
 		return empty, errors.New("响应 d 里没有 access_token")
 	}
 	return t, nil
+}
+
+// wrapAuthError 把登录链路的网络错误说成人能看懂的原因，并附上当前生效的
+// 代理线路。打包后首次登录若卡在「读取响应体超时」，多半是代理或系统防火墙
+// 把到 2Libra 的出网连接拦住了：用户能在提示里直接看到走的是哪条线、该去
+// 设置里改成直连还是放行应用，而不是对着一句含糊的 deadline 发懵。
+func (m *AuthManager) wrapAuthError(err error) error {
+	if err == nil {
+		return nil
+	}
+	via := ""
+	isDirect := false
+	if m.proxy != nil {
+		cfg, status := m.proxy.Snapshot()
+		via = status
+		isDirect = cfg.Mode == proxyDirect
+	}
+	var ne net.Error
+	timedOut := errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout())
+	if timedOut {
+		switch {
+		case via == "":
+			return fmt.Errorf("令牌请求超时：请检查网络，或在设置里把代理改为「直连」后重试（%w）", err)
+		case isDirect:
+			return fmt.Errorf("令牌请求超时：当前已是直连，请检查网络连通性，或确认系统防火墙放行了本应用出网（%w）", err)
+		default:
+			return fmt.Errorf("令牌请求超时：当前走 %q，请确认该代理能连通 2Libra，或改为「直连」后重试（%w）", via, err)
+		}
+	}
+	if errors.As(err, &ne) {
+		if via == "" || isDirect {
+			return fmt.Errorf("令牌请求失败：%s。多为系统防火墙拦截了本应用出网，请放行后重试", err.Error())
+		}
+		return fmt.Errorf("令牌请求失败：%s（当前走 %q）", err.Error(), via)
+	}
+	return err
 }
 
 func (m *AuthManager) exchangeCode(ctx context.Context, p *pendingLogin, code string) (tokenData, error) {
