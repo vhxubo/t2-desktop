@@ -10,8 +10,13 @@
 - `mygo.json` 的 `updates.github` 指向本仓库，`publicKey` 为更新包验签公钥。
 - `CHANGELOG.md` 的 `## <version>` 小节会被 `mygo build` 写进每个平台的更新清单，
   应用内的更新窗口据此展示发布说明。
-- `.github/workflows/release.yml`：推送 tag 即触发 → 建草稿 Release → 多平台构建
-  （win / mac / linux）并**签名更新包** → 上传到草稿 → 全部成功后自动发布。
+- `.github/workflows/release.yml`：推送 tag 即触发 → 建草稿 Release →
+  **`release-gate` 门禁**（见下）→ 多平台构建（win / mac / linux）并**签名更新包**
+  → 上传到草稿 → 全部成功后自动发布。
+- `release-gate` 在构建前跑，强制满足 `AGENTS.md` 的「发版要求」：
+  `go build ./...` 通过、`gofmt -l .` 无输出、`go tool mygo vet .` 干净、
+  `go test ./...` 全绿、且无 `TODO`/`FIXME`/`panic("not implemented")` 占位标记。
+  任一不过就中止发版，不进入多平台构建。
 - `main.go` 已 `mygo.Use(updatenative.Plugin)`；设置窗口的「检查更新」按钮调用
   `updater.CheckForUpdates()`，且应用每天后台自动检查一次 GitHub Release。
 

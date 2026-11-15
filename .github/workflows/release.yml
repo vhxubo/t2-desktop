@@ -56,8 +56,45 @@ jobs:
               --draft --verify-tag --title "$GITHUB_REF_NAME" --generate-notes "${flags[@]}"
           fi
 
-  build:
+  # 发版硬性门禁：对应 AGENTS.md「发版要求」。任一检查不达标即让工作流失败，
+  # 不会进入多平台构建，避免带着残缺或隐患的代码上线。
+  release-gate:
     needs: draft-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: 构建验证
+        run: go build ./...
+      - name: 格式检查（gofmt 无输出）
+        run: |
+          set -euo pipefail
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "以下文件未格式化，需 gofmt -w 处理：" >&2
+            echo "$out" >&2
+            exit 1
+          fi
+      - name: 静态检查
+        run: go tool mygo vet .
+      - name: 禁止未完成的占位标记
+        run: |
+          set -euo pipefail
+          # 发版不允许残留 TODO/FIXME/XXX/HACK 注释与 panic("not implemented") 占位。
+          if grep -rniE "//\s*(TODO|FIXME|XXX|HACK)|panic\(\s*\"(not implemented|unimplemented|TODO)\"" \
+                --include="*.go" .; then
+            echo "发现未完成的占位标记（见上方），发版前必须清理。" >&2
+            exit 1
+          fi
+      - name: 回归测试
+        run: go test ./...
+
+  build:
+    needs: [draft-release, release-gate]
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
