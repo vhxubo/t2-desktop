@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"image/png"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/egoist/mygo"
@@ -30,17 +29,17 @@ func trayItem(t *testing.T, menu *mygo.Menu, id string) *mygo.MenuItem {
 	return it
 }
 
-// 未登录时托盘菜单顶部是「未登录」，紧接着是登录与注册两个入口；通知、
-// 发帖与退出三个入口始终都在。
-func TestTrayMenuOffersLoginWhenSignedOut(t *testing.T) {
-	a := testApp(t)
-	menu := a.trayMenu()
-	want := []string{"未登录", "登录", "注册", "", "通知", "发帖", "", "退出"}
+// 一个账号都没有时托盘顶部是「未登录」，紧接着是登录与注册两个入口；
+// 账号管理与退出始终都在。
+func TestTrayMenuOffersLoginWhenNoAccounts(t *testing.T) {
+	b := testBook(t)
+	menu := b.trayMenu()
+	want := []string{"未登录", "登录", "注册", "", "账号管理", "", "退出"}
 	if got := trayLabels(menu); !reflect.DeepEqual(got, want) {
-		t.Fatalf("未登录时的托盘菜单 %q，期望 %q", got, want)
+		t.Fatalf("没有账号时的托盘菜单 %q，期望 %q", got, want)
 	}
-	// 账号状态行只显示状态，点它不该有任何动作。
-	if account := trayItem(t, menu, trayAccountID); !account.Disabled {
+	// 状态行只显示状态，点它不该有任何动作。
+	if account := trayItem(t, menu, trayAccountIDPrefix+"none"); !account.Disabled {
 		t.Error("账号状态行不该可点")
 	}
 	if trayItem(t, menu, trayLoginID).Click == nil {
@@ -54,80 +53,62 @@ func TestTrayMenuOffersLoginWhenSignedOut(t *testing.T) {
 // 托盘菜单的可操作项都要带图标：和侧边栏入口同一套线性图标，系统菜单才会
 // 在图标列画出它们（Windows 任务栏、Linux 托盘的菜单都显示图标列）。
 func TestTrayMenuItemsCarryIcons(t *testing.T) {
-	a := testApp(t)
-	for _, id := range []string{trayLoginID, traySignupID, trayNotificationsID, trayComposeID, trayQuitID} {
-		if it := trayItem(t, a.trayMenu(), id); it.Icon == nil {
+	b := testBook(t)
+	addTestAccount(t, b, "jimmy")
+	menu := b.trayMenu()
+	ids := []string{trayAccountIDPrefix + b.accountsView()[0].ID, trayAccountsID, trayQuitID}
+	for _, id := range ids {
+		if it := trayItem(t, menu, id); it.Icon == nil {
+			t.Errorf("托盘菜单项 %q 没有图标", id)
+		}
+	}
+	// 没有账号时那两个入口也要有图标。
+	empty := testBook(t).trayMenu()
+	for _, id := range []string{trayLoginID, traySignupID} {
+		if it := trayItem(t, empty, id); it.Icon == nil {
 			t.Errorf("托盘菜单项 %q 没有图标", id)
 		}
 	}
 }
 
-// 登录后账号状态变成「已登录：用户名」，登录按钮换成「退出登录」。
-func TestTrayMenuShowsAccountAndLogoutWhenSignedIn(t *testing.T) {
-	a := testApp(t)
-	if err := a.auth.storeToken(tokenData{AccessToken: "tok", Username: "jimmy", TokenType: "Bearer"}); err != nil {
-		t.Fatal(err)
+// 挂着几个账号，托盘就列几行：有未读的带上条数，登录失效的写明要重新登录。
+func TestTrayMenuListsEveryAccountWithUnread(t *testing.T) {
+	b := testBook(t)
+	jimmy := addTestAccount(t, b, "jimmy")
+	amy := addTestAccount(t, b, "amy")
+	setTestUnread(b, jimmy.ID, 3)
+	setTestNeedLogin(b, amy.ID)
+
+	menu := b.trayMenu()
+	want := []string{
+		"jimmy（3 条未读）",
+		"amy（需要重新登录）",
+		"", "账号管理", "", "退出",
 	}
-	menu := a.trayMenu()
-	want := []string{"已登录：jimmy", "退出登录", "", "通知", "发帖", "", "退出"}
 	if got := trayLabels(menu); !reflect.DeepEqual(got, want) {
-		t.Fatalf("登录后的托盘菜单 %q，期望 %q", got, want)
-	}
-	if menu.ItemByID(trayLoginID) != nil {
-		t.Error("登录后不该再出现「登录」")
+		t.Fatalf("托盘菜单 %q，期望 %q", got, want)
 	}
 }
 
-// 托盘里的「退出登录」就是应用内的那次退出：令牌被清掉，账号状态行随之下
-// 次弹出菜单时回到「未登录」。
-func TestTrayLogoutSignsOut(t *testing.T) {
-	a := testApp(t)
-	if err := a.auth.storeToken(tokenData{AccessToken: "tok", Username: "jimmy", TokenType: "Bearer"}); err != nil {
-		t.Fatal(err)
-	}
-	it := trayItem(t, a.trayMenu(), trayLogoutID)
+// 点账号那一行就是打开它的窗口：窗口是懒建的（测试里没有主循环，建不出来），
+// 但「最近用过的账号」要立刻记下，托盘左键与启动时的前台窗口都读它。
+func TestTrayAccountEntryRemembersTheAccount(t *testing.T) {
+	b := testBook(t)
+	jimmy := addTestAccount(t, b, "jimmy")
+	amy := addTestAccount(t, b, "amy")
+	it := trayItem(t, b.trayMenu(), trayAccountIDPrefix+jimmy.ID)
 	it.Click(it, nil)
-	if a.auth.loggedIn() {
-		t.Fatal("点托盘里的「退出登录」后仍是登录状态")
-	}
-	if got := trayItem(t, a.trayMenu(), trayAccountID).Label; got != "未登录" {
-		t.Errorf("退出后账号状态是 %q，期望「未登录」", got)
-	}
-}
-
-// 未登录时从托盘点「通知」「发帖」和从窗口里点一样：先弹授权，登录成功后
-// 再把窗口打开，用户不用回主窗口再点一次。
-func TestTrayEntriesAskForLoginFirst(t *testing.T) {
-	for _, tc := range []struct {
-		id    string
-		entry string
-	}{
-		{trayComposeID, "发帖"},
-		{trayNotificationsID, "通知"},
-	} {
-		t.Run(tc.entry, func(t *testing.T) {
-			a := testApp(t)
-			it := trayItem(t, a.trayMenu(), tc.id)
-			it.Click(it, nil)
-			if !a.authGate.open {
-				t.Fatalf("未登录点托盘里的「%s」没有弹出授权", tc.entry)
-			}
-			if !strings.Contains(a.authGate.need.Message, tc.entry) {
-				t.Errorf("授权提示 %q 没有说明「%s」需要登录", a.authGate.need.Message, tc.entry)
-			}
-			if len(a.authGate.replays) == 0 {
-				t.Errorf("点「%s」后没有登记登录成功后要重开的窗口", tc.entry)
-			}
-		})
+	if got := b.activeAccountID(); got != jimmy.ID {
+		t.Fatalf("点过 %q 之后最近使用的账号是 %q", amy.ID, got)
 	}
 }
 
 // 托盘里的「退出」走应用自己的退出流程（关窗口、停通知）。
 func TestTrayQuitQuitsTheApp(t *testing.T) {
-	a := testApp(t)
+	b := testBook(t)
 	quits := 0
-	a.quitApp = func() { quits++ }
-	it := trayItem(t, a.trayMenu(), trayQuitID)
+	b.quitApp = func() { quits++ }
+	it := trayItem(t, b.trayMenu(), trayQuitID)
 	it.Click(it, nil)
 	if quits != 1 {
 		t.Fatalf("点「退出」调用了 %d 次退出，期望 1 次", quits)

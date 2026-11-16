@@ -9,13 +9,19 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 关闭主窗口时的行为：默认每次询问，用户可以选「退出应用」或「收进托盘」，
-// 并把选择记到配置目录的 window.json 里，下次启动沿用。记住之后不再询问，
-// 想改回来就在设置窗口的「窗口」一块里选。
+// 关闭主窗口时的行为：默认每次询问，用户可以选「关闭窗口」「收进托盘」或
+// 「退出应用」，并把选择记到配置目录的 window.json 里，下次启动沿用。记住
+// 之后不再询问，想改回来就在设置窗口的「窗口」一块里选。
+//
+// 多账号时每个账号一个主窗口：这里的「关闭窗口」只关这个账号的窗口（它退回
+// 账号面板，账号仍挂着，未读角标与登录状态照常），所有窗口都关掉时应用才
+// 结束；「收进托盘」把这个窗口藏起来，应用继续在后台跑；「退出应用」则是关
+// 一次窗口就结束整个应用。
 const (
 	closeAsk    = iota // 每次关闭都询问
-	closeToQuit        // 关闭即退出
+	closeWindow        // 只关掉这个窗口（最后一个窗口关掉时应用退出）
 	closeToTray        // 收进托盘，应用继续运行
+	closeApp           // 关窗口即退出整个应用
 )
 
 // windowConfig 是持久化到 window.json 的内容。用字符串而不是数字，是为了
@@ -47,9 +53,13 @@ func newCloseModeStore(dir string) *closeModeStore {
 func parseCloseMode(s string) int {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "quit":
-		return closeToQuit
+		// 旧版本里 "quit" 是「关闭即退出应用」。那时只有一个窗口，现在按
+		// 「只关这个窗口」处理：单账号时结果一样，多账号时不会误关别人的窗口。
+		return closeWindow
 	case "tray":
 		return closeToTray
+	case "app-quit":
+		return closeApp
 	default:
 		return closeAsk
 	}
@@ -58,10 +68,12 @@ func parseCloseMode(s string) int {
 // modeName 是写进 window.json 的值，和 parseCloseMode 一一对应。
 func (s *closeModeStore) modeName() string {
 	switch s.mode {
-	case closeToQuit:
+	case closeWindow:
 		return "quit"
 	case closeToTray:
 		return "tray"
+	case closeApp:
+		return "app-quit"
 	default:
 		return "ask"
 	}
@@ -70,10 +82,12 @@ func (s *closeModeStore) modeName() string {
 // label 是给界面看的中文名称。
 func (s *closeModeStore) label() string {
 	switch s.mode {
-	case closeToQuit:
-		return "退出应用"
+	case closeWindow:
+		return "关闭窗口"
 	case closeToTray:
 		return "收进托盘"
+	case closeApp:
+		return "退出应用"
 	default:
 		return "每次询问"
 	}
@@ -83,7 +97,7 @@ func (s *closeModeStore) label() string {
 // 方提示；下次启动会回到旧配置。
 func (s *closeModeStore) Save(mode int) error {
 	switch mode {
-	case closeToQuit, closeToTray:
+	case closeWindow, closeToTray, closeApp:
 	default:
 		mode = closeAsk
 	}
@@ -108,18 +122,24 @@ func (a *app) askOnClose() bool {
 }
 
 // onMainWindowClose 挂在主窗口的 OnClose 上：按设置决定拦下这次关闭（收进
-// 托盘或先问一句），还是让它照常关掉（最后一个窗口关闭时应用退出）。只在
-// 主线程调用。
+// 托盘、先问一句，或结束整个应用），还是让它照常关掉（只关这个窗口；最后
+// 一个窗口关闭时应用退出）。只在主线程调用。
 func (a *app) onMainWindowClose(e *mygo.CloseEvent) {
 	switch {
 	case a.quitting:
 		return
+	case a.closingAfterPrompt:
+		// 弹窗里刚选了「只关这个窗口」：这次放行，别再问一遍。
+		a.closingAfterPrompt = false
 	case a.hideOnClose():
 		e.PreventDefault()
 		a.hideMainWindowToTray()
 	case a.askOnClose():
 		e.PreventDefault()
 		a.openClosePrompt()
+	case a.closeMode.mode == closeApp:
+		e.PreventDefault()
+		a.quitApp()
 	}
 }
 
@@ -133,8 +153,9 @@ func (a *app) openClosePrompt() {
 	}
 }
 
-// chooseCloseMode 是关闭提示里的选择：记住与否先落盘，再按选择退出或收起
-// 窗口。选择本身用户刚在弹窗里点过，所以不再额外发一条 toast。
+// chooseCloseMode 是关闭提示里的选择：记住与否先落盘，再按选择收起窗口、
+// 退出应用，或者只关掉这个窗口。选择本身用户刚在弹窗里点过，所以不再额外
+// 发一条 toast。
 func (a *app) chooseCloseMode(mode int) {
 	a.closePromptOpen = false
 	if a.closeRemember {
@@ -142,11 +163,19 @@ func (a *app) chooseCloseMode(mode int) {
 			a.toast(toastMain, err.Error())
 		}
 	}
-	if mode == closeToTray {
+	switch mode {
+	case closeToTray:
 		a.hideMainWindowToTray()
-		return
+	case closeApp:
+		a.quitApp()
+	default:
+		// 只关这个窗口：弹窗已经拦下了原来那次关闭，这里补关一次。用
+		// closingAfterPrompt 放行，否则「没记住」时又会弹一次。
+		if win := a.win; win != nil {
+			a.closingAfterPrompt = true
+			win.Close()
+		}
 	}
-	a.quitApp()
 }
 
 // hideMainWindowToTray 收起主窗口与它的附属窗口。主窗口只 Hide 不 Close：
@@ -178,14 +207,18 @@ func (a *app) closePromptDialog(c *ui.Context) {
 	ui.Modal(c, &a.closePromptOpen, func() {
 		ui.Column(c).Width(430).Gap(10).Children(func() {
 			ui.Text(c, "关闭主窗口").FontSize(16).Bold()
-			ui.Text(c, "要让 T2 Desktop 继续在系统托盘里运行，还是现在退出？"+
-				"收进托盘后应用仍在后台接收通知，点托盘图标就能回到窗口。").
-				TextColor(t.TextMuted).MaxLines(3)
+			ui.Text(c, "只关这个窗口的话，账号会挂回账号面板，未读角标与登录状态照常；"+
+				"收进托盘则应用继续在后台接收通知，点托盘图标就能回到窗口；"+
+				"退出应用会关掉所有账号的窗口。").
+				TextColor(t.TextMuted).MaxLines(4)
 			ui.Checkbox(c, &a.closeRemember, "记住我的选择，可在设置里修改")
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Spacer(c).Grow(1)
+				if ui.Button(c, "只关窗口").Clicked() {
+					a.chooseCloseMode(closeWindow)
+				}
 				if ui.Button(c, "退出应用").Clicked() {
-					a.chooseCloseMode(closeToQuit)
+					a.chooseCloseMode(closeApp)
 				}
 				if ui.PrimaryButton(c, "收进托盘").Clicked() {
 					a.chooseCloseMode(closeToTray)

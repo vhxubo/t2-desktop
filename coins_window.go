@@ -300,12 +300,12 @@ func (a *app) coinWindowView(c *ui.Context) {
 						TextColor(t.TextMuted).SingleLine()
 				}
 			})
-			a.titleButton(c, titleMinimize, "最小化", func() {
+			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.coinWin; win != nil {
 					win.Minimize()
 				}
 			})
-			a.titleButton(c, titleClose, "关闭", a.closeCoinWindow)
+			titleBarButton(c, titleClose, "关闭", a.closeCoinWindow)
 		})
 		ui.Divider(c)
 

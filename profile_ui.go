@@ -168,12 +168,12 @@ func (a *app) profileWindowView(c *ui.Context) {
 					ui.Text(c, name).FontSize(11).TextColor(t.TextMuted).SingleLine()
 				}
 			})
-			a.titleButton(c, titleMinimize, "最小化", func() {
+			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.profileWin; win != nil {
 					win.Minimize()
 				}
 			})
-			a.titleButton(c, titleClose, "关闭", a.closeProfileWindow)
+			titleBarButton(c, titleClose, "关闭", a.closeProfileWindow)
 		})
 		ui.Divider(c)
 
@@ -662,7 +662,7 @@ func (a *app) profileAccountBody(c *ui.Context, ps *profileState) {
 
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				if ui.Button(c, "退出登录").Clicked() {
-					a.auth.Logout()
+					a.logoutAccount()
 				}
 				ui.Spacer(c).Grow(1)
 			})

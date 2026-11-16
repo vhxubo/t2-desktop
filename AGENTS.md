@@ -59,8 +59,29 @@ a pure white page.
   凭据管理器 / macOS Keychain / Linux Secret Service），不得明文落盘。实现见
   `auth.go` 的 `tokenStore` 接口与 `secureTokenStore`：仅在凭据库不可用
   （`errors.ErrUnsupported`）或会话超过 `mygo.MaxSecretSize` 时才退回明文
-  `token.json`。测试经 `tokenStoreFactory` 改用文件实现以隔离并保留 `token.json`
-  断言。terms.md 要求令牌加密存储，这条硬规则对应。
+  文件（空键是旧版的 `token.json`，多账号是 `token-<id>.json`）。测试经
+  `tokenStoreFactory` 改用文件实现以隔离并保留 `token.json` 断言。terms.md 要求
+  令牌加密存储，这条硬规则对应。
+
+## 多账号：每个账号一个窗口
+
+本机可以同时挂多个账号，实现分三处，改动前先弄清分工：
+
+- `auth.go`：`AuthManager` 仍然只管**一个**账号（一份令牌、一次刷新、一次授权、
+  一条凭据）。`tokenStore` 的键就是账号 id（见 `tokenSecretKey` /
+  `tokenFilePath`），空键是旧版单账号会话，升级后第一次启动由
+  `accountBook.migrateLegacySession` 迁移成正式账号。
+- `accounts.go`：`accountBook` 管「本机有哪些账号」——账号索引 `accounts.json`
+  （只有昵称/头像这类展示信息，**绝不放令牌**）、每个账号一个 `*account`（会话 +
+  可选的窗口状态）、添加账号的浏览器授权、退出账号、以及窗口没开的账号的未读
+  轮询与令牌保活。全局同一时刻只允许一次授权在等回调（`claimLogin`）。
+- `app_window.go` + `main.go` 的 `newAppWithDeps`：`app` 是**一个账号的界面**，
+  窗口关掉就丢弃，账号仍留在账号册里。代理、外观、图片缓存与离线缓存是进程级
+  共享依赖（`appDeps`），不要每个窗口各建一份：离线缓存各自整份写回会互相覆盖。
+
+加功能时按这个分工放代码：会话相关进 `AuthManager`，账号列表与窗口调度进
+`accountBook`，界面状态进 `app`。新窗口都必须能安全销毁并重建（视图每帧重算，
+状态里不存窗口对象以外的临时值）。
 
 ## 网络请求：一律走配置的代理
 

@@ -190,12 +190,12 @@ func (a *app) pandoraWindowView(c *ui.Context) {
 				ui.Text(c, pandoraHeaderStatus(st)).FontSize(11).
 					TextColor(t.TextMuted).SingleLine()
 			})
-			a.titleButton(c, titleMinimize, "最小化", func() {
+			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.pandoraWin; win != nil {
 					win.Minimize()
 				}
 			})
-			a.titleButton(c, titleClose, "关闭", a.closePandoraWindow)
+			titleBarButton(c, titleClose, "关闭", a.closePandoraWindow)
 		})
 		ui.Divider(c)
 

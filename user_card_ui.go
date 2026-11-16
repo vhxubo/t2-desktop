@@ -194,12 +194,12 @@ func (a *app) userCardTitleBar(c *ui.Context) {
 			ui.Icon(c, profileIcon).Size(16, 16).TextColor(t.Accent)
 			ui.Text(c, "用户资料").FontSize(13).Bold().SingleLine()
 		})
-		a.titleButton(c, titleMinimize, "最小化", func() {
+		titleBarButton(c, titleMinimize, "最小化", func() {
 			if win := a.userCardWin; win != nil {
 				win.Minimize()
 			}
 		})
-		a.titleButton(c, titleClose, "关闭", a.closeUserCardWindow)
+		titleBarButton(c, titleClose, "关闭", a.closeUserCardWindow)
 	})
 }
 

@@ -59,9 +59,9 @@ func TestHideOnCloseNeedsTrayAndNoQuit(t *testing.T) {
 		t.Fatal("正在退出时不该把退出拦成收进托盘")
 	}
 	a.quitting = false
-	a.closeMode.mode = closeToQuit
+	a.closeMode.mode = closeWindow
 	if a.hideOnClose() {
-		t.Fatal("选了退出应用时不该拦截关闭")
+		t.Fatal("选了只关窗口时不该拦截关闭")
 	}
 }
 
@@ -98,12 +98,12 @@ func TestMainWindowCloseAsksOnceUntilRemembered(t *testing.T) {
 		t.Fatal("记住之后不该再弹提示")
 	}
 
-	// 选了退出应用：之后的关闭照常放行，由应用退出。
-	a.closeMode.mode = closeToQuit
+	// 选了只关窗口：之后的关闭照常放行，由窗口自己关掉。
+	a.closeMode.mode = closeWindow
 	quit := &mygo.CloseEvent{}
 	a.onMainWindowClose(quit)
 	if quit.DefaultPrevented() {
-		t.Fatal("记住退出应用后，关闭应放行")
+		t.Fatal("记住只关窗口后，关闭应放行")
 	}
 
 	// 退出流程里的关闭一律放行，否则应用退不掉。
@@ -132,13 +132,15 @@ func TestClosePromptForgetsWithoutRemember(t *testing.T) {
 	}
 }
 
-// 提示框里两个选项都点得动：退出应用走应用自己的退出流程，收进托盘收起窗口。
+// 提示框里三个选项都点得动：退出应用走应用自己的退出流程，收进托盘收起窗口，
+// 只关窗口则把这个窗口关掉、别的账号不受影响。
 func TestClosePromptButtons(t *testing.T) {
 	for _, tc := range []struct {
 		button string
 		mode   int
 	}{
-		{"退出应用", closeToQuit},
+		{"只关窗口", closeWindow},
+		{"退出应用", closeApp},
 		{"收进托盘", closeToTray},
 	} {
 		t.Run(tc.button, func(t *testing.T) {
@@ -149,7 +151,7 @@ func TestClosePromptButtons(t *testing.T) {
 			a.openClosePrompt()
 			tt := ui.NewTester(a.view, 1100, 760)
 			tt.Frame()
-			for _, want := range []string{"关闭主窗口", "记住我的选择", "退出应用", "收进托盘"} {
+			for _, want := range []string{"关闭主窗口", "记住我的选择", "只关窗口", "退出应用", "收进托盘"} {
 				if !tt.HasText(want) {
 					t.Fatalf("关闭提示缺少 %q：%q", want, tt.Texts())
 				}
@@ -160,11 +162,11 @@ func TestClosePromptButtons(t *testing.T) {
 			if a.closePromptOpen {
 				t.Error("点了按钮弹窗还开着")
 			}
-			if tc.mode == closeToQuit && quits != 1 {
+			if tc.mode == closeApp && quits != 1 {
 				t.Errorf("点「退出应用」调用了 %d 次退出，期望 1 次", quits)
 			}
-			if tc.mode == closeToTray && quits != 0 {
-				t.Error("点「收进托盘」不该退出应用")
+			if tc.mode != closeApp && quits != 0 {
+				t.Error("点「只关窗口」「收进托盘」都不该退出应用")
 			}
 		})
 	}
@@ -181,7 +183,7 @@ func TestSettingsWindowCloseBehaviourSavesChoice(t *testing.T) {
 	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1400)
 	st.Frame()
 
-	for _, want := range []string{"窗口", "每次询问", "退出应用", "收进托盘", "关闭主窗口时"} {
+	for _, want := range []string{"窗口", "每次询问", "关闭窗口", "收进托盘", "退出应用", "关闭主窗口时"} {
 		if !st.HasText(want) {
 			t.Fatalf("设置窗口缺少 %q：%q", want, st.Texts())
 		}

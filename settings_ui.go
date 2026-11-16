@@ -143,12 +143,12 @@ func (a *app) settingsWindowView(c *ui.Context) {
 				AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "设置").FontSize(13).Bold().SingleLine().TextColor(t.Text)
 			})
-			a.titleButton(c, titleMinimize, "最小化", func() {
+			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.settingsWin; win != nil {
 					win.Minimize()
 				}
 			})
-			a.titleButton(c, titleClose, "关闭", func() { a.closeSettingsWindow() })
+			titleBarButton(c, titleClose, "关闭", func() { a.closeSettingsWindow() })
 		})
 		ui.Divider(c)
 
@@ -216,15 +216,17 @@ func (a *app) updateSettingsSection(c *ui.Context) {
 func (a *app) windowSettingsSection(c *ui.Context) {
 	t := c.Theme()
 	settingsSection(c, "窗口", func() {
-		ui.Text(c, "收进托盘后应用继续在后台接收通知，点托盘图标回到窗口；"+
-			"要从托盘菜单的「退出」或系统的退出命令才会真正结束。").
-			FontSize(12).TextColor(t.TextMuted).MaxLines(3)
-		if ui.Segmented(c, &a.closeMode.mode, "每次询问", "退出应用", "收进托盘").
+		ui.Text(c, "多账号时每个账号一个窗口：关掉某个账号的窗口只是把它挂回账号面板，"+
+			"未读数照样更新、随时点开；所有窗口都关掉才结束应用。"+
+			"收进托盘则应用继续在后台接收通知，点托盘图标回到窗口；"+
+			"退出应用会在关窗口时结束整个应用。").
+			FontSize(12).TextColor(t.TextMuted).MaxLines(4)
+		if ui.Segmented(c, &a.closeMode.mode, "每次询问", "关闭窗口", "收进托盘", "退出应用").
 			Label("关闭主窗口时").Changed() {
 			a.setCloseMode(a.closeMode.mode)
 		}
 		if !a.trayReady {
-			ui.Text(c, "系统托盘当前不可用，关闭主窗口仍会退出应用。").
+			ui.Text(c, "系统托盘当前不可用，关闭窗口只能直接关掉。").
 				FontSize(11).TextColor(t.TextMuted).MaxLines(2)
 		}
 	})

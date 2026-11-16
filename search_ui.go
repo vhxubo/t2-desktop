@@ -132,12 +132,12 @@ func (a *app) searchWindowView(c *ui.Context) {
 						TextColor(t.TextMuted).SingleLine()
 				}
 			})
-			a.titleButton(c, titleMinimize, "最小化", func() {
+			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.searchWin; win != nil {
 					win.Minimize()
 				}
 			})
-			a.titleButton(c, titleClose, "关闭", a.closeSearchWindow)
+			titleBarButton(c, titleClose, "关闭", a.closeSearchWindow)
 		})
 		ui.Divider(c)
 

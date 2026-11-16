@@ -222,6 +222,13 @@ func (a *app) loadImage(raw string) (ui.ImageSource, error) {
 }
 
 func (a *app) fetchImage(raw string) ([]byte, error) {
+	return fetchImageBytes(a.client.httpClient(), raw)
+}
+
+// fetchImageBytes 取一张图片的原始字节。hc 必须来自 proxyManager 的共享
+// transport：图片也是出站请求，同样要走配置的代理。账号面板预取账号头像
+// 时用的是同一个函数。
+func fetchImageBytes(hc *http.Client, raw string) ([]byte, error) {
 	if _, err := parseImageURL(raw); err != nil {
 		return nil, err
 	}
@@ -232,7 +239,7 @@ func (a *app) fetchImage(raw string) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "2libra-native-reader/0.1 (+mygo)")
-	resp, err := a.client.httpClient().Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, err
 	}

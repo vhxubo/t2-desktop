@@ -250,12 +250,12 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 					ui.Text(c, "· 未连接").FontSize(11).TextColor(t.TextMuted).SingleLine()
 				}
 			})
-			a.titleButton(c, titleMinimize, "最小化", func() {
+			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.notifWin; win != nil {
 					win.Minimize()
 				}
 			})
-			a.titleButton(c, titleClose, "关闭", func() {
+			titleBarButton(c, titleClose, "关闭", func() {
 				if win := a.notifWin; win != nil {
 					win.Close()
 				}

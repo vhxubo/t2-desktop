@@ -91,12 +91,12 @@ func (a *app) aboutWindowView(c *ui.Context) {
 				AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "关于").FontSize(13).Bold().SingleLine().TextColor(t.Text)
 			})
-			a.titleButton(c, titleMinimize, "最小化", func() {
+			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.aboutWin; win != nil {
 					win.Minimize()
 				}
 			})
-			a.titleButton(c, titleClose, "关闭", func() { a.closeAboutWindow() })
+			titleBarButton(c, titleClose, "关闭", func() { a.closeAboutWindow() })
 		})
 		ui.Divider(c)
 

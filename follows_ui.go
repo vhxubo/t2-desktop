@@ -139,12 +139,12 @@ func (a *app) followsWindowView(c *ui.Context) {
 						TextColor(t.TextMuted).SingleLine()
 				}
 			})
-			a.titleButton(c, titleMinimize, "最小化", func() {
+			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.followsWin; win != nil {
 					win.Minimize()
 				}
 			})
-			a.titleButton(c, titleClose, "关闭", a.closeFollowsWindow)
+			titleBarButton(c, titleClose, "关闭", a.closeFollowsWindow)
 		})
 		ui.Divider(c)
 		ui.Column(c).Grow(1).MinHeight(0).Padding(12, 14).Gap(10).Children(func() {

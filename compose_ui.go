@@ -194,12 +194,12 @@ func (a *app) composeWindowView(c *ui.Context) {
 				ui.Text(c, "发帖").FontSize(13).Bold().SingleLine().TextColor(t.Text)
 				ui.Text(c, "· 支持 Markdown").FontSize(11).SingleLine().TextColor(t.TextMuted)
 			})
-			a.titleButton(c, titleMinimize, "最小化", func() {
+			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.composeWin; win != nil {
 					win.Minimize()
 				}
 			})
-			a.titleButton(c, titleClose, "关闭", func() { a.closeComposeWindow() })
+			titleBarButton(c, titleClose, "关闭", func() { a.closeComposeWindow() })
 		})
 		ui.Divider(c)
 

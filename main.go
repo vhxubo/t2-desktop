@@ -43,13 +43,19 @@ type tabState struct {
 // app holds only data and widget state. Never store ui.Element or *Context:
 // background work publishes results through Window.Update.
 type app struct {
-	auth     *AuthManager
-	proxy    *proxyManager
-	theme    *themeManager
-	client   *Client
-	win      *mygo.Window
-	srv      ui.Services
-	autoLoad bool
+	auth *AuthManager
+	// book 是进程级的账号册（见 accounts.go）。多账号时每个账号一个 app、
+	// 一个主窗口，共用同一个账号册；没有账号册时（无头测试、单窗口场景）
+	// 登录与退出登录退回到「本窗口自己的会话」那套行为。
+	book *accountBook
+	// accountID 是这个窗口所属账号在本机存储里的 id。未登录窗口为空。
+	accountID string
+	proxy     *proxyManager
+	theme     *themeManager
+	client    *Client
+	win       *mygo.Window
+	srv       ui.Services
+	autoLoad  bool
 
 	// 设置窗口里的代理草稿。保存前只改这些字段，不影响正在使用的 transport；
 	// 点「保存」才写入 proxy.json 并立即切换。保存结果见 toasts.go 的 toast。
@@ -281,9 +287,12 @@ type app struct {
 	// window.json。只在主线程读写。
 	closeMode *closeModeStore
 	// closePromptOpen / closeRemember 是关闭提示弹窗的状态：是否正在询问
-	// 「退出还是收进托盘」，以及这次要不要记住选择。只在主线程读写。
+	// 「只关窗口 / 收进托盘 / 退出应用」，以及这次要不要记住选择。只在主线程读写。
 	closePromptOpen bool
 	closeRemember   bool
+	// closingAfterPrompt 表示这次关闭是弹窗里刚选的「只关这个窗口」：放行一次，
+	// 不再重复询问（见 window_mode.go 的 chooseCloseMode）。
+	closingAfterPrompt bool
 	// quitting 表示已经在退出流程里：这时主窗口的 OnClose 不能再把退出拦成
 	// 「收进托盘」。由 OnBeforeQuit 与托盘的「退出」置位。
 	quitting bool
@@ -345,35 +354,120 @@ func tabFromID(id string) (int, bool) {
 	return n, true
 }
 
-func newApp(dir string) *app {
+// appDeps 是进程级的共享依赖：一个进程一份，多个账号窗口共用。
+//
+// 代理、外观、图片缓存与离线缓存都必须是全应用一份：每个窗口各建一份会让
+// 代理切换只对一个窗口生效，而离线缓存（cache/offline.json）会被几个窗口
+// 各自整份写回，后写的把前面账号的阅读记录覆盖掉。
+type appDeps struct {
+	dir       string
+	proxy     *proxyManager
+	theme     *themeManager
+	images    *imageCache
+	kv        *localKV
+	closeMode *closeModeStore
+	book      *accountBook
+}
+
+// newAppDeps 造一份独立的共享依赖：没有账号册（无头测试）时每个 app 自己
+// 一份，互不干扰。
+func newAppDeps(dir string) appDeps {
 	if dir == "" {
 		dir = configDir()
 	}
-	proxy := newProxyManager(dir)
-	auth := newAuthManagerAt(dir, proxy)
+	return appDeps{
+		dir:       dir,
+		proxy:     newProxyManager(dir),
+		theme:     newThemeManager(dir),
+		images:    newImageCache(dir),
+		kv:        newOfflineKV(dir),
+		closeMode: newCloseModeStore(dir),
+	}
+}
+
+// deps 是账号册那份共享依赖：所有账号窗口都从这里建，不各自造一份。
+func (b *accountBook) deps() appDeps {
+	return appDeps{
+		dir:       b.dir,
+		proxy:     b.proxy,
+		theme:     b.theme,
+		images:    b.images,
+		kv:        b.kv,
+		closeMode: b.closeMode,
+		book:      b,
+	}
+}
+
+// newApp 建一个独立的单账号界面（无头测试、以及没有账号册的场景）。
+func newApp(dir string) *app { return newAppWithDeps(newAppDeps(dir), nil) }
+
+// newAccountApp 建一个账号窗口的界面状态：会话来自账号册，共享依赖也来自
+// 账号册。窗口本身由 app.openMainWindow 创建。
+func newAccountApp(b *accountBook, acc *account) *app {
+	a := newAppWithDeps(b.deps(), acc)
+	a.autoLoad = true
+	return a
+}
+
+// newGuestApp 建未登录窗口的界面状态：没有账号时它照样能浏览公开内容，登录
+// 入口把它变成一个新账号的窗口（见 accountBook.startAddAccount）。
+func newGuestApp(b *accountBook) *app {
+	a := newAppWithDeps(b.deps(), nil)
+	a.autoLoad = true
+	return a
+}
+
+func newAppWithDeps(d appDeps, acc *account) *app {
+	// 账号窗口用它自己的会话；没有账号时用旧版单账号的会话（同一份凭据，
+	// 也就是升级前的 token.json）。
+	// 账号窗口用它自己的会话；没有账号时用旧版单账号的会话（同一份凭据，
+	// 也就是升级前的 token.json）：未登录窗口与无头测试都走这一条。
+	var auth *AuthManager
+	if acc != nil {
+		auth = acc.auth
+	} else {
+		auth = newAuthManagerAt(d.dir, d.proxy)
+	}
 	a := &app{
-		auth:         auth,
-		proxy:        proxy,
-		theme:        newThemeManager(dir),
-		client:       &Client{Auth: auth, Proxy: proxy},
-		images:       newImageCache(dir),
-		kv:           newOfflineKV(dir),
-		tabs:         make([]*tabState, len(tabSpecs)),
-		lastTab:      -1,
-		navSel:       tabID(0),
-		pageName:     "list",
+		auth:      auth,
+		book:      d.book,
+		proxy:     d.proxy,
+		theme:     d.theme,
+		client:    &Client{Auth: auth, Proxy: d.proxy},
+		images:    d.images,
+		kv:        d.kv,
+		closeMode: d.closeMode,
+		tabs:      make([]*tabState, len(tabSpecs)),
+		lastTab:   -1,
+		navSel:    tabID(0),
+		pageName:  "list",
+		// 原生通知默认开；多账号时每个账号窗口各自弹自己收到的消息。
 		nativeNotify: true,
 		coins:        newCoinState(),
 		pandora:      newPandoraState(),
 		profile:      newProfileState(),
-		closeMode:    newCloseModeStore(dir),
+	}
+	if acc != nil {
+		a.accountID = acc.ID
+	}
+	if d.book != nil {
+		// 这几项是进程级的：回调协议是否注册成功、更新插件装没装、托盘建没
+		// 建出来、以及怎么真正退出应用。窗口只是照着用。
+		a.schemeWarn = d.book.schemeWarning()
+		a.updates = d.book.updates
+		a.notify = d.book.notify
+		a.trayReady = d.book.trayIsReady()
+		a.quitApp = d.book.quitProgram
 	}
 	// 托盘的「退出」与窗口关闭走同一条退出流程；测试里换成记录调用，无头
 	// 环境没有主循环，不能真的退出。先立 quitting：退出时主窗口的 OnClose
 	// 不能再把这次退出拦成「收进托盘」。
-	a.quitApp = func() { a.quitting = true; mygo.App.Quit() }
+	if a.quitApp == nil {
+		a.quitApp = func() { a.quitting = true; mygo.App.Quit() }
+	}
 	// 本地缓存是"先读文件、后发请求"的首屏底稿：启动时就把金币与阅读记录
-	// 装进内存，第一帧就能画出来。文件不存在或损坏都只是空缓存。
+	// 装进内存，第一帧就能画出来。文件不存在或损坏都只是空缓存（共享的
+	// kv 只会真正读一次盘）。
 	if err := a.kv.load(); err != nil {
 		log.Printf("离线缓存不可用：%v", err)
 	}
@@ -385,13 +479,36 @@ func newApp(dir string) *app {
 	for i := range a.tabs {
 		a.tabs[i] = &tabState{}
 	}
-	a.auth.onChange = func(err error) {
-		a.publish(func() { a.onAuthChanged(err) })
-	}
+	a.bindAuth()
 	a.md = newMarkdownOptions(a, postTextStyle)
 	a.commentMd = newMarkdownOptions(a, commentTextStyle)
 	a.bioMd = newMarkdownOptions(a, bioTextStyle)
 	return a
+}
+
+// bindAuth 把会话变化接回本窗口。窗口开着时由窗口处理：它要重画、要弹授权；
+// 账号册只从 onAuthChanged 里同步昵称与头像（见 noteAuthChange）。
+func (a *app) bindAuth() {
+	if a.auth == nil {
+		return
+	}
+	a.auth.onChange = func(err error) {
+		a.publish(func() { a.onAuthChanged(err) })
+	}
+}
+
+// replaceAuth 换掉本窗口的会话（同一账号重新授权后令牌换了）：客户端、长
+// 连接与界面全部改读新会话，然后按「刚登录」重建一次。
+func (a *app) replaceAuth(auth *AuthManager) {
+	if auth == nil || auth == a.auth {
+		return
+	}
+	a.auth = auth
+	if a.client != nil {
+		a.client.Auth = auth
+	}
+	a.bindAuth()
+	a.onAuthChanged(nil)
 }
 
 // publish marshals a state change onto the UI thread, then rebuilds every
@@ -590,6 +707,16 @@ func (a *app) reclickTab(idx int) {
 
 func (a *app) onAuthChanged(err error) {
 	a.loginPending = false
+	// 标题栏的窗口标题带着账号名：登录、退出、重新授权后都要跟着变，任务栏
+	// 里才好分辨这是哪个账号的窗口。
+	if a.win != nil {
+		a.win.SetTitle(a.windowTitle())
+	}
+	// 账号册记的是「本机有哪些账号」：昵称、头像与「登录是否还有效」都要
+	// 从这次会话变化同步过去（账号面板与托盘读的是那一份）。
+	if a.book != nil && a.accountID != "" {
+		a.book.noteAuthChanged(a.accountID)
+	}
 	switch {
 	case err != nil:
 		a.loginMsg = friendlyError(err)
@@ -807,16 +934,27 @@ func (a *app) dialogs(c *ui.Context) {
 	a.closePromptDialog(c)
 }
 
-// sidebarFooter 是主页侧边栏底部的固定区：从上到下是外观的三档图标、设置
-// 入口，以及账号入口（登录 / 退出登录）。放在滚动区之外，导航项再多也不会
-// 把这些常驻入口挤走。
+// sidebarFooter 是主页侧边栏底部的固定区：从上到下是外观的三档图标、账号
+// 管理、设置、关于，以及账号入口（登录 / 退出登录）。放在滚动区之外，导航
+// 项再多也不会把这些常驻入口挤走。
 func (a *app) sidebarFooter(c *ui.Context) {
 	ui.Column(c).FillWidth().Shrink(0).Padding(6, 8).Gap(2).Children(func() {
 		a.themeButtons(c)
+		// 账号面板是多账号的总入口：切换、添加、退出哪个账号都在那一个窗口里。
+		a.sidebarButton(c, "账号", accountsIcon, "账号管理：切换、添加或退出账号", a.showAccounts)
 		a.sidebarButton(c, "设置", settingsIcon, "打开设置窗口", a.showSettings)
 		a.sidebarButton(c, "关于", aboutIcon, "关于本应用", a.showAbout)
 		a.sidebarAccount(c)
 	})
+}
+
+// showAccounts 打开账号面板。没有账号册（无头测试、旧的单窗口路径）时它
+// 不存在，也就没有可切的东西。
+func (a *app) showAccounts() {
+	if a.book == nil {
+		return
+	}
+	a.book.showPanel()
 }
 
 // sidebarAccount 是侧边栏底部的账号入口：未登录时是「登录」，点一下直接打开
@@ -835,10 +973,15 @@ func (a *app) sidebarAccount(c *ui.Context) {
 		ui.Text(c, waiting).FontSize(11).TextColor(t.TextMuted).MaxLines(3)
 		a.sidebarButton(c, "粘贴回调", nil, "在登录页粘贴回调链接", func() { a.pageName = "login" })
 		a.sidebarButton(c, "取消", nil, "取消这次登录", a.cancelLogin)
+	case a.book != nil && a.book.pendingLogin() != nil:
+		// 添加账号的授权挂在账号册上：等多久都不会有跳回，兜底动作都在账号
+		// 面板里（粘贴回调链接、取消）。
+		ui.Text(c, "等待浏览器授权…").FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		a.sidebarButton(c, "账号面板", nil, "打开账号面板查看授权进度", a.showAccounts)
 	case a.auth.loggedIn():
-		a.sidebarButton(c, "退出登录", logoutIcon, "退出登录", func() { a.auth.Logout() })
+		a.sidebarButton(c, "退出登录", logoutIcon, "退出这个账号（它的窗口会一起关闭）", a.logoutAccount)
 	default:
-		a.sidebarButton(c, "登录", loginIcon, "登录 2Libra", func() { a.startLogin() })
+		a.sidebarButton(c, "登录", loginIcon, "登录 2Libra（可以挂多个账号）", func() { a.startLogin() })
 		a.sidebarButton(c, "注册", signupIcon, "注册 2Libra 账号", a.openSignup)
 	}
 }
@@ -911,23 +1054,23 @@ func (a *app) titleBar(c *ui.Context) {
 			}
 		})
 		// 右段：自绘窗口控制按钮（最小化 / 最大化·还原 / 关闭），紧贴右上角。
-		a.titleButton(c, titleMinimize, "最小化", func() {
+		titleBarButton(c, titleMinimize, "最小化", func() {
 			if a.win != nil {
 				a.win.Minimize()
 			}
 		})
 		if a.win != nil && a.win.IsMaximized() {
-			a.titleButton(c, titleRestore, "还原", func() {
+			titleBarButton(c, titleRestore, "还原", func() {
 				a.win.ToggleMaximize()
 			})
 		} else {
-			a.titleButton(c, titleMaximize, "最大化", func() {
+			titleBarButton(c, titleMaximize, "最大化", func() {
 				if a.win != nil {
 					a.win.ToggleMaximize()
 				}
 			})
 		}
-		a.titleButton(c, titleClose, "关闭", func() {
+		titleBarButton(c, titleClose, "关闭", func() {
 			if a.win != nil {
 				a.win.Close()
 			}
@@ -945,10 +1088,11 @@ const (
 	titleClose
 )
 
-// titleButton 画一个窗口按钮。图形用矢量线条绘制，不依赖字体里的字符：
-// 「– / □ / ▢ / ✕」这类符号在不同字体下大小不一，有的字体还缺字，最大化
-// 之后会显示成空白或豆腐块，正是标题栏「显示不正常」的来源。
-func (a *app) titleButton(c *ui.Context, g titleGlyph, label string, onClick func()) {
+// titleBarButton 画一个窗口按钮（主窗口与各个账号/附属窗口共用同一套画法）。
+// 图形用矢量线条绘制，不依赖字体里的字符：「– / □ / ▢ / ✕」这类符号在不同
+// 字体下大小不一，有的字体还缺字，最大化之后会显示成空白或豆腐块，正是
+// 标题栏「显示不正常」的来源。
+func titleBarButton(c *ui.Context, g titleGlyph, label string, onClick func()) {
 	t := c.Theme()
 	b := ui.Box(c).Width(titleButtonWidth).Shrink(0).Background(ui.Transparent)
 	ink := t.Text
@@ -1244,7 +1388,7 @@ func (a *app) loginView(c *ui.Context) {
 					Color:  t.TextMuted,
 				})
 				if ui.Button(c, "退出登录").Clicked() {
-					a.auth.Logout()
+					a.logoutAccount()
 				}
 			}
 		})
@@ -1259,7 +1403,7 @@ func (a *app) loginView(c *ui.Context) {
 			ui.Text(c, "完成这次授权后会自动继续刚才被中断的操作。").FontSize(12).TextColor(t.TextMuted)
 		}
 		if ui.PrimaryButton(c, "打开浏览器授权").Clicked() {
-			a.startLoginWithScopes(a.pendingAuthScopes())
+			a.startLoginFromPage()
 		}
 		if ui.Button(c, "注册账号").Clicked() {
 			a.openSignup()
@@ -1335,10 +1479,41 @@ func (a *app) raiseMainWindow() {
 	win.Invalidate()
 }
 
-// startLogin 打开系统浏览器并进入等待状态：不回登录页、不需要第二次点击，
-// 系统回调（或用户粘贴的回调链接）完成授权后自行登录。
+// startLogin 是「登录」入口。多账号时它就是「添加账号」：浏览器授权回来后
+// 会为那个账号开一个自己的主窗口，已经登录的那个账号不受影响；账号窗口的
+// 令牌失效后再点「登录」，重新授权的是这个窗口自己的账号，而不是再添一个。
+// 没有账号册时（无头测试、单窗口路径）走本窗口自己的会话。
 func (a *app) startLogin() {
+	if a.book != nil {
+		if a.accountID != "" {
+			a.book.reloginAccount(a.accountID)
+			return
+		}
+		a.book.startAddAccount()
+		return
+	}
 	a.startLoginWithScopes(nil)
+}
+
+// startLoginFromPage 是登录回退页上的「打开浏览器授权」：未登录窗口里就是
+// 添加账号，账号窗口里则是给这个账号补权限。
+func (a *app) startLoginFromPage() {
+	if a.book != nil && a.accountID == "" {
+		a.book.startAddAccount()
+		return
+	}
+	a.startLoginWithScopes(a.pendingAuthScopes())
+}
+
+// logoutAccount 退出当前窗口所属的账号：多账号时它把这个账号从账号册里摘掉
+// （令牌删掉、窗口关掉），别的账号照常挂着；没有账号册时就是普通的一次退出
+// 登录。
+func (a *app) logoutAccount() {
+	if a.book != nil && a.accountID != "" {
+		a.book.logoutAccount(a.accountID)
+		return
+	}
+	a.auth.Logout()
 }
 
 // openSignup 打开带邀请码的 2Libra 注册页：注册在网页完成，应用内不做。未
@@ -1350,6 +1525,11 @@ func (a *app) openSignup() {
 // startLoginWithScopes 是上面那条流程的唯一实现：额外 scope 来自全局授权
 // 弹窗登记的缺失权限，普通登录传 nil 只申请默认范围。
 func (a *app) startLoginWithScopes(scopes []string) {
+	// 一次只允许一次授权在等回调（回调只带 code 与 state）：这个账号窗口先
+	// 认领，别的窗口 / 账号面板上正在等的授权让位。
+	if a.book != nil {
+		a.book.claimLogin(a.auth)
+	}
 	authorizeURL, err := a.auth.BeginScopes(context.Background(), scopes)
 	if err != nil {
 		a.cancelAuthGate("无法开始授权：" + err.Error())
@@ -1376,30 +1556,28 @@ func (a *app) cancelLogin() {
 }
 
 func main() {
-	a := newApp("")
-	a.autoLoad = true
+	// 账号册：本机登录过的账号、每个账号一条令牌、进程级的共享依赖（代理、
+	// 外观、图片缓存、离线缓存），以及多账号窗口的调度。它只读本机文件，
+	// 先建好，后面所有窗口都从它这里开。
+	b := newAccountBook("")
 	// 先把代理规则接到进程内所有 HTTP 出口，再装更新插件：更新插件自己
 	// 发请求（检查更新、下载更新包），不经过本应用的 Client。接好之后，
 	// 手动代理 / 直连 / 跟随系统三种模式与「不走代理的地址」对它同样生效，
 	// 设置窗口里改完代理立刻就能检查更新。
-	installGlobalProxy(a.proxy)
+	installGlobalProxy(b.proxy)
 	// 自动更新：更新包来自 github.com/vhxubo/t2-desktop 的 release，由
 	// mygo build 用 mygo.json 里 updates.publicKey 对应的私钥签名。native
 	// 更新窗口不需要 WebView，与本应用的原生 UI 一致：启动后检查一次，之后
 	// 每天一次，也在设置窗口的「检查更新」被点击时立即检查。
 	mygo.Use(updatenative.Plugin)
-	a.updates = true
+	b.updates = true
 	// 先按保存的外观模式设置原生外观，让启动首帧、原生更新/通知窗口与
 	// theme.json 一致；自绘界面仍由 view 每帧设置。
-	mygo.Theme.SetSource(themeSource(a.theme.Mode()))
+	mygo.Theme.SetSource(themeSource(b.theme.Mode()))
 	// 深链回调先注册，再取单实例锁：浏览器跳回时系统拉起的是一个新进程，
 	// 它把命令行转给第一个实例，转发可能早于下面几行执行。mygo 的
 	// OnOpenURL 只在投递那一刻有监听者时才送达，注册晚了链接就被丢掉。
-	mygo.App.OnOpenURL(func(raw string) {
-		// 系统投来深链（OAuth 回调）：先把主窗口拉到最前面，再处理回调。
-		a.raiseMainWindow()
-		a.publish(func() { a.handleCallbackURL(raw) })
-	})
+	mygo.App.OnOpenURL(b.handleDeepLink)
 	// On Windows/Linux the custom-scheme callback starts a second process;
 	// hand its URL to the instance that holds the PKCE verifier.
 	if !mygo.App.RequestSingleInstanceLock() {
@@ -1410,96 +1588,37 @@ func main() {
 	// and apps launched without an installer. Failure only disables the
 	// automatic jump back: pasting the callback link still works.
 	if err := mygo.App.RegisterURLScheme(appIdentifier); err != nil {
-		a.schemeWarn = "系统未把 " + appIdentifier + " 关联到本应用（" + err.Error() + "）：授权后浏览器不会自动跳回，请复制地址栏里的完整链接粘贴到下方。"
+		b.schemeWarn = "系统未把 " + appIdentifier + " 关联到本应用（" + err.Error() + "）：授权后浏览器不会自动跳回，请复制地址栏里的完整链接粘贴到「账号」面板里。"
 		log.Printf("运行时注册 %s 未成功（打包版由 mygo.json 的 urlSchemes 声明；仍可手动粘贴回调链接）：%v", appIdentifier, err)
 	} else {
 		log.Printf("回调协议已注册：%s", appIdentifier)
 	}
-	// 原生通知的点击只带回 id，由 openNotificationNotice 查回目标：帖子和
-	// 评论在应用内打开，其余交给系统浏览器。注册在 Run 之前，因此连「点击
-	// 通知才启动本进程」的那一次也能收到。
-	mygo.App.OnNotificationClick(func(id string) {
-		a.publish(func() { a.openNotificationNotice(id) })
-	})
+	// 原生通知的点击只带回 id，由账号册查回它是哪个账号的消息、落到哪个
+	// 窗口：帖子和评论在应用内打开，其余交给系统浏览器。注册在 Run 之前，
+	// 因此连「点击通知才启动本进程」的那一次也能收到。
+	mygo.App.OnNotificationClick(b.openNotice)
 	// 站内读掉消息不会产生 notification_update，窗口回到前台时校准一次。
-	mygo.App.OnDidBecomeActive(func() {
-		a.publish(func() { a.onBecameActive() })
-	})
-	// 退出可能来自托盘菜单、系统菜单或会话结束：先立这个标记，主窗口的关闭
-	// 才不会被「收进托盘」拦下来，退不掉。
-	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.quitting = true })
+	mygo.App.OnDidBecomeActive(b.onBecameActive)
+	// 退出可能来自托盘菜单、系统菜单或会话结束：先给所有窗口立这个标记，
+	// 主窗口的关闭才不会被「收进托盘」拦下来，退不掉。
+	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { b.markQuitting() })
 	mygo.App.WhenReady(func() {
 		// 原生通知要等应用就绪：Windows 走托盘气泡，macOS 首次会询问授权。
-		// 头less 测试不经过这里，a.notify 保持 nil，不会触碰系统通知。
+		// 头less 测试不经过这里，notify 保持 nil，不会触碰系统通知。
 		if mygo.NotificationsSupported() {
-			a.notify = showNativeNotice
+			b.notify = showNativeNotice
 		}
-		// 图片缓存要在后台定期清理过期帖子图片：启动时先清一次，之后按
-		// imageCacheCleanupInterval 再清。无头测试不经过这里。
-		a.startImageCacheMaintenance()
-		a.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:             "T2 Desktop",
-			Width:             1080,
-			Height:            720,
-			MinWidth:          760,
-			MinHeight:         520,
-			StateKey:          "main",
-			Content:           ui.View(a.view),
-			TitleBarStyle:     mygo.TitleBarHidden, // 隐藏原生标题栏
-			HideWindowButtons: true,                // 连系统按钮也隐藏，完全自绘最小化/最大化/关闭
-		})
-		// 主窗口关掉时把通知、设置、我的、金币等附属窗口一起关掉：没有主
-		// 窗口的它们都是孤岛，而且应用的最后一个窗口关闭时进程就该退出。
-		a.win.OnClosed(func() {
-			// 主窗口没了，标题栏的金币数也不用再刷新。
-			a.stopCoinTagWatch()
-			a.closeNotificationWindow()
-			a.closeSettingsWindow()
-			a.closeProfileWindow()
-			a.closeCoinWindow()
-			a.closePandoraWindow()
-			a.closeComposeWindow()
-			a.closeReplyWindow()
-			a.closeEditWindow()
-			a.closeSearchWindow()
-			a.closeAboutWindow()
-			a.closeFollowsWindow()
-		})
-		// 关闭按钮（自绘标题栏、Alt+F4、任务栏右键都一样）先问设置：默认
-		// 照常关闭，选了「收进托盘」就拦下来藏起窗口，见 window_mode.go。
-		a.win.OnClose(a.onMainWindowClose)
+		// 从这里开始才有主循环：后台结果可以投到 UI 线程。
+		b.mainLoop = true
+		// 图片缓存是进程级的一份，清理循环也只起一次。
+		b.startImageCacheMaintenance()
+		// 未激活账号的未读角标与令牌保活。
+		b.startBackground()
 		// 托盘图标：应用就绪后才有原生通知区域，见 tray.go。创建失败只记
-		// 日志，主窗口照常使用。
-		a.startTray()
-		// 表情表启动时就拉一次（文档同样建议启动时取并缓存）：等到第一次打开
-		// 详情再拉，正文会先按 :code: 短码排一遍，短码变成图片时整段重排。
-		// 放在主窗口创建之后，结果才能经 publish 回到 UI 线程。
-		a.ensureEmojis()
-		if a.auth.loggedIn() {
-			a.refreshUnread()
-			a.refreshFollowsUnread()
-			a.startNotificationWatch()
-			// 登录过的老会话启动时就先把金币数读出来，之后定时刷新。
-			a.startCoinTagWatch()
-			// 首页标题栏的潘多拉事件名也来自这一份静默读取。
-			a.loadPandoraEntry()
-			// 令牌里已经缓存了用户名与头像地址；这里再校准一次，老会话
-			// 也能补上头像，并在加载完成后刷新标题栏。
-			a.ensureAvatar()
-			// Pro 状态同样属于老会话要补齐的信息：官方图床只对 Pro 开放，
-			// 令牌里还没记过就现在读一次。
-			a.refreshProStatus(false)
-			go func() {
-				ctx := context.Background()
-				token := a.auth.accessToken()
-				_ = a.auth.verify(ctx, token)
-				a.auth.fetchIdentity(ctx, token)
-				a.publish(func() {
-					a.status = a.auth.verifyStatus()
-					a.ensureAvatar()
-				})
-			}()
-		}
+		// 日志，窗口照常使用。
+		b.startTray()
+		// 每个账号一个主窗口；一个账号都没有时打开未登录窗口。
+		b.restoreWindows()
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal("应用启动失败：", err)

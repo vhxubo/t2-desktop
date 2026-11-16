@@ -159,6 +159,9 @@ type AuthManager struct {
 	// proxy 只在登录链路用来把「当前生效的代理线路」写进网络错误提示，
 	// 让用户一眼看出令牌请求走的是哪条线、该去设置里改成直连还是放行。
 	proxy *proxyManager
+	// key 是这个会话在本机存储里的账号键（见 accounts.go）。空键是旧版单
+	// 账号会话的键；添加账号时先用空键，拿到用户名后才换成正式账号 id。
+	key string
 	// store persists the session. Production uses the OS credential store
 	// (mygo.Secrets); tests inject a file-backed store via tokenStoreFactory.
 	store tokenStore
@@ -174,13 +177,23 @@ func newAuthManager(dir string) *AuthManager {
 // newAuthManagerAt 复用调用方已经建好的代理管理器，保证 OAuth 与 API 请求
 // 走同一份代理配置和同一个连接池。
 func newAuthManagerAt(dir string, proxy *proxyManager) *AuthManager {
+	return newAuthManagerFor(dir, proxy, legacyTokenKey)
+}
+
+// newAuthManagerFor 建一个账号的会话：令牌从它自己的凭据里读，存储键是
+// 账号 id（见 accounts.go）。
+func newAuthManagerFor(dir string, proxy *proxyManager, key string) *AuthManager {
+	if dir == "" {
+		dir = configDir()
+	}
 	m := &AuthManager{
 		apiBase: apiBaseURL,
 		// 令牌交换在打包后可能走代理/系统防火墙，读响应体比开发机慢。给
 		// 30s 余量（原 20s），超时则经 wrapAuthError 说清走的哪条线路。
 		http:  proxy.Client(30 * time.Second),
 		proxy: proxy,
-		store: tokenStoreFactory(dir),
+		key:   key,
+		store: tokenStoreFactory(dir, key),
 	}
 	// client_id and scope are compile-time constants now. A settings.json
 	// left behind by an older build is ignored entirely.
@@ -193,36 +206,117 @@ func newAuthManagerAt(dir string, proxy *proxyManager) *AuthManager {
 // errNoToken is what tokenStore.load returns when no session is saved yet.
 var errNoToken = errors.New("no stored token")
 
-// tokenStore persists the login session. The production implementation keeps
-// the tokens in the OS credential store through mygo.Secrets (Windows
-// Credential Manager / macOS Keychain / Linux Secret Service) so the refresh
-// token is never written to disk in plaintext, as the 2Libra terms require.
-// fileTokenStore exists for tests and for platforms without a credential
-// store, where secureTokenStore transparently falls back to it.
+// tokenStore persists one account's login session. The production
+// implementation keeps the tokens in the OS credential store through
+// mygo.Secrets (Windows Credential Manager / macOS Keychain / Linux Secret
+// Service) so the refresh token is never written to disk in plaintext, as the
+// 2Libra terms require. fileTokenStore exists for tests and for platforms
+// without a credential store, where secureTokenStore transparently falls back
+// to it.
+//
+// 多账号：一个账号一份凭据，键是账号在本机存储里的 id（见 accounts.go）。
+// 旧版本只有一个账号、一份凭据，那个账号的键是空串，仍按旧名读写；升级后
+// 第一次启动会把它迁移成正式账号（见 accountBook.migrateLegacySession）。
 type tokenStore interface {
 	load() (*tokenData, error) // errNoToken when nothing is saved
 	save(t *tokenData) error
 	delete() error
 }
 
-// tokenSecretKey is the credential-store entry holding the serialized session.
-const tokenSecretKey = "session-token"
+// legacyTokenKey 是旧版单账号会话的存储键：没有账号册的时代本机只有一个
+// 登录态，令牌存在 session-token / token.json 里。空键让升级后的第一次
+// 启动还能读到老会话，再迁移到它自己的账号键上。
+const legacyTokenKey = ""
 
-// tokenStoreFactory builds the persistent token store for a config dir. Tests
+const (
+	legacyTokenSecret = "session-token"
+	tokenSecretPrefix = "session-token/"
+)
+
+// tokenSecretKey 是某个账号在 OS 凭据库里的条目名。旧键保持原名。
+func tokenSecretKey(key string) string {
+	if key == "" {
+		return legacyTokenSecret
+	}
+	return tokenSecretPrefix + storageKey(key)
+}
+
+// tokenFilePath 是凭据库不可用时退回的明文文件，同样保留旧名 token.json。
+func tokenFilePath(dir, key string) string {
+	if key == "" {
+		return filepath.Join(dir, "token.json")
+	}
+	return filepath.Join(dir, "token-"+storageKey(key)+".json")
+}
+
+// storageKey 把账号 id 变成可以做文件名、凭据键的片段：只保留字母、数字、
+// 点、下划线与连字符，其余换成下划线。账号 id 由 accountIDFor 生成，本来
+// 就合规；这里再兜一次，免得以后改 id 规则时把路径拼出配置目录。
+func storageKey(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "account"
+	}
+	return b.String()
+}
+
+// memoryTokenStore 只在内存里保存会话：添加账号时还不知道授权回来的会是
+// 哪个账号，令牌先留在这里，拿到用户名、定了账号 id 之后才换进它自己的
+// 凭据（见 accountBook.adoptLogin）。
+type memoryTokenStore struct {
+	mu sync.Mutex
+	t  *tokenData
+}
+
+func (s *memoryTokenStore) load() (*tokenData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.t == nil {
+		return nil, errNoToken
+	}
+	cp := *s.t
+	return &cp, nil
+}
+
+func (s *memoryTokenStore) save(t *tokenData) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *t
+	s.t = &cp
+	return nil
+}
+
+func (s *memoryTokenStore) delete() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.t = nil
+	return nil
+}
+
+// tokenStoreFactory builds the persistent token store for one account. Tests
 // override it (see auth_store_test.go) with a file-backed store so runs stay
-// isolated and the existing token.json assertions keep working; the default
-// production store uses the OS credential store.
-var tokenStoreFactory = func(dir string) tokenStore {
-	return newSecureTokenStore(dir)
+// isolated and the token file assertions keep working; the default production
+// store uses the OS credential store.
+var tokenStoreFactory = func(dir, key string) tokenStore {
+	return newSecureTokenStore(dir, key)
 }
 
 // fileTokenStore keeps the session as token.json, the pre-Secrets behaviour.
 // It is the fallback when no credential store is available and the store used
-// by tests.
+// by tests. 多账号时每个账号是 token-<id>.json，旧账号仍是 token.json。
 type fileTokenStore struct{ path string }
 
-func newFileTokenStore(dir string) tokenStore {
-	return fileTokenStore{path: filepath.Join(dir, "token.json")}
+func newFileTokenStore(dir, key string) tokenStore {
+	return fileTokenStore{path: tokenFilePath(dir, key)}
 }
 
 func (s fileTokenStore) load() (*tokenData, error) {
@@ -247,7 +341,7 @@ func (s fileTokenStore) delete() error {
 	return nil
 }
 
-// secureTokenStore keeps the session in the OS credential store via
+// secureTokenStore keeps one account's session in the OS credential store via
 // mygo.Secrets. When the store is unavailable (errors.ErrUnsupported, e.g. a
 // headless Linux without libsecret) or the serialized session exceeds the
 // credential store's size cap (mygo.MaxSecretSize), it falls back to
@@ -255,18 +349,19 @@ func (s fileTokenStore) delete() error {
 // later loads read the file instead of the (empty) credential store.
 type secureTokenStore struct {
 	dir      string
+	key      string
 	mu       sync.Mutex
 	file     tokenStore
 	fileOnly bool
 }
 
-func newSecureTokenStore(dir string) tokenStore {
-	return &secureTokenStore{dir: dir}
+func newSecureTokenStore(dir, key string) tokenStore {
+	return &secureTokenStore{dir: dir, key: key}
 }
 
 func (s *secureTokenStore) fileStore() tokenStore {
 	if s.file == nil {
-		s.file = newFileTokenStore(s.dir)
+		s.file = newFileTokenStore(s.dir, s.key)
 	}
 	return s.file
 }
@@ -278,7 +373,7 @@ func (s *secureTokenStore) load() (*tokenData, error) {
 	if fileOnly {
 		return s.fileStore().load()
 	}
-	b, err := mygo.Secrets.Get(tokenSecretKey)
+	b, err := mygo.Secrets.Get(tokenSecretKey(s.key))
 	if err != nil {
 		if errors.Is(err, mygo.ErrSecretNotFound) {
 			return nil, errNoToken
@@ -312,7 +407,7 @@ func (s *secureTokenStore) save(t *tokenData) error {
 		s.mu.Unlock()
 		return s.fileStore().save(t)
 	}
-	if err := mygo.Secrets.Set(tokenSecretKey, b); err != nil {
+	if err := mygo.Secrets.Set(tokenSecretKey(s.key), b); err != nil {
 		if errors.Is(err, errors.ErrUnsupported) {
 			fmt.Fprintln(os.Stderr, "token: OS 凭据库不可用，已退回明文文件存储")
 			s.mu.Lock()
@@ -332,7 +427,7 @@ func (s *secureTokenStore) delete() error {
 	if fileOnly {
 		return s.fileStore().delete()
 	}
-	err := mygo.Secrets.Delete(tokenSecretKey)
+	err := mygo.Secrets.Delete(tokenSecretKey(s.key))
 	if err != nil && !errors.Is(err, mygo.ErrSecretNotFound) {
 		if errors.Is(err, errors.ErrUnsupported) {
 			s.mu.Lock()
@@ -392,6 +487,14 @@ func (m *AuthManager) avatarURL() string {
 // Cancel drops the in-flight authorization when the user gives up on it, so a
 // late browser redirect cannot sign the session back in.
 func (m *AuthManager) Cancel() { m.cancelPending("已取消登录") }
+
+// awaitingLogin 报告这个会话正在等一次授权回调。多账号时回调只带 code 与
+// state，账号册靠它认出该把链接交给哪一个窗口。
+func (m *AuthManager) awaitingLogin() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pending != nil
+}
 
 func (m *AuthManager) verifyStatus() string {
 	m.mu.Lock()
@@ -462,6 +565,56 @@ func (m *AuthManager) clearToken() error {
 	m.lastVerify = ""
 	m.epoch++
 	return m.store.delete()
+}
+
+// rekey 把这个会话换到另一个账号的凭据上，并把当前令牌写过去。添加账号时
+// 授权回来的账号在拿到用户名之前并不确定，令牌先放在内存里；确定之后才
+// 换到它自己的存储键。
+func (m *AuthManager) rekey(store tokenStore, key string) error {
+	m.mu.Lock()
+	m.store = store
+	m.key = key
+	var snapshot *tokenData
+	if m.token != nil {
+		cp := *m.token
+		snapshot = &cp
+	}
+	m.mu.Unlock()
+	if snapshot == nil {
+		return nil
+	}
+	return store.save(snapshot)
+}
+
+// expiry 返回访问令牌的过期时间。令牌没记得到期信息时返回零值，调用方据此
+// 跳过提前刷新。
+func (m *AuthManager) expiry() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.token == nil || m.token.ExpiresIn <= 0 || m.token.ObtainedAt <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(m.token.ObtainedAt, 0).Add(time.Duration(m.token.ExpiresIn) * time.Second)
+}
+
+// refreshIfExpiring 在令牌 within 之内就要过期时提前刷新一次。多账号挂在
+// 后台时靠它保持登录：窗口没开的账号也不会等到用户点开才开始换令牌。
+// 令牌还早着、或根本没登录时直接返回。
+func (m *AuthManager) refreshIfExpiring(ctx context.Context, within time.Duration) error {
+	cur := m.accessToken()
+	if cur == "" {
+		return nil
+	}
+	if at := m.expiry(); at.IsZero() || time.Until(at) > within {
+		return nil
+	}
+	if _, err := m.refresh(ctx, cur); err != nil {
+		if errors.Is(err, errSessionChanged) {
+			return nil // 期间换过账号：这次结果本来就不该用
+		}
+		return err
+	}
+	return nil
 }
 
 func (m *AuthManager) notify(err error) {

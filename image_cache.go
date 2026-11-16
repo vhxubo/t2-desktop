@@ -607,15 +607,16 @@ func (a *app) prefetchImage(raw string, cat imageCategory) {
 	if !a.autoLoad {
 		return
 	}
-	// 界面查状态用的是 trim 过的地址，登记缓存项也用同一个键。
-	raw = strings.TrimSpace(raw)
-	if _, err := parseImageURL(raw); err != nil {
-		return
+	a.images.prefetch(raw, cat, a.imageFetcher())
+}
+
+// imageFetcher 是本窗口取图与重绘的那一份实现：取图走配置的代理，结果到了
+// 经 Window.Update 回到界面。
+func (a *app) imageFetcher() imageFetcher {
+	return imageFetcher{
+		fetch:  a.fetchImage,
+		redraw: func() { a.publish(func() {}) },
 	}
-	if _, created := a.images.begin(raw); !created {
-		return
-	}
-	go a.loadImageEntry(raw, cat)
 }
 
 // embeddedRasterPattern 找 SVG 里内嵌的位图（2Libra 的小徽章图标就是这种
@@ -808,41 +809,63 @@ func embeddedRasterImage(data []byte) ui.ImageSource {
 	return src
 }
 
-// loadImageEntry 先看磁盘缓存，没有再下载，解好后通知 UI 重绘。
-func (a *app) loadImageEntry(raw string, cat imageCategory) {
-	e := a.images.get(raw)
+// imageFetcher 是图片加载要的外部依赖：怎么取字节、结果到了怎么通知界面
+// 重绘。图片缓存是全应用一份（见 appDeps），而取图与重绘属于各自的界面：
+// 账号窗口有它自己的未读数与窗口，账号面板只有它自己那一个窗口。
+type imageFetcher struct {
+	fetch  func(raw string) ([]byte, error)
+	redraw func()
+}
+
+// prefetch 启动一次后台加载。同一个地址只下一次：成功、失败还是仍在下载
+// 都记在缓存项的 state 里，不会因为每帧渲染而重发。
+func (c *imageCache) prefetch(raw string, cat imageCategory, f imageFetcher) {
+	// 界面查状态用的是 trim 过的地址，登记缓存项也用同一个键。
+	raw = strings.TrimSpace(raw)
+	if _, err := parseImageURL(raw); err != nil {
+		return
+	}
+	if _, created := c.begin(raw); !created {
+		return
+	}
+	go c.load(raw, cat, f)
+}
+
+// load 先看磁盘缓存，没有再下载，解好后通知界面重绘。
+func (c *imageCache) load(raw string, cat imageCategory, f imageFetcher) {
+	e := c.get(raw)
 	if e == nil {
 		return
 	}
-	gen := a.images.generation()
-	if data, ok := a.images.readDisk(raw, cat); ok {
+	gen := c.generation()
+	if data, ok := c.readDisk(raw, cat); ok {
 		if src, err := decodeImageData(raw, cat, data); err == nil {
 			e.set(src)
-			a.publish(func() {})
+			f.redraw()
 			return
 		}
-		a.images.forgetDisk(raw, cat)
+		c.forgetDisk(raw, cat)
 	}
-	data, err := a.fetchImage(raw)
+	data, err := f.fetch(raw)
 	if err != nil {
 		e.set(nil)
 		log.Printf("图片加载失败：%v", err)
 		// 失败也要重建界面：否则占位会一直停在「加载中」的转圈上。
-		a.publish(func() {})
+		f.redraw()
 		return
 	}
 	src, err := decodeImageData(raw, cat, data)
 	if err != nil {
 		e.set(nil)
 		log.Printf("图片加载失败：%v", err)
-		a.publish(func() {})
+		f.redraw()
 		return
 	}
 	e.set(src)
-	if err := a.images.writeDisk(raw, cat, gen, data); err != nil {
+	if err := c.writeDisk(raw, cat, gen, data); err != nil {
 		log.Printf("图片缓存写入失败：%v", err)
 	}
-	a.publish(func() {}) // 走 Window.Update，让图片出现在下一帧
+	f.redraw() // 走 Window.Update，让图片出现在下一帧
 }
 
 // loadImageNow 是给 Markdown 同步 LoadImage 回调用的版本：先读缓存，没有再
@@ -889,23 +912,23 @@ func parseImageURL(raw string) (*url.URL, error) {
 }
 
 // cleanExpiredImages 清理过期的帖子图片，有删除时记一行日志。
-func (a *app) cleanExpiredImages() {
-	files, bytes := a.images.cleanExpired(time.Now())
+func (b *accountBook) cleanExpiredImages() {
+	files, bytes := b.images.cleanExpired(time.Now())
 	if files > 0 {
 		log.Printf("图片缓存：清理了 %d 个过期帖子图片（%s）", files, formatBytes(bytes))
 	}
 }
 
 // startImageCacheMaintenance 在启动时清一次过期帖子图片，之后每
-// imageCacheCleanupInterval 再清一次。只在真实应用里启动（main 的
-// WhenReady），无头测试不会在后台碰磁盘。
-func (a *app) startImageCacheMaintenance() {
+// imageCacheCleanupInterval 再清一次。图片缓存是全应用一份，所以这个循环
+// 也只起一次（见 main 的 WhenReady）。无头测试不经过这里。
+func (b *accountBook) startImageCacheMaintenance() {
 	go func() {
-		a.cleanExpiredImages()
+		b.cleanExpiredImages()
 		ticker := time.NewTicker(imageCacheCleanupInterval)
 		defer ticker.Stop()
 		for range ticker.C {
-			a.cleanExpiredImages()
+			b.cleanExpiredImages()
 		}
 	}()
 }

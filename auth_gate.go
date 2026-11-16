@@ -154,6 +154,14 @@ func (a *app) requestLogin(message string, replay func()) {
 func (a *app) authorizeGate() {
 	scopes := append([]string(nil), a.authGate.need.Scopes...)
 	a.authGate.open = false
+	// 未登录窗口里的「前往授权」其实就是添加一个账号：授权回来之后会给那个
+	// 账号开一个自己的窗口，这个匿名窗口随之关掉。它登记的待重跑调用属于
+	// 匿名窗口，一并丢弃。
+	if a.book != nil && a.accountID == "" {
+		a.cancelAuthGate("")
+		a.book.startAddAccount()
+		return
+	}
 	a.startLoginWithScopes(scopes)
 }
 

@@ -177,12 +177,12 @@ func (a *app) replyWindowView(c *ui.Context) {
 					a.closeReplyWindow()
 				}
 			})
-			a.titleButton(c, titleMinimize, "最小化", func() {
+			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.replyWin; win != nil {
 					win.Minimize()
 				}
 			})
-			a.titleButton(c, titleClose, "关闭", a.closeReplyWindow)
+			titleBarButton(c, titleClose, "关闭", a.closeReplyWindow)
 		})
 		ui.Divider(c)
 
