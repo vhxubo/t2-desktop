@@ -4,8 +4,10 @@
 > **非官方**桌面客户端，与 2Libra 无任何隶属、合作或背书关系。2Libra 仅提供
 > 账号授权与开放接口，不对本应用的可用性、内容与数据处理负责。
 
-基于 [mygo](https://github.com/egoist/mygo) 的纯原生 UI（无 WebView），用 Go 编写，
-支持 Windows / macOS / Linux。所有内容数据来自
+基于 [mygo](https://github.com/egoist/mygo) 的原生 UI，用 Go 编写，
+支持 Windows / macOS / Linux。界面全部是原生控件：唯一用到 webview 的地方是给
+「第二个及以后的账号」做授权的内置浏览器窗口（见下方「多账号」）。
+所有内容数据来自
 [2Libra 开放 API v1](https://r2.2libra.com/openapi/v1/index.md)，并严格遵守其
 [第三方接入条款](https://r2.2libra.com/openapi/v1/terms.md)（v1.1）。
 
@@ -83,6 +85,9 @@
 - **多账号**：可以同时挂多个账号，每个账号一个独立主窗口（各自登录、各自收通知），
   账号面板里随时打开、重新登录或退出某一个账号；未激活账号的未读角标与令牌刷新
   在后台进行，切换不用重新授权。
+- **内置浏览器登录**：第一个账号仍走系统浏览器；添加第二个及以后的账号时，授权页
+  开在应用内的独立浏览器窗口里（临时会话，不共用系统浏览器的登录状态），不用先去
+  网页端退出登录。系统没有 webview 时自动退回系统浏览器。
 - **消息中心**：未读角标、SSE 长连接、系统通知与已读批量管理。
 - **金币**：余额、今日明细、流水、统计与排行各自独立加载，未开通的能力只降级
   对应模块；标题栏金币数实时联动。
@@ -137,7 +142,7 @@
 | 项 | 说明 |
 | --- | --- |
 | 语言 | Go 1.27+ |
-| UI | `github.com/egoist/mygo` 原生 UI 包 `ui`（无 WebView） |
+| UI | `github.com/egoist/mygo` 原生 UI 包 `ui`；仅多账号授权页放进内置浏览器窗口 |
 | 构建工具 | `mygo`（`go tool mygo build`） |
 | 网络 | `golang.org/x/net` |
 | 包标识 | `com.vhxubo.t2-desktop` |

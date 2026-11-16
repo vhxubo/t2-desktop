@@ -215,7 +215,7 @@ func TestAddAccountCompletesFromCallback(t *testing.T) {
 	m.apiBase = srv.URL + "/api"
 	m.http = srv.Client()
 	m.store = &memoryTokenStore{}
-	m.onChange = func(err error) { b.finishAddAccount(m, err) }
+	m.onChange = func(err error) { b.finishAccountLogin(m, err) }
 	authorize, err := m.BeginScopes(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -356,9 +356,15 @@ func TestReloginRecoversExpiredAccount(t *testing.T) {
 	b := newAccountBook(dir)
 	var opened string
 	b.openURL = func(u string) error { opened = u; return nil }
+	// 重新登录用一份临时会话：这里让它指向测试服务器，而不是线上 API。
+	b.newLoginAuth = func() *AuthManager {
+		m := newAuthManagerFor(dir, b.proxy, legacyTokenKey)
+		m.store = &memoryTokenStore{}
+		m.apiBase = srv.URL + "/api"
+		m.http = srv.Client()
+		return m
+	}
 	acc := addTestAccount(t, b, "jimmy")
-	acc.auth.apiBase = srv.URL + "/api"
-	acc.auth.http = srv.Client()
 	setTestNeedLogin(b, acc.ID)
 	if !b.accountsView()[0].NeedsLogin {
 		t.Fatal("前置条件：这个账号应当已失效")
@@ -700,7 +706,7 @@ func TestPanelViewShowsPendingAuthorization(t *testing.T) {
 	m.apiBase = srv.URL + "/api"
 	m.http = srv.Client()
 	m.store = &memoryTokenStore{}
-	m.onChange = func(err error) { b.finishAddAccount(m, err) }
+	m.onChange = func(err error) { b.finishAccountLogin(m, err) }
 	if _, err := m.BeginScopes(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -708,7 +714,7 @@ func TestPanelViewShowsPendingAuthorization(t *testing.T) {
 	b.pending = &accountLogin{auth: m}
 	b.loginMsg = "已在浏览器打开授权页，同意后会自动跳回。"
 	b.mu.Unlock()
-	t.Cleanup(func() { b.cancelAddAccount() })
+	t.Cleanup(func() { b.cancelLogin() })
 
 	tt := ui.NewTester(b.panelView, accountsWindowWidth, accountsWindowHeight)
 	tt.Frame()
@@ -721,7 +727,7 @@ func TestPanelViewShowsPendingAuthorization(t *testing.T) {
 
 // 取消授权之后不能再认领迟到的回调：浏览器里那条链接会变成「没有对应的
 // 授权」。
-func TestCancelAddAccountRejectsLateCallback(t *testing.T) {
+func TestCancelLoginRejectsLateCallback(t *testing.T) {
 	b := testBook(t)
 	m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
 	m.store = &memoryTokenStore{}
@@ -731,11 +737,245 @@ func TestCancelAddAccountRejectsLateCallback(t *testing.T) {
 	b.mu.Lock()
 	b.pending = &accountLogin{auth: m}
 	b.mu.Unlock()
-	b.cancelAddAccount()
+	b.cancelLogin()
 	if b.pendingLogin() != nil {
 		t.Error("取消后不该还挂着 pending")
 	}
 	if !strings.Contains(b.loginStatus(), "已取消") {
+		t.Errorf("提示 = %q", b.loginStatus())
+	}
+}
+
+/* ------------------------------------------------------------------
+   添加账号走哪条路：系统浏览器还是内置浏览器
+------------------------------------------------------------------ */
+
+// 第一个账号用系统浏览器（网页端可能一个账号都没登，直接授权最快）；本机
+// 已经有账号时改用内置浏览器的独立会话，否则系统浏览器会把授权码发给网页里
+// 正登着的那个账号。系统 webview 不在时一律退回系统浏览器。
+func TestEmbeddedLoginIsUsedForAdditionalAccounts(t *testing.T) {
+	b := testBook(t)
+	if b.embeddedLoginReady("") {
+		t.Fatal("本机没有账号时不该用内置浏览器")
+	}
+	addTestAccount(t, b, "jimmy")
+	b.afterReady = true
+	if b.embeddedLoginReady("") {
+		t.Fatal("系统 webview 不可用时不该用内置浏览器")
+	}
+	b.webview = true
+	if !b.embeddedLoginReady("") {
+		t.Fatal("已经有账号、webview 可用时应改用内置浏览器")
+	}
+	// 重新登录已有账号也走内置浏览器：系统浏览器里登着的可能是别的账号。
+	b.afterReady = false
+	b.webview = false
+	if b.embeddedLoginReady("jimmy-930a68") {
+		t.Fatal("应用没就绪时不该用内置浏览器")
+	}
+}
+
+// 添加账号在系统浏览器路径上：地址交给系统浏览器打开，面板进入等待状态。
+func TestAddAccountOpensSystemBrowserWithNoAccounts(t *testing.T) {
+	b := testBook(t)
+	var opened string
+	b.openURL = func(u string) error { opened = u; return nil }
+	b.startAddAccount()
+	if opened == "" {
+		t.Fatal("没有打开授权页")
+	}
+	if !strings.Contains(opened, "/oauth/authorize?") ||
+		!strings.Contains(opened, "code_challenge_method=S256") {
+		t.Errorf("授权地址不对：%s", opened)
+	}
+	p := b.pendingLogin()
+	if p == nil {
+		t.Fatal("没有登记等待中的授权")
+	}
+	if p.embedded {
+		t.Error("本机没有账号时该走系统浏览器")
+	}
+	if p.url != opened {
+		t.Errorf("登记的授权地址 = %q，期望 %q", p.url, opened)
+	}
+	if !strings.Contains(b.loginStatus(), "已在浏览器打开授权页") {
+		t.Errorf("提示 = %q", b.loginStatus())
+	}
+	t.Cleanup(func() { b.cancelLogin() })
+}
+
+// 内置浏览器窗口起不来（应用没就绪、缺 WebView2 运行时）时要退回系统浏览
+// 器，别把用户卡在一个打不开的空窗口上。
+func TestEmbeddedLoginFailureFallsBackToSystemBrowser(t *testing.T) {
+	b := testBook(t)
+	addTestAccount(t, b, "jimmy")
+	b.webview = true
+	b.afterReady = false // 没就绪：openLoginWindow 会拒绝，于是退回系统浏览器
+	var opened string
+	b.openURL = func(u string) error { opened = u; return nil }
+	b.startAddAccount()
+	t.Cleanup(func() { b.cancelLogin() })
+	if opened == "" {
+		t.Fatal("内置浏览器不可用时没有退回系统浏览器")
+	}
+	p := b.pendingLogin()
+	if p == nil || p.embedded {
+		t.Fatalf("等待中的授权 = %+v，期望退回系统浏览器", p)
+	}
+}
+
+// 内置浏览器授权时，面板给出「打开授权窗口 / 改用系统浏览器 / 取消」三个
+// 出口，而不是粘贴回调链接那一套。
+func TestPanelPendingLoginInEmbeddedBrowser(t *testing.T) {
+	b := testBook(t)
+	m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
+	m.store = &memoryTokenStore{}
+	if _, err := m.BeginScopes(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	b.pending = &accountLogin{auth: m, embedded: true, url: "https://2libra.com/oauth/authorize?x=1"}
+	b.loginMsg = loginWaitingMessage(true)
+	b.mu.Unlock()
+	t.Cleanup(func() { b.cancelLogin() })
+
+	tt := ui.NewTester(b.panelView, accountsWindowWidth, accountsWindowHeight)
+	tt.Frame()
+	for _, want := range []string{"在内置浏览器里完成授权", "打开授权窗口", "改用系统浏览器", "取消授权"} {
+		if !tt.HasText(want) {
+			t.Errorf("内置浏览器授权时面板缺少 %q：%q", want, tt.Texts())
+		}
+	}
+	if tt.HasText("回调链接") {
+		t.Error("内置浏览器授权时不该再要求粘贴回调链接")
+	}
+}
+
+// 「改用系统浏览器」把同一个授权地址交给系统浏览器，授权本身不重来。
+func TestUseSystemBrowserKeepsTheSameAuthorization(t *testing.T) {
+	b := testBook(t)
+	m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
+	m.store = &memoryTokenStore{}
+	if _, err := m.BeginScopes(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	const authorize = "https://2libra.com/oauth/authorize?x=1"
+	b.mu.Lock()
+	b.pending = &accountLogin{auth: m, embedded: true, url: authorize}
+	b.mu.Unlock()
+	t.Cleanup(func() { b.cancelLogin() })
+	var opened string
+	b.openURL = func(u string) error { opened = u; return nil }
+
+	b.useSystemBrowserForLogin()
+	if opened != authorize {
+		t.Fatalf("系统浏览器打开的地址 = %q，期望 %q", opened, authorize)
+	}
+	p := b.pendingLogin()
+	if p == nil {
+		t.Fatal("改用系统浏览器后不该丢掉这次授权")
+	}
+	if p.embedded {
+		t.Error("改用系统浏览器后仍标着 embedded")
+	}
+	if b.pendingLogin() != p {
+		t.Error("改用系统浏览器后应仍是同一次授权")
+	}
+}
+
+// 内置浏览器窗口的界面：说明这是独立会话，webview 还没建出来时给进度，
+// 起不来时给原因与「重试 / 改用系统浏览器」两个出口。
+func TestLoginWindowViewStates(t *testing.T) {
+	b := testBook(t)
+
+	// 还在等 webview：进度 + 说明 + 底部的两个出口。
+	tt := ui.NewTester(b.loginWindowView, loginWindowWidth, loginWindowHeight)
+	tt.Frame()
+	for _, want := range []string{"登录另一个账号", "独立会话", "正在打开授权页", "改用系统浏览器", "取消"} {
+		if !tt.HasText(want) {
+			t.Errorf("内置浏览器窗口缺少 %q：%q", want, tt.Texts())
+		}
+	}
+
+	// 起不来：原因与重试入口。
+	b.loginErr = "内置浏览器不可用：没有 WebView2 运行时"
+	tt.Frame()
+	for _, want := range []string{"内置浏览器打不开授权页", "没有 WebView2 运行时", "重试", "改用系统浏览器"} {
+		if !tt.HasText(want) {
+			t.Errorf("内置浏览器失败时缺少 %q：%q", want, tt.Texts())
+		}
+	}
+}
+
+/* ------------------------------------------------------------------
+   授权回来的账号对不对
+------------------------------------------------------------------ */
+
+// 重新登录时授权回来的必须是这个账号本人：是别人的话就另算一个新账号，
+// 原来的账号继续标着要重新登录，绝不把别人的令牌装到它头上。
+func TestReloginWithDifferentAccountAddsItInstead(t *testing.T) {
+	b := testBook(t)
+	jimmy := addTestAccount(t, b, "jimmy")
+	setTestNeedLogin(b, jimmy.ID)
+
+	// 授权回来的是 amy。
+	m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
+	m.store = &memoryTokenStore{}
+	if err := m.storeToken(tokenData{AccessToken: "tok-amy", Username: "amy", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	b.pending = &accountLogin{auth: m, accountID: jimmy.ID}
+	b.mu.Unlock()
+
+	b.finishAccountLogin(m, nil)
+	waitFor(t, func() bool { return b.accountCount() == 2 }, "把另一个账号添进来")
+	if b.account(jimmy.ID) == nil {
+		t.Fatal("原来的账号不该被抹掉")
+	}
+	if !b.account(jimmy.ID).sessionChanged() {
+		t.Error("原来的账号仍应标着要重新登录")
+	}
+	if amy := b.accountByUsername("amy"); amy == nil {
+		t.Error("授权回来的账号没有被添进来")
+	}
+	msg := b.loginStatus()
+	if !strings.Contains(msg, "amy") || !strings.Contains(msg, "jimmy") {
+		t.Errorf("提示没有说清回来的是谁：%q", msg)
+	}
+}
+
+// 重新登录授权回来的正是本人：同一个账号恢复可用，不多出一条记录。
+func TestReloginWithTheSameAccountAppliesTheSession(t *testing.T) {
+	b := testBook(t)
+	jimmy := addTestAccount(t, b, "jimmy")
+	setTestNeedLogin(b, jimmy.ID)
+
+	m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
+	m.store = &memoryTokenStore{}
+	// 昵称大小写不同也算同一个人。
+	if err := m.storeToken(tokenData{AccessToken: "tok-fresh", Username: "Jimmy", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	b.pending = &accountLogin{auth: m, accountID: jimmy.ID}
+	b.mu.Unlock()
+
+	b.finishAccountLogin(m, nil)
+	if b.accountCount() != 1 {
+		t.Fatalf("重新登录后账号数 = %d，期望 1", b.accountCount())
+	}
+	acc := b.account(jimmy.ID)
+	if acc == nil {
+		t.Fatal("账号不见了")
+	}
+	if got := acc.auth.accessToken(); got != "tok-fresh" {
+		t.Errorf("账号的令牌 = %q，期望换成了新的", got)
+	}
+	if acc.sessionChanged() {
+		t.Error("重新登录后仍标着要重新登录")
+	}
+	if !strings.Contains(b.loginStatus(), "已重新登录") {
 		t.Errorf("提示 = %q", b.loginStatus())
 	}
 }

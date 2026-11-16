@@ -1610,6 +1610,13 @@ func main() {
 		}
 		// 从这里开始才有主循环：后台结果可以投到 UI 线程。
 		b.mainLoop = true
+		// 内置浏览器授权要问一次系统 webview 在不在（Windows 的 WebView2
+		// 运行时、macOS 的 WKWebView、Linux 的 WebKitGTK）。不在时授权退回
+		// 系统浏览器，用户照旧能登录。
+		b.webview = mygo.WebViewAvailable()
+		if !b.webview {
+			log.Printf("系统 webview 不可用：添加账号时改用系统浏览器授权")
+		}
 		// 图片缓存是进程级的一份，清理循环也只起一次。
 		b.startImageCacheMaintenance()
 		// 未激活账号的未读角标与令牌保活。

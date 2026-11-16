@@ -51,7 +51,8 @@ a pure white page.
 
 ## 项目约定
 
-- Go 桌面应用，界面是 github.com/egoist/mygo 的原生 UI 包 `ui`，没有 webview 页面。
+- Go 桌面应用，界面是 github.com/egoist/mygo 的原生 UI 包 `ui`，没有 webview 页面；
+  唯一的例外是多账号授权页（见下方「授权走哪个浏览器」），它放在内置浏览器窗口里。
 - 应用状态里不要保存 `ui.Element` 或 `*ui.Context`：元素每次构建都会失效。
   后台结果通过 `Window.Update` / `app.publish` 回到 UI 线程。
 - 改 UI 前先按 `.agents/skills/mygo-maintenance/SKILL.md` 的约定核对 mygo 版本与 API。
@@ -82,6 +83,19 @@ a pure white page.
 加功能时按这个分工放代码：会话相关进 `AuthManager`，账号列表与窗口调度进
 `accountBook`，界面状态进 `app`。新窗口都必须能安全销毁并重建（视图每帧重算，
 状态里不存窗口对象以外的临时值）。
+
+### 授权走哪个浏览器
+
+- **第一个账号**走系统浏览器 + 自定义协议深链（`OnOpenURL` → `accountBook.handleDeepLink`）。
+- **第二个及以后的账号、以及重新登录**，只要系统 webview 可用（`mygo.WebViewAvailable()`），
+  就走 `login_window.go` 的内置浏览器窗口：`mygo.NewEphemeralSession()` 的独立会话，
+  没有系统浏览器里的 cookie，用户可以直接登录另一个账号，不必先去网页端退出。
+  授权结果的回调是自定义协议，webview 不会加载它，由 `Page.OnWillNavigate` /
+  `OnDidFailLoad` 拦下后交给同一个 `completeCallback`（跟深链完全同一条完成路径）。
+- 内置浏览器起不来（缺 WebView2 运行时 / WebKitGTK、应用未就绪）时退回系统浏览器，
+  面板上给出原因。不要为内置浏览器另写一套令牌交换：那是 `AuthManager.Complete` 的活。
+- 重新登录时授权回来的昵称会和账号核对（`persistLogin`）：不是同一个人就另算新账号，
+  绝不把别人的令牌装到已有账号上。
 
 ## 网络请求：一律走配置的代理
 

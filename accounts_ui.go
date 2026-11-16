@@ -243,10 +243,33 @@ func (b *accountBook) panelFooter(c *ui.Context, pending *accountLogin) {
 	})
 }
 
-// panelPendingLogin 是「正在等浏览器授权」那一段：说明、粘贴回调的兜底入口
-// 与取消。粘贴框与取消都在这里，用户不用回主窗口找。
+// panelPendingLogin 是「正在等授权」那一段。内置浏览器授权时给出「打开授权
+// 窗口 / 改用系统浏览器 / 取消」；系统浏览器授权时给出粘贴回调链接的兜底入口
+// （浏览器没自动跳回时用）。两处都留着取消。
 func (b *accountBook) panelPendingLogin(c *ui.Context, pending *accountLogin) {
 	t := c.Theme()
+	if pending.embedded {
+		ui.Text(c, "在内置浏览器里完成授权").FontSize(12).Bold().TextColor(t.Text)
+		ui.Text(c, "授权页开在独立的浏览器窗口里，它不会用到系统浏览器里的登录状态，"+
+			"所以可以直接登录要挂的另一个账号。同意授权后那个窗口会自动收起。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			if ui.PrimaryButton(c, "打开授权窗口").Clicked() {
+				b.showLoginWindow()
+			}
+			if ui.Button(c, "改用系统浏览器").Clicked() {
+				b.useSystemBrowserForLogin()
+			}
+			ui.Spacer(c).Grow(1)
+			if ui.Button(c, "取消授权").Clicked() {
+				b.cancelLogin()
+			}
+		})
+		if msg := b.loginStatus(); msg != "" {
+			ui.Text(c, msg).FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		}
+		return
+	}
 	ui.Text(c, "等待浏览器授权…").FontSize(12).Bold().TextColor(t.Text)
 	if warn := b.schemeWarning(); warn != "" {
 		ui.Text(c, warn).FontSize(11).TextColor(t.Danger).MaxLines(3)
@@ -263,7 +286,7 @@ func (b *accountBook) panelPendingLogin(c *ui.Context, pending *accountLogin) {
 			}
 		}
 		if ui.Button(c, "取消授权").Clicked() {
-			b.cancelAddAccount()
+			b.cancelLogin()
 		}
 		ui.Spacer(c).Grow(1)
 	})

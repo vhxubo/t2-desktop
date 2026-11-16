@@ -120,13 +120,18 @@ type accountView struct {
 	NeedsLogin bool
 }
 
-// accountLogin 是一次「添加账号」授权。浏览器里点的可能是任何一个 2Libra
-// 账号，所以授权过程先挂在一个临时 AuthManager 上，令牌只留在内存；拿到
-// 用户名之后才决定它是新账号，还是已有账号的一次重新授权。
+// accountLogin 是一次账号授权（添加账号或重新登录）。浏览器里点的可能是任何
+// 一个 2Libra 账号，所以授权过程先挂在一个临时 AuthManager 上，令牌只留在
+// 内存；拿到用户名之后才决定它属于哪个账号。
 type accountLogin struct {
 	auth *AuthManager
-	// accountID 非空表示这是给已有账号重新授权（换掉它的令牌）。
+	// accountID 非空表示这是给已有账号重新登录（成功时先核对昵称）。
 	accountID string
+	// url 是这次的授权地址：内置浏览器窗口关掉后还能改用系统浏览器重开。
+	url string
+	// embedded 表示这次授权在应用内置的浏览器窗口里进行（独立会话），而不是
+	// 系统浏览器。
+	embedded bool
 	// paste 是用户粘贴回调链接的输入框内容（浏览器没自动跳回时的兜底）。
 	paste string
 }
@@ -150,12 +155,20 @@ type accountBook struct {
 	// 以下只在主线程读写。
 	panelWin   *mygo.Window
 	confirmOut string // 面板里正在确认「退出这个账号」的账号 id
+	// loginWin / loginView 是内置浏览器授权窗口（见 login_window.go）；
+	// loginErr 是它起不来或页面加载失败时的说明。只在主线程读写。
+	loginWin   *mygo.Window
+	loginView  *mygo.WebView
+	loginErr   string
 	guest      *app
 	tray       *mygo.Tray
 	trayReady  bool
 	quitting   bool
 	schemeWarn string
 	updates    bool
+	// webview 表示系统 webview 可用（WebView2 / WKWebView / WebKitGTK），
+	// 内置浏览器授权窗口才建得出来。应用就绪时问一次。
+	webview bool
 	// imgHTTP 是账号面板预取头像用的客户端：与窗口里的图片一样走配置的代理。
 	imgHTTP *http.Client
 	// notify / openURL / quitApp 是可以替换的系统动作：无头测试里换成记录
@@ -176,6 +189,9 @@ type accountBook struct {
 	// bgClient 造后台轮询未读数用的客户端。测试里换成指向 httptest 的客户端，
 	// 生产走共享代理的 transport。
 	bgClient func(acc *account) *Client
+	// newLoginAuth 造一次账号授权用的临时会话（令牌先只放内存）。测试里换成
+	// 指向 httptest 的实现，生产用真实 API 与共享代理。
+	newLoginAuth func() *AuthManager
 }
 
 // newAccountBook 建账号册：装载共享服务、读账号索引、迁移旧版单账号会话。
@@ -197,6 +213,11 @@ func newAccountBook(dir string) *accountBook {
 	b.quitApp = b.quitProgram
 	b.bgClient = func(acc *account) *Client {
 		return &Client{Auth: acc.auth, Proxy: b.proxy}
+	}
+	b.newLoginAuth = func() *AuthManager {
+		m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
+		m.store = &memoryTokenStore{}
+		return m
 	}
 	if err := b.kv.load(); err != nil {
 		log.Printf("离线缓存不可用：%v", err)
@@ -536,63 +557,188 @@ func (b *accountBook) changedHook() func() {
 }
 
 /* ------------------------------------------------------------------
-   添加账号：浏览器授权
+   添加账号 / 重新登录：授权走系统浏览器或内置浏览器
 ------------------------------------------------------------------ */
 
-// startAddAccount 开始一次「添加账号」授权：打开系统浏览器，等回调。被授权
-// 的可能是任何一个 2Libra 账号 —— 已有的会换成新的会话，新的会开一个自己的
-// 主窗口。同一时刻只允许一次添加授权：回调只带 code 与 state，多开会分不清
-// 哪一次回来了。
+// startAddAccount 开始一次「添加账号」授权。被授权的可能是任何一个 2Libra
+// 账号 —— 已有的会换成新的会话，新的会开一个自己的主窗口。同一时刻只允许
+// 一次账号授权：回调只带 code 与 state，多开会分不清哪一次回来了。
+//
+// 走哪条路看账号册：本机还没有账号时用系统浏览器（那里可能一个账号都没登，
+// 直接授权最快）；已经有账号时用内置浏览器的独立会话，否则系统浏览器会把
+// 授权码发给网页里正登着的那个账号，用户得先去网页端退出登录。
 func (b *accountBook) startAddAccount() {
 	if b.pendingLogin() != nil {
-		b.setLoginMsg("已经有一次授权在进行，请先在浏览器里完成它，或点「取消」。")
+		b.setLoginMsg("已经有一次授权在进行，请先完成它，或点「取消」。")
 		b.showPanel()
 		return
 	}
 	// 令牌先只放内存：这时还不知道授权回来的是哪个账号，拿不到它的存储键。
-	auth := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
-	auth.store = &memoryTokenStore{}
-	auth.onChange = func(err error) { b.finishAddAccount(auth, err) }
+	b.beginAccountLogin(b.newLoginAuth(), "", nil)
+}
+
+// reloginAccount 给一个令牌已失效的账号重新授权。授权也用一份临时会话：
+// 授权回来的昵称会和这个账号核对，不是同一个人就另算新账号，绝不把别人的
+// 令牌装到它头上（见 persistLogin）。
+func (b *accountBook) reloginAccount(id string) {
+	acc := b.account(id)
+	if acc == nil {
+		return
+	}
+	if b.pendingLogin() != nil {
+		b.setLoginMsg("已经有一次授权在进行，请先完成或取消它。")
+		b.showPanel()
+		return
+	}
+	b.beginAccountLogin(b.newLoginAuth(), id, nil)
+}
+
+// beginAccountLogin 是上面两条入口的共同实现：认领全局唯一的那次授权、拿
+// 授权地址，然后决定在系统浏览器还是内置浏览器里打开。extraScopes 是补权限
+// 时要追加的 scope。
+func (b *accountBook) beginAccountLogin(auth *AuthManager, targetID string, extraScopes []string) {
+	auth.onChange = func(err error) { b.finishAccountLogin(auth, err) }
 	// 一次只允许一次授权在等回调：别的账号窗口正在补授权的话先让位。
 	b.claimLogin(auth)
-	url, err := auth.BeginScopes(context.Background(), nil)
+	authorize, err := auth.BeginScopes(context.Background(), extraScopes)
 	if err != nil {
 		b.setLoginMsg("无法开始授权：" + friendlyError(err))
 		b.showPanel()
 		return
 	}
+	p := &accountLogin{auth: auth, accountID: targetID, url: authorize}
+	embedded := b.embeddedLoginReady(targetID)
+	p.embedded = embedded
 	b.mu.Lock()
-	b.pending = &accountLogin{auth: auth}
-	b.loginMsg = "已在浏览器打开授权页，同意后会自动跳回。"
+	b.pending = p
+	b.loginMsg = loginWaitingMessage(embedded)
 	b.mu.Unlock()
 	b.showPanel()
-	if err := b.openURL(url); err != nil {
-		b.setLoginMsg("打开浏览器失败：" + err.Error())
+	if !embedded {
+		if err := b.openURL(authorize); err != nil {
+			b.setLoginMsg("打开浏览器失败：" + err.Error())
+			b.redrawPanel()
+			return
+		}
+		return
+	}
+	if err := b.openLoginWindow(authorize); err != nil {
+		// 内置浏览器起不来（缺 WebView2 运行时、平台不支持）：收起那个窗口、
+		// 退回系统浏览器 —— 用户至少还有一条能走通的路。
+		b.closeLoginWindow()
+		b.mu.Lock()
+		if b.pending == p {
+			b.pending.embedded = false
+		}
+		b.mu.Unlock()
+		if err := b.openURL(authorize); err != nil {
+			b.setLoginMsg("内置浏览器与系统浏览器都打不开授权页：" + err.Error())
+			b.redrawPanel()
+			return
+		}
+		b.setLoginMsg(loginWaitingMessage(false))
 	}
 	b.redrawPanel()
 }
 
-// finishAddAccount 是一次添加授权的结束（成功或失败）。它从授权协程回到
-// 主线程：成功要把账号写进索引并开窗口，失败只是把原因摆到面板上。
-func (b *accountBook) finishAddAccount(auth *AuthManager, err error) {
+// loginWaitingMessage 是面板上等待授权时的那句话，按授权方式分开说。
+func loginWaitingMessage(embedded bool) string {
+	if embedded {
+		return "已在内置浏览器窗口里打开授权页：那个窗口是独立会话，可以直接登录要挂的另一个账号。"
+	}
+	return "已在浏览器打开授权页，同意后会自动跳回。"
+}
+
+// embeddedLoginReady 报告这次授权该不该用内置浏览器：系统 webview 可用、
+// 应用已就绪，并且要么是本机已经有账号（添加账号时不能再借系统浏览器的
+// 登录态），要么是给已有账号重新登录（targetID 非空）。
+func (b *accountBook) embeddedLoginReady(targetID string) bool {
+	if !b.webview || !b.afterReady {
+		return false
+	}
+	return targetID != "" || b.accountCount() > 0
+}
+
+// finishAccountLogin 是一次账号授权的结束（成功或失败）。它从授权协程回到
+// 主线程：成功要把会话落进账号册（必要时开窗口），失败只把原因摆到面板上。
+func (b *accountBook) finishAccountLogin(auth *AuthManager, err error) {
 	b.onMain(func() {
-		b.takePending(auth)
-		if err != nil {
-			b.setLoginMsg(friendlyError(err))
+		p := b.takePending(auth)
+		if p == nil {
+			// 被取代或已取消的那一次：不报告，也不动账号册。
 			return
 		}
-		acc, err := b.adoptLogin(auth)
+		// 内置浏览器窗口的使命就是这次授权：结束就收起。
+		b.closeLoginWindow()
+		if err != nil {
+			b.setLoginMsg(friendlyError(err))
+			if p.accountID != "" {
+				b.bindSession(b.account(p.accountID))
+			}
+			return
+		}
+		acc, err := b.persistLogin(p)
 		if err != nil {
 			b.setLoginMsg(err.Error())
 			return
 		}
-		b.setLoginMsg("已登录：" + acc.name())
 		b.openWindow(acc.ID)
 	})
 }
 
-// adoptLogin 把一次成功授权落成一个账号：同一昵称的账号已经在本机时换掉它
-// 的会话（重新授权），否则新增一条并开窗口。只在主线程调用。
+// persistLogin 把一次成功授权落进账号册。给已有账号重新授权时先核对身份：
+// 授权回来的是另一个账号的话，就当新账号添进去，原账号继续标着要重新登录 ——
+// 绝不把别人的令牌装到它头上。
+func (b *accountBook) persistLogin(p *accountLogin) (*account, error) {
+	name := p.auth.username()
+	if p.accountID != "" {
+		if target := b.account(p.accountID); target != nil {
+			if target.Username == "" || name == "" || strings.EqualFold(target.Username, name) {
+				if err := b.applySession(target, p.auth); err != nil {
+					return nil, err
+				}
+				b.setLoginMsg("已重新登录：" + target.name())
+				return target, nil
+			}
+			b.setLoginMsg("授权回来的是「" + name + "」，不是「" + target.name() +
+				"」。已把它添成另一个账号；原来那个仍需要重新登录。")
+			return b.adoptLogin(p.auth)
+		}
+	}
+	acc, err := b.adoptLogin(p.auth)
+	if err == nil && p.accountID == "" {
+		b.setLoginMsg("已登录：" + acc.name())
+	}
+	return acc, err
+}
+
+// applySession 把一份新令牌装到已有账号上（重新授权成功）：凭据换到它的
+// 账号键、窗口改读新会话，账号索引里的昵称与头像跟着更新。
+func (b *accountBook) applySession(acc *account, auth *AuthManager) error {
+	if err := auth.rekey(tokenStoreFactory(b.dir, acc.ID), acc.ID); err != nil {
+		return fmt.Errorf("保存令牌失败：%w", err)
+	}
+	auth.onChange = nil
+	b.mu.Lock()
+	acc.auth = auth
+	acc.Username = orString(auth.username(), acc.Username)
+	acc.Avatar = orString(auth.avatarURL(), acc.Avatar)
+	acc.unread = 0
+	b.mu.Unlock()
+	if app := acc.app; app != nil {
+		// 窗口开着：换掉它的会话，界面按新令牌重建。
+		app.replaceAuth(auth)
+	}
+	b.bindSession(acc)
+	if err := b.save(); err != nil {
+		return fmt.Errorf("账号索引写入失败：%w", err)
+	}
+	log.Printf("已重新登录账号 %s（%s）", acc.ID, acc.name())
+	return nil
+}
+
+// adoptLogin 把一次成功授权落成一个账号：同一昵称的账号已经在本机时换成
+// 它的会话，否则新增一条。只在主线程调用。
 func (b *accountBook) adoptLogin(auth *AuthManager) (*account, error) {
 	name := auth.username()
 	existing := b.accountByUsername(name)
@@ -600,31 +746,16 @@ func (b *accountBook) adoptLogin(auth *AuthManager) (*account, error) {
 		existing = b.account(accountIDFor(name))
 	}
 	if existing != nil {
-		if err := auth.rekey(tokenStoreFactory(b.dir, existing.ID), existing.ID); err != nil {
-			return nil, fmt.Errorf("保存令牌失败：%w", err)
-		}
-		auth.onChange = nil
-		b.mu.Lock()
-		existing.auth = auth
-		existing.Username = orString(name, existing.Username)
-		existing.Avatar = orString(auth.avatarURL(), existing.Avatar)
-		existing.unread = 0
-		b.mu.Unlock()
-		if app := existing.app; app != nil {
-			// 窗口开着：换掉它的会话，界面按新令牌重建。
-			app.replaceAuth(auth)
-		}
-		b.bindSession(existing)
-		if err := b.save(); err != nil {
-			return nil, fmt.Errorf("账号索引写入失败：%w", err)
+		if err := b.applySession(existing, auth); err != nil {
+			return nil, err
 		}
 		return existing, nil
 	}
 
 	id := accountIDFor(name)
 	if b.account(id) != nil {
-		// 极端情况：同一个昵称算出了已存在的 id（昵称里含大写到哈希相同），
-		// 或者随机 id 撞车。换一个随机后缀，绝不覆盖别人的凭据。
+		// 极端情况：同一个昵称算出了已存在的 id，或者随机 id 撞车。换一个随机
+		// 后缀，绝不覆盖别人的凭据。
 		id = id + "-" + randomHex(2)
 	}
 	if err := auth.rekey(tokenStoreFactory(b.dir, id), id); err != nil {
@@ -695,9 +826,9 @@ func (b *accountBook) takePending(auth *AuthManager) *accountLogin {
 	return p
 }
 
-// cancelAddAccount 放弃正在进行的添加授权：丢掉 PKCE 会话，迟到的回调也
-// 不能再把账号签进来。
-func (b *accountBook) cancelAddAccount() {
+// cancelLogin 放弃正在进行的账号授权（添加账号或重新登录）：丢掉 PKCE 会话、
+// 收起内置浏览器窗口，迟到的回调也不能再把账号签进来。
+func (b *accountBook) cancelLogin() {
 	p := b.pendingLogin()
 	if p == nil {
 		return
@@ -706,6 +837,7 @@ func (b *accountBook) cancelAddAccount() {
 	b.pending = nil
 	b.mu.Unlock()
 	p.auth.Cancel()
+	b.closeLoginWindow()
 	if p.accountID != "" {
 		// 重新登录被取消：把会话的处理函数交还给窗口 / 账号册。
 		b.bindSession(b.account(p.accountID))
@@ -730,59 +862,6 @@ func (b *accountBook) completeCallback(raw string) bool {
 	}
 	b.setLoginMsg("已收到回调，正在用授权码换取令牌…")
 	return true
-}
-
-/* ------------------------------------------------------------------
-   重新登录失效的账号
------------------------------------------------------------------- */
-
-// reloginAccount 给一个令牌已失效的账号重新授权。会话对象还在（凭据键
-// 没变），重新授权成功后就地更新，窗口照旧。
-func (b *accountBook) reloginAccount(id string) {
-	acc := b.account(id)
-	if acc == nil {
-		return
-	}
-	if b.pendingLogin() != nil {
-		b.setLoginMsg("已经有一次授权在进行，请先完成或取消它。")
-		b.showPanel()
-		return
-	}
-	auth := acc.auth
-	auth.onChange = func(err error) { b.finishRelogin(acc, err) }
-	url, err := auth.BeginScopes(context.Background(), nil)
-	if err != nil {
-		b.bindSession(acc)
-		b.setLoginMsg("无法开始授权：" + friendlyError(err))
-		b.showPanel()
-		return
-	}
-	b.mu.Lock()
-	b.pending = &accountLogin{auth: auth, accountID: id}
-	b.loginMsg = "已在浏览器打开授权页，同意后会自动跳回。"
-	b.mu.Unlock()
-	b.showPanel()
-	if err := b.openURL(url); err != nil {
-		b.setLoginMsg("打开浏览器失败：" + err.Error())
-	}
-	b.redrawPanel()
-}
-
-// finishRelogin 是重新授权的结束：成功就把账号恢复成可用，并打开它的窗口。
-func (b *accountBook) finishRelogin(acc *account, err error) {
-	b.onMain(func() {
-		b.takePending(acc.auth)
-		// 会话的处理函数交还给窗口（或账号册）：这次重新授权的回调到此为止，
-		// 之后令牌再失效还要按窗口 / 后台那一套处理。
-		b.bindSession(acc)
-		if err != nil {
-			b.setLoginMsg(friendlyError(err))
-			return
-		}
-		b.noteAuthChange(acc)
-		b.setLoginMsg("已重新登录：" + acc.name())
-		b.openWindow(acc.ID)
-	})
 }
 
 /* ------------------------------------------------------------------
@@ -845,7 +924,7 @@ func (b *accountBook) logoutAccount(id string) {
 		return
 	}
 	if p := b.pendingLogin(); p != nil && p.accountID == id {
-		b.cancelAddAccount()
+		b.cancelLogin()
 	}
 	// 这是最后一个账号：先把未登录窗口摆出来，再关它的窗口。窗口是最后一个
 	// 关掉的，mygo 会直接结束应用 —— 那样用户就看不到可以重新登录的窗口了。
@@ -1105,8 +1184,12 @@ func (b *accountBook) postMain(fn func()) {
 	b.onMain(fn)
 }
 
-// anyWindow 返回任意一个还活着的窗口，账号面板的请求借它排到主循环上。
+// anyWindow 返回任意一个还活着的窗口：账号面板与内置浏览器窗口的请求借它排
+// 到主循环上。
 func (b *accountBook) anyWindow() *mygo.Window {
+	if b.loginWin != nil {
+		return b.loginWin
+	}
 	if b.panelWin != nil {
 		return b.panelWin
 	}
@@ -1181,6 +1264,9 @@ func (b *accountBook) claimLogin(m *AuthManager) {
 	b.mu.Unlock()
 	if dropped != nil {
 		dropped.auth.Cancel()
+		// 被取代的那次授权可能正开在内置浏览器窗口里：窗口一并收起，别留一个
+		// 已经作废的授权页在屏幕上。
+		b.closeLoginWindow()
 	}
 	for _, acc := range b.snapshotAccounts() {
 		if acc.auth != nil && acc.auth != m {
@@ -1284,10 +1370,13 @@ func (b *accountBook) onBecameActive() {
 }
 
 // markQuitting 标记「正在退出」：所有窗口的关闭都不该再被拦成「收进托盘」，
-// 后台循环也要停下。
+// 后台循环与内置浏览器授权也要停下。
 func (b *accountBook) markQuitting() {
 	b.quitting = true
 	b.stopBackground()
+	// 正在等授权的内置浏览器窗口：退出时一并放弃，迟到的回调不会再签账号。
+	b.cancelLogin()
+	b.closeLoginWindow()
 	for _, acc := range b.snapshotAccounts() {
 		if acc.app != nil {
 			acc.app.quitting = true
