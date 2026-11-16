@@ -120,7 +120,7 @@ func decodeTopicRaw(t *testing.T, raw string) topicDetail {
 }
 
 // collectionTestApp 造一个已登录、正文已加载的详情页，合集接口由假服务端
-// 提供。
+// 提供。合集只对自己的帖子开放，所以登录账号就是夹具里那篇帖子的作者。
 func collectionTestApp(t *testing.T, handler http.HandlerFunc) (*app, *httptest.Server) {
 	t.Helper()
 	srv := httptest.NewServer(handler)
@@ -129,7 +129,46 @@ func collectionTestApp(t *testing.T, handler http.HandlerFunc) (*app, *httptest.
 	a.autoLoad = true
 	a.client.Base = srv.URL + "/api"
 	a.client.HTTP = srv.Client()
+	if err := a.auth.storeToken(tokenData{
+		AccessToken: "tok", TokenType: "Bearer", Username: a.detail.topic.Author,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return a, srv
+}
+
+// 合集只对自己的帖子开放：别人的帖子、匿名帖都不给入口，免得点开只换来
+// 一句 403。
+func TestDetailCollectionOnlyOnOwnTopic(t *testing.T) {
+	a, _ := collectionTestApp(t, func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	if !a.canCollectTopic(a.detail) {
+		t.Fatalf("夹具里这篇帖子应当属于当前账号：author=%q", a.detail.topic.Author)
+	}
+
+	for _, author := range []string{"alice", "匿名"} {
+		a.detail.topic.Author = author
+		a.detail.topic.CollectionKnown = true
+		a.detail.topic.CollectionID = "c1"
+		a.detail.coll.open = true
+		if a.canCollectTopic(a.detail) {
+			t.Errorf("作者为 %q 时不该给出合集入口", author)
+		}
+		tt := ui.NewTester(a.view, 1100, 760)
+		tt.Frame()
+		if _, ok := tt.Find("合集"); ok {
+			t.Errorf("作者为 %q 时页面上出现了合集按钮：%q", author, tt.Texts())
+		}
+		if _, ok := tt.Find("已在合集"); ok {
+			t.Errorf("作者为 %q 时页面上出现了「已在合集」：%q", author, tt.Texts())
+		}
+		// 气泡里的动作同样被挡住：不发请求。
+		a.assignTopicCollection(a.detail, collectionItem{ID: "c2", Name: "别的合集"}, true)
+		if a.detail.coll.busy {
+			t.Errorf("作者为 %q 时仍然发起了归入请求", author)
+		}
+	}
 }
 
 // 详情页的「合集」胶囊：点开气泡列出我的合集，点一行就把帖子归入，成功后

@@ -196,10 +196,18 @@ func (a *app) ensureCollections(d *detailState) {
 	}()
 }
 
+// canCollectTopic 报告这篇帖子能不能归入合集。合集是「我」组织自己内容的
+// 方式，服务端也只允许作者本人归入（别人的帖子会 403）；匿名帖的 author
+// 为 null（解码成「匿名」），确认不了是不是自己发的，同样不给入口，免得
+// 点开只换来一句错误。
+func (a *app) canCollectTopic(d *detailState) bool {
+	return d != nil && d.topic != nil && a.isMine(d.topic.Author)
+}
+
 // toggleCollectionPicker 开 / 关合集气泡。打开时顺手读一次列表，第一帧里
 // 就能看到自己的合集。
 func (a *app) toggleCollectionPicker(d *detailState) {
-	if d == nil || a.detail != d {
+	if d == nil || a.detail != d || !a.canCollectTopic(d) {
 		return
 	}
 	d.coll.open = !d.coll.open
@@ -212,7 +220,7 @@ func (a *app) toggleCollectionPicker(d *detailState) {
 // 成功后把状态写回详情，页面里的按钮与气泡都跟着变；「我的 - 合集」的
 // 帖子数已经过期，清掉缓存。
 func (a *app) assignTopicCollection(d *detailState, item collectionItem, add bool) {
-	if d == nil || a.detail != d || d.topic == nil || d.coll.busy {
+	if d == nil || a.detail != d || d.topic == nil || d.coll.busy || !a.canCollectTopic(d) {
 		return
 	}
 	if !a.auth.loggedIn() {
@@ -272,7 +280,7 @@ func (a *app) assignTopicCollection(d *detailState, item collectionItem, add boo
 // createCollectionForTopic 新建一个合集并立刻把当前帖子归进去：用户点
 // 「新建」时想的是「把这帖放进这个新合集」，分两步做会多一次点击。
 func (a *app) createCollectionForTopic(d *detailState) {
-	if d == nil || a.detail != d || d.coll.creating || d.coll.busy {
+	if d == nil || a.detail != d || d.coll.creating || d.coll.busy || !a.canCollectTopic(d) {
 		return
 	}
 	name := strings.TrimSpace(d.coll.draft)
@@ -356,8 +364,9 @@ func (a *app) invalidateCollections() {
 
 // collectionButton 是作者行上收藏左侧的「合集」胶囊：点开气泡，选择把帖子
 // 归入哪个合集，或者新建一个。详情里带当前合集时按钮直接说明「已在合集」。
+// 只在帖子属于当前账号时出现（见 canCollectTopic）。
 func (a *app) collectionButton(c *ui.Context, d *detailState) {
-	if d == nil || d.topic == nil {
+	if !a.canCollectTopic(d) {
 		return
 	}
 	t := c.Theme()
