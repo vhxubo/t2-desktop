@@ -66,7 +66,7 @@ func (a *app) showSettingsWindow() {
 	// 重新开窗口时回到第一页；已经开着的窗口只带到前台，保留用户当前所在页。
 	a.settingsTab = settingsTabProxy
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "设置",
+		Title:             a.subWindowTitle("设置"),
 		Width:             settingsWindowWidth,
 		Height:            settingsWindowHeight,
 		MinWidth:          settingsWindowMinW,
@@ -142,6 +142,7 @@ func (a *app) settingsWindowView(c *ui.Context) {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "设置").FontSize(13).Bold().SingleLine().TextColor(t.Text)
+				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.settingsWin; win != nil {

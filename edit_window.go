@@ -100,7 +100,7 @@ func (a *app) openEditWindow(st *editState) {
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             st.windowTitle(),
+		Title:             a.subWindowTitle(st.windowTitle()),
 		Width:             editWindowWidth,
 		Height:            editWindowHeight,
 		MinWidth:          editWinMinWidth,
@@ -178,6 +178,7 @@ func (a *app) editWindowView(c *ui.Context) {
 				if sub := editWindowSubtitle(st); sub != "" {
 					ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).SingleLine()
 				}
+				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.editWin; win != nil {

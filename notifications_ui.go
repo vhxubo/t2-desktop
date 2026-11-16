@@ -130,7 +130,7 @@ func (a *app) showNotificationWindow() {
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "通知",
+		Title:             a.subWindowTitle("通知"),
 		Width:             notifWindowWidth,
 		Height:            notifWindowHeight,
 		MinWidth:          notifWindowMinWidth,
@@ -249,6 +249,7 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 				default:
 					ui.Text(c, "· 未连接").FontSize(11).TextColor(t.TextMuted).SingleLine()
 				}
+				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.notifWin; win != nil {

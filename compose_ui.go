@@ -94,7 +94,7 @@ func (a *app) openComposeWindow() {
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "发帖",
+		Title:             a.subWindowTitle("发帖"),
 		Width:             composeWindowWidth,
 		Height:            composeWindowHeight,
 		MinWidth:          composeWinMinWidth,
@@ -193,6 +193,7 @@ func (a *app) composeWindowView(c *ui.Context) {
 				AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "发帖").FontSize(13).Bold().SingleLine().TextColor(t.Text)
 				ui.Text(c, "· 支持 Markdown").FontSize(11).SingleLine().TextColor(t.TextMuted)
+				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.composeWin; win != nil {

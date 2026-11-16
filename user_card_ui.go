@@ -76,7 +76,7 @@ func (a *app) showUserCardWindow(username string) {
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "用户资料",
+		Title:             a.subWindowTitle("用户资料"),
 		Width:             userCardWindowWidth,
 		Height:            userCardWindowHeight,
 		MinWidth:          userCardMinWidth,
@@ -184,7 +184,8 @@ func (a *app) userCardWindowView(c *ui.Context) {
 
 // userCardTitleBar 是自绘标题栏：左边是人形图标与「用户资料」，右边是
 // 最小化与关闭，画法与主窗口、通知、我的三个窗口一致。它同时是拖动窗口的
-// 区域。用户名只在下面的资料头里写一次，标题栏不再重复。
+// 区域。资料头里写的是这张卡片的用户；标题栏最右那枚标识写的是「这扇窗口
+// 属于哪个账号」，多账号时不至于把别人的资料当成自己账号的窗口。
 func (a *app) userCardTitleBar(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
@@ -193,6 +194,7 @@ func (a *app) userCardTitleBar(c *ui.Context) {
 			AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, profileIcon).Size(16, 16).TextColor(t.Accent)
 			ui.Text(c, "用户资料").FontSize(13).Bold().SingleLine()
+			a.accountWindowTag(c)
 		})
 		titleBarButton(c, titleMinimize, "最小化", func() {
 			if win := a.userCardWin; win != nil {

@@ -63,7 +63,7 @@ func (a *app) showPandoraWindow() {
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "潘多拉",
+		Title:             a.subWindowTitle("潘多拉"),
 		Width:             pandoraWindowWidth,
 		Height:            pandoraWindowHeight,
 		MinWidth:          pandoraWinMinWidth,
@@ -189,6 +189,7 @@ func (a *app) pandoraWindowView(c *ui.Context) {
 				ui.Text(c, "潘多拉").FontSize(13).Bold().SingleLine().TextColor(t.Text)
 				ui.Text(c, pandoraHeaderStatus(st)).FontSize(11).
 					TextColor(t.TextMuted).SingleLine()
+				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.pandoraWin; win != nil {

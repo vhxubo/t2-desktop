@@ -45,7 +45,7 @@ func (a *app) showAboutWindow() {
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "关于",
+		Title:             a.subWindowTitle("关于"),
 		Width:             aboutWindowWidth,
 		Height:            aboutWindowHeight,
 		MinWidth:          aboutWindowMinW,
@@ -90,6 +90,7 @@ func (a *app) aboutWindowView(c *ui.Context) {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "关于").FontSize(13).Bold().SingleLine().TextColor(t.Text)
+				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.aboutWin; win != nil {

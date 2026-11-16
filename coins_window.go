@@ -66,7 +66,7 @@ func (a *app) showCoinWindow() {
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "金币",
+		Title:             a.subWindowTitle("金币"),
 		Width:             coinWindowWidth,
 		Height:            coinWindowHeight,
 		MinWidth:          coinWinMinWidth,
@@ -299,6 +299,7 @@ func (a *app) coinWindowView(c *ui.Context) {
 					ui.Text(c, coinThousands(cs.balance)+" 金币").FontSize(11).
 						TextColor(t.TextMuted).SingleLine()
 				}
+				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.coinWin; win != nil {

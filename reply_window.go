@@ -76,7 +76,7 @@ func (a *app) openReplyWindow() {
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "写评论",
+		Title:             a.subWindowTitle("写评论"),
 		Width:             replyWindowWidth,
 		Height:            replyWindowHeight,
 		MinWidth:          replyWinMinWidth,
@@ -167,6 +167,7 @@ func (a *app) replyWindowView(c *ui.Context) {
 				if sub := replyWindowSubtitle(d); sub != "" {
 					ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).SingleLine()
 				}
+				a.accountWindowTag(c)
 			})
 			// 「收回评论区」给一个带文字的入口：这是窗口里唯一会「关掉」但
 			// 不丢草稿的动作，值得比一个叉更明确。

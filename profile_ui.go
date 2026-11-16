@@ -51,7 +51,7 @@ func (a *app) showProfileWindow() {
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "我的",
+		Title:             a.subWindowTitle("我的"),
 		Width:             profileWindowWidth,
 		Height:            profileWindowHeight,
 		MinWidth:          profileWinMinWidth,
@@ -167,6 +167,7 @@ func (a *app) profileWindowView(c *ui.Context) {
 				if name := a.profileTitleName(ps); name != "" {
 					ui.Text(c, name).FontSize(11).TextColor(t.TextMuted).SingleLine()
 				}
+				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.profileWin; win != nil {

@@ -21,6 +21,67 @@ import (
 // 不会把「发送」「发布」按钮挤出窗口。
 const accountBadgeNameMaxWidth = 150
 
+// 多账号时每个账号一扇窗口，但附属窗口（通知、设置、金币、发帖……）的自绘
+// 标题栏只有自己的名字：任务栏、Alt+Tab 与屏幕上并排的几扇窗口长得一模一样，
+// 不写明是谁的窗口就只能一个个点开看。这里给它们同一枚账号标识，位置也和
+// 主窗口的一致 —— 标题栏最右、窗口按钮左侧。
+//
+// 名字取这个窗口自己的会话（a.auth），不是账号册里记的「上次用的那个」：
+// 窗口里发的每个请求、收到的每条消息都来自这份令牌。
+
+// accountWindowTagWidth 是标题栏里账号标识的最大宽度：昵称过长时在标识内
+// 截断，不会把窗口标题或右侧的窗口按钮挤出去。
+const accountWindowTagWidth = 120
+
+// windowAccountName 是这扇窗口属于哪个账号的展示名：只有多账号时才写，
+// 单账号的窗口标题已经说明身份。会话里还没读到昵称时退回账号册里记的那个。
+func (a *app) windowAccountName() string {
+	if !a.multiAccount() {
+		return ""
+	}
+	if a.auth != nil {
+		if name := a.auth.username(); name != "" {
+			return name
+		}
+	}
+	if a.book != nil {
+		if acc := a.book.account(a.accountID); acc != nil {
+			return acc.name()
+		}
+	}
+	return ""
+}
+
+// accountWindowTag 把「这扇窗口属于哪个账号」画在标题栏右侧：单账号与未登录
+// 窗口不画，免得白占版面。点它打开账号面板，和其它账号入口一致。
+func (a *app) accountWindowTag(c *ui.Context) {
+	name := a.windowAccountName()
+	if name == "" {
+		return
+	}
+	t := c.Theme()
+	ui.Spacer(c).Grow(1)
+	tag := ui.Row(c).Shrink(0).Gap(5).AlignItems(ui.Center).Padding(2, 7).
+		Radius(999).Background(t.Accent.Mix(t.Background, 0.88)).
+		Cursor(ui.CursorPointer)
+	tag.Children(func() {
+		ui.Text(c, "@"+name).FontSize(11).Bold().TextColor(t.Accent).SingleLine().
+			MaxWidth(accountWindowTagWidth).MinWidth(0)
+	})
+	tag.Label("账号 " + name)
+	tag.Tooltip("这扇窗口属于 @" + name + "；点开账号面板可以查看或切换账号")
+	tag.OnClick(a.showAccounts)
+}
+
+// subWindowTitle 是附属窗口的原生标题：加上账号名，任务栏与 Alt+Tab 里才
+// 分得清「通知」「设置」是哪一扇。
+func (a *app) subWindowTitle(base string) string {
+	if name := a.windowAccountName(); name != "" {
+		return base + " · " + name
+	}
+	return base
+}
+
 // multiAccount 报告本机是否挂了不止一个账号。没有账号册（无头测试、旧的
 // 单窗口路径）按单账号处理。
 func (a *app) multiAccount() bool {

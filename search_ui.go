@@ -44,7 +44,7 @@ func (a *app) showSearchWindow() {
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             "搜索",
+		Title:             a.subWindowTitle("搜索"),
 		Width:             searchWindowWidth,
 		Height:            searchWindowHeight,
 		MinWidth:          searchWinMinWidth,
@@ -131,6 +131,7 @@ func (a *app) searchWindowView(c *ui.Context) {
 					ui.Textf(c, "共 %d 条", st.total).FontSize(11).
 						TextColor(t.TextMuted).SingleLine()
 				}
+				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.searchWin; win != nil {
