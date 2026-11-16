@@ -530,6 +530,67 @@ func TestClosingWindowKeepsAccountInBook(t *testing.T) {
 	}
 }
 
+// 系统通知的点击按 id 里的账号段落到对应窗口：两个账号各收到一条消息（这里
+// 故意用同一个消息 id）时，点谁的通知就只开谁那一条，绝不串到另一个窗口。
+// 目标查不到（窗口关过、进程重启）时退回这个账号自己的消息中心 —— 把站内
+// 消息中心交给系统浏览器，会落到浏览器里登录的另一个账号上。
+func TestNativeNoticeClickOpensTheRightAccount(t *testing.T) {
+	b := testBook(t)
+	jimmy := addTestAccount(t, b, "jimmy")
+	amy := addTestAccount(t, b, "amy")
+	appJ := newAppWithDeps(b.deps(), jimmy)
+	appA := newAppWithDeps(b.deps(), amy)
+	appJ.autoLoad = false
+	appA.autoLoad = false
+	jimmy.app = appJ
+	amy.app = appA
+
+	noticeJ := notificationNativeID(jimmy.ID, "n1")
+	noticeA := notificationNativeID(amy.ID, "n1")
+	appJ.rememberNoticeTarget(noticeJ, "https://2libra.com/post/social/AAAA1111")
+	appA.rememberNoticeTarget(noticeA, "https://2libra.com/post/work/BBBB2222")
+
+	b.openNotice(noticeA)
+	if appA.pageName != "detail" || appA.detail == nil || appA.detail.shortID != "BBBB2222" {
+		t.Fatalf("点击没有落到 amy 的窗口：page=%q detail=%+v", appA.pageName, appA.detail)
+	}
+	if appJ.pageName == "detail" {
+		t.Error("点 amy 的通知不该把 jimmy 的窗口切走")
+	}
+
+	appA.pageName = "list"
+	appA.detail = nil
+	b.openNotice(noticeJ)
+	if appJ.pageName != "detail" || appJ.detail == nil || appJ.detail.shortID != "AAAA1111" {
+		t.Fatalf("点击没有落到 jimmy 的窗口：page=%q detail=%+v", appJ.pageName, appJ.detail)
+	}
+	if appA.pageName == "detail" {
+		t.Error("点 jimmy 的通知不该把 amy 的窗口切走")
+	}
+
+	// 目标已经清掉：认得出账号就不再交给浏览器。
+	opened := ""
+	b.openURL = func(u string) error { opened = u; return nil }
+	// 应用已就绪才有窗口可拉；两个窗口都挂着，openNotice 不会去建新窗口。
+	b.afterReady = true
+	appA.noticeTargets = nil
+	appA.pageName = "list"
+	appA.detail = nil
+	b.openNotice(noticeA)
+	if opened != "" {
+		t.Errorf("认得出账号时不该交给浏览器：%q", opened)
+	}
+	if appA.pageName != "list" {
+		t.Errorf("目标没了不该乱开页面：%q", appA.pageName)
+	}
+
+	// 认不出账号（升级前弹出的旧通知）：仍回到站内消息中心。
+	b.openNotice("t2-notification:legacy")
+	if opened != siteBaseURL+"/notifications" {
+		t.Errorf("认不出账号时应回到站内消息中心：%q", opened)
+	}
+}
+
 // 一个账号窗口真的能画出来：标题栏带账号名（任务栏、Alt+Tab 靠它区分），
 // 侧边栏底部有「账号」入口与「退出登录」。说明这个窗口确实挂在账号册上，
 // 而不是一个没人管的孤立窗口。

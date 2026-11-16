@@ -312,6 +312,8 @@ type app struct {
 	nativeNotify bool // 原生通知开关（默认开）
 	// noticeTargets 是「原生通知 id → 目标地址」的映射：系统通知的点击回调
 	// 只带 id，靠它把点击落回对应的帖子 / 评论，进程重启后再点击则回到站点。
+	// id 里带账号段（见 notificationNativeID），多账号时点击才知道该找哪个
+	// 窗口。
 	noticeTargets map[string]string
 
 	// onReplyPosted is a hook invoked after a reply is posted (or fails),
@@ -441,7 +443,8 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 		lastTab:   -1,
 		navSel:    tabID(0),
 		pageName:  "list",
-		// 原生通知默认开；多账号时每个账号窗口各自弹自己收到的消息。
+		// 原生通知默认开；多账号时每个账号窗口各自弹自己收到的消息，
+		// 通知里写明是哪个账号（见 notify.go 的 notificationNative）。
 		nativeNotify: true,
 		coins:        newCoinState(),
 		pandora:      newPandoraState(),

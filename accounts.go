@@ -1328,33 +1328,60 @@ func (b *accountBook) handleDeepLink(raw string) {
 	b.showPanel()
 }
 
-// openNotice 处理原生通知的点击：先找到消息属于哪个账号，再把那个窗口拉到
-// 前台并打开目标。系统通知可能比进程活得久，找不到归属时退回站点页面。
+// openNotice 处理原生通知的点击：先认出消息属于哪个账号，再把那个窗口拉到
+// 前台并打开目标。系统只把通知 id 带回来，账号段就写在 id 里（见
+// notificationNativeID），所以多账号时消息不会落进别人的窗口；系统通知可能
+// 比进程活得久，目标查不到时退回这个账号自己的消息中心。
 func (b *accountBook) openNotice(id string) {
 	b.onMain(func() {
+		accountID, _ := splitNotificationNoticeID(id)
 		for _, acc := range b.snapshotAccounts() {
+			// id 带账号段时只认那个账号：同一个消息 id 在别的窗口里没有意义。
+			if accountID != "" && acc.ID != accountID {
+				continue
+			}
 			app := acc.app
 			if app == nil {
 				continue
 			}
-			if target := app.noticeTargets[id]; target != "" {
+			if target := app.noticeTarget(id); target != "" {
 				b.raiseAccountWindow(acc.ID)
 				app.publish(func() { app.openNotificationTarget(target) })
 				return
 			}
 		}
-		if b.guest != nil {
-			if target := b.guest.noticeTargets[id]; target != "" {
+		// 升级前弹出的通知没有账号段，才轮到未登录窗口。
+		if accountID == "" && b.guest != nil {
+			if target := b.guest.noticeTarget(id); target != "" {
 				b.guest.raiseMainWindow()
 				b.guest.publish(func() { b.guest.openNotificationTarget(target) })
 				return
 			}
 		}
-		// 冷启动后系统才把点击交回来：映射没了，回到站内消息中心。
-		if err := b.openURL(siteBaseURL + "/notifications"); err != nil {
-			log.Printf("打开消息中心失败：%v", err)
-		}
+		b.openNoticeFallback(accountID)
 	})
+}
+
+// openNoticeFallback 是「点击的系统通知已经找不到目标」时的落点：能认出账号
+// 就在应用内打开那个账号的窗口与消息中心 —— 把站内消息中心交给系统浏览器会
+// 落到浏览器里登录的另一个账号上，多账号时这正是最容易认错的地方。
+//
+// 认不出账号（升级前弹出的旧通知、账号已经退出）或应用还没就绪时，仍然回到
+// 站内消息中心，至少别让这次点击没有反应。
+func (b *accountBook) openNoticeFallback(accountID string) {
+	if accountID != "" && b.afterReady && b.account(accountID) != nil {
+		b.openWindow(accountID)
+		// 窗口是排到主线程下一拍建的，等它建好再打开消息中心。
+		b.postMain(func() {
+			if acc := b.account(accountID); acc != nil && acc.app != nil {
+				acc.app.showNotifications()
+			}
+		})
+		return
+	}
+	if err := b.openURL(siteBaseURL + "/notifications"); err != nil {
+		log.Printf("打开消息中心失败：%v", err)
+	}
 }
 
 // onBecameActive 是应用回到前台时：每个开着的窗口都校准一次未读数与金币数。

@@ -23,12 +23,18 @@ const noticeTargetKeep = 200
 // 运行留下、本次进程里没有对应 Notification 对象」的消息同样会触发，
 // 所以这里不再给单条通知挂 OnClick，否则同一次点击会被处理两次。
 func showNativeNotice(n nativeNotice) error {
-	note := mygo.NewNotification(mygo.NotificationOptions{
-		ID:    n.ID,
-		Title: n.Title,
-		Body:  n.Body,
-	})
-	return note.Show()
+	opts := mygo.NotificationOptions{
+		ID:       n.ID,
+		Title:    n.Title,
+		Subtitle: n.Subtitle,
+		Body:     n.Body,
+	}
+	// 一个账号一叠：macOS 的通知中心按账号分开堆，两个账号的消息不会混在
+	// 一起（其它平台忽略这个字段）。
+	if n.AccountID != "" {
+		opts.Group = "t2-account:" + n.AccountID
+	}
+	return mygo.NewNotification(opts).Show()
 }
 
 // notificationTabIndex 定位通知的数据源。通知不再占据侧边栏的页面：它留在
@@ -260,7 +266,7 @@ func (a *app) pollNotifications() {
 			}
 			notices := make([]nativeNotice, 0, len(fresh))
 			for _, n := range fresh {
-				notices = append(notices, notificationNative(n))
+				notices = append(notices, a.notificationNative(n))
 			}
 			if !a.nativeNotify {
 				return
@@ -270,20 +276,40 @@ func (a *app) pollNotifications() {
 	}()
 }
 
-// openNotificationNotice handles a click on a native notification. The ID is
-// the one the platform kept, so a system notification that outlived the app
-// process still resolves to its target; when the mapping is gone (冷启动后
-// 系统才把点击交回来), fall back to the site's message center.
-func (a *app) openNotificationNotice(id string) {
-	a.openNotificationTarget(a.notificationNoticeTarget(id))
+// notificationNative 给一条消息补上「这是哪个账号收到的」再交给系统通知。
+// 单账号不写账号名：窗口标题已经说明身份，副标题只会多占一行。
+func (a *app) notificationNative(n *notification) nativeNotice {
+	return notificationNative(n, a.accountID, a.noticeAccountName())
 }
 
-// notificationNoticeTarget is the click target of one native notification.
-func (a *app) notificationNoticeTarget(id string) string {
-	if target := a.noticeTargets[id]; target != "" {
-		return target
+// noticeAccountName 是系统通知副标题里的账号名。没有账号（未登录窗口、旧版
+// 单账号会话）时返回空串，通知里就不写这一行。
+func (a *app) noticeAccountName() string {
+	if a.accountID == "" || !a.multiAccount() {
+		return ""
 	}
-	return siteBaseURL + "/notifications"
+	// 名字取这个窗口自己的会话：通知说的是这份令牌收到的消息。
+	if a.auth != nil {
+		if name := a.auth.username(); name != "" {
+			return name
+		}
+	}
+	if a.book != nil {
+		if acc := a.book.account(a.accountID); acc != nil {
+			return acc.name()
+		}
+	}
+	return ""
+}
+
+// noticeTarget 是这条系统通知的点击目标。系统通知的点击回调只带 id，靠这
+// 个映射落回对应的帖子 / 评论；映射已经清掉（窗口关过、进程重启、通知太旧）
+// 时返回空串，由账号册决定退回哪儿（见 openNotice）。
+func (a *app) noticeTarget(id string) string {
+	if id == "" {
+		return ""
+	}
+	return a.noticeTargets[id]
 }
 
 // rememberNoticeTarget keeps the click target of a shown notification. The
