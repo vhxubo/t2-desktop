@@ -142,6 +142,14 @@ const (
 	noticeFontSize       float32 = 12 // 页面顶部的一行状态说明
 )
 
+// 楼主回复上那枚「OP」标签的配色：站点网页用 #00d3bb 的青绿底配
+// oklch(38% .063 188.416) 的深青字。这套颜色不跟主题的强调色走——强调色
+// 已经用来表示「当前账号的回复」与置顶 / 定位，OP 要自己是一眼可辨的标记。
+var (
+	opTagBackground = ui.Hex("#00d3bb")
+	opTagText       = ui.Oklch(0.38, 0.063, 188.416)
+)
+
 // replyLocateMaxPages 是从评论列表点进来、首屏没找到目标评论时最多自动
 // 续拉的页数：30 条一页，20 页足够覆盖绝大多数帖子，又不会无限请求。
 const replyLocateMaxPages = 20
@@ -1273,21 +1281,56 @@ func replyCanLoadMore(d *detailState) bool {
 	return d.replyTotalPages == 0 || d.replyPage < d.replyTotalPages
 }
 
+// isTopicAuthor 报告这条评论是不是楼主的回复。带作者 id 时按 id 比对，否则
+// 退回昵称；匿名帖（作者是「匿名」）不参与判断，否则每条匿名回复都会被标成
+// 楼主。
+func (a *app) isTopicAuthor(r replyItem) bool {
+	d := a.detail
+	if d == nil || d.topic == nil {
+		return false
+	}
+	topic := d.topic
+	if topic.AuthorID != "" && r.AuthorID != "" {
+		return topic.AuthorID == r.AuthorID
+	}
+	if r.Author == "" || r.Author == "匿名" {
+		return false
+	}
+	return topic.Author != "" && topic.Author != "匿名" && topic.Author == r.Author
+}
+
+// opTag 画昵称后面那枚「OP」标签。它只是一枚小标记，不参与点击：整行没有
+// 任何动作挂在它身上，点它和点空白一样。
+func (a *app) opTag(c *ui.Context) {
+	ui.Text(c, "OP").FontSize(10).Bold().
+		TextColor(opTagText).Background(opTagBackground).
+		Padding(3, 5).Radius(4).
+		Tooltip("楼主的回复")
+}
+
 func (a *app) replyRow(c *ui.Context, r replyItem, focusID string, isNew bool) {
 	t := c.Theme()
 	bg := t.Surface
 	border := t.Border
+	borderWidth := float32(1)
 	if r.Pinned {
 		border = t.Accent
 	}
+	// 当前账号自己的回复描一圈强调色边框、底色再提亮一点点：一长串别人的
+	// 回复里，一眼就能找到「我发的这条」。边框加宽到 1.5（实际渲染为 2 个
+	// 设备像素），比置顶 / 定位用的 1 DIP 描边更醒目。
+	if a.isMine(r.Author) {
+		border, borderWidth = t.Accent, 1.5
+		bg = t.Accent.Mix(t.Surface, 0.94)
+	}
 	if focusID != "" && r.ID != "" && r.ID == focusID {
 		bg = t.SurfaceHover
-		border = t.Accent
+		border, borderWidth = t.Accent, 1.5
 	}
 	left := float32(12)
 	left += float32(r.Depth) * 14
 	row := ui.Column(c).FillWidth().Padding(10, 12, 10, left).Radius(10).
-		Background(bg).Border(1, border).Gap(6)
+		Background(bg).Border(borderWidth, border).Gap(6)
 	hovered := row.Hovered()
 	// 评论已关闭时整条都不能回复；已删除的评论同样不提供回复入口。
 	closed := a.detail != nil && a.detail.topic != nil && a.detail.topic.CommentsClosed
@@ -1341,6 +1384,11 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string, isNew bool) {
 				Bold:   true,
 				Badges: r.Badges,
 			})
+			// 楼主的回复紧跟着昵称挂一枚 OP 标签，读长帖时一眼分得清哪几条
+			// 是发帖人自己在下场回话（见 opTag）。
+			if a.isTopicAuthor(r) {
+				a.opTag(c)
+			}
 			if r.CreatedAt != "" {
 				ui.Text(c, relativeTime(r.CreatedAt)).FontSize(metaSmallFontSize).
 					TextColor(t.TextMuted)
@@ -1818,7 +1866,14 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 		// 会把输入框挤到另一个 ID 上，焦点随之丢失（发送后折不回一行）。
 		// 输入框本身是复合控件不能带 key，key 给包着它的 Row。
 		c.Key("reply-composer-row")
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.End).Children(func() {
+		// 折叠态整行只有一行高：输入框、发送按钮与账号标签上下居中，与占位
+		// 文字的中线对齐，不会因为按钮比单行输入框矮半行而整体往下一沉。
+		// 展开后文字会长成多行，按钮改回沉到底部，贴着最后一行。
+		align := ui.End
+		if !expanded {
+			align = ui.Center
+		}
+		ui.Row(c).FillWidth().Gap(8).AlignItems(align).Children(func() {
 			a.replyField(c, d, expanded)
 		})
 	})

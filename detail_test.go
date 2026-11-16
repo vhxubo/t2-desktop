@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1284,6 +1285,222 @@ func TestReplyComposerSendSitsAtRightEdge(t *testing.T) {
 		t.Errorf("发送按钮没贴在输入框右端：间距 %.0f（输入框右边缘 %.0f，按钮左边缘 %.0f）",
 			gap, area.X+area.W, send.X)
 	}
+}
+
+// 折叠态的评论框只有一行高：输入框、发送按钮与账号标签一起上下居中，和占位
+// 文字站在同一条中线上，不会因为按钮比输入框矮半行而整体往下一沉。展开后
+// 文字长成多行，按钮改回贴着最后一行。
+func TestReplyComposerCollapsedRowCentered(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.theme.mode = themeLight
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	mid := func(r ui.Rect) float32 { return r.Y + r.H/2 }
+	area, ok := tt.Find("写评论")
+	if !ok {
+		t.Fatalf("找不到回复输入框：%q", tt.Texts())
+	}
+	send, ok := tt.Find("发送")
+	if !ok {
+		t.Fatalf("找不到发送按钮：%q", tt.Texts())
+	}
+	if d := mid(area) - mid(send); d > 1 || d < -1 {
+		t.Errorf("折叠态发送按钮应与输入框上下居中：输入框中线 %.1f / 按钮中线 %.1f",
+			mid(area), mid(send))
+	}
+
+	// 选中展开：输入框长高，发送按钮沉到底部贴着最后一行。
+	tt.ClickAt(area.X+area.W/2, area.Y+area.H/2)
+	tt.Frame()
+	area, ok = tt.Find("写评论")
+	if !ok {
+		t.Fatal("输入框消失")
+	}
+	send, ok = tt.Find("发送")
+	if !ok {
+		t.Fatal("展开后找不到发送按钮")
+	}
+	if area.H < 60 {
+		t.Fatalf("输入框应已展开：%+v", area)
+	}
+	if d := mid(send) - mid(area); d < 10 {
+		t.Errorf("展开态发送按钮应沉到底部：输入框中线 %.1f / 按钮中线 %.1f",
+			mid(area), mid(send))
+	}
+	if gap := (area.Y + area.H) - (send.Y + send.H); gap > 1 || gap < -1 {
+		t.Errorf("展开态发送按钮应与输入框底边齐平：差 %.1f", gap)
+	}
+}
+
+// 楼主的回复在昵称后面挂一枚 OP 标签：青绿底配深青字，别人的回复没有。
+func TestReplyRowMarksTopicAuthorWithOP(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.theme.mode = themeLight
+	if a.detail.topic.Author != "jimmy" {
+		t.Fatalf("测试数据的楼主应是 jimmy：%q", a.detail.topic.Author)
+	}
+	a.detail.replyList = []replyItem{
+		{ID: "c1", Author: "dannyng", Floor: 1, Content: "别人的回复"},
+		{ID: "c2", Author: "jimmy", Floor: 2, Content: "楼主的回复"},
+	}
+	a.detail.rebuildDisplay()
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	seen := 0
+	for _, text := range tt.Texts() {
+		if text == "OP" {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("只有楼主的回复该带 OP 标签，实际 %d 枚：%q", seen, tt.Texts())
+	}
+	op, ok := tt.Find("OP")
+	if !ok {
+		t.Fatalf("找不到 OP 标签：%q", tt.Texts())
+	}
+	// 标签在楼主那层楼的头部行里：和右端的楼层号同高、站在它左边。
+	floor, ok := tt.Find("2 楼")
+	if !ok {
+		t.Fatalf("找不到楼主那层楼的楼层号：%q", tt.Texts())
+	}
+	if opMid, floorMid := op.Y+op.H/2, floor.Y+floor.H/2; opMid-floorMid > 2 || floorMid-opMid > 2 {
+		t.Errorf("OP 标签应在楼主那层楼的头部行：标签 %+v / 楼层 %+v", op, floor)
+	}
+	if op.X >= floor.X {
+		t.Errorf("OP 标签应贴在昵称后面、在楼层号左边：标签 %+v / 楼层 %+v", op, floor)
+	}
+
+	// 底色是站点那支青绿 #00d3bb，标签里的字形是它的深青字。
+	im := tt.Image()
+	teal := 0
+	var ink color.RGBA = im.RGBAAt(0, 0)
+	inkLum := 1000.0
+	for y := int(op.Y); y < int(op.Y+op.H); y++ {
+		for x := int(op.X); x < int(op.X+op.W); x++ {
+			c := im.RGBAAt(x, y)
+			if c.G >= 0xb0 && c.R <= 0x40 && c.B >= 0x90 {
+				teal++
+			}
+			if l := colorLum(c); l < inkLum {
+				inkLum, ink = l, c
+			}
+		}
+	}
+	if teal < 120 {
+		t.Errorf("OP 标签的青绿底色只有 %d 个像素，可能没有画上 #00d3bb", teal)
+	}
+	if ink.R > 40 || ink.G < 50 || ink.B < 45 || ink.B > 110 {
+		t.Errorf("OP 标签的字色应是 oklch(38%% .063 188.416) 的深青：%v", ink)
+	}
+}
+
+// 当前账号自己的回复多一圈强调色描边、底色也提亮一档；别人的回复仍是普通的
+// 中性描边。
+func TestReplyRowHighlightsOwnReply(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.theme.mode = themeLight
+	// 这个窗口登录的是 dannyng：c1 就是「我」的回复。
+	_ = a.auth.storeToken(tokenData{AccessToken: "tok", Username: "dannyng"})
+	a.detail.replyList = []replyItem{
+		{ID: "c1", Author: "dannyng", Floor: 1, Content: "我自己的回复"},
+		{ID: "c2", Author: "alice", Floor: 2, Content: "别人的回复"},
+	}
+	a.detail.rebuildDisplay()
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	mineBorder, mineFill, ok := replyRowEdge(tt, "我自己的回复")
+	if !ok {
+		t.Fatalf("找不到自己的那条回复：%q", tt.Texts())
+	}
+	otherBorder, otherFill, ok := replyRowEdge(tt, "别人的回复")
+	if !ok {
+		t.Fatalf("找不到别人的那条回复：%q", tt.Texts())
+	}
+	if b := int(mineBorder.B) - int(mineBorder.R); b < 150 {
+		t.Errorf("自己的回复应有强调色描边：%v", mineBorder)
+	}
+	if mineBorder == otherBorder {
+		t.Errorf("自己的回复与别人的回复描边同色：%v", mineBorder)
+	}
+	if b := int(otherBorder.B) - int(otherBorder.R); b > 40 {
+		t.Errorf("别人的回复不该有强调色描边：%v", otherBorder)
+	}
+	if mineFill == otherFill {
+		t.Errorf("自己的回复底色应比别人更亮一档：%v", mineFill)
+	}
+}
+
+// isTopicAuthor 先认作者 id，没有 id 时才退回昵称；匿名帖的「匿名」不算楼主，
+// 否则每条匿名回复都会挂上 OP 标签。
+func TestReplyTopicAuthorMatch(t *testing.T) {
+	a := testApp(t)
+	topic := &topicDetail{Author: "jimmy", AuthorID: "u1"}
+	a.detail = &detailState{topic: topic}
+
+	cases := []struct {
+		name string
+		r    replyItem
+		want bool
+	}{
+		{"id 对得上、昵称不同也算楼主", replyItem{Author: "Jimmy", AuthorID: "u1"}, true},
+		{"只有昵称时按昵称", replyItem{Author: "jimmy"}, true},
+		{"别人", replyItem{Author: "alice"}, false},
+		{"别人的 id", replyItem{Author: "jimmy", AuthorID: "u2"}, false},
+		{"空的作者", replyItem{}, false},
+	}
+	for _, tc := range cases {
+		if got := a.isTopicAuthor(tc.r); got != tc.want {
+			t.Errorf("%s：isTopicAuthor = %v，期望 %v", tc.name, got, tc.want)
+		}
+	}
+
+	// 匿名帖：作者是「匿名」，所有匿名回复都不算楼主。
+	a.detail = &detailState{topic: &topicDetail{Author: "匿名"}}
+	if a.isTopicAuthor(replyItem{Author: "匿名"}) {
+		t.Error("匿名帖的回复不该被当成楼主")
+	}
+	// 没有详情 / 没有正文时什么都不标。
+	a.detail = nil
+	if a.isTopicAuthor(replyItem{Author: "jimmy", AuthorID: "u1"}) {
+		t.Error("没有帖子数据时不该标 OP")
+	}
+}
+
+// replyRowEdge 从一条评论的正文往左量这行的描边与底色：正文左边是这行的
+// 内边距（行底色），再往左是 1～2 DIP 的描边。返回的 border 是扫描窗口里
+// 离行底色最远的像素，抗锯齿把描边边缘混成过渡色时也能取到它的本色。
+func replyRowEdge(tt *ui.Tester, text string) (border, fill color.RGBA, ok bool) {
+	r, ok := tt.Find(text)
+	if !ok {
+		return border, fill, false
+	}
+	im := tt.Image()
+	y := int(r.Y + r.H/2)
+	fill = im.RGBAAt(int(r.X)-2, y)
+	best := -1
+	for x := int(r.X) - 3; x >= int(r.X)-22 && x >= 0; x-- {
+		c := im.RGBAAt(x, y)
+		d := rgbDistance(c, fill)
+		if d > best {
+			best, border = d, c
+		}
+	}
+	return border, fill, true
+}
+
+func rgbDistance(a, b color.RGBA) int {
+	return absInt(int(a.R)-int(b.R)) + absInt(int(a.G)-int(b.G)) + absInt(int(a.B)-int(b.B))
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // detailAppWithReplies 打开一个详情页，填好正文与评论，并置为登录态。
