@@ -28,6 +28,16 @@ import (
 //
 // 三个端点都不返回约定的响应体（文档只写了请求），所以成功后一律用本地提交
 // 的值更新页面与缓存，不拿响应去猜字段。
+//
+// 编辑时限：文档里没有。api-write.md 的「编辑帖子」「评论」两节只写了作者本人
+// 与 last-write-wins（并发以后提交的为准），index.md 的配额一节也只有通用调用
+// 频次；terms.md 与 changelog.md 同样没有任何「发布后 X 分钟内可改」「最多改
+// 几次」的规则。读端点也没有 can_edit / editable_until / edited_at 这类字段
+// （帖子的 updated_at 语义未定义，评论根本没有这个字段），所以客户端**不做**
+// 本地时限判断——编一个窗口出来只会在允许编辑时把入口藏掉。真正的裁决在服务端：
+// 超时或超次数时它回 403 permission_denied，m 是可读的中文原因，friendlyError
+// 会原样展示（permission_denied 不走授权链路，见 auth_gate.go），按钮留着让
+// 用户重试是安全的。
 
 // editKind 是编辑窗口这次在改什么。
 type editKind int
