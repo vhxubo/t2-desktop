@@ -165,6 +165,7 @@ func (a *app) hideMainWindowToTray() {
 	a.closeComposeWindow()
 	a.closeUserCardWindow()
 	a.closeSearchWindow()
+	a.closeFollowsWindow()
 }
 
 // closePromptDialog 是关闭主窗口时的询问框。放在主窗口里而不是另开一个

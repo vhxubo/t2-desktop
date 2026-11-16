@@ -74,6 +74,12 @@ type topicDetail struct {
 	// 收藏」和「响应里没有这个字段」：后者不该在按钮旁边凭空写一个 0。
 	FavoritedCount     int
 	FavoriteCountKnown bool
+	// 合集归属：文档的稳定字段里没有它，线上可能带 collection_id 或
+	// collection 对象。CollectionKnown 区分「确实没归入合集」和「响应里
+	// 没有这个字段」——后者按钮只能提供归入，不能声称「没在合集里」。
+	CollectionID    string
+	CollectionName  string
+	CollectionKnown bool
 	// Reactions 是帖子收到的表情表态汇总；Rewards 是打赏合计与打赏者。
 	Reactions []reactionStat
 	Rewards   rewardStat
@@ -126,6 +132,9 @@ type voteBlock struct {
 	Finished  bool
 	Options   []voteOption
 	MaxChoice int
+	// ResultVisible 是 result_visible：结果是否公开。公开或投票已结束时，
+	// 详情加载后顺手读一次分布（见 vote.go 的 loadVoteResult）。
+	ResultVisible bool
 }
 
 type voteOption struct {
@@ -161,8 +170,12 @@ type replyItem struct {
 	Emojis          map[string]string
 	Badges          []badgeInfo
 	Deleted, Pinned bool
-	Depth           int
-	Children        []replyItem
+	// Bookmarked / BookmarkKnown 是这条评论的书签状态。带令牌时服务端会下发
+	// is_bookmarked；匿名响应没有这个键，不能当成「没加书签」。
+	Bookmarked    bool
+	BookmarkKnown bool
+	Depth         int
+	Children      []replyItem
 	// HasChildren 标记这条评论在原始数据里带子树（楼中楼）。flattenReplies
 	// 把树摊平后 Children 被清空，但保留这个标志，供楼层视图在评论旁显示
 	// 折叠 / 展开入口，并据此隐藏被折叠的子回复。
@@ -273,6 +286,29 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 		t.FavoriteCountKnown = true
 		t.FavoritedCount = o.num("favorited_count")
 	}
+	// 合集归属不在文档的稳定字段里：有就展示，没有就按未知处理。
+	if o.has("collection_id") {
+		t.CollectionKnown = true
+		t.CollectionID = o.str("collection_id")
+	}
+	if col := o.sub("collection"); col != nil {
+		t.CollectionKnown = true
+		if id := col.str("id"); id != "" {
+			t.CollectionID = id
+		}
+		t.CollectionName = cleanText(col.str("name", "title"))
+	}
+	if list := rawArray(o["collections"]); len(list) > 0 {
+		t.CollectionKnown = true
+		if first := asObject(list[0]); first != nil {
+			if id := first.str("id"); id != "" {
+				t.CollectionID = id
+			}
+			if name := cleanText(first.str("name", "title")); name != "" {
+				t.CollectionName = name
+			}
+		}
+	}
 	for _, raw := range rawArray(o["tags"]) {
 		tag := asObject(raw)
 		if tag == nil {
@@ -343,11 +379,12 @@ func decodePostscripts(raw json.RawMessage) []postscript {
 
 func decodeVote(o object) *voteBlock {
 	v := &voteBlock{
-		ID:        o.str("id"),
-		Type:      o.str("type"),
-		Title:     o.str("title"),
-		Finished:  o.flag("voting_finished"),
-		MaxChoice: o.num("max_choices"),
+		ID:            o.str("id"),
+		Type:          o.str("type"),
+		Title:         o.str("title"),
+		Finished:      o.flag("voting_finished"),
+		MaxChoice:     o.num("max_choices"),
+		ResultVisible: o.flag("result_visible"),
 	}
 	for _, raw := range rawArray(o["options"]) {
 		opt := asObject(raw)
@@ -422,6 +459,10 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 		r.Level = depth + 1
 	}
 	r.ReplyCommentID = o.str("reply_comment_id")
+	if o.has("is_bookmarked", "bookmarked") {
+		r.BookmarkKnown = true
+		r.Bookmarked = o.flag("is_bookmarked", "bookmarked")
+	}
 	if a := o.sub("author"); a != nil {
 		if name := a.str("username"); name != "" {
 			r.Author = name

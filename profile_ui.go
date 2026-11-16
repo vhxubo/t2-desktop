@@ -275,23 +275,27 @@ func (a *app) profileOverviewBody(c *ui.Context, ps *profileState) {
 
 // profileStatsSection 是「最近统计」：粉丝、关注、主页访问与等级来自公开
 // 资料；帖子数与回复数只有对应的标签页拉到过数据时才显示，不为了一个数字
-// 在打开窗口时多发两个请求。
+// 在打开窗口时多发两个请求。粉丝与关注两块可以点开名单（见 follows.go）。
 func (a *app) profileStatsSection(c *ui.Context, ps *profileState) {
 	u := ps.user
 	settingsSection(c, "最近统计", func() {
 		ui.Row(c).FillWidth().Gap(8).Wrap().Children(func() {
-			profileStatChip(c, "粉丝", profileCountText(ps.infoLoaded, u.Followers))
-			profileStatChip(c, "关注", profileCountText(ps.infoLoaded, u.Following))
-			profileStatChip(c, "主页访问", profileCountText(ps.infoLoaded, u.HomeView))
-			profileStatChip(c, "等级", profileCountText(ps.infoLoaded && u.Level > 0, u.Level))
+			profileStatChip(c, "粉丝", profileCountText(ps.infoLoaded, u.Followers), func() {
+				a.showFollows(followsFollowers)
+			})
+			profileStatChip(c, "关注", profileCountText(ps.infoLoaded, u.Following), func() {
+				a.showFollows(followsFollowing)
+			})
+			profileStatChip(c, "主页访问", profileCountText(ps.infoLoaded, u.HomeView), nil)
+			profileStatChip(c, "等级", profileCountText(ps.infoLoaded && u.Level > 0, u.Level), nil)
 			if topics := &ps.content[profileContentTopics]; topics.loaded {
-				profileStatChip(c, "帖子", fmt.Sprintf("%d", len(topics.items)))
+				profileStatChip(c, "帖子", fmt.Sprintf("%d", len(topics.items)), nil)
 			}
 			if ps.replyLoaded {
-				profileStatChip(c, "回复", fmt.Sprintf("%d", ps.replyTotal))
+				profileStatChip(c, "回复", fmt.Sprintf("%d", ps.replyTotal), nil)
 			}
 			if ps.badgeLoaded {
-				profileStatChip(c, "徽章", fmt.Sprintf("%d", len(ps.badges)))
+				profileStatChip(c, "徽章", fmt.Sprintf("%d", len(ps.badges)), nil)
 			}
 		})
 	})
@@ -305,9 +309,20 @@ func profileCountText(known bool, n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-func profileStatChip(c *ui.Context, label, value string) {
+// profileStatChip 是一块统计。onClick 非空时整块可点（粉丝 / 关注打开
+// 名单），悬停给浅底与强调色描边，免得它看起来和旁边的只读数字一样。
+func profileStatChip(c *ui.Context, label, value string, onClick func()) {
 	t := c.Theme()
-	ui.Box(c).Padding(6, 10).Radius(8).Background(t.Surface).Border(1, t.Border).Children(func() {
+	b := ui.Box(c).Padding(6, 10).Radius(8).Background(t.Surface).Border(1, t.Border)
+	if onClick != nil {
+		if b.Hovered() {
+			b.Background(t.SurfaceHover)
+			b.Border(1, t.Accent)
+		}
+		b.Label(label).Tooltip("查看" + label + "名单")
+		b.OnClick(onClick)
+	}
+	b.Children(func() {
 		ui.Column(c).Gap(1).Children(func() {
 			ui.Text(c, value).FontSize(14).Bold().SingleLine()
 			ui.Text(c, label).FontSize(10).TextColor(t.TextMuted).SingleLine()
@@ -396,7 +411,7 @@ func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
 		return i
 	}
 	ui.List(c, &st.list, len(items), func(i int) {
-		a.profileContentRow(c, items[i])
+		a.profileContentRow(c, kind, items[i])
 	}).Grow(1).MinHeight(0).Gap(8)
 	if spec.Paging == pagingPages {
 		a.profileMoreContent(c, kind, st)
@@ -414,8 +429,40 @@ func profileContentTotal(st *tabState) int {
 
 // profileContentRow 和主窗口的列表行用同一套画法：收藏是帖子、书签是评论，
 // 书签因此会走评论的富行；点开后由 openProfileItem 在主窗口打开正文。
-func (a *app) profileContentRow(c *ui.Context, it Item) {
-	a.rowWith(c, it, a.openProfileItem)
+// 「书签」分段的行右侧多一枚移除按钮：书签本来就是这个窗口里能删的东西，
+// 让用户为了删一条书签再进帖子是把断头路接了一半。
+func (a *app) profileContentRow(c *ui.Context, kind int, it Item) {
+	if kind != profileContentBookmarks || it.CommentID == "" {
+		a.rowWith(c, it, a.openProfileItem)
+		return
+	}
+	t := c.Theme()
+	busy := a.profile != nil && a.profile.bookmarkBusy == it.CommentID
+	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Grow(1).MinWidth(0).Children(func() {
+			a.rowWith(c, it, a.openProfileItem)
+		})
+		b := ui.Box(c).Size(28, 28).Radius(8).Center().Background(ui.Transparent)
+		hovered := b.Hovered() && !busy
+		if hovered {
+			b.Background(t.SurfaceHover)
+		}
+		ink := t.TextMuted
+		if hovered {
+			ink = t.Danger
+		}
+		b.Children(func() {
+			if busy {
+				ui.Spinner(c).Size(12, 12)
+				return
+			}
+			ui.Icon(c, bookmarkOnIcon).Size(15, 15).TextColor(ink)
+		})
+		b.Label("移除书签").Tooltip("从书签里移除这条评论")
+		if !busy {
+			b.OnClick(func() { a.removeProfileBookmark(it) })
+		}
+	})
 }
 
 // profileMoreContent 是分页列表底部的续拉行：还有下一页时给按钮，续拉失败
@@ -434,7 +481,10 @@ func (a *app) profileMoreContent(c *ui.Context, kind int, st *tabState) {
 			ui.Spinner(c).Size(14, 14)
 			ui.Text(c, "正在加载更多…").FontSize(11).TextColor(t.TextMuted)
 		})
-	case !st.noMore && (st.totalPages == 0 || st.page < st.totalPages):
+	// 服务端给了总数且已经全部拿到时不再给按钮：留着它只会让人点一下拿到
+	// 空页，白等一次请求。
+	case !st.noMore && (st.totalPages == 0 || st.page < st.totalPages) &&
+		!(st.total > 0 && len(st.items) >= st.total):
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			if ui.Button(c, "加载更多").Clicked() {
 				a.loadProfileContent(kind, st.page+1)

@@ -251,6 +251,16 @@ type app struct {
 	userCardWin   *mygo.Window
 	userCard      *userCardState
 	userCardShown bool
+	// followsWin 是「关注与粉丝」窗口（见 follows.go / follows_ui.go）：入口是
+	// 「我的」窗口概览里的粉丝 / 关注两个统计块。follows 是它读的状态，
+	// followsShown 表示窗口此刻是否在屏幕上。都只在主线程读写。
+	followsWin   *mygo.Window
+	follows      *followsState
+	followsShown bool
+	// followUnread 是关注流未读数，作为侧边栏「动态」一项的角标；
+	// followUnreadGen 丢弃过期的未读数请求。都只在主线程读写。
+	followUnread    int
+	followUnreadGen uint64
 	// searchWin 是搜索窗口：入口是标题栏的放大镜。search 是它的输入、结果与
 	// 防抖状态，界面与请求在 search.go / search_ui.go。都只在主线程读写。
 	searchWin *mygo.Window
@@ -400,6 +410,7 @@ func (a *app) publish(fn func()) {
 		a.redrawReplyWindow()
 		a.redrawUserCardWindow()
 		a.redrawSearchWindow()
+		a.redrawFollowsWindow()
 	})
 }
 
@@ -550,6 +561,11 @@ func (a *app) refreshTab(idx int) {
 		// 需要登录的页交给选中处理去弹授权，这里不发注定失败的请求。
 		return
 	}
+	// 打开「动态」就把关注流标成已读：角标说明的是上次离开之后新增了多少
+	// 条，看完这一页它就该消失（见 follows.go 的 markFollowsRead）。
+	if tabSpecs[idx].Path == "/v1/me/follows/timeline" {
+		a.markFollowsRead()
+	}
 	st.err = ""
 	st.moreErr = ""
 	a.load(idx, 1)
@@ -633,8 +649,11 @@ func (a *app) onAuthChanged(err error) {
 		a.navSel = tabID(0)
 	}
 	if a.auth.loggedIn() {
+		a.resetFollowsUnread()
 		a.refreshUnread()
 		a.startNotificationWatch()
+		// 关注流的未读角标也属于当前账号：登录 / 换账号后重新读一次。
+		a.refreshFollowsUnread()
 		// 标题栏的金币数在登录后立即读一次，之后按间隔刷新；读取结果同时
 		// 写回金币窗口共用的状态。
 		a.startCoinTagWatch()
@@ -662,6 +681,10 @@ func (a *app) onAuthChanged(err error) {
 		// 独立写评论窗口也一样：退出后没有可发的身份，草稿留在页面状态里，
 		// 窗口收起来。
 		a.closeReplyWindow()
+		// 关注与粉丝名单、关注流未读角标都只属于当前账号。
+		a.closeFollowsWindow()
+		a.follows = nil
+		a.resetFollowsUnread()
 		a.unread = 0
 		a.unreadLoading = false
 		a.notifSeen = nil
@@ -725,7 +748,7 @@ func (a *app) view(c *ui.Context) {
 							// 再点一次已经在看的这一页就刷新：回到第一页重新
 							// 拉一遍。选中值没变时 Sidebar 不报 Changed，所以
 							// 刷新挂在这一行自己的点击上。
-							ui.SidebarItem(c, tabID(i), tabIcons[i], s.Label).
+							ui.SidebarItem(c, tabID(i), tabIcons[i], a.followsTabLabel(i, s.Label)).
 								OnClick(func() { a.reclickTab(idx) })
 						}
 					})
@@ -1430,6 +1453,7 @@ func main() {
 			a.closeReplyWindow()
 			a.closeSearchWindow()
 			a.closeAboutWindow()
+			a.closeFollowsWindow()
 		})
 		// 关闭按钮（自绘标题栏、Alt+F4、任务栏右键都一样）先问设置：默认
 		// 照常关闭，选了「收进托盘」就拦下来藏起窗口，见 window_mode.go。
@@ -1443,6 +1467,7 @@ func main() {
 		a.ensureEmojis()
 		if a.auth.loggedIn() {
 			a.refreshUnread()
+			a.refreshFollowsUnread()
 			a.startNotificationWatch()
 			// 登录过的老会话启动时就先把金币数读出来，之后定时刷新。
 			a.startCoinTagWatch()

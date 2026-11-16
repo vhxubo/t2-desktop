@@ -30,6 +30,7 @@ const (
 	toastSearch                           // 搜索窗口
 	toastPandora                          // 潘多拉窗口：开盒 / 重抽结果
 	toastReply                            // 独立写评论窗口：发送结果
+	toastFollows                          // 关注与粉丝窗口：回关 / 取关
 )
 
 // toastNote 是一条等着显示的提示。
@@ -60,6 +61,8 @@ func (a *app) toastWindow(target toastTarget) *mygo.Window {
 		return a.pandoraWin
 	case toastReply:
 		return a.replyWin
+	case toastFollows:
+		return a.followsWin
 	}
 	return a.win
 }

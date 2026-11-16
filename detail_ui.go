@@ -79,6 +79,11 @@ type detailState struct {
 	fav   favoriteState
 	react reactionState
 	vote  voteUIState
+	// bmBusy 是正在提交书签的评论 id：一次只提交一条，避免连点把同一条
+	// 评论反复加 / 删（见 bookmarks.go）。
+	bmBusy string
+	// coll 是作者行「合集」气泡的状态（见 collections.go）。
+	coll collectionState
 
 	// composer: write a comment (optionally as a nested reply to replyTo).
 	// 发送失败的原因不落在页面上，用主窗口的 toast 说明（见 submitReply）。
@@ -373,6 +378,16 @@ func (a *app) loadTopic() {
 			syncFavorite(d, topic, a.auth.username())
 			// 投票选项可能随刷新变化，勾选框的行数跟着对齐。
 			syncVote(d, topic)
+			// 投票已结束或结果公开时顺手读一次分布：这两类帖子打开就想看
+			// 结果，不必再点一次「查看投票结果」。
+			if topic.Vote != nil {
+				if topic.Vote.Finished {
+					d.vote.resultOpen = true
+				}
+				if topic.Vote.Finished || topic.Vote.ResultVisible {
+					a.loadVoteResult(d)
+				}
+			}
 			// 正文拿到后写一份本机缓存，并补全阅读记录里打开时还缺的字段。
 			a.updateReadingTopic(d.shortID, &topic)
 			a.saveCachedDetail(d)
@@ -810,6 +825,99 @@ func (a *app) voteSection(c *ui.Context, d *detailState, v *voteBlock) {
 			a.submitVoteMulti(d, v)
 		}
 	}
+	a.voteResultSection(c, d, v)
+}
+
+// voteResultSection 是投票块里的结果分布：一行展开 / 收起，展开后每个选项
+// 一条进度条。分布来自 GET /vote/result（见 vote.go）；失败只在这里说明，
+// 不弹 toast —— 这是一次用户主动发起的只读查询。
+func (a *app) voteResultSection(c *ui.Context, d *detailState, v *voteBlock) {
+	t := c.Theme()
+	if v.ID == "" {
+		return
+	}
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		label := "查看投票结果"
+		if d.vote.resultOpen {
+			label = "收起投票结果"
+		}
+		a.smallAction(c, label, d.vote.resultLoading, func() { a.toggleVoteResult(d) })
+		if d.vote.resultLoading {
+			ui.Spinner(c).Size(12, 12)
+			ui.Text(c, "正在读取结果…").FontSize(11).TextColor(t.TextMuted)
+		} else if d.vote.result != nil && d.vote.result.Total > 0 {
+			ui.Textf(c, "共 %d 票", d.vote.result.Total).FontSize(11).TextColor(t.TextMuted)
+		}
+	})
+	if d.vote.resultErr != "" {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "读取投票结果失败："+d.vote.resultErr).FontSize(11).
+				TextColor(t.Danger).MaxLines(2).Grow(1)
+			a.smallAction(c, "重试", false, func() { a.loadVoteResult(d) })
+		})
+	}
+	if !d.vote.resultOpen || d.vote.result == nil {
+		return
+	}
+	total := d.vote.result.Total
+	for _, row := range voteResultRows(v, d.vote.result) {
+		share := 0.0
+		if total > 0 {
+			share = float64(row.Votes) / float64(total)
+		}
+		percent := int(share*100 + 0.5)
+		ui.Column(c).FillWidth().Gap(3).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, row.Text).FontSize(metaSmallFontSize).TextColor(t.Text).
+					SingleLine().Grow(1)
+				ui.Textf(c, "%d 票 · %d%%", row.Votes, percent).FontSize(11).
+					TextColor(t.TextMuted).Shrink(0)
+			})
+			ui.Progress(c, share)
+		})
+	}
+	if total == 0 {
+		ui.Text(c, "还没有人投票。").FontSize(11).TextColor(t.TextMuted)
+	}
+}
+
+// voteResultRows 把结果端点与详情里的选项合并成要画的几行：以详情顺序为
+// 主（用户看到的就是这个顺序），结果里多出来的选项接在后面。
+func voteResultRows(v *voteBlock, res *voteResult) []voteOption {
+	if res == nil {
+		return nil
+	}
+	byID := make(map[string]voteOption, len(res.Options))
+	for _, o := range res.Options {
+		if o.ID != "" {
+			byID[o.ID] = o
+		}
+	}
+	var rows []voteOption
+	seen := make(map[string]bool, len(res.Options))
+	if v != nil {
+		for _, o := range v.Options {
+			row := o
+			if got, ok := byID[o.ID]; ok {
+				row.Votes = got.Votes
+				if got.Text != "" {
+					row.Text = got.Text
+				}
+			}
+			if o.ID != "" {
+				seen[o.ID] = true
+			}
+			rows = append(rows, row)
+		}
+	}
+	for _, o := range res.Options {
+		if seen[o.ID] {
+			continue
+		}
+		seen[o.ID] = true
+		rows = append(rows, o)
+	}
+	return rows
 }
 
 func anyVoteChecked(checks []bool) bool {
@@ -903,7 +1011,9 @@ func (a *app) topicAuthorLine(c *ui.Context, d *detailState) {
 					TextColor(t.TextMuted)
 			}
 		})
-		// 收藏是帖子级的动作，贴在这条元信息行的最右侧。
+		// 收藏是帖子级的动作，贴在这条元信息行的最右侧；合集在它左边：
+		// 「归入合集」是整理动作，收藏是标记动作，两个入口相邻但各管一件事。
+		a.collectionButton(c, d)
 		a.favoriteButton(c, d)
 	})
 }
@@ -1335,10 +1445,55 @@ func (a *app) replyFooter(c *ui.Context, r replyItem, closed bool) {
 		if a.canRewardOn(d, r.ID) {
 			a.rewardEntry(c, d, r.ID, interactEntryCompact)
 		}
+		a.bookmarkEntry(c, d, r)
 		if !closed {
 			a.replyEntry(c, d, r)
 		}
 	})
+}
+
+// bookmarkEntry 是评论底行的书签图标：已加书签时填实并换成强调色。未登录
+// 也可以点，授权成功后同一次操作自动重跑（见 bookmarks.go）。
+func (a *app) bookmarkEntry(c *ui.Context, d *detailState, r replyItem) {
+	if r.ID == "" || r.Deleted {
+		return
+	}
+	t := c.Theme()
+	on := a.replyBookmarked(d, r.ID)
+	busy := d.bmBusy == r.ID
+	b := ui.Box(c).Size(20, 20).Radius(6).Center().Background(ui.Transparent)
+	hovered := b.Hovered()
+	if hovered && !busy {
+		b.Background(t.SurfaceHover)
+	}
+	ink := t.TextMuted
+	switch {
+	case on:
+		ink = t.Accent
+	case hovered:
+		ink = t.Text
+	}
+	if busy {
+		b.Disabled(true)
+	}
+	b.Children(func() {
+		icon := bookmarkIcon
+		if on {
+			icon = bookmarkOnIcon
+		}
+		ui.Icon(c, icon).Size(14, 14).TextColor(ink)
+	})
+	label, tip := "加书签", "把这条评论加入书签"
+	if on {
+		label, tip = "取消书签", "已加书签，点一下移除"
+	}
+	if busy {
+		tip = "正在提交…"
+	}
+	b.Label(label).Tooltip(tip)
+	if !busy {
+		b.OnClick(func() { a.toggleReplyBookmark(d, r) })
+	}
 }
 
 // replyEntry 是回复入口：和表态 / 打赏一样是一枚图标，放在评论底行最右端。

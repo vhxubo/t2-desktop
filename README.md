@@ -73,14 +73,18 @@
 ## 功能特性
 
 - **浏览与无限滚动**：热门、最新、最新评论三个信息流，分页拉取到底自动停止。
-- **帖子详情**：Markdown 正文渲染、评论、表情、配图，单选 / 多选投票，正文内联跳转带返回栈。
+- **帖子详情**：Markdown 正文渲染、评论、表情、配图，单选 / 多选投票与结果分布，
+  正文内联跳转带返回栈。
+- **互动**：收藏帖子、给评论加书签（详情与「我的」两处都能删）、把帖子归入或移出
+  合集（可直接新建合集）。
 - **登录 2Libra**：浏览器 OAuth（PKCE）+ 自定义协议深链回调；未关联协议时
   可手动粘贴回调链接。
 - **消息中心**：未读角标、SSE 长连接、系统通知与已读批量管理。
 - **金币**：余额、今日明细、流水、统计与排行各自独立加载，未开通的能力只降级
   对应模块；标题栏金币数实时联动。
 - **潘多拉**：今日盲盒与抽奖进度。
-- **我的**：概览 / 内容 / 回复 / 徽章墙 / 六维属性（权限分）五个标签页。
+- **我的**：概览 / 内容 / 回复 / 徽章墙 / 六维属性（权限分）五个标签页；粉丝与
+  关注两个数字可以点开名单，行内直接回关 / 取关。
 - **发帖与评论**：独立写帖窗口、独立写评论窗口，草稿不丢字。
 - **图床（图库）**：内置 Imgur / Tikolu / MJJ.Today / ImgBB / Skyimg /
   111666.best / StarDots，官方图床仅对 Pro 开放。
@@ -200,6 +204,8 @@ gofmt -l .                      # 不应输出任何文件
 | 个人主页 | `profile.go`、`profile_ui.go`、`attributes.go`（六维属性）、`badges.go`（徽章墙） |
 | 发帖 / 评论 | `compose.go`、`compose_ui.go`、`comments.go`、`reply_view.go` |
 | 交互（投票 / 表态 / 关注） | `vote.go`、`interact.go`、`follow.go` |
+| 书签 / 合集 | `bookmarks.go`、`collections.go` |
+| 关注与粉丝名单 | `follows.go`、`follows_ui.go` |
 | 金币 | `coins.go`、`coins_ui.go`、`coins_window.go`、`coin_events.go`、`coin_cache.go` |
 | 潘多拉 | `pandora.go`、`pandora_window.go`、`pandora_ui.go` |
 | 通知 | `notifications.go`、`notifications_ui.go`、`stream.go`（SSE） |

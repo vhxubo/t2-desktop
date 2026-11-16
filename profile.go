@@ -175,6 +175,9 @@ type profileState struct {
 	// badgeBusyID 是正在提交佩戴 / 取消佩戴的徽章 uuid；一次只提交一枚，
 	// 避免连点造成重复扣币。
 	badgeBusyID string
+	// bookmarkBusy 是正在移除的书签评论 id（「我的内容 - 书签」里直接移除，
+	// 见 bookmarks.go）；一次只提交一条。
+	bookmarkBusy string
 }
 
 func newProfileState() *profileState {
