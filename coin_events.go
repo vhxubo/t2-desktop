@@ -26,25 +26,28 @@ import "time"
 //	coinEventBadge       佩戴 / 取消佩戴徽章                          toggleProfileBadge
 //	coinEventPandora     开盲盒 / 重抽 POST /v1/pandora/open|reroll  openPandoraBox
 //	                     🔑                                          rerollPandoraBox
+//	coinEventBet         参与竞猜 POST /v1/topics/:id/bets/:opt/      submitBet
+//	                     participate 🔑
 //	coinEventIncoming    收到表态 / 打赏 / 回复等新通知                pollNotifications
 //	coinEventForeground  回到前台，校准在站点上的金币变动              onBecameActive
 //
-// 金币池注资、竞猜、兑换码领取、盲盒延期、付费墙解锁、更换头像这些能力这个
+// 金币池注资、兑换码领取、盲盒延期、付费墙解锁、更换头像这些能力这个
 // 应用还没有入口；以后加上时，同样在成功后调用 coinsChanged。
 // 用户直接在站点上完成它们不会产生站内通知，由 coinEventForeground 与标题栏
 // 金币数的定时刷新兜底。
 type coinEvent string
 
 const (
-	coinEventSign       coinEvent = "checkin"       // 签到
-	coinEventPost       coinEvent = "post"          // 发帖（含随帖扣费的项目）
-	coinEventReply      coinEvent = "comment"       // 回复 / 评论
-	coinEventReaction   coinEvent = "send_reaction" // 表态（发送表情）
-	coinEventReward     coinEvent = "send_reward"   // 打赏
-	coinEventBadge      coinEvent = "badge_equip"   // 佩戴 / 取消佩戴徽章
-	coinEventPandora    coinEvent = "pandora"       // 开盲盒 / 重抽
-	coinEventIncoming   coinEvent = "incoming"      // 收到表态 / 打赏 / 回复等新通知
-	coinEventForeground coinEvent = "foreground"    // 回到前台校准站点上的变动
+	coinEventSign       coinEvent = "checkin"         // 签到
+	coinEventPost       coinEvent = "post"            // 发帖（含随帖扣费的项目）
+	coinEventReply      coinEvent = "comment"         // 回复 / 评论
+	coinEventReaction   coinEvent = "send_reaction"   // 表态（发送表情）
+	coinEventReward     coinEvent = "send_reward"     // 打赏
+	coinEventBadge      coinEvent = "badge_equip"     // 佩戴 / 取消佩戴徽章
+	coinEventPandora    coinEvent = "pandora"         // 开盲盒 / 重抽
+	coinEventBet        coinEvent = "bet_participate" // 参与竞猜
+	coinEventIncoming   coinEvent = "incoming"        // 收到表态 / 打赏 / 回复等新通知
+	coinEventForeground coinEvent = "foreground"      // 回到前台校准站点上的变动
 )
 
 // coinRefreshDelay 是全局金币刷新的合并窗口：连着发几条回复、点几个表情时

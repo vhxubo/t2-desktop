@@ -983,3 +983,51 @@ func TestEditEndpointsUseConfiguredProxy(t *testing.T) {
 		}
 	}
 }
+
+// 竞猜的读（GET /bets）与写（POST participate）两个出口都要走配置的代理。
+func TestBetEndpointsUseConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var paths []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, envelopeJSON(`{
+            "title":"经代理的竞猜","options":[{"id":"opt-a","text":"甲","total_coins":5}]
+        }`))
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		Proxy:  p,
+		Base:   "http://upstream.invalid/api",
+		bearer: func() string { return "tok" },
+	}
+	ctx := context.Background()
+	if _, err := c.fetchTopicBets(ctx, "a1b2"); err != nil {
+		t.Fatalf("经代理读竞猜失败：%v", err)
+	}
+	if err := c.participateBet(ctx, "k1", "a1b2", "opt-a", 20); err != nil {
+		t.Fatalf("经代理参与竞猜失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{
+		"GET /api/v1/topics/a1b2/bets",
+		"POST /api/v1/topics/a1b2/bets/opt-a/participate",
+	}
+	if len(paths) != len(want) {
+		t.Fatalf("代理收到 %d 次请求，期望 %d 次：%v", len(paths), len(want), paths)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Errorf("第 %d 次请求 = %s，期望 %s", i+1, paths[i], want[i])
+		}
+	}
+}

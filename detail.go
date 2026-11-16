@@ -66,6 +66,8 @@ type topicDetail struct {
 	Tags                     []string
 	Postscripts              []postscript
 	Vote                     *voteBlock
+	// Bet 是竞猜块：线上在 d.bet，早期文档在 d.extra.bet（见 bets.go）。
+	Bet *betInfo
 	// 收藏状态：favorited 只在带令牌时有意义。字段缺失时 FavoriteKnown 为
 	// false，按钮按未收藏展示，点一下以服务端结果为准。
 	Favorited     bool
@@ -331,6 +333,8 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 			t.Vote = decodeVote(vote)
 		}
 	}
+	// 竞猜：线上与文档的位置同样不固定（d.bet / d.extra.bet），两处都认。
+	t.Bet = decodeTopicBet(o)
 	return t, nil
 }
 

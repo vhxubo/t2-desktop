@@ -79,6 +79,7 @@ type detailState struct {
 	fav   favoriteState
 	react reactionState
 	vote  voteUIState
+	bet   betUIState
 	// bmBusy 是正在提交书签的评论 id：一次只提交一条，避免连点把同一条
 	// 评论反复加 / 删（见 bookmarks.go）。
 	bmBusy string
@@ -385,6 +386,8 @@ func (a *app) loadTopic() {
 			syncFavorite(d, topic, a.auth.username())
 			// 投票选项可能随刷新变化，勾选框的行数跟着对齐。
 			syncVote(d, topic)
+			// 竞猜选项若已变化，收起指向旧选项的投注面板。
+			syncBets(d, topic)
 			// 投票已结束或结果公开时顺手读一次分布：这两类帖子打开就想看
 			// 结果，不必再点一次「查看投票结果」。
 			if topic.Vote != nil {
@@ -797,6 +800,9 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 			ui.Text(c, "投票 · "+v.Title).FontSize(commentFontSize).Bold()
 			a.voteSection(c, d, v)
 		})
+	}
+	if p.Bet != nil {
+		a.betSection(c, d)
 	}
 	// 正文末尾不再画互动行：表态与打赏固定在左栏底部的互动栏里
 	// （见 detailView 的 topicInteractionBar），正文再长也始终可达。
