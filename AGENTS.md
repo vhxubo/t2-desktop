@@ -164,7 +164,7 @@ a pure white page.
 | --- | --- |
 | oauth.md | `auth.go`、`auth_ui.go`、`auth_gate.go` |
 | api-read.md | `api.go`（列表与解码）、`detail.go`、`profile.go`、`attributes.go`（六维属性）、`badges.go`（徽章墙与佩戴状态）、`user_card.go`、`notifications.go`、`follows.go`（关注 / 粉丝名单、关注流未读数） |
-| api-write.md | `compose.go`、`vote.go`（投票与结果分布）、`detail.go`（发评论）、`edit.go`（编辑帖子 / 编辑评论 / 追加附言，界面在 `edit_window.go`）、`follow.go`、`interact.go`、`bookmarks.go`（评论书签）、`collections.go`（新建合集 / 归入与移出） |
+| api-write.md | `compose.go`、`vote.go`（投票与结果分布）、`detail.go`（发评论）、`edit.go`（编辑帖子 / 编辑评论 / 追加附言，界面在 `edit_window.go`）、`comments_status.go`（关闭 / 开启评论）、`follow.go`、`interact.go`、`bookmarks.go`（评论书签）、`collections.go`（新建合集 / 归入与移出） |
 | api-economy.md | `coins.go`、`coins_window.go`、`badges.go`（佩戴切换，scope `write:economy`）、`image_hosts.go`（上传；官方图床只对 Pro 开放）、`image_hosts_adapters.go`（第三方图床协议：Imgur / Tikolu / MJJ.Today / ImgBB / Skyimg / 111666.best / StarDots，来自「通用图片上传助手」脚本） |
 | 搜索（`/v1/search`） | `search.go`、`search_ui.go` |
 | 节点（`/v1/nodes`） | `nodes.go`（请求、父子关系、本地缓存）、`compose.go`（两列选项）、`cascader.go`（级联选择组件） |

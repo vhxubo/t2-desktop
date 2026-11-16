@@ -87,6 +87,8 @@ type detailState struct {
 	bmBusy string
 	// coll 是作者行「合集」气泡的状态（见 collections.go）。
 	coll collectionState
+	// comments 是作者「关闭 / 开启评论」那一次操作的状态（见 comments_status.go）。
+	comments commentsStatusState
 
 	// composer: write a comment (optionally as a nested reply to replyTo).
 	// 发送失败的原因不落在页面上，用主窗口的 toast 说明（见 submitReply）。
@@ -639,6 +641,8 @@ func (a *app) detailView(c *ui.Context) {
 		// 操作按钮不再占一行页头，而是悬浮在内容右上角：不占正文高度，
 		// 也不会随正文滚走（见 detailToolBar）。
 		a.detailToolBar(c, d)
+		// 「关闭 / 开启评论」的确认框：作者点了工具条里的图标才展开，盖在整页上。
+		a.commentsStatusDialog(c, d)
 	})
 	// 表态、打赏与明细都是贴着各自入口的气泡（见 interact.go），在互动区
 	// 构建时已经就地挂好，这里不需要再叠一层弹窗。
@@ -674,9 +678,9 @@ func (a *app) detailToolBar(c *ui.Context, d *detailState) {
 					d.list.ScrollTo(0, ui.Start)
 				})
 			}
-			// 作者本人多两个入口：改标题 / 正文，以及往帖子末尾追加附言。
-			// 接口只允许作者本人改，所以入口也只在昵称对得上时出现（见
-			// canEditTopic），不拿一个点了必然 403 的按钮占位置。
+			// 作者本人多三个入口：改标题 / 正文、往帖子末尾追加附言，以及
+			// 关闭 / 开启评论。接口只允许作者本人改，所以入口也只在昵称对得上
+			// 时出现（见 canEditTopic），不拿一个点了必然 403 的按钮占位置。
 			if a.canEditTopic(d) {
 				a.detailToolButton(c, editIcon, "编辑帖子", "修改标题与正文", func() {
 					a.showTopicEdit(d)
@@ -684,6 +688,8 @@ func (a *app) detailToolBar(c *ui.Context, d *detailState) {
 				a.detailToolButton(c, postscriptIcon, "追加附言", "在帖子末尾追加一段附言", func() {
 					a.showPostscript(d)
 				})
+				// 评论开关同样是作者动作：接口非作者一律 403（见 comments_status.go）。
+				a.commentsStatusButton(c, d)
 			}
 			a.detailRefreshButton(c, d)
 			a.detailToolButton(c, closeIcon, "关闭详情", "关闭详情（Esc）", a.closeDetail)

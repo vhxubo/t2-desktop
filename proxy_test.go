@@ -932,9 +932,9 @@ func TestImageHostAndImageURLUseConfiguredProxy(t *testing.T) {
 	}
 }
 
-// 编辑帖子 / 编辑评论 / 追加附言这三个写端点也必须走配置的代理。它们和读端点
-// 共用同一个 Client，但「共用」这件事要用假代理证明一次，不能只靠约定：新加的
-// 出口一旦自建 http.Client，代理规则就会在这里漏掉。
+// 编辑帖子 / 编辑评论 / 追加附言 / 评论开关这几个写端点也必须走配置的代理。它们
+// 和读端点共用同一个 Client，但「共用」这件事要用假代理证明一次，不能只靠约定：
+// 新加的出口一旦自建 http.Client，代理规则就会在这里漏掉。
 func TestEditEndpointsUseConfiguredProxy(t *testing.T) {
 	clearProxyEnv(t)
 	var mu sync.Mutex
@@ -966,6 +966,9 @@ func TestEditEndpointsUseConfiguredProxy(t *testing.T) {
 	if err := c.addPostscript(ctx, "a1b2", "附言", "k1"); err != nil {
 		t.Fatalf("经代理追加附言失败：%v", err)
 	}
+	if _, err := c.setTopicCommentsClosed(ctx, "a1b2", true); err != nil {
+		t.Fatalf("经代理关闭评论失败：%v", err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -973,6 +976,7 @@ func TestEditEndpointsUseConfiguredProxy(t *testing.T) {
 		"/api/v1/topics/a1b2/edit",
 		"/api/v1/replies/c1/edit",
 		"/api/v1/topics/a1b2/postscript",
+		"/api/v1/topics/a1b2/comments-status",
 	}
 	if len(paths) != len(want) {
 		t.Fatalf("代理收到 %d 次请求，期望 %d 次：%v", len(paths), len(want), paths)
