@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -206,6 +209,8 @@ func (a *app) profileWindowView(c *ui.Context) {
 	// 缺权限时也摆出同一个全局授权弹窗：从本窗口发起的请求失败后，用户就
 	// 在这个窗口里看到原因与「前往授权」。
 	a.authDialog(c)
+	// 合集改名 / 删除的对话框：它们盖在整扇窗口上，所以画在最后。
+	a.profileCollectionDialogs(c)
 }
 
 // profileTitleName 是窗口标题栏上的账号名：优先昵称，其次用户名。
@@ -354,7 +359,7 @@ var profileContentEmpty = [][2]string{
 	{"还没有发布过帖子。", "需要发帖请到站点完成。"},
 	{"还没有收藏过帖子。", "在站点收藏的帖子会出现在这里。"},
 	{"还没有加过书签。", "在站点给评论加的书签会出现在这里。"},
-	{"还没有创建合集。", "合集可以在站点创建与管理。"},
+	{"还没有创建合集。", "在帖子详情页的「合集」里新建；这里可以改名、删除与查看合集内容。"},
 }
 
 func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
@@ -365,6 +370,14 @@ func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
 	}
 	st := &ps.content[kind]
 	spec := profileContentSpecs[kind]
+
+	// 点开一个合集时整块换成它里面的帖子，「返回合集列表」再回到这一页的分段。
+	if kind == profileContentCollections && ps.collBrowse != nil {
+		a.collectionTopicsBody(c, ps.collBrowse, a.openProfileItem, func() {
+			ps.collBrowse = nil
+		})
+		return
+	}
 
 	// 分段切换：帖子 / 收藏 / 书签 / 合集。每段各有一份列表状态，已经拉过的
 	// 保留着，来回切换不会重新请求。
@@ -431,12 +444,22 @@ func profileContentTotal(st *tabState) int {
 // profileContentRow 和主窗口的列表行用同一套画法：收藏是帖子、书签是评论，
 // 书签因此会走评论的富行；点开后由 openProfileItem 在主窗口打开正文。
 // 「书签」分段的行右侧多一枚移除按钮：书签本来就是这个窗口里能删的东西，
-// 让用户为了删一条书签再进帖子是把断头路接了一半。
+// 让用户为了删一条书签再进帖子是把断头路接了一半。「合集」分段同理：整行
+// 点开合集里的帖子，右侧是改名与删除（合集是我自己的，见 collections.go）。
 func (a *app) profileContentRow(c *ui.Context, kind int, it Item) {
-	if kind != profileContentBookmarks || it.CommentID == "" {
+	switch {
+	case kind == profileContentCollections:
+		a.profileCollectionRow(c, it)
+	case kind == profileContentBookmarks && it.CommentID != "":
+		a.profileBookmarkRow(c, it)
+	default:
 		a.rowWith(c, it, a.openProfileItem)
-		return
 	}
+}
+
+// profileBookmarkRow 是「我的内容 - 书签」的一行：整行打开评论，右侧一枚
+// 移除按钮。
+func (a *app) profileBookmarkRow(c *ui.Context, it Item) {
 	t := c.Theme()
 	busy := a.profile != nil && a.profile.bookmarkBusy == it.CommentID
 	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
@@ -462,6 +485,41 @@ func (a *app) profileContentRow(c *ui.Context, kind int, it Item) {
 		b.Label("移除书签").Tooltip("从书签里移除这条评论")
 		if !busy {
 			b.OnClick(func() { a.removeProfileBookmark(it) })
+		}
+	})
+}
+
+// profileCollectionRow 是「我的内容 - 合集」的一行：整行点开合集里的帖子，
+// 右侧两枚图标按钮分别改名与删除。合集在站点上只有创建者能改，而这一页
+// 本来就只有「我的」，所以不需要再判断归属。
+func (a *app) profileCollectionRow(c *ui.Context, it Item) {
+	ps := a.profile
+	if ps == nil {
+		return
+	}
+	busy := ps.collBusy != ""
+	title := it.Title
+	if title == "" {
+		title = "未命名合集"
+	}
+	// 合集行没有 short_id，靠 Clickable 说明「这一行可以点」：点开的是合集里
+	// 的帖子，而不是站外链接。
+	row := it
+	row.Clickable = !busy
+	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Grow(1).MinWidth(0).Children(func() {
+			a.rowWith(c, row, func(Item) { a.openProfileCollection(it) })
+		})
+
+		rename := iconActionButton(c, editIcon, "重命名合集 "+title, "给这个合集改名")
+		rename.Disabled(busy)
+		if rename.Clicked() {
+			a.askRenameCollection(it)
+		}
+		del := iconActionButton(c, trashIcon, "删除合集 "+title, "删除这个合集，帖子本身不受影响")
+		del.Disabled(busy)
+		if del.Clicked() {
+			a.askDeleteCollection(it)
 		}
 	})
 }
@@ -744,4 +802,235 @@ func (a *app) openProfileDetail(it Item) {
 	a.detailStack = nil
 	a.openDetail(it)
 	a.showMainWindow()
+}
+
+/* ------------------------------------------------------------------
+   合集：打开内容、改名、删除
+--------------------------------------------------------------- */
+
+// openProfileCollection 在「我的内容 - 合集」里点开一个合集：整块换成它里面
+// 的帖子（collection_browse.go），返回时再回到合集列表。
+func (a *app) openProfileCollection(it Item) {
+	ps := a.profile
+	if ps == nil || it.Key == "" || ps.collBusy != "" {
+		return
+	}
+	name := it.Title
+	if name == "" {
+		name = "未命名合集"
+	}
+	ps.collBrowse = newCollectionBrowse(collectionItem{ID: it.Key, Name: name}, "")
+	a.loadCollectionTopics(ps.collBrowse, 1)
+}
+
+// askRenameCollection 打开改名对话框，输入框先填上现在的名字。
+func (a *app) askRenameCollection(it Item) {
+	ps := a.profile
+	if ps == nil || it.Key == "" || ps.collBusy != "" {
+		return
+	}
+	ps.collEdit = it.Key
+	ps.collDraft = it.Title
+}
+
+// submitRenameCollection 提交一次改名（PATCH，id 不变）。结果用本窗口的 toast
+// 报告；成功后重读合集列表，让新名字立刻出现在这里。
+func (a *app) submitRenameCollection() {
+	ps := a.profile
+	if ps == nil || ps.collEdit == "" || ps.collBusy != "" {
+		return
+	}
+	name := strings.TrimSpace(ps.collDraft)
+	if name == "" {
+		a.toast(toastProfile, "请先填写合集名称")
+		return
+	}
+	if utf8.RuneCountInString(name) > collectionNameMax {
+		a.toast(toastProfile, fmt.Sprintf("合集名称最多 %d 个字", collectionNameMax))
+		return
+	}
+	if !a.auth.loggedIn() {
+		a.requestLogin("登录后才能修改合集。", a.submitRenameCollection)
+		return
+	}
+	id := ps.collEdit
+	ps.collBusy = id
+	actor := a.auth.username()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	go func() {
+		defer cancel()
+		item, err := a.client.renameCollection(ctx, id, name)
+		a.publish(func() {
+			if a.profile != ps {
+				return
+			}
+			ps.collBusy = ""
+			// 请求期间换了账号 / 退出登录：这次结果不属于当前会话。
+			if !a.auth.loggedIn() || a.auth.username() != actor {
+				return
+			}
+			if err != nil {
+				if a.handleAuthError(err, a.submitRenameCollection) {
+					return
+				}
+				a.toast(toastProfile, friendlyError(err))
+				return
+			}
+			ps.collEdit = ""
+			ps.collDraft = ""
+			if ps.collBrowse != nil && ps.collBrowse.id == id {
+				ps.collBrowse.name = item.Name
+			}
+			a.toast(toastProfile, "已改名为「"+item.Name+"」")
+			a.invalidateDetailCollectionPicker()
+			a.reloadProfileContent(profileContentCollections)
+		})
+	}()
+}
+
+// askDeleteCollection 打开删除确认框。删除不可恢复（合集里的帖子只是被取消
+// 挂载，帖子本身不受影响），所以先问一句再提交。
+func (a *app) askDeleteCollection(it Item) {
+	ps := a.profile
+	if ps == nil || it.Key == "" || ps.collBusy != "" {
+		return
+	}
+	ps.collDelete = it.Key
+}
+
+// submitDeleteCollection 提交删除。结果用本窗口的 toast 报告；成功后就地关掉
+// 正在浏览的那个合集（如果正是它）并重读列表。
+func (a *app) submitDeleteCollection() {
+	ps := a.profile
+	if ps == nil || ps.collDelete == "" || ps.collBusy != "" {
+		return
+	}
+	if !a.auth.loggedIn() {
+		a.requestLogin("登录后才能删除合集。", a.submitDeleteCollection)
+		return
+	}
+	id := ps.collDelete
+	name := ""
+	for _, it := range ps.content[profileContentCollections].items {
+		if it.Key == id {
+			name = it.Title
+			break
+		}
+	}
+	ps.collBusy = id
+	actor := a.auth.username()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	go func() {
+		defer cancel()
+		err := a.client.deleteCollection(ctx, id)
+		a.publish(func() {
+			if a.profile != ps {
+				return
+			}
+			ps.collBusy = ""
+			if !a.auth.loggedIn() || a.auth.username() != actor {
+				return
+			}
+			if err != nil {
+				if a.handleAuthError(err, a.submitDeleteCollection) {
+					return
+				}
+				a.toast(toastProfile, friendlyError(err))
+				return
+			}
+			ps.collDelete = ""
+			if ps.collBrowse != nil && ps.collBrowse.id == id {
+				ps.collBrowse = nil
+			}
+			// 当前打开的详情页可能正显示「已在合集」这个已删的合集：清掉归属，
+			// 别让按钮指着一个不存在的合集。
+			if d := a.detail; d != nil && d.topic != nil &&
+				d.topic.CollectionKnown && d.topic.CollectionID == id {
+				d.topic.CollectionID = ""
+				d.topic.CollectionName = ""
+			}
+			if name != "" {
+				a.toast(toastProfile, "已删除合集「"+name+"」")
+			} else {
+				a.toast(toastProfile, "已删除合集")
+			}
+			a.invalidateDetailCollectionPicker()
+			a.reloadProfileContent(profileContentCollections)
+		})
+	}()
+}
+
+// profileCollectionDialogs 是改名与删除的对话框。同一时刻只开一个：改名优先，
+// 关掉之后才轮到删除确认。
+func (a *app) profileCollectionDialogs(c *ui.Context) {
+	ps := a.profile
+	if ps == nil {
+		return
+	}
+	t := c.Theme()
+	if ps.collEdit != "" {
+		open := true
+		dismissed := ui.Modal(c, &open, func() {
+			ui.Column(c).Width(380).Gap(10).Children(func() {
+				ui.Text(c, "重命名合集").FontSize(16).Bold()
+				ui.TextInput(c, &ps.collDraft).Label("合集名称").
+					Placeholder("合集名称").MaxLength(collectionNameMax).
+					FillWidth().Disabled(ps.collBusy != "")
+				ui.Textf(c, "最多 %d 个字；改名不会改变合集里的帖子。", collectionNameMax).
+					FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Spacer(c).Grow(1)
+					if ui.Button(c, "取消").Clicked() {
+						ps.collEdit, ps.collDraft = "", ""
+					}
+					save := ui.PrimaryButton(c, "保存")
+					if ps.collBusy != "" {
+						save.Disabled(true)
+					}
+					if save.Clicked() {
+						a.submitRenameCollection()
+					}
+				})
+			})
+		})
+		if dismissed.Dismissed() {
+			ps.collEdit, ps.collDraft = "", ""
+		}
+		return
+	}
+	if ps.collDelete == "" {
+		return
+	}
+	name := "这个合集"
+	for _, it := range ps.content[profileContentCollections].items {
+		if it.Key == ps.collDelete && it.Title != "" {
+			name = "「" + it.Title + "」"
+			break
+		}
+	}
+	open := true
+	dismissed := ui.Modal(c, &open, func() {
+		ui.Column(c).Width(420).Gap(10).Children(func() {
+			ui.Text(c, "删除合集？").FontSize(16).Bold()
+			ui.Text(c, "删除"+name+"只删合集本身：合集里的帖子会被取消挂载，"+
+				"帖子、评论和浏览数都不受影响。删除不可恢复。").
+				TextColor(t.TextMuted).MaxLines(3)
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Spacer(c).Grow(1)
+				if ui.Button(c, "取消").Clicked() {
+					ps.collDelete = ""
+				}
+				confirm := ui.PrimaryButton(c, "确认删除")
+				if ps.collBusy != "" {
+					confirm.Disabled(true)
+				}
+				if confirm.Clicked() {
+					a.submitDeleteCollection()
+				}
+			})
+		})
+	})
+	if dismissed.Dismissed() {
+		ps.collDelete = ""
+	}
 }

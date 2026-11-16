@@ -39,11 +39,15 @@ type tabState struct {
 	// 数据，items 每次变动后由 refold 重算，不单独维护顺序。
 	fold tabFold
 
-	// 通知（弹窗）专用：分段筛选、正在提交已读的 id 与勾选批量。
-	filter     int
-	reading    map[string]bool
-	selected   map[string]bool
-	markingAll bool
+	// 通知（弹窗）专用：分段筛选、关键词搜索、正在提交已读的 id 与勾选批量。
+	// keyword 是已经生效的搜索词（拼进请求），keywordDraft 是输入框里的草稿：
+	// 只有点「搜索」才应用，避免「输入即搜索」把配额耗在打字的中间状态上。
+	filter       int
+	keyword      string
+	keywordDraft string
+	reading      map[string]bool
+	selected     map[string]bool
+	markingAll   bool
 }
 
 // tabFold 存一页的分组结果与展开状态。
@@ -598,8 +602,8 @@ func (a *app) load(idx, page int) {
 	st := a.tabs[idx]
 	spec := tabSpecs[idx]
 	if spec.Kind == kindNotification {
-		// 分段筛选直接改接口参数，不额外请求参数名。
-		spec.Query = notificationsQuery(st.filter)
+		// 分段筛选与关键词搜索直接改接口参数，不额外请求参数名。
+		spec.Query = notificationsQuery(st.filter, st.keyword)
 	}
 	a.loadSpec(st, spec, page, func() { a.load(idx, page) })
 }
@@ -1458,7 +1462,8 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 		}
 	})
 	// 有 short_id 的帖子/评论在应用内看正文和评论；其余条目保持打开原文。
-	if it.ShortID != "" || it.URL != "" {
+	// Clickable 留给没有这两种标识、但仍由调用方决定去处（合集行）的情况。
+	if it.Clickable || it.ShortID != "" || it.URL != "" {
 		row.OnClick(func() { open(it) })
 	}
 }

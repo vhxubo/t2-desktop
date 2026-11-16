@@ -218,7 +218,9 @@ func (a *app) pollNotifications() {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	go func() {
 		defer cancel()
-		page, err := a.client.fetchNotifications(ctx, 1, notificationFilterAll)
+		// 原生通知只播报最新一页的未读消息：不按关键词过滤，用户设的搜索条件
+		// 只影响窗口里的列表。
+		page, err := a.client.fetchNotifications(ctx, 1, notificationFilterAll, "")
 		if err != nil {
 			return // 静默失败：角标与列表保持原样，SSE 会继续推进
 		}

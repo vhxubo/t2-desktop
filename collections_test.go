@@ -299,3 +299,134 @@ func TestDetailCollectionCreateRejectsEmptyName(t *testing.T) {
 		t.Errorf("没有提示名称必填：%q", tt.Texts())
 	}
 }
+
+// 合集的三个路径都按文档拼：改名 / 删除打 /v1/me/collections/:id，公开合集
+// 挂在用户下，合集内帖子挂在 /v1/collections/:id 下；id 与昵称都要转义。
+func TestCollectionPaths(t *testing.T) {
+	cases := []struct{ got, want string }{
+		{collectionPath("c1"), "/v1/me/collections/c1"},
+		{collectionPath("a/b?c"), "/v1/me/collections/a%2Fb%3Fc"},
+		{userCollectionsPath("jimmy"), "/v1/users/jimmy/collections"},
+		{userCollectionsPath("a b"), "/v1/users/a%20b/collections"},
+		{collectionTopicsPath("c1"), "/v1/collections/c1/topics"},
+		{collectionTopicsPath("c/1"), "/v1/collections/c%2F1/topics"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("路径 = %q，期望 %q", c.got, c.want)
+		}
+	}
+}
+
+// 改名是 PATCH 且只带 name；删除是同一个路径上的 DELETE。404 表示目标状态
+// 已经成立（合集早就不在了），不该弹成错误。
+func TestClientCollectionEditEndpoints(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(body)
+		mu.Lock()
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		bodies = append(bodies, string(body))
+		mu.Unlock()
+		switch {
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/me/collections/c1":
+			_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"c1","name":"新名字","topic_count":4}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/me/collections/c1":
+			_, _ = fmt.Fprint(w, envelopeJSON(`{"ok":true}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/me/collections/gone":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprint(w, `{"c":404,"code":"not_found","m":"合集不存在","d":null}`)
+		default:
+			t.Errorf("意外请求 %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), Base: srv.URL + "/api", bearer: func() string { return "tok" }}
+	ctx := context.Background()
+
+	item, err := c.renameCollection(ctx, "c1", "新名字")
+	if err != nil {
+		t.Fatalf("改名失败：%v", err)
+	}
+	if item.ID != "c1" || item.Name != "新名字" || item.Count != 4 {
+		t.Errorf("改名结果解析不对：%+v", item)
+	}
+	if err := c.deleteCollection(ctx, "c1"); err != nil {
+		t.Fatalf("删除合集失败：%v", err)
+	}
+	if err := c.deleteCollection(ctx, "gone"); err != nil {
+		t.Errorf("404 应当视为已删除：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{
+		"PATCH /api/v1/me/collections/c1",
+		"DELETE /api/v1/me/collections/c1",
+		"DELETE /api/v1/me/collections/gone",
+	}
+	for i, w := range want {
+		if i >= len(calls) || calls[i] != w {
+			t.Errorf("第 %d 个请求 = %q，期望 %q（实际 %v）", i, at(calls, i), w, calls)
+		}
+	}
+	if got := strings.TrimSpace(at(bodies, 0)); got != `{"name":"新名字"}` {
+		t.Errorf("改名请求体 = %s", got)
+	}
+}
+
+// 某用户的公开合集：匿名可读的端点，昵称要转义，整页返回（裸数组）。
+func TestFetchUserCollections(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = append(got, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		if r.URL.Path != "/api/v1/users/jimmy/collections" {
+			t.Errorf("路径不对：%s", r.URL.Path)
+		}
+		_, _ = fmt.Fprint(w, envelopeJSON(`[{"id":"c1","name":"职场","topic_count":2}]`))
+	}))
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), Base: srv.URL + "/api"}
+
+	items, err := c.fetchUserCollections(context.Background(), "jimmy")
+	if err != nil {
+		t.Fatalf("读公开合集失败：%v", err)
+	}
+	if len(items) != 1 || items[0].ID != "c1" || items[0].Name != "职场" || items[0].Count != 2 {
+		t.Errorf("公开合集解析不对：%+v", items)
+	}
+	// 空昵称不发请求：拼出来的路径会落到别人的列表上。
+	if _, err := c.fetchUserCollections(context.Background(), ""); err == nil {
+		t.Error("空昵称应当直接报错，不该发请求")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 {
+		t.Errorf("不该发出多余请求：%v", got)
+	}
+}
+
+// 合集内帖子是普通的页码分页帖子列表；文档没约定列表字段名，所以用 auto。
+func TestCollectionTopicsSpec(t *testing.T) {
+	spec := collectionTopicsSpec("c1")
+	if spec.Path != "/v1/collections/c1/topics" {
+		t.Errorf("路径 = %q", spec.Path)
+	}
+	if spec.Query != "page=1&limit=50" {
+		t.Errorf("第 1 页 query = %q", spec.Query)
+	}
+	if spec.ListKey != "auto" || spec.Kind != kindTopic || spec.Paging != pagingPages {
+		t.Errorf("spec 不对：%+v", spec)
+	}
+	// 第 2 页只替换 page，其它参数原样保留（编码后按字母序重排）。
+	if got := endpoint("https://2libra.com/api", spec, 2); got != "https://2libra.com/api/v1/collections/c1/topics?limit=50&page=2" {
+		t.Errorf("第 2 页 URL = %q", got)
+	}
+}

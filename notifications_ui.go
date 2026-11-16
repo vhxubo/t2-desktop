@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -266,6 +267,9 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 
 		ui.Column(c).Grow(1).MinHeight(0).Padding(10, 12).Gap(8).Children(func() {
 			a.notificationActions(c, st)
+			// 关键词搜索与分段筛选可以叠加：接口把 keyword 和 type / unread_only
+			// 当独立参数处理。
+			a.notificationSearchRow(c, st)
 
 			// 分段筛选直接映射接口的 type / unread_only，切换后按新参数重拉。
 			ui.Row(c).FillWidth().Gap(6).Wrap().Children(func() {
@@ -278,6 +282,55 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 			a.notificationsList(c, st)
 		})
 	})
+}
+
+// notificationSearchRow 是通知窗口里的关键词搜索：在自己的通知里按内容
+// 过滤（接口的 keyword 参数，1–50 字，忽略大小写的包含匹配）。只有点「搜索」
+// 才发请求——接口按次计配额，用户还在打字时不该把中间状态发出去。
+func (a *app) notificationSearchRow(c *ui.Context, st *tabState) {
+	t := c.Theme()
+	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Icon(c, searchIcon).Size(14, 14).TextColor(t.TextMuted)
+		ui.TextInput(c, &st.keywordDraft).Label("搜索通知内容").
+			Placeholder("在通知里搜内容（1–50 字）").
+			MaxLength(notificationKeywordMax).Grow(1).MinWidth(0)
+		a.smallAction(c, "搜索", st.loading, func() {
+			a.applyNotificationKeyword(st, st.keywordDraft)
+		})
+		if st.keyword != "" {
+			a.smallAction(c, "清除搜索", false, func() {
+				a.applyNotificationKeyword(st, "")
+			})
+		}
+	})
+}
+
+// applyNotificationKeyword 应用或清除关键词并从第一页重拉。服务端按关键词
+// 重新查询并按时间倒序返回，旧的页码没有意义，所以整份列表清掉重来。
+func (a *app) applyNotificationKeyword(st *tabState, keyword string) {
+	keyword = strings.TrimSpace(keyword)
+	if utf8.RuneCountInString(keyword) > notificationKeywordMax {
+		a.toast(toastNotifications,
+			fmt.Sprintf("关键词最多 %d 个字", notificationKeywordMax))
+		return
+	}
+	if keyword == st.keyword {
+		return
+	}
+	st.keyword = keyword
+	st.keywordDraft = keyword
+	st.items = nil
+	st.selected = nil
+	st.loaded = false
+	st.loading = false
+	st.noMore = false
+	st.err = ""
+	st.moreErr = ""
+	st.page = 1
+	st.list.ScrollTo(0, ui.Start)
+	if idx := notificationTabIndex(); idx >= 0 {
+		a.load(idx, 1)
+	}
 }
 
 // notificationActions 是窗口里的操作行：全部已读、已读本页、勾选批量、
@@ -336,6 +389,19 @@ func (a *app) notificationsList(c *ui.Context, st *tabState) {
 			}
 		})
 	case len(st.items) == 0:
+		// 关键词筛选没有结果与「本来就没有通知」是两回事：前者要给出关键词
+		// 与清除入口，后者才该建议去别的分类看看。
+		if st.keyword != "" {
+			ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Padding(24).Children(func() {
+				ui.Text(c, "没有匹配的通知").FontSize(15).Bold()
+				ui.Text(c, "没有找到包含「"+st.keyword+"」的消息。换个关键词，或者清除搜索。").
+					TextColor(t.TextMuted).MaxLines(3)
+				a.smallAction(c, "清除搜索", false, func() {
+					a.applyNotificationKeyword(st, "")
+				})
+			})
+			return
+		}
 		meta := notificationFilterAt(st.filter)
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Padding(24).Children(func() {
 			ui.Text(c, meta.EmptyTitle).FontSize(15).Bold()

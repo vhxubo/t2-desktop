@@ -13,11 +13,12 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 兑换码（api-economy.md 的「兑换码」与 api-read.md 的 extra.redeem_codes）
+// 兑换码（api-read.md 的「我的」与 api-economy.md 的「兑换码」）
 //
 //	GET  /v1/topics/:short_id             详情里的 extra.redeem_codes：只有
 //	                                      masked_code 与 is_redeemed，已领取的
 //	                                      才给完整 code
+//	GET  /v1/me/redeem-codes              我兑换过的兑换码（scope read:me）
 //	POST /v1/redeem-codes/:code/redeem 🔑 scope write:economy，需开通
 //
 // 路径参数是人类可读的兑换码（帖子详情里那个 masked_code 是脱敏值，不能用来
@@ -39,6 +40,11 @@ const (
 	// 每项上限（≤200 字）。按字符计数，与 compose.go 的 composeCodeTextMax
 	// 同口径，避免中文码被按字节误判。
 	redeemCodeMax = 200
+	// redeemedCodesPath 是「我兑换过的兑换码」。只读且只限本人：路径里没有
+	// 任何用户参数，领码仍走 POST /v1/redeem-codes/:code/redeem。
+	redeemedCodesPath = "/v1/me/redeem-codes"
+	// redeemedCodesLimit 是该端点每页条数：文档默认 50、上限 50。
+	redeemedCodesLimit = 50
 )
 
 // redeemPath 拼领取路径。兑换码里可能有空格、斜杠、中文，整段必须转义，

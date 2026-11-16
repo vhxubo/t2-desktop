@@ -24,6 +24,10 @@ import (
 //	徽章        GET /v1/me/badges、/v1/me/badges/equipped；佩戴 / 取消佩戴（见 badges.go）
 //	权限与账号  GET /v1/users/:userName + 令牌里的 scope
 //
+// 合集除了读，还能在这里改名（PATCH /v1/me/collections/:id）与删除
+// （DELETE /v1/me/collections/:id），点开一个合集看它里面的帖子（见
+// collection_browse.go 的 GET /v1/collections/:id/topics）。
+//
 // 金币不在这里：金币页是独立的金币窗口（见 coins_window.go），入口是标题栏
 // 上登录账号左侧的金币数。本窗口不展示余额、签到，也不提供金币相关的入口。
 //
@@ -178,6 +182,17 @@ type profileState struct {
 	// bookmarkBusy 是正在移除的书签评论 id（「我的内容 - 书签」里直接移除，
 	// 见 bookmarks.go）；一次只提交一条。
 	bookmarkBusy string
+
+	// 合集（「我的内容 - 合集」）：
+	//	collBrowse 非空表示点开了一个合集，正在看它里面的帖子；返回时置空。
+	//	collEdit / collDraft 是改名对话框的状态（正在改的合集 id 与输入框内容），
+	//	collDelete 是正在确认删除的合集 id，collBusy 是正在提交改名 / 删除的
+	//	合集 id —— 一次只提交一个，避免连点。
+	collBrowse *collectionBrowse
+	collEdit   string
+	collDraft  string
+	collDelete string
+	collBusy   string
 }
 
 func newProfileState() *profileState {

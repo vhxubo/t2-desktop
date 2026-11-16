@@ -241,6 +241,21 @@ type coinState struct {
 	rankingItems   []coinRankEntry
 	rankingErr     string
 
+	// 兑换记录（GET /v1/me/redeem-codes，见 redeem_history.go）。它是「兑换」
+	// 视图的数据源，只有切到那一页才拉。
+	redeemList       ui.ListState
+	redeemSeq        uint64
+	redeemLoading    bool
+	redeemLoaded     bool
+	redeemWait       bool // 首屏失败在等全局授权补权限，避免每帧重发
+	redeemItems      []redeemedCode
+	redeemPage       int
+	redeemTotal      int
+	redeemTotalPages int
+	redeemNoMore     bool
+	redeemErr        string
+	redeemMoreErr    string
+
 	// 本地缓存状态。updatedAt 是当前显示数据的新鲜时间；fromCache 表示首屏
 	// 来自 cache/offline.json（之后网络刷新成功会清掉）；cacheNote 是金币页
 	// 顶部的一行说明，告诉用户现在看的是不是本地缓存。

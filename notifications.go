@@ -32,6 +32,10 @@ const (
 
 	notificationLimit = 50
 
+	// notificationKeywordMax 是通知关键词的长度上限（文档 1–50 字，超出是
+	// 400 invalid_request）。界面先按同一上限挡掉，省一次注定失败的请求。
+	notificationKeywordMax = 50
+
 	// notificationReadBatchMax 是「按条已读」单次请求的 id 上限（服务端约定
 	// 最多 100 条），超过就分片；空 id 列表绝不发请求。
 	notificationReadBatchMax = 100
@@ -74,7 +78,9 @@ func notificationFilterAt(i int) notificationFilterOption {
 }
 
 // notificationsQuery 是通知列表第 1 页的 query；页数由 endpoint 负责替换。
-func notificationsQuery(filter int) string {
+// keyword 是可选的内容搜索（1–50 字，服务端忽略大小写做包含匹配），为空时不发
+// 这个参数，行为与以前完全一致。
+func notificationsQuery(filter int, keyword string) string {
 	f := notificationFilterAt(filter)
 	q := "page=1&limit=" + strconv.Itoa(notificationLimit)
 	if f.UnreadOnly {
@@ -82,6 +88,9 @@ func notificationsQuery(filter int) string {
 	}
 	if f.Type != "" {
 		q += "&type=" + url.QueryEscape(f.Type)
+	}
+	if keyword = strings.TrimSpace(keyword); keyword != "" {
+		q += "&keyword=" + url.QueryEscape(keyword)
 	}
 	return q
 }
@@ -173,9 +182,9 @@ func decodeNotificationsPage(d json.RawMessage, requestedPage int) notificationP
 
 // fetchNotifications loads one page of messages. It reuses endpoint() so the
 // query shape is the same as the tab contract.
-func (c *Client) fetchNotifications(ctx context.Context, page, filter int) (notificationPage, error) {
+func (c *Client) fetchNotifications(ctx context.Context, page, filter int, keyword string) (notificationPage, error) {
 	return withAuthRetry(c, ctx, func(token string) (notificationPage, error) {
-		s := tabSpec{Path: notificationsPath, Query: notificationsQuery(filter)}
+		s := tabSpec{Path: notificationsPath, Query: notificationsQuery(filter, keyword)}
 		d, err := c.getJSON(ctx, endpoint(c.base(), s, page), token)
 		if err != nil {
 			return notificationPage{}, err

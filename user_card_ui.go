@@ -174,6 +174,8 @@ func (a *app) userCardWindowView(c *ui.Context) {
 				a.userCardListBody(c, cs, userCardReplies)
 			case userCardTabAttrs:
 				a.userCardAttrsBody(c, cs)
+			case userCardTabCollections:
+				a.userCardCollectionsBody(c, cs)
 			default:
 				a.userCardListBody(c, cs, userCardTopics)
 			}
@@ -408,6 +410,18 @@ func userCardStat(c *ui.Context, label, value string) {
 	})
 }
 
+// userCardCollectionsBody 是「他的合集」分段：平时是公开合集列表，点开一个
+// 合集就地换成它里面的帖子，左上角的「返回」回到列表。
+func (a *app) userCardCollectionsBody(c *ui.Context, cs *userCardState) {
+	if cs.collBrowse != nil {
+		a.collectionTopicsBody(c, cs.collBrowse, a.openUserCardDetail, func() {
+			cs.collBrowse = nil
+		})
+		return
+	}
+	a.userCardListBody(c, cs, userCardCollections)
+}
+
 // userCardListBody 画一个标签页的列表：加载中、失败、空与正常四种状态，
 // 正常时每行可以点开正文。
 func (a *app) userCardListBody(c *ui.Context, cs *userCardState, kind userCardListKind) {
@@ -431,11 +445,14 @@ func (a *app) userCardListBody(c *ui.Context, cs *userCardState, kind userCardLi
 		return
 	case l.loaded && len(l.items) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(6).Children(func() {
-			if kind == userCardReplies {
+			switch kind {
+			case userCardReplies:
 				ui.Text(c, "这位用户还没有发表过回复。").FontSize(12).TextColor(t.TextMuted)
-				return
+			case userCardCollections:
+				ui.Text(c, "这位用户还没有公开合集。").FontSize(12).TextColor(t.TextMuted)
+			default:
+				ui.Text(c, "这位用户还没有发布过主题。").FontSize(12).TextColor(t.TextMuted)
 			}
-			ui.Text(c, "这位用户还没有发布过主题。").FontSize(12).TextColor(t.TextMuted)
 		})
 		return
 	}
@@ -450,7 +467,10 @@ func (a *app) userCardListBody(c *ui.Context, cs *userCardState, kind userCardLi
 	ui.List(c, &l.list, len(items), func(i int) {
 		a.userCardRow(c, items[i], kind)
 	}).Grow(1).MinHeight(0).Gap(8)
-	a.userCardMore(c, cs, kind)
+	// 公开合集整页返回，没有下一页，别给一颗点了只会拿到空页的按钮。
+	if userCardSpec(cs.username, kind, 1).Paging == pagingPages {
+		a.userCardMore(c, cs, kind)
+	}
 }
 
 // userCardMore 是列表底部的续拉：还有下一页时给按钮，续拉失败时给出原因
@@ -506,12 +526,35 @@ func (a *app) userCardRow(c *ui.Context, it Item, kind userCardListKind) {
 			}
 		})
 	})
+	// 合集行没有 short_id：点开的是这个合集里面的帖子（见 collection_browse.go）。
+	if kind == userCardCollections {
+		row.Tooltip("查看这个合集里的帖子")
+		if it.Key != "" {
+			row.OnClick(func() { a.openUserCardCollection(it) })
+		}
+		return
+	}
 	if it.ShortID != "" {
 		row.Tooltip("打开正文")
 		row.OnClick(func() { a.openUserCardDetail(it) })
 	} else if it.URL != "" {
 		row.OnClick(func() { a.openExternal(it.URL) })
 	}
+}
+
+// openUserCardCollection 在资料卡的「他的合集」里点开一个合集：就地换成它里面
+// 的帖子，返回时回到合集列表。这里记下主人昵称，浏览视图里会写「by @昵称」。
+func (a *app) openUserCardCollection(it Item) {
+	cs := a.userCard
+	if cs == nil || it.Key == "" || cs.username == "" {
+		return
+	}
+	name := it.Title
+	if name == "" {
+		name = "未命名合集"
+	}
+	cs.collBrowse = newCollectionBrowse(collectionItem{ID: it.Key, Name: name}, cs.username)
+	a.loadCollectionTopics(cs.collBrowse, 1)
 }
 
 // userCardRowMeta 是行的次行：主题行给节点与回复 / 浏览数，回复行给它所属

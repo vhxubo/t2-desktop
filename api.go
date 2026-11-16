@@ -73,7 +73,7 @@ var tabSpecs = []tabSpec{
 	// 通知走开放 API 的消息列表；字段名是 list（不是 items），筛选另带
 	// type / unread_only，由 notificationQuery 生成。它不再是侧边栏页面：
 	// 入口是标题栏铃铛打开的弹窗，保留这一项是为了复用通用加载与分页。
-	{Label: "通知", Path: notificationsPath, Query: notificationsQuery(notificationFilterAll), ListKey: "list", NeedsAuth: true, Paging: pagingPages, Kind: kindNotification},
+	{Label: "通知", Path: notificationsPath, Query: notificationsQuery(notificationFilterAll, ""), ListKey: "list", NeedsAuth: true, Paging: pagingPages, Kind: kindNotification},
 	// 金币页聚合多个只读端点，不再是侧边栏页面：它是独立的金币窗口，入口
 	// 见 coins_window.go；加载由 coinState 统一调度，不走通用 fetch。
 }
@@ -130,6 +130,10 @@ type Item struct {
 	Stats *replyStats
 	// Pinned 标记置顶帖：列表行的置顶角标读它，不用再从 Meta 文本里猜。
 	Pinned bool
+	// Clickable 让没有 short_id / URL 的行也能点开：合集行就是这样，点开的是
+	// 合集里的帖子（由调用方给的 open 决定去哪）。默认 false，普通行的可点性
+	// 仍由 short_id / URL 决定。
+	Clickable bool
 }
 
 // replyStats 是帖子列表接口里与「最近一次回复」有关的一组字段：
@@ -376,6 +380,13 @@ func (c *Client) getJSON(ctx context.Context, u, token string) (json.RawMessage,
 // else becomes an apiError carrying code/required_scope/retry_after.
 func (c *Client) postJSON(ctx context.Context, u, token, idempotencyKey string, payload any) (json.RawMessage, error) {
 	return c.writeJSON(ctx, http.MethodPost, u, token, idempotencyKey, payload)
+}
+
+// patchJSON sends one PATCH with a JSON body through the same write path.
+// 合集改名（PATCH /v1/me/collections/:collectionId）是唯一的 PATCH 写端点：
+// 它只改名字，id 不变，所以不能当成「删了再建」。
+func (c *Client) patchJSON(ctx context.Context, u, token string, payload any) (json.RawMessage, error) {
+	return c.writeJSON(ctx, http.MethodPatch, u, token, "", payload)
 }
 
 // deleteJSON sends one DELETE without a body through the same write path.

@@ -22,9 +22,12 @@ const (
 	coinViewHistory
 	coinViewStats
 	coinViewRanking
+	// coinViewRedeem 是「兑换」页：我兑换过的兑换码（GET /v1/me/redeem-codes）。
+	// 领取本身在帖子详情页的兑换码块里，这里只回看历史。
+	coinViewRedeem
 )
 
-var coinViewLabels = []string{"今日", "历史", "统计", "排行"}
+var coinViewLabels = []string{"今日", "历史", "统计", "排行", "兑换"}
 
 func (a *app) coinsBody(c *ui.Context) {
 	cs := a.coins
@@ -39,7 +42,8 @@ func (a *app) coinsBody(c *ui.Context) {
 			ui.Spacer(c).Grow(1)
 			a.coinSignLine(c, cs)
 			busy := cs.baseLoading || cs.todayLoading || cs.historyLoading ||
-				cs.dailyLoading || cs.breakdownLoading || cs.rankingLoading || cs.signBusy
+				cs.dailyLoading || cs.breakdownLoading || cs.rankingLoading ||
+				cs.redeemLoading || cs.signBusy
 			a.smallAction(c, "刷新", busy, func() { a.reloadCoins() })
 		})
 		ui.Divider(c)
@@ -52,6 +56,8 @@ func (a *app) coinsBody(c *ui.Context) {
 			a.coinStatsView(c, cs)
 		case coinViewRanking:
 			a.coinRankingView(c, cs)
+		case coinViewRedeem:
+			a.coinRedeemView(c, cs)
 		default:
 			a.coinTodayView(c, cs)
 		}
@@ -811,6 +817,8 @@ func (a *app) ensureCoinsLoaded() {
 		a.ensureCoinStats()
 	case coinViewRanking:
 		a.ensureCoinRanking()
+	case coinViewRedeem:
+		a.ensureCoinRedeem()
 	}
 }
 

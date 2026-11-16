@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -13,29 +14,35 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 合集（api-write.md）
+// 合集（api-write.md / api-read.md 的「合集」）
 //
-//	GET  /v1/me/collections             我的合集（读，见 profile.go）
-//	POST /v1/me/collections             新建（scope read:me）
-//	POST /v1/me/collections/assign      归入 / 移出（scope read:me）
+//	GET    /v1/me/collections                     我的合集（读，见 profile.go）
+//	POST   /v1/me/collections                     新建（scope read:me）
+//	PATCH  /v1/me/collections/:collectionId       改名（scope read:me，仅创建者）
+//	DELETE /v1/me/collections/:collectionId       删除（scope read:me，仅创建者）
+//	POST   /v1/me/collections/assign              归入 / 移出（scope read:me）
+//	GET    /v1/users/:userName/collections        某用户的公开合集
+//	GET    /v1/collections/:collectionId/topics   合集内的帖子
 //
 // 读端点在「我的 - 我的内容 - 合集」里；这里补的是写的一半：在帖子详情页
-// 直接新建合集、把当前帖子归入某个合集，或把它移出。
+// 直接新建合集、把当前帖子归入某个合集，或把它移出；在「我的」窗口里改名与
+// 删除合集。
 //
-// 两个写端点的 scope 都是 read:me（历史原因，不需要 write:*），缺权限时仍走
+// 写端点的 scope 都是 read:me（历史原因，不需要 write:*），缺权限时仍走
 // auth_gate.go 的全局授权链路。
 //
-// assign 有两种写法：单个 collection_id（null 表示移出）与批量的
-// collection_ids（目标全集，空数组 = 移出全部）。这里用单个写法：一次只
-// 归入一个合集，不必先知道这篇帖子还在哪些合集里。传了 collection_ids 就
-// 会覆盖全集，在没有「当前归属」数据时那样做会误删别的合集。
-
+// assign 只支持单个 collection_id（null 表示移出）。批量的 collection_ids
+// 已于 2026-11-12 从文档删除（一篇帖子只能属于一个合集，传它必定 400），
+// 这里也不发：一次只归入一个合集，不必先知道这篇帖子还在哪些合集里。
 const (
 	myCollectionsPath     = "/v1/me/collections"
 	collectionsAssignPath = "/v1/me/collections/assign"
-	// collectionNameMax 是新建合集时界面的字数上限。文档没有给上限，这里
+	// collectionNameMax 是新建 / 改名时界面的字数上限。文档没有给上限，这里
 	// 只防一个明显过长的名字，不假装知道服务端的真实约束。
 	collectionNameMax = 50
+	// collectionTopicsLimit 是合集内帖子列表每页条数：与其它帖子列表一致，
+	// 该端点没有单独的 limit 上限说明。
+	collectionTopicsLimit = 50
 )
 
 // collectionItem 是「我的合集」里的一项。Count 是服务端给的帖子数，缺字段
@@ -44,6 +51,22 @@ type collectionItem struct {
 	ID    string
 	Name  string
 	Count int
+}
+
+// collectionPath 拼单个合集的路径：改名（PATCH）与删除（DELETE）都用它。
+// 合集 id 是服务端给的 uuid，转义后拼进去，别让特殊字符改变路径层级。
+func collectionPath(id string) string {
+	return myCollectionsPath + "/" + url.PathEscape(id)
+}
+
+// userCollectionsPath 是某用户的公开合集列表。昵称转义规则复用 userPath。
+func userCollectionsPath(name string) string {
+	return userPath(name) + "/collections"
+}
+
+// collectionTopicsPath 是合集内的帖子列表。合集 id 同样按路径段转义。
+func collectionTopicsPath(id string) string {
+	return "/v1/collections/" + url.PathEscape(id) + "/topics"
 }
 
 // fetchMyCollections 读我的合集。端点整页返回，d 可能是裸数组，也可能包在
@@ -56,6 +79,21 @@ func (c *Client) fetchMyCollections(ctx context.Context) ([]collectionItem, erro
 		}
 		return decodeCollections(d), nil
 	})
+}
+
+// fetchUserCollections 读某用户的公开合集。它是匿名可读的端点，登录后照常
+// 带令牌：响应里可能带个性化字段，解码时只用合集的 id / 名字 / 帖子数。
+func (c *Client) fetchUserCollections(ctx context.Context, name string) ([]collectionItem, error) {
+	if name == "" {
+		return nil, errors.New("还不知道要读谁的合集")
+	}
+	d, err := withAuthRetry(c, ctx, func(token string) (json.RawMessage, error) {
+		return c.getJSON(ctx, c.apiURL(userCollectionsPath(name)), token)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return decodeCollections(d), nil
 }
 
 func decodeCollections(d json.RawMessage) []collectionItem {
@@ -71,22 +109,35 @@ func decodeCollections(d json.RawMessage) []collectionItem {
 	}
 	var out []collectionItem
 	for _, raw := range list {
-		o := asObject(raw)
-		if o == nil {
-			continue
+		item, ok := decodeCollectionObject(raw)
+		// 没有 id 或名字的项跳过：气泡里点不了，也不该显示成「未命名」。
+		if ok && item.ID != "" {
+			out = append(out, item)
 		}
-		id := o.str("id")
-		name := cleanText(o.str("name", "title"))
-		if id == "" || name == "" {
-			continue
-		}
-		out = append(out, collectionItem{
-			ID:    id,
-			Name:  name,
-			Count: o.num("topic_count", "post_count", "item_count", "count"),
-		})
 	}
 	return out
+}
+
+// decodeCollectionObject 解一个合集对象：响应可能直接是合集，也可能包在
+// collection 里。名字是必须的（没有名字的行没法展示），id 由调用方按需要
+// 补齐。ok 为 false 表示这一项认不出来。
+func decodeCollectionObject(raw json.RawMessage) (collectionItem, bool) {
+	o := asObject(raw)
+	if o == nil {
+		return collectionItem{}, false
+	}
+	if inner := o.sub("collection"); inner != nil {
+		o = inner
+	}
+	name := cleanText(o.str("name", "title"))
+	if name == "" {
+		return collectionItem{}, false
+	}
+	return collectionItem{
+		ID:    o.str("id"),
+		Name:  name,
+		Count: o.num("topic_count", "post_count", "item_count", "count"),
+	}, true
 }
 
 // createCollection 新建一个合集。响应里带创建结果时用它拿 id，没带时返回
@@ -98,22 +149,46 @@ func (c *Client) createCollection(ctx context.Context, name string) (collectionI
 		if err != nil {
 			return collectionItem{}, err
 		}
-		item := collectionItem{Name: name}
-		if o := asObject(d); o != nil {
-			// d 可能是合集本身，也可能包在 collection 里。
-			if inner := o.sub("collection"); inner != nil {
-				o = inner
-			}
-			if id := o.str("id"); id != "" {
-				item.ID = id
-			}
-			if got := cleanText(o.str("name", "title")); got != "" {
-				item.Name = got
-			}
-			item.Count = o.num("topic_count", "post_count", "item_count", "count")
+		if item, ok := decodeCollectionObject(d); ok {
+			return item, nil
+		}
+		return collectionItem{Name: name}, nil
+	})
+}
+
+// renameCollection 给合集改名（PATCH，body 只有 name）。id 不变，名字以服务端
+// 确认为准（可能会去掉首尾空白）；响应没带结果时用提交的名字兜底。
+func (c *Client) renameCollection(ctx context.Context, id, name string) (collectionItem, error) {
+	return withAuthRetry(c, ctx, func(token string) (collectionItem, error) {
+		d, err := c.patchJSON(ctx, c.apiURL(collectionPath(id)), token,
+			map[string]any{"name": name})
+		if err != nil {
+			return collectionItem{}, err
+		}
+		item, ok := decodeCollectionObject(d)
+		if !ok {
+			return collectionItem{ID: id, Name: name}, nil
+		}
+		if item.ID == "" {
+			item.ID = id
 		}
 		return item, nil
 	})
+}
+
+// deleteCollection 删掉一个合集（仅创建者）。合集里的帖子只是被取消挂载，
+// 帖子、评论与浏览数都不受影响，但不可恢复。404 视为成功：目标状态已经
+// 成立，不必让用户看见一次「已经没了」的错误。
+func (c *Client) deleteCollection(ctx context.Context, id string) error {
+	_, err := withAuthRetry(c, ctx, func(token string) (struct{}, error) {
+		_, err := c.deleteJSON(ctx, c.apiURL(collectionPath(id)), token)
+		var ae *apiError
+		if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+			err = nil
+		}
+		return struct{}{}, err
+	})
+	return err
 }
 
 // assignTopicCollection 把帖子归入某个合集。collectionID 为空时传 null，
@@ -356,6 +431,17 @@ func (a *app) invalidateCollections() {
 	st.noMore = false
 	st.err = ""
 	st.moreErr = ""
+}
+
+// invalidateDetailCollectionPicker 让详情页的合集气泡下次打开时重读：改名或
+// 删除之后，气泡里留着的旧名字不能再点，否则点下去就是一次注定失败的归入。
+func (a *app) invalidateDetailCollectionPicker() {
+	if a.detail == nil || !a.detail.coll.loaded {
+		return
+	}
+	a.detail.coll.loaded = false
+	a.detail.coll.items = nil
+	a.detail.coll.err = ""
 }
 
 /* ------------------------------------------------------------------

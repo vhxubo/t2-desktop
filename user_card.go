@@ -58,28 +58,32 @@ const (
 	userCardBioReserved float32 = 380
 )
 
-// 资料卡里的三个标签页。前两个是列表（各自对应一个端点），第三个是站点
-// 六项属性的雷达图（数据来自 about 响应里的 achievement_count）。
+// 资料卡里的四个标签页。前两个是列表（各自对应一个端点），第三个是站点
+// 六项属性的雷达图（数据来自 about 响应里的 achievement_count），第四个是
+// 这个人的公开合集（点开一个就换成合集里的帖子，见 collection_browse.go）。
 const (
 	userCardTabTopics = iota
 	userCardTabReplies
 	userCardTabAttrs
+	userCardTabCollections
 )
 
-var userCardTabLabels = []string{"他发布的主题", "他的最新回复", "属性雷达"}
+var userCardTabLabels = []string{"他发布的主题", "他的最新回复", "属性雷达", "他的合集"}
 
-// userCardListKind 区分资料卡里的两个列表：它们只有端点和行渲染不同。
+// userCardListKind 区分资料卡里的三个列表：它们只有端点和行渲染不同。
 type userCardListKind int
 
 const (
 	userCardTopics userCardListKind = iota
 	userCardReplies
+	userCardCollections
 )
 
-// userCardSpec 是「某人发布的主题 / 评论」的端点。两者都要 username 而不是
-// 「我」，因此昵称必须转义，避免特殊字符改变请求路径。
+// userCardSpec 是「某人发布的主题 / 评论 / 公开合集」的端点。三者都要
+// username 而不是「我」，因此昵称必须转义，避免特殊字符改变请求路径。
 func userCardSpec(name string, kind userCardListKind, page int) tabSpec {
-	if kind == userCardReplies {
+	switch kind {
+	case userCardReplies:
 		return tabSpec{
 			Label:   userCardTabLabels[userCardTabReplies],
 			Path:    "/v1/users/" + url.PathEscape(name) + "/replies",
@@ -87,6 +91,16 @@ func userCardSpec(name string, kind userCardListKind, page int) tabSpec {
 			ListKey: "items",
 			Paging:  pagingPages,
 			Kind:    kindComment,
+		}
+	case userCardCollections:
+		// 公开合集整页返回，文档没有分页参数；列表字段名同样没约定，用 auto
+		// 兼容裸数组与 collections 包装。
+		return tabSpec{
+			Label:   userCardTabLabels[userCardTabCollections],
+			Path:    userCollectionsPath(name),
+			ListKey: "auto",
+			Paging:  pagingOff,
+			Kind:    kindCollection,
 		}
 	}
 	return tabSpec{
@@ -250,6 +264,10 @@ type userCardState struct {
 	tab     int
 	topics  userCardList
 	replies userCardList
+	// collections 是这个人的公开合集；只有切到「他的合集」才拉一次。
+	collections userCardList
+	// collBrowse 非空表示点开了其中一个合集，正在看它里面的帖子。
+	collBrowse *collectionBrowse
 
 	// follow 是当前登录用户对该用户的关注状态，沿用帖子详情的同一套字段。
 	follow followState
@@ -261,8 +279,11 @@ func newUserCardState(username string) *userCardState {
 
 // list 返回某一类列表的状态，供加载与渲染共用。
 func (cs *userCardState) list(kind userCardListKind) *userCardList {
-	if kind == userCardReplies {
+	switch kind {
+	case userCardReplies:
 		return &cs.replies
+	case userCardCollections:
+		return &cs.collections
 	}
 	return &cs.topics
 }
@@ -301,10 +322,16 @@ func (a *app) ensureUserCardLoaded() {
 		a.loadUserCardAbout()
 	}
 	// 两个标签页在打开时各拉一页：统计里的主题数与回复数要立刻有数，
-	// 切标签也不用等。
+	// 切标签也不用等。合集是另一条端点（GET /v1/users/:name/collections），
+	// 只有切到那个标签页才发请求。
 	for _, kind := range []userCardListKind{userCardTopics, userCardReplies} {
 		if l := cs.list(kind); !l.loaded && !l.loading {
 			a.loadUserCardList(kind, 1)
+		}
+	}
+	if cs.tab == userCardTabCollections {
+		if l := cs.collections; !l.loaded && !l.loading {
+			a.loadUserCardList(userCardCollections, 1)
 		}
 	}
 }
