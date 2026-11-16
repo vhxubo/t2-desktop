@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -48,6 +50,110 @@ func TestDecodeEquippedBadges(t *testing.T) {
 	}
 	if weatherIconURL("fog") != "https://r2.2libra.com/weather/svg/fog.svg" {
 		t.Errorf("天气图标地址错误：%s", weatherIconURL("fog"))
+	}
+}
+
+// 「我来过」徽章可能带一句状态。三种形状都要能处理：对象（有状态）、null
+// （未设置或已过期）、键缺失（不是这枚徽章 / 没有设置）。其它徽章带上这个
+// 字段也不该被当成自己的状态。
+func TestDecodeBadgeStatusOnlyForIWasHere(t *testing.T) {
+	const icon = "https://r2.2libra.com/badge/svg/i_was_here.svg"
+	o := mustObject(t, `{
+		"equipped_badges":[
+			{"badge":{"code":"i_was_here","name":"我来过","icon_url":"`+icon+`"},
+			 "status":{"text":"在搬砖","updated_at":1767225600000}},
+			{"badge":{"code":"i_was_here","name":"我来过","icon_url":"`+icon+`"},"status":null},
+			{"badge":{"code":"i_was_here","name":"我来过","icon_url":"`+icon+`"}},
+			{"badge":{"code":"early_bird","name":"早起鸟","icon_url":"`+icon+`"},
+			 "status":{"text":"不该显示","updated_at":1767225600000}}
+		]}`)
+	badges := decodeBadges(o)
+	if len(badges) != 4 {
+		t.Fatalf("徽章数量 = %d：%+v", len(badges), badges)
+	}
+	if badges[0].Status == nil || badges[0].Status.Text != "在搬砖" {
+		t.Errorf("status 对象没有解出来：%+v", badges[0])
+	}
+	if badges[1].Status != nil {
+		t.Errorf("status 为 null 时应视为没有状态：%+v", badges[1])
+	}
+	if badges[2].Status != nil {
+		t.Errorf("缺少 status 键时应视为没有状态：%+v", badges[2])
+	}
+	if badges[3].Status != nil {
+		t.Errorf("非 i_was_here 徽章不该带状态：%+v", badges[3])
+	}
+}
+
+// 状态是每次响应带来的瞬时值：不写进阅读历史这类本机缓存，换账号 / 重开
+// 应用都不会从旧数据里冒出过期状态。
+func TestBadgeStatusNotPersistedInReadingHistory(t *testing.T) {
+	rec := readingRecord{
+		ShortID: "S1",
+		Badges: []badgeInfo{{
+			Name: "我来过", Code: badgeCodeIWasHere,
+			Status: &badgeStatusInfo{Text: "在搬砖"},
+		}},
+	}
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "搬砖") {
+		t.Errorf("徽章状态不应写入本机缓存：%s", raw)
+	}
+}
+
+// 徽章墙的佩戴状态来自 /badges/equipped（没有 status），用户对象的徽章带
+// status。同步资料头时同一枚仍在佩戴的徽章保留状态；换下后状态随徽章消失，
+// 重新佩戴也不会从旧数据里恢复。
+func TestEquippedBadgeStatusOnlyWhileEquipped(t *testing.T) {
+	a := testApp(t)
+	ps := &profileState{}
+	ps.user.Badges = []badgeInfo{{
+		Name: "我来过", Code: badgeCodeIWasHere,
+		Status: &badgeStatusInfo{Text: "在搬砖"},
+	}}
+	ps.badges = []badgeWallEntry{{
+		BadgeID: "b1", Name: "我来过", Code: badgeCodeIWasHere, Equipped: true,
+		IconURL: "https://r2.2libra.com/badge/svg/i_was_here.svg",
+	}}
+
+	a.syncProfileEquippedBadges(ps)
+	if len(ps.user.Badges) != 1 || ps.user.Badges[0].Status == nil ||
+		ps.user.Badges[0].Status.Text != "在搬砖" {
+		t.Fatalf("仍佩戴时状态应保留：%+v", ps.user.Badges)
+	}
+
+	ps.badges[0].Equipped = false
+	a.syncProfileEquippedBadges(ps)
+	if len(ps.user.Badges) != 0 {
+		t.Fatalf("换下后不该还挂着徽章：%+v", ps.user.Badges)
+	}
+	ps.badges[0].Equipped = true
+	a.syncProfileEquippedBadges(ps)
+	if len(ps.user.Badges) != 1 || ps.user.Badges[0].Status != nil {
+		t.Errorf("重新佩戴不该恢复旧状态：%+v", ps.user.Badges)
+	}
+}
+
+// 状态画在用户名旁的徽章右侧。
+func TestAuthorBadgeStatusRenders(t *testing.T) {
+	a := testApp(t)
+	icon := "https://r2.2libra.com/badge/svg/i_was_here.svg"
+	a.images.put(icon, solidBitmap(22, 15, marker))
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.userTag(c, userTagSpec{
+			Name: "jimmy", Size: 12, Bold: true,
+			Badges: []badgeInfo{{
+				Name: "我来过", Code: badgeCodeIWasHere, IconURL: icon,
+				Status: &badgeStatusInfo{Text: "在搬砖"},
+			}},
+		})
+	}, 400, 80)
+	tt.Frame()
+	if !tt.HasText("在搬砖") {
+		t.Errorf("徽章状态没有渲染：%q", tt.Texts())
 	}
 }
 

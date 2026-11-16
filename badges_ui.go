@@ -9,7 +9,8 @@ import (
 
 // authorBadges 在通用的用户标识里画佩戴中的社区徽章图标。徽章小图由服务端
 // 给出，固有尺寸约 22×22，用在用户名旁的 ≤32px 槽位；佩戴「忽冷忽热」时服务端
-// 还会带天气，网页用天气图标 + 温度代替徽章图标，这里保持一致。
+// 还会带天气，网页用天气图标 + 温度代替徽章图标，这里保持一致。佩戴「我来过」
+// 时服务端可能带一句状态（如「在搬砖」），画在徽章右侧。
 //
 // 数据只来自已经收到的用户对象（author.equipped_badges 等）：没有就什么都不
 // 画，绝不为了补徽章单独请求用户资料或徽章墙。图片和表情一样是站点固定给出
@@ -45,6 +46,13 @@ func (a *app) authorBadges(c *ui.Context, badges []badgeInfo) {
 		}
 		if temperature != "" {
 			ui.Text(c, temperature).FontSize(11).TextColor(t.TextMuted)
+		}
+		// 「我来过」的状态紧挨徽章右侧，和站内的位置一致。状态只来自当前
+		// 这次响应，不在这里缓存或推导。
+		if b.Status != nil {
+			tip := "「我来过」状态：" + b.Status.Text
+			ui.Text(c, b.Status.Text).FontSize(11).TextColor(t.TextMuted).
+				SingleLine().Tooltip(tip)
 		}
 	}
 }

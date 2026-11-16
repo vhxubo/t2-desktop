@@ -2212,15 +2212,9 @@ func (a *app) submitReply() {
 		return
 	}
 	target := d.replyTo
-	// 回三级评论时新评论会变成它的兄弟（见 detail.go 的 replyMaxLevel）：
-	// 正文补上被回复人的名字，否则读的人看不出在回谁。网页端也这么补。
-	// 用户自己已经写了「@昵称 」就不重复加。
-	if target.needsMention() {
-		mention := "@" + target.Author
-		if content != mention && !strings.HasPrefix(content, mention+" ") {
-			content = mention + " " + content
-		}
-	}
+	// 正文里的「@被回复人」由服务端在需要时补（三级回复），客户端不自己加：
+	// 重复补不会多收通知，但会让人以为发出去的内容和响应不一致。响应里的
+	// content 才是最终正文，见 createReply。
 	// parentID 是挂载点（三级回复挂在二级评论下），target.ID 才是被回复的
 	// 那条。列表落位用挂载点，引用与跳转用 target。
 	parentID := target.postParentID()
@@ -2283,11 +2277,7 @@ func (a *app) submitReply() {
 			// 刚发的回复按提交的目标补齐，否则它在列表里会被当成一级评论
 			// （缩进少一层，再回复它时又会走错分支）。
 			if created.Level <= 1 && target.ID != "" {
-				level := target.newLevel()
-				if level <= 0 {
-					level = 2 // 层级未知时至少按楼中楼算
-				}
-				created.Level = level
+				created.Level = target.replyDepth()
 			}
 			if created.ParentFloor == 0 {
 				created.ParentFloor = parentFloor

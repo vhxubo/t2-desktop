@@ -236,6 +236,10 @@ func (a *app) userCardHeader(c *ui.Context, cs *userCardState) {
 						continue
 					}
 					userCardChip(c, b.Name, t.Warning)
+					// 「我来过」的状态显示在徽章右侧，与站内一致；没有就是没有。
+					if b.Status != nil {
+						userCardChip(c, b.Status.Text, t.TextMuted)
+					}
 				}
 			})
 		})

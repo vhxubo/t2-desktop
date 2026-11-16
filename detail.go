@@ -125,8 +125,22 @@ type postscript struct {
 // 昵称旁。佩戴「忽冷忽热」时服务端还会带 weather，网页会用天气图标和
 // 温度代替徽章图标。
 type badgeInfo struct {
-	Name, IconURL string
-	Weather       *weatherInfo
+	Name, Code, IconURL string
+	Weather             *weatherInfo
+	// Status 是「我来过」徽章的一句状态（如「在搬砖」），展示在徽章右侧。
+	// 只有 badge.code == "i_was_here" 的项才可能有这个值；服务端已经按有效期
+	// 过滤过，客户端不按 updated_at 自己判断，也不把它写进本机缓存。
+	Status *badgeStatusInfo `json:"-"`
+}
+
+// badgeCodeIWasHere 是「我来过」徽章的机器码：equipped_badges 里只有这一项
+// 会带 status。
+const badgeCodeIWasHere = "i_was_here"
+
+// badgeStatusInfo 是徽章状态里我们真正展示的部分。updated_at 只用于排查，
+// 解码时直接忽略。
+type badgeStatusInfo struct {
+	Text string
 }
 
 type weatherInfo struct {
@@ -533,7 +547,17 @@ func decodeBadges(a object) []badgeInfo {
 		}
 		b := badgeInfo{
 			Name:    badge.str("name"),
+			Code:    badge.str("code"),
 			IconURL: badge.str("icon_url", "icon_url_large"),
+		}
+		// status 只跟着「我来过」徽章：对象表示有状态，null 或缺少这个键都
+		// 当作没有。它是 item 上的字段，不在 badge 里。
+		if b.Code == badgeCodeIWasHere {
+			if s := item.sub("status"); s != nil {
+				if text := strings.TrimSpace(s.str("text")); text != "" {
+					b.Status = &badgeStatusInfo{Text: text}
+				}
+			}
 		}
 		if w := item.sub("weather"); w != nil {
 			wi := &weatherInfo{SymbolCode: w.str("symbol_code")}
@@ -780,7 +804,7 @@ const replyMaxLevel = 3
 //
 // 三级回复是扁平存储的：真正回谁记在 replyCommentId 里，parentId 停在二级
 // 评论上，level 恒为 3。所以「提交用的父」和「被点的那条」不是同一个，字段
-// 必须按层级组装，见 postParentID / newLevel。
+// 必须按层级组装，见 postParentID / writeLevel。
 type replyTarget struct {
 	ID       string // 被点「回复」的那条评论
 	Level    int    // 它的层级；0 表示未知（服务端没给）
@@ -801,25 +825,34 @@ func (t replyTarget) postParentID() string {
 	return t.ID
 }
 
-// newLevel 是这条回复发出去之后的层级，也就是提交时 level 的取值：回复
-// 顶层评论是 2 级，回复楼中楼是 3 级，回复三级评论仍是 3 级（同级兄弟）。
-// 层级未知时不发这个字段，让服务端按 parentId 自己推。
-func (t replyTarget) newLevel() int {
+// writeLevel 是提交时 level 的取值，按开放文档从 0 起：评论帖子 0、回复一级
+// 评论 1、回复二级评论 2、回复三级评论 3。它决定通知收件人，显式传可以避免
+// 服务端靠 parentId / replyCommentId 推断。读接口里的 Level 从 1 起（1 = 楼层
+// 评论），所以回复时正好等于被回复对象的 Level；评论帖子是 0。
+// 层级未知时第二个返回值为 false，宁可不传（服务端会推断），也不发一个错的。
+func (t replyTarget) writeLevel() (int, bool) {
+	if t.ID == "" {
+		return 0, true
+	}
+	if t.Level <= 0 {
+		return 0, false
+	}
+	return min(t.Level, replyMaxLevel), true
+}
+
+// replyDepth 是这条评论在楼层树里的层级（读接口口径，1 起）：评论帖子是 1，
+// 回复一级评论是 2，回复二级评论是 3，回复三级评论仍是 3（同级兄弟）。
+// 201 响应常常不带 level，刚发的评论按它补齐，否则缩进会少一层。
+func (t replyTarget) replyDepth() int {
 	switch {
 	case t.ID == "":
 		return 1
 	case t.Level <= 0:
-		return 0
+		return 2 // 层级未知时至少按楼中楼算
 	case t.Level >= replyMaxLevel:
 		return replyMaxLevel
 	}
 	return t.Level + 1
-}
-
-// needsMention 表示这条回复会成为某条三级回复的兄弟，正文得带上被回复人的
-// 名字才有上下文——网页端也在提交前补一个「@昵称 」。
-func (t replyTarget) needsMention() bool {
-	return t.Level >= replyMaxLevel && t.Author != ""
 }
 
 // label 是「正在回复 X」里的 X：有楼层号报楼层，否则报作者名。
@@ -842,13 +875,16 @@ func (t replyTarget) label() string {
 func (c *Client) createReply(ctx context.Context, shortID, content string, target replyTarget) (replyItem, error) {
 	return withAuthRetry(c, ctx, func(token string) (replyItem, error) {
 		payload := map[string]any{"content": content}
-		// 嵌套回复的字段按层级组装：parentId 是挂载点，replyCommentId 才是
-		// 真正被回复的那条，level 是新评论的层级。三个字段缺一，三级回复就
-		// 会被服务端当成第四层（parentId 直接指向三级评论）而报错。
-		if parentID := target.postParentID(); parentID != "" {
+		// level 显式声明这条评论的层级（从 0 起），它决定通知收件人。评论
+		// 帖子固定 0；嵌套回复的 parentId 是挂载点，replyCommentId 才是真正
+		// 被回复的那条，三级回复的 parentId 因此停在二级评论上。
+		parentID := target.postParentID()
+		if parentID == "" {
+			payload["level"] = 0
+		} else {
 			payload["parentId"] = parentID
 			payload["replyCommentId"] = target.ID
-			if level := target.newLevel(); level > 0 {
+			if level, known := target.writeLevel(); known {
 				payload["level"] = level
 			}
 		}
@@ -861,6 +897,8 @@ func (c *Client) createReply(ctx context.Context, shortID, content string, targe
 		// 线上 201 只保证回创建结果，不保证带正文：有的响应只有 id / 楼层 /
 		// 作者。刚发的评论此时若直接拿返回值插进列表，会显示「（无内容）」，
 		// 刷新后才看到正文。正文就是这次提交的内容，缺失时直接补上。
+		// 服务端给三级回复补的「@用户名 」前缀只在响应里出现，不要在本地补；
+		// 响应带正文时以它为准。
 		if strings.TrimSpace(r.Content) == "" {
 			r.Content = content
 		}

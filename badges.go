@@ -424,12 +424,18 @@ func profileBadgeName(badges []badgeWallEntry, badgeID string) string {
 
 // syncProfileEquippedBadges 把佩戴中的徽章同步到资料头：资料头本来就展示
 // 佩戴中的徽章，切换后要立刻跟上。「忽冷忽热」这类带天气的徽章保留原来的
-// 天气信息，天气只出现在用户对象的 equipped_badges 里，徽章墙没有。
+// 天气信息，「我来过」的状态也一并保留；这两项只出现在用户对象的
+// equipped_badges 里，徽章墙没有。换下徽章后状态随它一起丢掉，重新戴上
+// 不会从旧数据里恢复（服务端也不会自动恢复）。
 func (a *app) syncProfileEquippedBadges(ps *profileState) {
 	weather := make(map[string]*weatherInfo, len(ps.user.Badges))
+	status := make(map[string]*badgeStatusInfo, len(ps.user.Badges))
 	for _, b := range ps.user.Badges {
 		if b.Weather != nil {
 			weather[b.Name] = b.Weather
+		}
+		if b.Status != nil {
+			status[b.Name] = b.Status
 		}
 	}
 	infos := make([]badgeInfo, 0, len(ps.badges))
@@ -441,10 +447,13 @@ func (a *app) syncProfileEquippedBadges(ps *profileState) {
 		if icon == "" {
 			icon = b.IconURLLarge
 		}
+		name := profileBadgeDisplayName(b)
 		infos = append(infos, badgeInfo{
-			Name:    profileBadgeDisplayName(b),
+			Name:    name,
+			Code:    b.Code,
 			IconURL: icon,
-			Weather: weather[b.Name],
+			Weather: weather[name],
+			Status:  status[name],
 		})
 	}
 	ps.user.Badges = infos

@@ -979,7 +979,8 @@ func TestLiveDetail(t *testing.T) {
 }
 
 // POST /v1/topics/:short_id/replies: path, auth, mandatory Idempotency-Key,
-// body fields (content + optional parentId) and the 201 decoded reply.
+// body fields (content + parentId/replyCommentId + explicit level) and the 201
+// decoded reply.
 func TestCreateReplyPostsComment(t *testing.T) {
 	var mu sync.Mutex
 	var method, path, auth, key, body string
@@ -1009,15 +1010,21 @@ func TestCreateReplyPostsComment(t *testing.T) {
 	if auth != "Bearer tok" || key == "" {
 		t.Errorf("缺鉴权/幂等头：auth=%q key=%q", auth, key)
 	}
-	if !strings.Contains(body, `"content":"顶"`) || !strings.Contains(body, `"parentId":"c1"`) {
-		t.Errorf("请求体缺少 content/parentId：%s", body)
+	// 回复一级评论：parentId / replyCommentId 都是它本身，level 显式传 1。
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(body), &sent); err != nil {
+		t.Fatalf("请求体不是 JSON：%s", body)
+	}
+	if sent["content"] != "顶" || sent["parentId"] != "c1" ||
+		sent["replyCommentId"] != "c1" || sent["level"] != float64(1) {
+		t.Errorf("回复一级评论的请求体不对：%s", body)
 	}
 	mu.Unlock()
 	if reply.ID != "r9" || reply.Content != "顶" || reply.Floor != 7 || reply.Author != "jimmy" {
 		t.Errorf("返回的评论解析错误：%+v", reply)
 	}
 
-	// 顶层评论不带 parentId，也不该出现该字段。
+	// 顶层评论不带 parentId，但 level 要显式传 0（评论帖子）。
 	mu.Lock()
 	body = ""
 	mu.Unlock()
@@ -1026,8 +1033,15 @@ func TestCreateReplyPostsComment(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if strings.Contains(body, "parentId") {
+	sent = nil
+	if err := json.Unmarshal([]byte(body), &sent); err != nil {
+		t.Fatalf("请求体不是 JSON：%s", body)
+	}
+	if _, ok := sent["parentId"]; ok {
 		t.Errorf("顶层评论不该带 parentId：%s", body)
+	}
+	if sent["level"] != float64(0) {
+		t.Errorf("评论帖子的 level 应为 0：%s", body)
 	}
 }
 
@@ -2213,7 +2227,8 @@ func TestReplyComposerSends(t *testing.T) {
 	if gotAuth != "Bearer tok" || gotKey == "" {
 		t.Errorf("缺鉴权/幂等头：auth=%q key=%q", gotAuth, gotKey)
 	}
-	if !strings.Contains(gotBody, `"content":"测试评论"`) || strings.Contains(gotBody, "parentId") {
+	if !strings.Contains(gotBody, `"content":"测试评论"`) ||
+		!strings.Contains(gotBody, `"level":0`) || strings.Contains(gotBody, "parentId") {
 		t.Errorf("请求体不对：%s", gotBody)
 	}
 	if a.detail.draft != "" {
@@ -2371,6 +2386,33 @@ func TestDecodeReplyThirdLevel(t *testing.T) {
 	}
 }
 
+// 提交时的 level 从 0 起：评论帖子 0、回复一级评论 1、二级 2、三级 3。
+// 它和读接口里从 1 起、界面缩进用的 Level 不是同一套数字，别混用。
+func TestReplyWriteLevelMapping(t *testing.T) {
+	cases := []struct {
+		name      string
+		target    replyTarget
+		wantLevel int
+		wantKnown bool
+		wantDepth int
+	}{
+		{"评论帖子", replyTarget{}, 0, true, 1},
+		{"回复一级", replyTarget{ID: "c1", Level: 1}, 1, true, 2},
+		{"回复二级", replyTarget{ID: "c2", Level: 2}, 2, true, 3},
+		{"回复三级", replyTarget{ID: "c3", Level: 3, ParentID: "c2"}, 3, true, 3},
+		{"层级未知", replyTarget{ID: "cx"}, 0, false, 2},
+	}
+	for _, tc := range cases {
+		if got, known := tc.target.writeLevel(); got != tc.wantLevel || known != tc.wantKnown {
+			t.Errorf("%s：writeLevel = (%d, %v)，期望 (%d, %v)",
+				tc.name, got, known, tc.wantLevel, tc.wantKnown)
+		}
+		if got := tc.target.replyDepth(); got != tc.wantDepth {
+			t.Errorf("%s：replyDepth = %d，期望 %d", tc.name, got, tc.wantDepth)
+		}
+	}
+}
+
 // 回三级评论不能把 parentId 指到三级评论上：服务端会把它当成第四层。
 // parentId 停在二级评论、level 固定 3，真正回谁写在 replyCommentId 里。
 func TestCreateReplyFlattensThirdLevel(t *testing.T) {
@@ -2410,7 +2452,8 @@ func TestCreateReplyFlattensThirdLevel(t *testing.T) {
 }
 
 // 回复三级评论发出去后要落在二级评论子树的末尾，深度是 2（与其它三级回复
-// 平级），引用指向被点的那条，而不是它的父。
+// 平级），引用指向被点的那条，而不是它的父。正文里的「@被回复人」由服务端
+// 补，客户端不自己加；列表里显示的是响应返回的正文。
 func TestReplyComposerAnswersThirdLevelAsSibling(t *testing.T) {
 	var mu sync.Mutex
 	body := ""
@@ -2420,7 +2463,7 @@ func TestReplyComposerAnswersThirdLevelAsSibling(t *testing.T) {
 		body = string(b)
 		mu.Unlock()
 		w.WriteHeader(http.StatusCreated)
-		_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"new3","level":3,"flat_floor":12,"author":{"username":"reader"}}`))
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"new3","content":"@alice 顶","level":3,"flat_floor":12,"author":{"username":"reader"}}`))
 	}))
 	defer srv.Close()
 
@@ -2456,9 +2499,9 @@ func TestReplyComposerAnswersThirdLevelAsSibling(t *testing.T) {
 	if payload["parentId"] != "l2" || payload["replyCommentId"] != "l3a" || payload["level"] != float64(3) {
 		t.Errorf("三级回复的嵌套字段不对：%s", sent)
 	}
-	// 新评论会成为三级评论的兄弟，正文必须带上被回复人。
-	if payload["content"] != "@alice 顶" {
-		t.Errorf("三级回复应在正文前补被回复人：%s", sent)
+	// 客户端不自己补 @：提交的正文就是用户输入的内容。
+	if payload["content"] != "顶" {
+		t.Errorf("正文应由服务端补 @，客户端不要自己加：%s", sent)
 	}
 
 	at := replyIndexByID(a.detail.replyList, "new3")
@@ -2471,6 +2514,10 @@ func TestReplyComposerAnswersThirdLevelAsSibling(t *testing.T) {
 	}
 	if got.ParentID != "l2" || got.ReplyCommentID != "l3a" {
 		t.Errorf("引用目标没有补齐：%+v", got)
+	}
+	// 响应里的 content 带服务端补的 @，列表应以它为准。
+	if got.Content != "@alice 顶" {
+		t.Errorf("应使用响应返回的正文：%q", got.Content)
 	}
 	// 列表：l1、l2、l3a、l3b，新的三级回复接在子树末尾。
 	if at != 4 || at != len(a.detail.replyList)-1 {

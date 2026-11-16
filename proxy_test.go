@@ -988,6 +988,49 @@ func TestEditEndpointsUseConfiguredProxy(t *testing.T) {
 	}
 }
 
+// 发评论同样是 postJSON 的写出口：请求体新增了显式 level 与 replyCommentId，
+// 但它仍然必须经配置的代理，不能在改动字段时顺手换成一个直连的客户端。
+func TestCreateReplyUsesConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var paths, bodies []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		bodies = append(bodies, string(body))
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"r1","content":"顶","floor":1}`))
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		Proxy:  p,
+		Base:   "http://upstream.invalid/api",
+		bearer: func() string { return "tok" },
+	}
+	target := replyTarget{ID: "c3", Level: 3, ParentID: "c2"}
+	if _, err := c.createReply(context.Background(), "a1b2", "顶", target); err != nil {
+		t.Fatalf("经代理发评论失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != 1 || paths[0] != "POST /api/v1/topics/a1b2/replies" {
+		t.Fatalf("代理收到的请求 = %v，期望发评论 POST", paths)
+	}
+	for _, want := range []string{`"parentId":"c2"`, `"replyCommentId":"c3"`, `"level":3`} {
+		if !strings.Contains(bodies[0], want) {
+			t.Errorf("发评论请求体缺少 %s：%q", want, bodies[0])
+		}
+	}
+}
+
 // 盲盒的延期是又一个用 postJSON 的写出口：必须经配置的代理，不能因为
 // 和开盒 / 重抽共用 Client 就假设它天然不会直连。
 func TestPandoraExtendUsesConfiguredProxy(t *testing.T) {
