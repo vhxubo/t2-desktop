@@ -206,6 +206,12 @@ type app struct {
 	// 主线程读写。
 	replyWin    *mygo.Window
 	replyWinFor *detailState
+	// editWin 是「编辑」窗口（见 edit_window.go）：改已发表的帖子、改自己的
+	// 评论、给帖子追加附言。edit 是这次编辑的原文与草稿，窗口关掉就丢弃——
+	// 编辑是一次性的短操作，留一份旧正文只会在下次打开时盖掉最新内容。都只在
+	// 主线程读写。
+	editWin *mygo.Window
+	edit    *editState
 	// hosts 是图库（图床）配置：几个内置预设加用户手工添加的项，落盘在
 	// localKV 的 imagehosts:v1。hostActiveLabel 是当前激活项的名字，编辑器
 	// 的工具面板直接把它绑到下拉框上。都只在 UI 线程读写，见 image_hosts.go。
@@ -408,6 +414,7 @@ func (a *app) publish(fn func()) {
 		a.redrawPandoraWindow()
 		a.redrawComposeWindow()
 		a.redrawReplyWindow()
+		a.redrawEditWindow()
 		a.redrawUserCardWindow()
 		a.redrawSearchWindow()
 		a.redrawFollowsWindow()
@@ -681,6 +688,8 @@ func (a *app) onAuthChanged(err error) {
 		// 独立写评论窗口也一样：退出后没有可发的身份，草稿留在页面状态里，
 		// 窗口收起来。
 		a.closeReplyWindow()
+		// 编辑窗口里是上一个账号的内容，退出后一并关掉并丢弃。
+		a.closeEditWindow()
 		// 关注与粉丝名单、关注流未读角标都只属于当前账号。
 		a.closeFollowsWindow()
 		a.follows = nil
@@ -1451,6 +1460,7 @@ func main() {
 			a.closePandoraWindow()
 			a.closeComposeWindow()
 			a.closeReplyWindow()
+			a.closeEditWindow()
 			a.closeSearchWindow()
 			a.closeAboutWindow()
 			a.closeFollowsWindow()

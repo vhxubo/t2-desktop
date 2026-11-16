@@ -47,6 +47,7 @@ type uploadTarget int
 const (
 	uploadTargetCompose uploadTarget = iota
 	uploadTargetReply
+	uploadTargetEdit
 )
 
 type uploadJob struct {
@@ -75,13 +76,21 @@ func (a *app) editorState(t uploadTarget) (*string, *mdEditor) {
 			return nil, nil
 		}
 		return &a.detail.draft, &a.detail.mdEditor
+	case uploadTargetEdit:
+		if a.edit == nil {
+			return nil, nil
+		}
+		return &a.edit.body, &a.edit.mdEditor
 	}
 	return nil, nil
 }
 
 func (a *app) editorToastTarget(t uploadTarget) toastTarget {
-	if t == uploadTargetCompose {
+	switch t {
+	case uploadTargetCompose:
 		return toastCompose
+	case uploadTargetEdit:
+		return toastEdit
 	}
 	return toastMain
 }
@@ -228,6 +237,9 @@ func (a *app) pickImages(t uploadTarget) int {
 		parent := a.win
 		if t == uploadTargetCompose && a.composeWin != nil {
 			parent = a.composeWin
+		}
+		if t == uploadTargetEdit && a.editWin != nil {
+			parent = a.editWin
 		}
 		paths, err = mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:      parent,

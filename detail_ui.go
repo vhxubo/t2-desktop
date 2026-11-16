@@ -654,6 +654,17 @@ func (a *app) detailToolBar(c *ui.Context, d *detailState) {
 					d.list.ScrollTo(0, ui.Start)
 				})
 			}
+			// 作者本人多两个入口：改标题 / 正文，以及往帖子末尾追加附言。
+			// 接口只允许作者本人改，所以入口也只在昵称对得上时出现（见
+			// canEditTopic），不拿一个点了必然 403 的按钮占位置。
+			if a.canEditTopic(d) {
+				a.detailToolButton(c, editIcon, "编辑帖子", "修改标题与正文", func() {
+					a.showTopicEdit(d)
+				})
+				a.detailToolButton(c, postscriptIcon, "追加附言", "在帖子末尾追加一段附言", func() {
+					a.showPostscript(d)
+				})
+			}
 			a.detailRefreshButton(c, d)
 			a.detailToolButton(c, closeIcon, "关闭详情", "关闭详情（Esc）", a.closeDetail)
 		})
@@ -1445,6 +1456,9 @@ func (a *app) replyFooter(c *ui.Context, r replyItem, closed bool) {
 		if a.canRewardOn(d, r.ID) {
 			a.rewardEntry(c, d, r.ID, interactEntryCompact)
 		}
+		if a.canEditReply(r) {
+			a.replyEditEntry(c, d, r)
+		}
 		a.bookmarkEntry(c, d, r)
 		if !closed {
 			a.replyEntry(c, d, r)
@@ -1493,6 +1507,29 @@ func (a *app) bookmarkEntry(c *ui.Context, d *detailState, r replyItem) {
 	b.Label(label).Tooltip(tip)
 	if !busy {
 		b.OnClick(func() { a.toggleReplyBookmark(d, r) })
+	}
+}
+
+// replyEditEntry 是「编辑这条评论」的入口：只有作者本人看得到（见
+// canEditReply）。它和书签、回复一样是评论底行的一枚图标，点开在编辑窗口里
+// 改正文（见 edit_window.go）。
+func (a *app) replyEditEntry(c *ui.Context, d *detailState, r replyItem) {
+	t := c.Theme()
+	b := ui.Box(c).Size(20, 20).Radius(6).Center().Background(ui.Transparent)
+	hovered := b.Hovered()
+	if hovered {
+		b.Background(t.SurfaceHover)
+	}
+	ink := t.TextMuted
+	if hovered {
+		ink = t.Text
+	}
+	b.Children(func() {
+		ui.Icon(c, editIcon).Size(14, 14).TextColor(ink)
+	})
+	b.Label("编辑评论").Tooltip("修改这条评论的正文")
+	if b.Clicked() {
+		a.showReplyEdit(d, r)
 	}
 }
 

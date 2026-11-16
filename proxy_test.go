@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -928,5 +929,57 @@ func TestImageHostAndImageURLUseConfiguredProxy(t *testing.T) {
 	}
 	if uploads.Load() != 1 || downloads.Load() != 1 {
 		t.Errorf("代理收到上传 %d 次、图片下载 %d 次，期望各 1 次", uploads.Load(), downloads.Load())
+	}
+}
+
+// 编辑帖子 / 编辑评论 / 追加附言这三个写端点也必须走配置的代理。它们和读端点
+// 共用同一个 Client，但「共用」这件事要用假代理证明一次，不能只靠约定：新加的
+// 出口一旦自建 http.Client，代理规则就会在这里漏掉。
+func TestEditEndpointsUseConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var paths []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, envelopeJSON(`{}`))
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		Proxy:  p,
+		Base:   "http://upstream.invalid/api",
+		bearer: func() string { return "tok" },
+	}
+	ctx := context.Background()
+	if err := c.editTopic(ctx, "a1b2", "新标题", "新正文"); err != nil {
+		t.Fatalf("经代理编辑帖子失败：%v", err)
+	}
+	if err := c.editReply(ctx, "c1", "新评论"); err != nil {
+		t.Fatalf("经代理编辑评论失败：%v", err)
+	}
+	if err := c.addPostscript(ctx, "a1b2", "附言", "k1"); err != nil {
+		t.Fatalf("经代理追加附言失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{
+		"/api/v1/topics/a1b2/edit",
+		"/api/v1/replies/c1/edit",
+		"/api/v1/topics/a1b2/postscript",
+	}
+	if len(paths) != len(want) {
+		t.Fatalf("代理收到 %d 次请求，期望 %d 次：%v", len(paths), len(want), paths)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Errorf("第 %d 次请求 = %s，期望 %s", i+1, paths[i], want[i])
+		}
 	}
 }
