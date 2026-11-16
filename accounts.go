@@ -723,20 +723,25 @@ func (b *accountBook) applySession(acc *account, auth *AuthManager) error {
 		return fmt.Errorf("保存令牌失败：%w", err)
 	}
 	auth.onChange = nil
+	// 先写账号索引、再换会话：acc.auth 一旦变成新会话，面板与测试就认为
+	// 「重新登录完成」，此时 accounts.json 必须已经落盘，不能出现「界面
+	// 说好了、磁盘还在写」的中间态。
 	b.mu.Lock()
-	acc.auth = auth
 	acc.Username = orString(auth.username(), acc.Username)
 	acc.Avatar = orString(auth.avatarURL(), acc.Avatar)
 	acc.unread = 0
+	b.mu.Unlock()
+	if err := b.save(); err != nil {
+		return fmt.Errorf("账号索引写入失败：%w", err)
+	}
+	b.mu.Lock()
+	acc.auth = auth
 	b.mu.Unlock()
 	if app := acc.app; app != nil {
 		// 窗口开着：换掉它的会话，界面按新令牌重建。
 		app.replaceAuth(auth)
 	}
 	b.bindSession(acc)
-	if err := b.save(); err != nil {
-		return fmt.Errorf("账号索引写入失败：%w", err)
-	}
 	log.Printf("已重新登录账号 %s（%s）", acc.ID, acc.name())
 	return nil
 }

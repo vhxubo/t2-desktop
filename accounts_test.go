@@ -383,6 +383,8 @@ func TestReloginRecoversExpiredAccount(t *testing.T) {
 	}
 	b.handleDeepLink(defaultRedirectURI + "?code=c&state=" + u.Query().Get("state"))
 
+	// 令牌一换成新值，账号索引就已经写完了：applySession 先落盘再换会话，
+	// 这里不会在磁盘写到一半时结束测试（TempDir 清理会因此报「目录非空」）。
 	waitFor(t, func() bool { return acc.auth.accessToken() == "fresh" }, "重新登录后的令牌")
 	if b.accountCount() != 1 {
 		t.Fatalf("重新登录后账号数 = %d，期望 1", b.accountCount())
