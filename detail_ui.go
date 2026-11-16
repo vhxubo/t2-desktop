@@ -80,6 +80,8 @@ type detailState struct {
 	react reactionState
 	vote  voteUIState
 	bet   betUIState
+	// restricted 是正文末尾受限内容块的状态（见 restricted.go）。
+	restricted restrictedUIState
 	// bmBusy 是正在提交书签的评论 id：一次只提交一条，避免连点把同一条
 	// 评论反复加 / 删（见 bookmarks.go）。
 	bmBusy string
@@ -803,6 +805,9 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 	}
 	if p.Bet != nil {
 		a.betSection(c, d)
+	}
+	if p.Restricted != nil {
+		a.restrictedSection(c, d)
 	}
 	// 正文末尾不再画互动行：表态与打赏固定在左栏底部的互动栏里
 	// （见 detailView 的 topicInteractionBar），正文再长也始终可达。

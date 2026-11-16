@@ -984,6 +984,49 @@ func TestEditEndpointsUseConfiguredProxy(t *testing.T) {
 	}
 }
 
+// 盲盒的延期是又一个用 postJSON 的写出口：必须经配置的代理，不能因为
+// 和开盒 / 重抽共用 Client 就假设它天然不会直连。
+func TestPandoraExtendUsesConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var paths, bodies []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		bodies = append(bodies, string(body))
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"cost":12,"next_cost":20,"active_extended":true}`))
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		Proxy:  p,
+		Base:   "http://upstream.invalid/api",
+		bearer: func() string { return "tok" },
+	}
+	res, err := c.extendPandora(context.Background(), "k1", "b1")
+	if err != nil {
+		t.Fatalf("经代理延期失败：%v", err)
+	}
+	if !res.CostKnown || res.Cost != 12 || !res.NextCostKnown || res.NextCost != 20 {
+		t.Errorf("延期响应解析不对：%+v", res)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != 1 || paths[0] != "POST /api/v1/pandora/extend" {
+		t.Fatalf("代理收到的请求 = %v，期望延期 POST", paths)
+	}
+	if !strings.Contains(bodies[0], `"box_instance_id":"b1"`) {
+		t.Errorf("延期请求体不对：%q", bodies[0])
+	}
+}
+
 // 竞猜的读（GET /bets）与写（POST participate）两个出口都要走配置的代理。
 func TestBetEndpointsUseConfiguredProxy(t *testing.T) {
 	clearProxyEnv(t)
@@ -1021,6 +1064,61 @@ func TestBetEndpointsUseConfiguredProxy(t *testing.T) {
 	want := []string{
 		"GET /api/v1/topics/a1b2/bets",
 		"POST /api/v1/topics/a1b2/bets/opt-a/participate",
+	}
+	if len(paths) != len(want) {
+		t.Fatalf("代理收到 %d 次请求，期望 %d 次：%v", len(paths), len(want), paths)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Errorf("第 %d 次请求 = %s，期望 %s", i+1, paths[i], want[i])
+		}
+	}
+}
+
+// 受限内容三个读出口与解锁写出口都必须经配置的代理，不能因为共用 Client
+// 就假设其中某一个天然不会直连。
+func TestRestrictedEndpointsUseConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var paths []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"unlocked":true,"content":"经代理的正文"}`))
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		Proxy:  p,
+		Base:   "http://upstream.invalid/api",
+		bearer: func() string { return "tok" },
+	}
+	ctx := context.Background()
+	if _, err := c.fetchRestricted(ctx, "r1"); err != nil {
+		t.Fatalf("经代理读受限内容失败：%v", err)
+	}
+	if _, err := c.fetchRestrictedAuction(ctx, "r1"); err != nil {
+		t.Fatalf("经代理读竞拍状态失败：%v", err)
+	}
+	if _, err := c.fetchRestrictedBids(ctx, "r1"); err != nil {
+		t.Fatalf("经代理读出价记录失败：%v", err)
+	}
+	if _, err := c.unlockRestricted(ctx, "k1", "r1"); err != nil {
+		t.Fatalf("经代理解锁失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{
+		"GET /api/v1/topics/r1/restricted",
+		"GET /api/v1/topics/r1/restricted/auction",
+		"GET /api/v1/topics/r1/restricted/auction/bids",
+		"POST /api/v1/topics/r1/restricted/unlock",
 	}
 	if len(paths) != len(want) {
 		t.Fatalf("代理收到 %d 次请求，期望 %d 次：%v", len(paths), len(want), paths)

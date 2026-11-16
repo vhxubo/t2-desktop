@@ -19,22 +19,25 @@ import (
 //	GET  /v1/pandora/today   今日状态 + 当前事件（scope read:economy，需开通）
 //	POST /v1/pandora/open    开盲盒，无请求体（scope write:economy，需开通）🔑
 //	POST /v1/pandora/reroll  重抽，body 是 box_instance_id（同上）🔑
+//	POST /v1/pandora/extend  延期，body 是 box_instance_id（同上）🔑
 //
-// 两个写端点都标 🔑：每次用户动作铸一个新的 Idempotency-Key，超时重试沿用
+// 三个写端点都标 🔑：每次用户动作铸一个新的 Idempotency-Key，超时重试沿用
 // 同一个键；授权链路重跑时是一次新的动作，换新键。响应字段没有在文档里逐项
 // 列出，按「认得的字段用、不认识的忽略」解码，并兼容「完整今日状态」与
-// 「只返回一个 box」两种形状。
+// 「只返回一个 box」两种形状。延期响应按文档会带 cost 与 next_cost，可直接
+// 展示。
 //
 // 站点的 reroll_limit 可能大于 1，但本应用的产品约定是「开一次 + 重抽一次」
 // 共两次：见 pandoraStatus.canReroll。多出来的重抽次数留给站点，不在应用里
-// 提供第三个入口。
+// 提供第三个入口。延期是另一回事：它延长当前事件的生效时间，不占抽奖次数。
 
 const (
 	pandoraOpenPath   = "/v1/pandora/open"
 	pandoraRerollPath = "/v1/pandora/reroll"
+	pandoraExtendPath = "/v1/pandora/extend"
 
-	// pandoraActionTimeout 是一次开盒 / 重抽的超时。写操作会改变金币与站内
-	// 状态，给得比普通读稍宽，但别让按钮一直转圈。
+	// pandoraActionTimeout 是一次开盒 / 重抽 / 延期的超时。写操作会改变金币
+	// 与站内状态，给得比普通读稍宽，但别让按钮一直转圈。
 	pandoraActionTimeout = 25 * time.Second
 )
 
@@ -112,6 +115,22 @@ func (s pandoraStatus) canReroll(now time.Time) bool {
 		if t, ok := profileTime(b.RerollDeadlineAt); ok && !now.Before(t) {
 			return false
 		}
+	}
+	if b := s.Box; b.ExpireAt != "" {
+		if t, ok := profileTime(b.ExpireAt); ok && !now.Before(t) {
+			return false
+		}
+	}
+	return true
+}
+
+// canExtend 回答「当前盲盒能不能延期」。延期延长的是已抽中事件的生效时间，
+// 因此要有盒子编号、盒子仍在有效期内；事件已经过期就没有可延长的对象了。
+// active_extended 不再作为门槛：响应里的 next_cost（下次延期价格）说明站点
+// 允许连续延期，只是越往后越贵，价格交给界面展示。
+func (s pandoraStatus) canExtend(now time.Time) bool {
+	if !s.BoxKnown || !s.HasBox || s.Box.InstanceID == "" {
+		return false
 	}
 	if b := s.Box; b.ExpireAt != "" {
 		if t, ok := profileTime(b.ExpireAt); ok && !now.Before(t) {
@@ -254,7 +273,11 @@ type pandoraActionResult struct {
 	Status    pandoraStatus
 	Cost      float64
 	CostKnown bool
-	Message   string
+	// NextCost / NextCostKnown 是延期响应里的 next_cost：下次延期的价格，
+	// 直接展示给用户，让他知道再延一次要花多少。只有延期会用到。
+	NextCost      float64
+	NextCostKnown bool
+	Message       string
 }
 
 func decodePandoraAction(d json.RawMessage) pandoraActionResult {
@@ -267,6 +290,11 @@ func decodePandoraAction(d json.RawMessage) pandoraActionResult {
 		out.Cost, out.CostKnown = v, true
 	} else if o.has("cost", "cost_coins", "costCoins", "coin_cost") {
 		out.CostKnown = true
+	}
+	if v, ok := o.number("next_cost", "nextCost"); ok {
+		out.NextCost, out.NextCostKnown = v, true
+	} else if o.has("next_cost", "nextCost") {
+		out.NextCostKnown = true
 	}
 	out.Message = o.str("message", "msg")
 	return out
@@ -289,12 +317,26 @@ func applyPandoraAction(prev, got pandoraStatus, action string) pandoraStatus {
 	}
 	next.Known = true
 	next.HasBox, next.OpenedToday, next.CanOpen = true, true, false
-	if action == "reroll" && next.BoxKnown && !next.Box.CountersKnown && prev.BoxKnown {
-		// 只返回 box 的重抽响应没带计数：按「用掉一次」补上，按钮立刻消失，
-		// 不必等下一次 GET 把界面改回来。
-		next.Box.RerollUsed = prev.Box.RerollUsed + 1
-		next.Box.RerollLimit = prev.Box.RerollLimit
-		next.Box.CountersKnown = true
+	if action == "extend" {
+		// 延期成功就落下「已延期」标志：站点响应可能只回 cost / next_cost
+		// 而不带完整今日状态，界面据此立刻显示已延期与下次价格。
+		next.ActiveExtended = true
+	}
+	if next.BoxKnown && !next.Box.CountersKnown && prev.BoxKnown {
+		switch action {
+		case "reroll":
+			// 只返回 box 的重抽响应没带计数：按「用掉一次」补上，按钮立刻
+			// 消失，不必等下一次 GET 把界面改回来。
+			next.Box.RerollUsed = prev.Box.RerollUsed + 1
+			next.Box.RerollLimit = prev.Box.RerollLimit
+			next.Box.CountersKnown = true
+		case "extend":
+			// 延期不消耗重抽次数；响应 box 没带计数时沿用旧值，别把还能
+			// 重抽的状态冲成 0。
+			next.Box.RerollUsed = prev.Box.RerollUsed
+			next.Box.RerollLimit = prev.Box.RerollLimit
+			next.Box.CountersKnown = true
+		}
 	}
 	return next
 }
@@ -339,6 +381,23 @@ func (c *Client) rerollPandora(ctx context.Context, idempotencyKey, instanceID s
 	return out, err
 }
 
+// extendPandora 延长当前盲盒事件的生效时间。box_instance_id 同样只能来自
+// today / open / reroll 的响应。响应会带本次扣费 cost 与下次价格 next_cost，
+// 交给界面展示；延期不占抽奖次数，也不改变重抽进度。
+func (c *Client) extendPandora(ctx context.Context, idempotencyKey, instanceID string) (pandoraActionResult, error) {
+	var out pandoraActionResult
+	payload := map[string]any{"box_instance_id": instanceID}
+	_, err := withAuthRetry(c, ctx, func(token string) (struct{}, error) {
+		d, err := c.postJSON(ctx, c.base()+pandoraExtendPath, token, idempotencyKey, payload)
+		if err != nil {
+			return struct{}{}, err
+		}
+		out = decodePandoraAction(d)
+		return struct{}{}, nil
+	})
+	return out, err
+}
+
 // ---- 界面状态 ----
 
 // pandoraState 是潘多拉窗口的界面状态，只在 UI 线程读写。
@@ -359,8 +418,13 @@ type pandoraState struct {
 	entryKnown   bool
 	entryLoading bool
 
-	// busy 是正在提交的动作："open" / "reroll"；按钮据此禁用并显示进度。
+	// busy 是正在提交的动作："open" / "reroll" / "extend"；按钮据此禁用并显示进度。
 	busy string
+
+	// extendNextCost 是上次延期响应里的 next_cost，在延期按钮旁提示下次价格；
+	// 没延期过就留空，不猜价格。
+	extendNextCost      float64
+	extendNextCostKnown bool
 
 	// owner 是这份状态属于哪个账号。重新授权（同一个账号补权限）时保留状态，
 	// 重抽才能接着用原来的 box_instance_id 重跑；换账号 / 退出则整体丢弃。
@@ -467,14 +531,20 @@ func (a *app) reloadPandora() {
 	a.loadPandoraStatus()
 }
 
-// pandoraAction 是开盒 / 重抽共用的提交路径。kind 只有 "open" 与 "reroll"。
+// pandoraAction 是开盒 / 重抽 / 延期共用的提交路径。kind 只有 "open" /
+// "reroll" / "extend"。延期不占抽奖次数，但要花金币，走同一条授权与金币
+// 刷新链路。
 func (a *app) pandoraAction(kind string) {
 	st := a.pandora
 	if st == nil || st.busy != "" {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录 2Libra 后才能抽取潘多拉盲盒。", func() { a.pandoraAction(kind) })
+		loginText := "登录 2Libra 后才能抽取潘多拉盲盒。"
+		if kind == "extend" {
+			loginText = "登录 2Libra 后才能延期潘多拉盲盒。"
+		}
+		a.requestLogin(loginText, func() { a.pandoraAction(kind) })
 		return
 	}
 	switch kind {
@@ -492,6 +562,15 @@ func (a *app) pandoraAction(kind string) {
 			a.toast(toastPandora, "还没拿到这个盲盒的编号，请先刷新")
 			return
 		}
+	case "extend":
+		if !st.status.canExtend(pandoraNow()) {
+			a.toast(toastPandora, "当前盲盒不能延期，请刷新后再试")
+			return
+		}
+		if st.status.Box.InstanceID == "" {
+			a.toast(toastPandora, "还没拿到这个盲盒的编号，请先刷新")
+			return
+		}
 	}
 	st.busy = kind
 	actor := a.auth.username()
@@ -503,9 +582,12 @@ func (a *app) pandoraAction(kind string) {
 		defer cancel()
 		var res pandoraActionResult
 		var err error
-		if kind == "reroll" {
+		switch kind {
+		case "reroll":
 			res, err = a.client.rerollPandora(ctx, key, instance)
-		} else {
+		case "extend":
+			res, err = a.client.extendPandora(ctx, key, instance)
+		default:
 			res, err = a.client.openPandora(ctx, key)
 		}
 		a.publish(func() {
@@ -520,8 +602,13 @@ func (a *app) pandoraAction(kind string) {
 			if err != nil {
 				var ae *apiError
 				if errors.As(err, &ae) && ae.Code == "conflict" {
-					// 今日已开 / 重抽次数已用完：服务端拒绝，按「已经抽过」处理。
-					a.toast(toastPandora, "这次抽奖已经用过了，明天再来")
+					// 今日已开 / 重抽次数已用完 / 事件已过期无法延期：服务端
+					// 拒绝，按「这次机会已经用掉」处理并重读状态。
+					if kind == "extend" {
+						a.toast(toastPandora, "这次延期没成功，请刷新后再试")
+					} else {
+						a.toast(toastPandora, "这次抽奖已经用过了，明天再来")
+					}
 					a.reloadPandora()
 					return
 				}
@@ -536,9 +623,12 @@ func (a *app) pandoraAction(kind string) {
 			st.entryStatus = next
 			st.entryKnown = true
 			st.loaded, st.wait, st.err = true, false, ""
+			if kind == "extend" && res.NextCostKnown {
+				st.extendNextCost, st.extendNextCostKnown = res.NextCost, true
+			}
 			text := pandoraActionText(kind, res, next)
 			a.toast(toastPandora, text)
-			// 开盒 / 重抽可能改变金币与流水：交给全局金币事件统一刷新。
+			// 开盒 / 重抽 / 延期都可能改变金币与流水：交给全局金币事件统一刷新。
 			a.coinsChanged(coinEventPandora)
 			// 动作响应不一定带完整今日状态，再读一次 today 校准。直接调
 			// loadPandoraStatus 而不是 reloadPandora：保留刚抽到的结果，
@@ -550,12 +640,27 @@ func (a *app) pandoraAction(kind string) {
 
 func (a *app) openPandoraBox()   { a.pandoraAction("open") }
 func (a *app) rerollPandoraBox() { a.pandoraAction("reroll") }
+func (a *app) extendPandoraBox() { a.pandoraAction("extend") }
 
 // ---- 展示辅助 ----
 
 // pandoraActionText 是成功后的 toast：说清抽到了什么、花了多少、还能不能
-// 再抽一次。金额只在响应明确给出且大于 0 时展示。
+// 再抽一次。金额只在响应明确给出且大于 0 时展示。延期单独一条：它不产生
+// 新结果，重点是本次花了多少、下次延期要多少。
 func pandoraActionText(kind string, res pandoraActionResult, status pandoraStatus) string {
+	if kind == "extend" {
+		text := "盲盒已延期"
+		if name := strings.TrimSpace(status.Box.EventName); name != "" {
+			text += "：" + name
+		}
+		if res.CostKnown && res.Cost > 0 {
+			text += "，消耗 " + coinAmountText(res.Cost) + " 金币"
+		}
+		if res.NextCostKnown && res.NextCost > 0 {
+			text += "；下次延期 " + coinAmountText(res.NextCost) + " 金币"
+		}
+		return text
+	}
 	prefix := "盲盒已开启"
 	if kind == "reroll" {
 		prefix = "已再抽一次"

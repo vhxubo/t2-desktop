@@ -87,6 +87,97 @@ func TestDecodePandoraToday(t *testing.T) {
 	}
 }
 
+// 延期响应按文档会带 cost 与 next_cost（下次延期价格）；两种键名都认，
+// 缺字段时不能凭空报一个价格。
+func TestDecodePandoraExtendCosts(t *testing.T) {
+	res := decodePandoraAction(json.RawMessage(`{
+		"active_extended":true,"cost":12,"next_cost":20,
+		"box":{"box_instance_id":"b1","event_name":"金币雨","rarity":"bronze"}
+	}`))
+	if !res.Status.ActiveExtended || !res.Status.BoxKnown {
+		t.Fatalf("延期响应状态解码不对：%+v", res.Status)
+	}
+	if !res.CostKnown || res.Cost != 12 {
+		t.Errorf("cost = %v（known=%v），期望 12", res.Cost, res.CostKnown)
+	}
+	if !res.NextCostKnown || res.NextCost != 20 {
+		t.Errorf("next_cost = %v（known=%v），期望 20", res.NextCost, res.NextCostKnown)
+	}
+
+	camel := decodePandoraAction(json.RawMessage(`{"cost":5,"nextCost":9}`))
+	if !camel.NextCostKnown || camel.NextCost != 9 {
+		t.Errorf("nextCost 驼峰写法没认出来：%+v", camel)
+	}
+	bare := decodePandoraAction(json.RawMessage(`{"box":{"box_instance_id":"b1"}}`))
+	if bare.CostKnown || bare.NextCostKnown {
+		t.Errorf("没有价格字段却标成已知：%+v", bare)
+	}
+}
+
+// 延期要花金币，不占抽奖次数；可延期看的是有没有盒子且事件还没到期。
+func TestPandoraCanExtend(t *testing.T) {
+	freezePandoraNow(t)
+	base := pandoraStatus{
+		Known: true, FlagsKnown: true, HasBox: true, BoxKnown: true,
+		Box: pandoraBox{
+			InstanceID: "b1", EventName: "金币雨",
+			RerollUsed: 1, RerollLimit: 1, CountersKnown: true,
+			ExpireAt: "2026-11-13T16:05:46.604Z",
+		},
+	}
+	if !base.canExtend(pandoraNow()) {
+		t.Error("有盒子且未到期应能延期")
+	}
+	// 已延期过仍可再延：站点用 next_cost 逐次涨价，而不是一次就锁死。
+	base.ActiveExtended = true
+	if !base.canExtend(pandoraNow()) {
+		t.Error("已延期过也应能再次延期")
+	}
+	expired := base
+	expired.Box.ExpireAt = "2026-11-12T11:00:00.000Z"
+	if expired.canExtend(pandoraNow()) {
+		t.Error("事件已过期就不该再延期")
+	}
+	noBox := base
+	noBox.Box.InstanceID = ""
+	if noBox.canExtend(pandoraNow()) {
+		t.Error("没有盒子编号不该给延期入口")
+	}
+}
+
+// 延期响应只带 box 时，重抽计数不能被冲掉；延期本身也不改变已抽次数。
+func TestPandoraExtendMergeKeepsReroll(t *testing.T) {
+	freezePandoraNow(t)
+	prev := pandoraStatus{
+		Known: true, FlagsKnown: true, HasBox: true, OpenedToday: true,
+		BoxKnown: true,
+		Box: pandoraBox{
+			InstanceID: "b1", EventName: "金币雨",
+			RerollUsed: 1, RerollLimit: 1, CountersKnown: true,
+			ExpireAt: "2026-11-13T16:05:46.604Z",
+		},
+	}
+	got := decodePandoraStatus(json.RawMessage(`{"box":{
+		"box_instance_id":"b1","event_name":"金币雨","rarity":"bronze",
+		"expire_at":"2026-11-14T16:05:46.604Z"}}`))
+	next := applyPandoraAction(prev, got, "extend")
+	if !next.ActiveExtended {
+		t.Error("延期成功后要落下已延期标志")
+	}
+	if next.Box.RerollUsed != 1 || next.Box.RerollLimit != 1 || !next.Box.CountersKnown {
+		t.Errorf("延期冲掉了重抽计数：%+v", next.Box)
+	}
+	if next.drawsUsed() != 2 {
+		t.Errorf("延期改变了已抽次数：%d，期望 2", next.drawsUsed())
+	}
+	if next.canReroll(pandoraNow()) {
+		t.Error("重抽已用掉的状态不该被延期重新打开")
+	}
+	if next.Box.ExpireAt != "2026-11-14T16:05:46.604Z" {
+		t.Errorf("延期没有更新到期时间：%q", next.Box.ExpireAt)
+	}
+}
+
 // 开盒响应只返回一个 box 时，今日状态里的标志不能被零值冲掉；重抽响应
 // 没带计数时，本地按「用掉一次」补上，按钮立刻消失。
 func TestPandoraActionMergePartialBox(t *testing.T) {
@@ -324,6 +415,256 @@ func TestPandoraOpenAndRerollContract(t *testing.T) {
 	}
 	if gets.Load() < 2 {
 		t.Errorf("动作后没有重读今日状态：GET %d 次", gets.Load())
+	}
+}
+
+// 延期的请求契约：POST /v1/pandora/extend，body 是 box_instance_id，带令牌
+// 与新铸的 Idempotency-Key；响应里的 cost / next_cost 落到 toast，延期不占
+// 抽奖次数，但和开盒一样触发金币刷新，并重新读一次 today 校准。
+func TestPandoraExtendContract(t *testing.T) {
+	freezePandoraNow(t)
+	var mu sync.Mutex
+	var paths, keys, bodies, auths []string
+	var gets, extends atomic.Int32
+	extended := false
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auths = append(auths, r.Header.Get("Authorization"))
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		if key := r.Header.Get("Idempotency-Key"); key != "" {
+			keys = append(keys, r.URL.Path+" "+key)
+		}
+		state := extended
+		mu.Unlock()
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/pandora/today":
+			gets.Add(1)
+			active := "false"
+			if state {
+				active = "true"
+			}
+			_, _ = io.WriteString(w, envelopeJSON(`{
+				"has_box":true,"can_open":false,"opened_today":true,
+				"active_extended":`+active+`,
+				"next_open_at":"2026-11-13T16:00:00.000Z",
+				"box":{"box_instance_id":"b1","event_name":"金币雨",
+					"event_title":"小小金币雨，获得 67 金币。","rarity":"bronze",
+					"reroll_used":0,"reroll_limit":1,
+					"reroll_deadline_at":"2026-11-13T15:00:00.000Z",
+					"expire_at":"2026-11-13T16:05:46.604Z"}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/pandora/extend":
+			extends.Add(1)
+			body, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			bodies = append(bodies, string(body))
+			extended = true
+			mu.Unlock()
+			if !strings.Contains(string(body), `"box_instance_id":"b1"`) {
+				t.Errorf("延期请求体不对：%s", body)
+			}
+			_, _ = io.WriteString(w, envelopeJSON(`{
+				"cost":12,"next_cost":20,"active_extended":true,
+				"box":{"box_instance_id":"b1","event_name":"金币雨",
+					"rarity":"bronze","expire_at":"2026-11-14T16:05:46.604Z"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	a := pandoraTestApp(t, true)
+	a.client.Base = srv.URL + "/api"
+	a.client.HTTP = srv.Client()
+	defer a.stopCoinRefresh()
+	events := make(chan coinEvent, 8)
+	a.onCoinsChanged = func(e coinEvent) { events <- e }
+
+	a.showPandoraWindow()
+	waitPandora(t, "可延期状态", func() bool {
+		st := a.pandora
+		return st != nil && st.loaded && st.status.canExtend(pandoraNow())
+	})
+	drawsBefore := a.pandora.status.drawsUsed()
+
+	a.extendPandoraBox()
+	waitPandora(t, "延期成功", func() bool {
+		st := a.pandora
+		return st.busy == "" && st.extendNextCostKnown && st.status.ActiveExtended
+	})
+	if got := extends.Load(); got != 1 {
+		t.Fatalf("延期请求 %d 次，期望 1", got)
+	}
+	if got := a.pandora.status.drawsUsed(); got != drawsBefore {
+		t.Errorf("延期改变了已抽次数：%d，期望 %d", got, drawsBefore)
+	}
+	if !pandoraHasToast(a, "盲盒已延期") || !pandoraHasToast(a, "下次延期") {
+		t.Errorf("延期成功 toast 不含价格：%+v", a.toasts)
+	}
+	select {
+	case e := <-events:
+		if e != coinEventPandora {
+			t.Errorf("金币事件 = %q，期望 %q", e, coinEventPandora)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("延期成功后没有发出金币变动事件")
+	}
+	waitPandora(t, "延期后校准", func() bool { return gets.Load() >= 2 })
+	if !a.pandora.entryKnown || !a.pandora.entryStatus.ActiveExtended {
+		t.Errorf("延期后首页入口没拿到延期标志：%+v", a.pandora.entryStatus)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(auths) == 0 || auths[0] != "Bearer tok" {
+		t.Errorf("请求没有带令牌：%v", auths)
+	}
+	for _, p := range paths {
+		if p == "POST /api/v1/pandora/extend" {
+			continue
+		}
+		if !strings.HasPrefix(p, "GET /api/v1/pandora/today") {
+			t.Errorf("出现了意料之外的请求：%s", p)
+		}
+	}
+	if len(keys) != 1 || !strings.HasPrefix(keys[0], "/api/v1/pandora/extend ") {
+		t.Errorf("延期请求没有带 Idempotency-Key：%v", keys)
+	}
+	if len(bodies) != 1 || strings.TrimSpace(bodies[0]) == "" {
+		t.Errorf("延期请求体不对：%q", bodies)
+	}
+}
+
+// 延期缺 write:economy 时走和开盒一样的授权链路，授权成功后重跑同一次
+// 延期，并保留原来的 box_instance_id。
+func TestPandoraExtendNeedsAuthorization(t *testing.T) {
+	freezePandoraNow(t)
+	var extends atomic.Int32
+	var extended atomic.Bool
+	var keyUsed atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/pandora/today":
+			active := "false"
+			if extended.Load() {
+				active = "true"
+			}
+			_, _ = io.WriteString(w, envelopeJSON(`{
+				"has_box":true,"can_open":false,"opened_today":true,
+				"active_extended":`+active+`,
+				"box":{"box_instance_id":"b1","event_name":"金币雨",
+					"reroll_used":0,"reroll_limit":1,
+					"expire_at":"2026-11-13T16:05:46.604Z"}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/pandora/extend":
+			keyUsed.Store(r.Header.Get("Idempotency-Key"))
+			if extends.Add(1) == 1 {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, `{"c":403,"code":"insufficient_scope",
+					"required_scope":["write:economy"],"m":"缺少权限范围","d":null}`)
+				return
+			}
+			extended.Store(true)
+			_, _ = io.WriteString(w, envelopeJSON(`{"cost":12,"next_cost":20,
+				"active_extended":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	a := pandoraTestApp(t, true)
+	a.client.Base = srv.URL + "/api"
+	a.client.HTTP = srv.Client()
+	defer a.stopCoinRefresh()
+	a.showPandoraWindow()
+	waitPandora(t, "可延期状态", func() bool {
+		st := a.pandora
+		return st != nil && st.loaded && st.status.canExtend(pandoraNow())
+	})
+	a.extendPandoraBox()
+	waitPandora(t, "授权弹窗", func() bool { return a.authGate.open })
+	if len(a.authGate.need.Scopes) != 1 || a.authGate.need.Scopes[0] != "write:economy" {
+		t.Errorf("授权弹窗缺少 write:economy：%+v", a.authGate.need)
+	}
+	if !a.pandora.status.BoxKnown || a.pandora.status.Box.InstanceID != "b1" {
+		t.Fatalf("等待授权时丢掉了盒子编号：%+v", a.pandora.status)
+	}
+	if pandoraHasToast(a, "缺少权限") || pandoraHasToast(a, "403") {
+		t.Errorf("缺权限不该显示普通错误 toast：%+v", a.toasts)
+	}
+	firstKey, _ := keyUsed.Load().(string)
+
+	a.autoLoad = false
+	a.onAuthChanged(nil)
+	waitPandora(t, "授权后重跑延期", func() bool { return extends.Load() == 2 })
+	waitPandora(t, "延期结果", func() bool {
+		st := a.pandora
+		return st.busy == "" && st.status.ActiveExtended && st.extendNextCostKnown
+	})
+	if !pandoraHasToast(a, "盲盒已延期") {
+		t.Errorf("授权重跑后没有延期成功提示：%+v", a.toasts)
+	}
+	if secondKey, _ := keyUsed.Load().(string); secondKey == "" {
+		t.Error("重跑延期时没有带 Idempotency-Key")
+	} else if secondKey == firstKey {
+		t.Error("授权重跑是新动作，该换新 Idempotency-Key")
+	}
+}
+
+// 窗口里：有盒子且未到期时给出「延期事件」按钮，悬浮能看到下次价格；
+// 正在延期时换成进度、按钮禁用；事件过期后不给延期入口。
+func TestPandoraWindowShowsExtend(t *testing.T) {
+	freezePandoraNow(t)
+	a := pandoraTestApp(t, false)
+	box := pandoraBox{
+		InstanceID: "b1", EventName: "金币雨",
+		EventTitle: "小小金币雨，获得 67 金币。", Rarity: "bronze",
+		RerollUsed: 1, RerollLimit: 1, CountersKnown: true,
+		ExpireAt: "2026-11-13T16:05:46.604Z",
+	}
+	a.pandora = &pandoraState{
+		loaded: true,
+		status: pandoraStatus{
+			Known: true, FlagsKnown: true, HasBox: true, OpenedToday: true,
+			NextOpenAt: "2026-11-13T16:00:00.000Z", BoxKnown: true, Box: box,
+		},
+		extendNextCostKnown: true, extendNextCost: 20,
+	}
+	tt := ui.NewTester(a.pandoraWindowView, pandoraWindowWidth, pandoraWindowHeight)
+	tt.Frame()
+	if !tt.HasText("延期事件") {
+		t.Fatalf("窗口里没有延期入口：%q", tt.Texts())
+	}
+	btn, ok := tt.Find("延期潘多拉盲盒")
+	if !ok {
+		t.Fatalf("延期按钮没有可访问名：%q", tt.Texts())
+	}
+	tt.Move(btn.X+btn.W/2, btn.Y+btn.H/2)
+	tt.Advance(700 * time.Millisecond)
+	if !tt.HasText("约 20 金币") {
+		t.Errorf("悬浮没有显示下次延期价格：%q", tt.Texts())
+	}
+
+	// 正在延期：进度可见、按钮不在了。
+	a.pandora.busy = "extend"
+	tt = ui.NewTester(a.pandoraWindowView, pandoraWindowWidth, pandoraWindowHeight)
+	tt.Frame()
+	if !tt.HasText("正在延期…") {
+		t.Errorf("延期进行中没有进度说明：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("延期潘多拉盲盒"); ok {
+		t.Error("延期进行中不该还能点按钮")
+	}
+
+	// 事件已过期：不给延期入口。
+	a.pandora.busy = ""
+	expired := box
+	expired.ExpireAt = "2026-11-12T11:00:00.000Z"
+	a.pandora.status.Box = expired
+	tt = ui.NewTester(a.pandoraWindowView, pandoraWindowWidth, pandoraWindowHeight)
+	tt.Frame()
+	if _, ok := tt.Find("延期潘多拉盲盒"); ok {
+		t.Errorf("事件过期后不该还有延期按钮：%q", tt.Texts())
 	}
 }
 

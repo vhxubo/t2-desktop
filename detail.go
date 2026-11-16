@@ -68,6 +68,9 @@ type topicDetail struct {
 	Vote                     *voteBlock
 	// Bet 是竞猜块：线上在 d.bet，早期文档在 d.extra.bet（见 bets.go）。
 	Bet *betInfo
+	// Restricted 是隐藏内容的门槛（api-read.md 的 extra.restricted）：
+	// 未解锁时只有条件，已解锁时可能带正文，字段按受限内容的容错解码读取。
+	Restricted *restrictedInfo
 	// 收藏状态：favorited 只在带令牌时有意义。字段缺失时 FavoriteKnown 为
 	// false，按钮按未收藏展示，点一下以服务端结果为准。
 	Favorited     bool
@@ -335,6 +338,8 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 	}
 	// 竞猜：线上与文档的位置同样不固定（d.bet / d.extra.bet），两处都认。
 	t.Bet = decodeTopicBet(o)
+	// 受限内容门槛：文档写在 extra.restricted，顶层也认。
+	t.Restricted = decodeTopicRestricted(o)
 	return t, nil
 }
 

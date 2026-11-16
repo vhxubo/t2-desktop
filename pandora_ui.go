@@ -157,6 +157,12 @@ func (a *app) pandoraDrawAction(c *ui.Context, st *pandoraState, now time.Time) 
 			ui.Text(c, "正在重抽…").FontSize(12).TextColor(t.TextMuted)
 		})
 		return
+	case st.busy == "extend":
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Spinner(c).Size(16, 16)
+			ui.Text(c, "正在延期…").FontSize(12).TextColor(t.TextMuted)
+		})
+		return
 	}
 	if st.status.CanOpen {
 		b := ui.PrimaryButton(c, "开启盲盒（第 1 次）")
@@ -302,12 +308,63 @@ func (a *app) pandoraEventCard(c *ui.Context, st *pandoraState) {
 			if st.status.canReroll(pandoraNow()) {
 				b := ui.PrimaryButton(c, "再抽一次")
 				b.Label("重抽潘多拉盲盒")
+				b.Disabled(st.busy != "")
 				if b.Clicked() {
 					a.rerollPandoraBox()
 				}
 			}
 		})
+
+		// 延期入口：延长本次事件的生效时间，会扣金币，价格逐次上涨。
+		// 只在有盒子、事件还没到期时给出；服务端还有最终裁决权。
+		a.pandoraExtendRow(c, st)
 	})
+}
+
+// pandoraExtendRow 画「延期生效时间」的一行。价格取自上次延期响应的
+// next_cost，没延期过就不猜；正在延期时换成进度说明并禁用按钮。
+func (a *app) pandoraExtendRow(c *ui.Context, st *pandoraState) {
+	t := c.Theme()
+	if !st.status.canExtend(pandoraNow()) {
+		return
+	}
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, pandoraExtendHint(st)).FontSize(11).
+			TextColor(t.TextMuted).MaxLines(2).Grow(1)
+		switch st.busy {
+		case "extend":
+			ui.Row(c).Shrink(0).Gap(6).AlignItems(ui.Center).Children(func() {
+				ui.Spinner(c).Size(14, 14)
+				ui.Text(c, "正在延期…").FontSize(11).TextColor(t.TextMuted)
+			})
+		default:
+			b := ui.Button(c, "延期事件")
+			b.Label("延期潘多拉盲盒")
+			b.Tooltip(pandoraExtendTooltip(st))
+			b.Disabled(st.busy != "")
+			if b.Clicked() {
+				a.extendPandoraBox()
+			}
+		}
+	})
+}
+
+// pandoraExtendHint 说明延期这一行的状态：已延期过就点明，否则写清会扣金币。
+func pandoraExtendHint(st *pandoraState) string {
+	if st.status.ActiveExtended {
+		return "本次事件已延期；再次延期会继续延长到期时间。"
+	}
+	return "想把本次事件留得更久？延期会消耗金币。"
+}
+
+// pandoraExtendTooltip 把已知的下次价格写到悬浮说明里；没有就不编。
+func pandoraExtendTooltip(st *pandoraState) string {
+	tip := "花金币延长本次事件的生效时间；价格以服务端返回为准。"
+	if st.extendNextCostKnown && st.extendNextCost > 0 {
+		tip = "约 " + coinAmountText(st.extendNextCost) + " 金币，" +
+			"花金币延长本次事件的生效时间；价格以服务端返回为准。"
+	}
+	return tip
 }
 
 func (a *app) pandoraFact(c *ui.Context, label, value string) {
@@ -347,7 +404,8 @@ func (a *app) pandoraRulesCard(c *ui.Context, st *pandoraState) {
 		for _, line := range []string{
 			"每天 0 点前后（东八区）发放一个盲盒，开启后得到一个随机事件。",
 			"本应用把一天的抽奖定为两次：先开启，再重抽一次；重抽会用服务端返回的新结果更新展示。",
-			"开盒与重抽可能扣金币或改变站内状态，扣费与结果以服务端为准；网络失败不会自动重试，需再点一次。",
+			"事件生效期间可以花金币延期，延长它的到期时间；延不占抽奖次数，价格逐次上涨，以服务端返回为准。",
+			"开盒、重抽与延期都可能扣金币或改变站内状态，扣费与结果以服务端为准；网络失败不会自动重试，需再点一次。",
 			balance,
 		} {
 			if line != "" {
