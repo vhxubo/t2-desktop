@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"net/url"
+	"strings"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -39,6 +42,7 @@ func (b *accountBook) openLoginWindow(authorizeURL string) error {
 	if win := b.loginWin; win != nil {
 		// 已经开着：换到新的授权页（重新登录、重试都会走到这里）。
 		b.loginErr = ""
+		b.loginURL = ""
 		if b.loginView != nil {
 			if err := b.loginView.Page().LoadURL(authorizeURL); err != nil {
 				b.loginErr = "内置浏览器打不开授权页：" + err.Error()
@@ -61,12 +65,14 @@ func (b *accountBook) openLoginWindow(authorizeURL string) error {
 	})
 	b.loginWin = win
 	b.loginErr = ""
+	b.loginURL = ""
 	win.OnClosed(func() {
 		if b.loginWin != win {
 			return
 		}
 		b.loginWin = nil
 		b.loginView = nil
+		b.loginURL = ""
 		// 关掉窗口就是放弃这次授权：迟到的回调不能再把账号签进来。
 		if b.pendingLogin() != nil {
 			b.cancelLogin()
@@ -105,6 +111,11 @@ func (b *accountBook) openLoginWindow(authorizeURL string) error {
 		raw := le.URL
 		b.postMain(func() { b.completeCallback(raw) })
 	})
+	// 记住页面停在哪：站点登录完成后往往停在自己的页面上，授权流程不再继续，
+	// 这时窗口要给出「重新授权」（见 loginLeftAuthorizePage）。站点是单页应用，
+	// 登录与授权页之间可能没有整页跳转，所以站内切页（标题变化）也读一次地址。
+	view.Page().OnDidNavigate(func(string) { b.postMain(b.syncLoginPage) })
+	view.Page().OnPageTitleUpdated(func(*mygo.TitleEvent) { b.postMain(b.syncLoginPage) })
 	win.Invalidate()
 	return nil
 }
@@ -119,6 +130,7 @@ func (b *accountBook) closeLoginWindow() {
 	b.loginWin = nil
 	b.loginView = nil
 	b.loginErr = ""
+	b.loginURL = ""
 	win.Close()
 }
 
@@ -137,6 +149,9 @@ func (b *accountBook) showLoginWindow() {
 	}
 	win.Show()
 	win.Focus()
+	// 窗口在后台放了一会儿：重新读一次页面地址，底部该不该给「重新授权」按
+	// 真实页面来。
+	b.syncLoginPage()
 	win.Invalidate()
 }
 
@@ -149,6 +164,83 @@ func (b *accountBook) retryLoginWindow() {
 	b.loginErr = ""
 	if b.loginView != nil {
 		if err := b.loginView.Page().LoadURL(p.url); err != nil {
+			b.loginErr = "内置浏览器打不开授权页：" + err.Error()
+		}
+	}
+	b.redrawLoginWindow()
+}
+
+// syncLoginPage 把内置浏览器当前所在的地址记下来，并据此决定要不要露出「重新
+// 授权」。地址以 webview 自己报的为准：2Libra 站点是单页应用，登录与授权页之间
+// 可能没有整页跳转，导航事件带过来的地址会过期。只在主线程调用；窗口已经收起时
+// 迟到的回调不再管。
+func (b *accountBook) syncLoginPage() {
+	if b.loginWin == nil || b.loginView == nil {
+		return
+	}
+	cur := b.loginView.Page().URL()
+	if cur == "" || cur == b.loginURL {
+		return
+	}
+	before := b.loginLeftAuthorizePage()
+	b.loginURL = cur
+	if b.loginLeftAuthorizePage() != before {
+		b.redrawLoginWindow()
+	}
+}
+
+// loginLeftAuthorizePage 报告内置浏览器是不是停在了授权页之外：站点登录完成后
+// 常常停在自己的首页上，OAuth 流程不会自己继续，界面这时给出「重新授权」。
+func (b *accountBook) loginLeftAuthorizePage() bool {
+	if b.loginURL == "" {
+		return false
+	}
+	p := b.pendingLogin()
+	if p == nil || p.url == "" {
+		return false
+	}
+	return !sameAuthorizePage(b.loginURL, p.url)
+}
+
+// sameAuthorizePage 比较两个地址是不是同一个页面：协议、主机与路径一致就算，
+// 查询串不参与比较 —— 授权页的查询串里是 state 与 PKCE，重新发起授权会换一份。
+func sameAuthorizePage(a, b string) bool {
+	ua, err := url.Parse(a)
+	if err != nil {
+		return false
+	}
+	ub, err := url.Parse(b)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) &&
+		strings.EqualFold(ua.Host, ub.Host) &&
+		ua.EscapedPath() == ub.EscapedPath()
+}
+
+// reauthorizeLoginWindow 是窗口里的「重新授权」：用同一份临时会话重新发起
+// 一次授权。站点登录完成后常常停在自己的页面上，OAuth 流程不会自己继续；这个
+// 窗口里的 cookie 还在，重新发起会直接落到权限清单上。重新发起同时换掉
+// state / PKCE，并把等待授权的时间重新计时（AuthManager 只等 5 分钟）。
+func (b *accountBook) reauthorizeLoginWindow() {
+	p := b.pendingLogin()
+	if p == nil {
+		return
+	}
+	authorize, err := p.auth.BeginScopes(context.Background(), nil)
+	if err != nil {
+		b.loginErr = "无法重新发起授权：" + friendlyError(err)
+		b.redrawLoginWindow()
+		return
+	}
+	b.mu.Lock()
+	if b.pending == p {
+		p.url = authorize
+	}
+	b.mu.Unlock()
+	b.loginErr = ""
+	if b.loginView != nil {
+		if err := b.loginView.Page().LoadURL(authorize); err != nil {
 			b.loginErr = "内置浏览器打不开授权页：" + err.Error()
 		}
 	}
@@ -239,7 +331,29 @@ func (b *accountBook) loginWindowView(c *ui.Context) {
 		})
 
 		ui.Divider(c)
-		ui.Row(c).FillWidth().Padding(8, 12).Gap(8).AlignItems(ui.Center).Children(func() {
+		b.loginWindowFooter(c)
+	})
+}
+
+// loginWindowFooter 是窗口底部的出口。站点登录完成后往往停在自己的页面上、
+// OAuth 流程不再继续，所以离开授权页之后要多给一个「重新授权」：这个窗口里
+// 已经登录，重新发起授权会直接进权限清单，不用再输一次密码。
+func (b *accountBook) loginWindowFooter(c *ui.Context) {
+	t := c.Theme()
+	// 打不开授权页时由中间那块说明与「重试」负责，底部不再重复一个重新授权。
+	left := b.loginLeftAuthorizePage() && b.loginErr == ""
+	ui.Column(c).FillWidth().Padding(8, 12).Gap(8).Children(func() {
+		if left {
+			ui.Text(c, "登录完成后如果页面没有回到授权页，点「重新授权」重新载入授权页："+
+				"这个窗口已经登录，不用再输一次密码。").
+				FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		}
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			if left {
+				if ui.PrimaryButton(c, "重新授权").Clicked() {
+					b.reauthorizeLoginWindow()
+				}
+			}
 			if ui.Button(c, "改用系统浏览器").Clicked() {
 				b.useSystemBrowserForLogin()
 			}

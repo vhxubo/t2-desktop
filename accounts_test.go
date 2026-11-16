@@ -907,6 +907,56 @@ func TestLoginWindowViewStates(t *testing.T) {
 	}
 }
 
+// 站点登录完成后往往停在自己的页面上，OAuth 流程不会自己继续：内置浏览器窗口
+// 要给出「重新授权」，点了就用同一份临时会话重新发起一次授权（换掉 state 与
+// PKCE，也重新计时），而不是把这次授权丢掉。
+func TestLoginWindowOffersReauthorizeAfterSiteLogin(t *testing.T) {
+	b := testBook(t)
+	m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
+	m.store = &memoryTokenStore{}
+	authorize, err := m.BeginScopes(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	b.pending = &accountLogin{auth: m, embedded: true, url: authorize}
+	b.mu.Unlock()
+	t.Cleanup(func() { b.cancelLogin() })
+
+	tt := ui.NewTester(b.loginWindowView, loginWindowWidth, loginWindowHeight)
+
+	// 正停在授权页上：页面自己就是入口，不再多一个按钮。
+	b.loginURL = authorize
+	tt.Frame()
+	if tt.HasText("重新授权") {
+		t.Errorf("停在授权页上时不该有「重新授权」：%q", tt.Texts())
+	}
+
+	// 登录完成后停在站点的页面上：给按钮与说明。
+	b.loginURL = "https://2libra.com/login"
+	tt.Frame()
+	for _, want := range []string{"重新授权", "这个窗口已经登录"} {
+		if !tt.HasText(want) {
+			t.Errorf("停在站点的登录页上时缺少 %q：%q", want, tt.Texts())
+		}
+	}
+
+	if err := tt.Click("重新授权"); err != nil {
+		t.Fatalf("点击「重新授权」失败：%v", err)
+	}
+	p := b.pendingLogin()
+	if p == nil {
+		t.Fatal("重新授权不该丢掉这次授权")
+	}
+	if p.url == authorize {
+		t.Error("重新授权应换一份新的授权地址")
+	}
+	if !strings.Contains(p.url, "/oauth/authorize?") ||
+		!strings.Contains(p.url, "code_challenge=") {
+		t.Errorf("重新发起授权后的地址不对：%s", p.url)
+	}
+}
+
 /* ------------------------------------------------------------------
    授权回来的账号对不对
 ------------------------------------------------------------------ */

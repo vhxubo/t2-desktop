@@ -157,9 +157,13 @@ type accountBook struct {
 	confirmOut string // 面板里正在确认「退出这个账号」的账号 id
 	// loginWin / loginView 是内置浏览器授权窗口（见 login_window.go）；
 	// loginErr 是它起不来或页面加载失败时的说明。只在主线程读写。
-	loginWin   *mygo.Window
-	loginView  *mygo.WebView
-	loginErr   string
+	loginWin  *mygo.Window
+	loginView *mygo.WebView
+	loginErr  string
+	// loginURL 是内置浏览器最近一次提交的地址。站点登录完成后往往停在自己的
+	// 页面上，授权流程不会自己继续：界面据此露出「重新授权」（见
+	// loginLeftAuthorizePage）。
+	loginURL   string
 	guest      *app
 	tray       *mygo.Tray
 	trayReady  bool
