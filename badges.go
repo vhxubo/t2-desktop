@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -44,6 +45,7 @@ func myBadgeEquipPath(badgeID string) string {
 type badgeWallEntry struct {
 	UserBadgeID  string // user_badge 的 uuid
 	BadgeID      string // 徽章本体 uuid：佩戴 / 取消佩戴用
+	Code         string // 徽章机器码，例如 do_me_a_favor
 	Name         string
 	Description  string
 	IconURL      string // 22×15 的小图，用户名旁用
@@ -54,6 +56,23 @@ type badgeWallEntry struct {
 	UserPercentage float64
 	AchievedAt     string
 	Equipped       bool
+
+	// 下面几项来自 badge.attributes，是「发评会不会更便宜」的全部依据（见
+	// comment_cost.go）。字段缺失与 0 是两件不同的事（0 表示这枚徽章把发评
+	// 费用压到 0），所以每一项都配一个 Has 标记，不做零值推断。
+	//
+	//	comment_cost                 固定扣费，负数表示扣除（前排打手 8 金币）
+	//	comment_cost_percent         评论专属减免（都听我说！0.3）
+	//	coin_system_cost_percent     金币系统普适减免（大平衡者 0.3）
+	//	daily_active_gain_percent    活跃度加成（走个面 0.2），与评论费用无关
+	CommentCost               float64
+	HasCommentCost            bool
+	CommentCostPercent        float64
+	HasCommentCostPercent     bool
+	CoinSystemCostPercent     float64
+	HasCoinSystemCostPercent  bool
+	DailyActiveGainPercent    float64
+	HasDailyActiveGainPercent bool
 }
 
 // profileBadgeDisplayName 是徽章在界面上的名字。接口偶尔会有没有名称的条目，
@@ -99,6 +118,7 @@ func decodeUserBadges(d json.RawMessage) []badgeWallEntry {
 		b := badgeWallEntry{
 			UserBadgeID:    item.str("id"),
 			BadgeID:        item.str("badge_id"),
+			Code:           badge.str("code"),
 			Name:           badge.str("name"),
 			Description:    badge.str("description"),
 			IconURL:        badge.str("icon_url"),
@@ -107,6 +127,17 @@ func decodeUserBadges(d json.RawMessage) []badgeWallEntry {
 			UserCount:      badge.num("user_count"),
 			UserPercentage: rawFloat(badge["user_percentage"]),
 			AchievedAt:     item.str("achieved_at"),
+		}
+		// attributes 是每枚徽章自己的数值表：只认识「与发评费用 / 活跃度有关」
+		// 的那四项，exp、float_percent 之类的属性不参与任何判断。
+		if attr := badge.sub("attributes"); attr != nil {
+			b.CommentCost, b.HasCommentCost = badgeFloat(attr, "comment_cost")
+			b.CommentCostPercent, b.HasCommentCostPercent =
+				badgeFloat(attr, "comment_cost_percent")
+			b.CoinSystemCostPercent, b.HasCoinSystemCostPercent =
+				badgeFloat(attr, "coin_system_cost_percent")
+			b.DailyActiveGainPercent, b.HasDailyActiveGainPercent =
+				badgeFloat(attr, "daily_active_gain_percent")
 		}
 		if b.BadgeID == "" {
 			b.BadgeID = badge.str("id")
@@ -164,6 +195,22 @@ func rawFloat(raw json.RawMessage) float64 {
 		return f
 	}
 	return 0
+}
+
+// badgeFloat 读徽章属性里的一个数值，并回答「这个键在不在」。0 是合法值
+// （例如把发评费用减免到 0），不能用 0 当成「没给」。
+func badgeFloat(o object, keys ...string) (float64, bool) {
+	for _, k := range keys {
+		raw, ok := o[k]
+		if !ok {
+			continue
+		}
+		if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
+			continue
+		}
+		return rawFloat(raw), true
+	}
+	return 0, false
 }
 
 /* ------------------------------------------------------------------
@@ -346,6 +393,9 @@ func (a *app) toggleProfileBadge(badgeID, name string, equip bool, key string) {
 			if ps.badgeLoaded {
 				a.syncProfileEquippedBadges(ps)
 			}
+			// 评论框的状态栏读的是同一份佩戴状态：这里切换完要立刻跟上，
+			// 否则评论框上方还显示着上一枚徽章的费用。
+			a.noteBadgeEquipped(badgeID, equip)
 			// 佩戴可能扣金币，交给全局金币事件刷新标题栏与金币窗口。
 			a.coinsChanged(coinEventBadge)
 			if message == "" {

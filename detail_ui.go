@@ -1857,8 +1857,12 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				// 2000 字截断），所以只显示当前有多少字，不报上限；超限由
 				// 服务端在发送时拦截。和独立写评论窗口同一套写法（见
 				// replyWindowBody），展开输入框时才出现，正好压在工具条右端。
-				ui.Text(c, fmt.Sprintf("%d 字", utf8.RuneCountInString(d.draft))).
-					FontSize(11).TextColor(t.TextMuted).SingleLine()
+				// 登录后字数挪到评论费用状态栏里（见 comment_cost_ui.go），
+				// 那里同时报发评金币与徽章建议，同一条链上不重复写两遍。
+				if !a.commentCostBarVisible() {
+					ui.Text(c, fmt.Sprintf("%d 字", utf8.RuneCountInString(d.draft))).
+						FontSize(11).TextColor(t.TextMuted).SingleLine()
+				}
 			})
 			a.editorPanels(c, uploadTargetReply, &d.mdEditor, &d.draft,
 				a.replyCommunityEmojis(d))
@@ -1866,6 +1870,10 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				a.editorPreviewView(c, d.draft, a.replyEmojis(d),
 					a.commentMd, replyPreviewFit(d.draft))
 			}
+			// 评论费用状态栏：字数、预计发评金币、可省金币的徽章与「走个面」
+			// 活跃度开关。它和工具条一样带 KeepFocus，按上面的按钮不会让输入框
+			// 失焦缩回一行。
+			a.commentCostBar(c, d.draft)
 		}
 		// 展开时上面会多出工具条、视图切换与面板。MyGo 的节点身份由
 		// 「父节点 + 子节点序号」推导，若不给这一行固定 key，多出来的兄弟
@@ -2041,6 +2049,12 @@ func (a *app) submitReply() {
 	content := strings.TrimSpace(d.draft)
 	if content == "" {
 		a.replyToast("评论内容不能为空")
+		return
+	}
+	// 潘多拉的「多说多写」对评论字数有硬要求：没到门槛就发不出去，先在本地
+	// 拦下来，免得白跑一次请求（判断依据见 comment_cost.go）。
+	if short, minLength := a.commentCostShortfall(content); short > 0 {
+		a.replyToast(fmt.Sprintf("还差 %d 字才能发送（潘多拉要求 ≥%d 字）", short, minLength))
 		return
 	}
 	if n := editorPendingUploads(d.draft); n > 0 {

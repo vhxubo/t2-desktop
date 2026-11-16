@@ -225,6 +225,13 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 			ui.Text(c, "松开即可把图片插入评论").FontSize(11).
 				TextColor(t.Accent).Padding(4, 2)
 		}
+		// 评论费用状态栏：字数、预计发评金币、可省金币的徽章与「走个面」
+		// 开关。占整窗宽度，左右两栏都看得到（见 comment_cost_ui.go）。
+		a.commentCostBar(c, d.draft)
+		// 两栏这一行给一个固定 key：状态栏在登录 / 退出时会多出或消失一个
+		// 兄弟节点，没有 key 的话输入框会被挤到另一个节点身份上，焦点与
+		// 选区随之丢失。
+		c.Key("reply-window-columns")
 		ui.Row(c).FillWidth().Grow(1).MinHeight(0).Gap(replyWindowPad).
 			AlignItems(ui.Stretch).Children(func() {
 			// 左栏：输入框占满整栏，发送在栏底的页脚里。
@@ -242,8 +249,12 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 					}
 					ui.Text(c, hint).FontSize(11).TextColor(t.TextMuted).SingleLine().
 						Grow(1).MinWidth(0)
-					ui.Text(c, fmt.Sprintf("%d 字", utf8.RuneCountInString(d.draft))).
-						FontSize(11).TextColor(t.TextMuted).SingleLine()
+					// 登录后字数在评论费用状态栏里报（见 comment_cost_ui.go），
+					// 同一条链上不重复写两遍；未登录时仍留在这里。
+					if !a.commentCostBarVisible() {
+						ui.Text(c, fmt.Sprintf("%d 字", utf8.RuneCountInString(d.draft))).
+							FontSize(11).TextColor(t.TextMuted).SingleLine()
+					}
 					if d.posting {
 						ui.Spinner(c).Size(16, 16)
 					}

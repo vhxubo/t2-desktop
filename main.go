@@ -166,6 +166,11 @@ type app struct {
 	pandoraWin   *mygo.Window
 	pandoraShown bool
 
+	// commentCost 是评论框上方那条「发评金币与徽章」状态栏的数据：我的徽章
+	// （含 attributes）、佩戴状态与正在切换的那一枚（见 comment_cost.go）。
+	// 它是账号级的，与具体帖子无关，所以挂在这里而不是 detailState 上。
+	commentCost *commentCostState
+
 	detail       *detailState
 	detailStack  []*detailState // 正文内联跳转的返回栈
 	emojis       map[string]emojiInfo
@@ -449,6 +454,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 		coins:        newCoinState(),
 		pandora:      newPandoraState(),
 		profile:      newProfileState(),
+		commentCost:  newCommentCostState(),
 	}
 	if acc != nil {
 		a.accountID = acc.ID
@@ -776,6 +782,9 @@ func (a *app) onAuthChanged(err error) {
 	// 「我的」窗口里的资料与列表同样属于某个账号：换账号或退出后一律
 	// 丢弃，下次打开时按新会话重新拉取。
 	a.profile = newProfileState()
+	// 评论框的状态栏读的是这个账号的徽章与佩戴状态：重新授权后按新令牌重新
+	// 读一次，换账号 / 退出则整体丢弃，不沿用上一个账号的徽章。
+	a.commentCost = newCommentCostState()
 	// 授权状态变了，之前因缺权限停住的 tab 可以重新拉取。
 	for _, st := range a.tabs {
 		st.authWait = false

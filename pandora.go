@@ -39,6 +39,9 @@ const (
 	// pandoraActionTimeout 是一次开盒 / 重抽 / 延期的超时。写操作会改变金币
 	// 与站内状态，给得比普通读稍宽，但别让按钮一直转圈。
 	pandoraActionTimeout = 25 * time.Second
+
+	// pandoraEntryRetry 是标题栏入口静默读取失败后的退避时间。
+	pandoraEntryRetry = time.Minute
 )
 
 // pandoraNow 返回「现在」，测试可以替换。时间按东八区解释，与接口日期一致。
@@ -69,6 +72,12 @@ type pandoraBox struct {
 	// 缺计数就在本地按「用掉一次」补。
 	CountersKnown     bool
 	ForcePurpleReroll bool
+	// CommentMinLength / NeedCustomEmoji 是事件对「评论正文」的硬约束（多说
+	// 多写要求最少字数、小表情要求带自定义表情）。文档没有逐项列出盒子的
+	// 字段，这两项按「认得的字段用、不认识就忽略」解码：既认盒子顶层的
+	// comment_constraint，也认 payload.comment_constraint。
+	CommentMinLength int
+	NeedCustomEmoji  bool
 }
 
 func (b pandoraBox) known() bool {
@@ -264,6 +273,22 @@ func decodePandoraBox(o object) pandoraBox {
 	if v, ok := o.number("rolled_value", "rolledValue"); ok {
 		b.RolledValue, b.RolledKnown = v, true
 	}
+	// 评论约束可能在盒子顶层，也可能在 payload 里；两个位置都认。
+	for _, holder := range []object{o, o.sub("payload")} {
+		if holder == nil {
+			continue
+		}
+		c := holder.sub("comment_constraint", "commentConstraint")
+		if c == nil {
+			continue
+		}
+		if n := c.num("min_length", "minLength"); n > 0 {
+			b.CommentMinLength = n
+		}
+		if c.flag("custom_emoji_required", "customEmojiRequired") {
+			b.NeedCustomEmoji = true
+		}
+	}
 	return b
 }
 
@@ -417,6 +442,9 @@ type pandoraState struct {
 	entryStatus  pandoraStatus
 	entryKnown   bool
 	entryLoading bool
+	// entryTried 是上次静默读取的时间。评论框状态栏与登录都会触发这次读取，
+	// 失败时按 pandoraEntryRetry 退避，不能每帧重发一个注定失败的请求。
+	entryTried time.Time
 
 	// busy 是正在提交的动作："open" / "reroll" / "extend"；按钮据此禁用并显示进度。
 	busy string
@@ -452,9 +480,14 @@ func (a *app) loadPandoraEntry() {
 	if st == nil || !a.autoLoad || !a.auth.loggedIn() {
 		return
 	}
-	if st.loading || st.loaded || st.entryLoading {
+	if st.loading || st.loaded || st.entryLoading || st.entryKnown {
 		return
 	}
+	// 失败退避：评论框打开时每帧都会走到这里，没有退避就会一直重发。
+	if !st.entryTried.IsZero() && time.Since(st.entryTried) < pandoraEntryRetry {
+		return
+	}
+	st.entryTried = time.Now()
 	st.entryLoading = true
 	actor := a.auth.username()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
