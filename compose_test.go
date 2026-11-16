@@ -55,8 +55,8 @@ func composeReady(a *app) *composeState {
 }
 
 // 节点用两列级联选择：第一列分类，第二列节点；选中后触发框显示父/子名字，
-// 提交用的仍是 uuid。node_id 必填，所以级联选择常驻，不再有「手动指定节点」
-// 与「恢复 AI 判定」这类展开 / 清除入口。
+// 提交用的仍是 uuid。节点是选填的，面板顶部有清除入口，清掉就回到「由 AI
+// 判定分类」。
 func TestComposeNodeCascader(t *testing.T) {
 	a := testApp(t)
 	st := composeReady(a)
@@ -68,7 +68,7 @@ func TestComposeNodeCascader(t *testing.T) {
 	}
 	for _, gone := range []string{"手动指定节点", "恢复 AI 判定", "收起节点"} {
 		if tt.HasText(gone) {
-			t.Errorf("节点必选后不该还有 %q：%q", gone, tt.Texts())
+			t.Errorf("节点改用常驻级联选择后不该还有 %q：%q", gone, tt.Texts())
 		}
 	}
 
@@ -76,9 +76,9 @@ func TestComposeNodeCascader(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	// 必选项没有清除入口，面板顶部不会出现「清除节点选择」。
-	if tt.HasText("清除节点选择") {
-		t.Errorf("必选的节点不该有清除入口：%q", tt.Texts())
+	// 选填项面板顶部有「清除节点选择」。
+	if !tt.HasText("清除节点选择") {
+		t.Errorf("选填的节点应当给出清除入口：%q", tt.Texts())
 	}
 	for _, want := range []string{"社区", "生活", "社区讨论"} {
 		if _, ok := tt.Find(want); !ok {
@@ -385,7 +385,6 @@ func TestComposePayloadValidation(t *testing.T) {
 		want string
 	}{
 		{"空标题", func(st *composeState) { st.title = "   " }, "标题不能为空"},
-		{"没选节点", func(st *composeState) { st.nodeID = "" }, "请选择节点"},
 		{"标题过长", func(st *composeState) { st.title = strings.Repeat("字", composeTitleMax+1) }, "标题最多"},
 		{"正文过长", func(st *composeState) { st.body = strings.Repeat("字", composeContentMax+1) }, "正文最多"},
 		{"投票无标题", func(st *composeState) {
@@ -445,57 +444,103 @@ func TestComposePayloadValidation(t *testing.T) {
 			t.Errorf("%s：错误 = %q，期望包含 %q", c.name, err.Error(), c.want)
 		}
 	}
-	// 合法的最小表单：标题 + 节点。node_id 是文档里的必填项，必须发出去。
-	p, err := base().payload()
+	// 合法的最小表单：只有标题，节点留空也不拦（发出去由 AI 判定分类）。
+	min := newComposeState()
+	min.title = "标题"
+	p, err := min.payload()
 	if err != nil {
 		t.Errorf("最小表单不该报错：%v", err)
+	}
+	if _, ok := p["node_id"]; ok {
+		t.Errorf("没选节点时不该发送 node_id：%v", p)
+	}
+	// 手动选了节点就带上 uuid（文档要求的是 uuid，不是 slug）。
+	p, err = base().payload()
+	if err != nil {
+		t.Errorf("选了节点不该报错：%v", err)
 	}
 	if p["node_id"] != "uuid-node" {
 		t.Errorf("node_id 没有进请求体：%v", p)
 	}
 }
 
-// 节点必选：面板里没有清除入口，把选择清空后 payload 会拦下发布并说明缺节点；
-// 节点列表到位时自动预选第一个可发的节点。
-func TestComposeNodeIsRequired(t *testing.T) {
+// 节点选填：面板里能清除选择，清除后触发框显示「由 AI 判定分类」，请求体里
+// 没有 node_id，也不会在本地报「请选择节点」。
+func TestComposeNodeIsOptional(t *testing.T) {
 	a := testApp(t)
 	st := composeReady(a)
-	st.title = "没挑节点的帖子"
+	st.title = "不挑节点的帖子"
 	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	tt.Frame()
 	if err := tt.Click("社区 · 社区讨论"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if tt.HasText("清除节点选择") {
-		t.Fatalf("必选的节点不该给出清除入口：%q", tt.Texts())
+	if err := tt.Click("清除节点选择"); err != nil {
+		t.Fatalf("级联面板里没有清除入口：%v：%q", err, tt.Texts())
 	}
-	// 直接清空（例如换了节点表）时，发布前本地就要拦住。
-	st.nodeID = ""
+	if st.nodeID != "" {
+		t.Fatalf("清除后 nodeID = %q", st.nodeID)
+	}
 	tt.Frame()
-	if !tt.HasText("选择发帖节点") {
-		t.Errorf("清空后触发框没有提示选择节点：%q", tt.Texts())
-	}
-	if _, err := st.payload(); err == nil || !strings.Contains(err.Error(), "请选择节点") {
-		t.Fatalf("没选节点时应当拦住发布，实际 err = %v", err)
-	}
-	// 自动预选：列表一到就把第一个可发节点填进 nodeID。
-	st.nodeID = ""
-	st.autoPickNode()
-	if st.nodeID != "uuid-community" {
-		t.Errorf("自动预选结果 = %q，期望 uuid-community（第一个子节点）", st.nodeID)
-	}
-	st.nodeID = "uuid-work"
-	st.autoPickNode()
-	if st.nodeID != "uuid-work" {
-		t.Errorf("已有选择时不该覆盖：%q", st.nodeID)
+	if !tt.HasText("由 AI 判定分类") || !tt.HasText("选填") {
+		t.Errorf("清除后没有说明节点由 AI 判定：%q", tt.Texts())
 	}
 	p, err := st.payload()
+	if err != nil {
+		t.Fatalf("不选节点不该拦住发布：%v", err)
+	}
+	if _, ok := p["node_id"]; ok {
+		t.Errorf("不选节点时请求体里不该有 node_id：%v", p)
+	}
+	// 再点一次选个具体节点：请求体里带上的是 uuid。
+	st.nodeID = "uuid-work"
+	p, err = st.payload()
 	if err != nil {
 		t.Fatalf("选了节点不该拦住发布：%v", err)
 	}
 	if p["node_id"] != "uuid-work" {
 		t.Errorf("node_id = %v，期望 uuid-work", p["node_id"])
+	}
+}
+
+// 不选节点时发出去的请求体里没有 node_id（不是空串）：交给接口按内容由 AI
+// 判定分类。
+func TestComposePublishWithoutNodeOmitsNodeID(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/topics" {
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &gotBody); err != nil {
+			t.Errorf("请求体不是 JSON：%v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		io.WriteString(w, envelopeJSON(`{"short_id":"NoNode1","node":{"slug":"chat"}}`))
+	}))
+	defer srv.Close()
+
+	a := loginApp(t, srv)
+	st := composeReady(a)
+	st.nodeID = "" // 用户把节点选择清掉了
+	st.title = "让 AI 归类"
+	var done sync.WaitGroup
+	done.Add(1)
+	a.onPostPublished = func(created createdTopic, err error) {
+		if err != nil {
+			t.Errorf("发表失败：%v", err)
+		}
+		done.Done()
+	}
+	a.submitCompose()
+	done.Wait()
+	if _, ok := gotBody["node_id"]; ok {
+		t.Errorf("没选节点时请求体里不该有 node_id：%v", gotBody)
+	}
+	if gotBody["title"] != "让 AI 归类" {
+		t.Errorf("标题没发出去：%v", gotBody)
 	}
 }
 
@@ -669,7 +714,7 @@ func TestComposeWindowLayout(t *testing.T) {
 	composeReady(a)
 	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	for _, want := range []string{
-		"节点", "必选",
+		"节点", "选填",
 		"标题", "正文", "发布设置", "匿名发帖",
 		"加粗", "斜体", "删除线", "代码", "引用", "代码块", "列表", "编号", "链接", "图片", "分割线",
 		"编辑", "预览", "附加组件", "已添加 0 / 6 项",
@@ -1186,43 +1231,42 @@ func TestComposeFabFloatsOverContent(t *testing.T) {
 	}
 }
 
-// 新草稿的 nodeID 先是空的，节点列表一到就自动预选第一个可发节点：node_id
-// 是接口必填项，界面必须先给一个能发出去的值。
-func TestComposeNodeAutoPickedFromList(t *testing.T) {
+// 新草稿默认不指定节点：nodeID 留空，节点列表到位也不预选，请求体里没有
+// node_id，发帖后由站点 AI 判定分类。
+func TestComposeDefaultsToAIClassification(t *testing.T) {
 	a := testApp(t)
 	st := newComposeState()
 	a.compose = st
 	if st.nodeID != "" {
-		t.Fatalf("刚打开还没有节点表，不该有 nodeID：%+v", st)
+		t.Fatalf("默认不该指定节点：%+v", st)
 	}
-	// 节点列表到位（缓存或 /v1/nodes 回来）后自动预选。
+	// 节点列表到位（缓存或 /v1/nodes 回来）后也不预选。
 	st.nodes = []composeNode{
 		{ID: "uuid-forum", Slug: "forum", Name: "社区"},
 		{ID: "uuid-community", Slug: "community", Name: "社区讨论", ParentSlug: "forum", ParentName: "社区"},
 	}
 	st.nodeLoaded = true
-	st.autoPickNode()
-	if st.nodeID != "uuid-community" {
-		t.Fatalf("自动预选 = %q，期望第一个子节点 uuid-community", st.nodeID)
+	if st.nodeID != "" {
+		t.Fatalf("节点列表到位后不该自动预选：%q", st.nodeID)
 	}
-	st.title = "带节点的帖子"
+	st.title = "让 AI 归类的帖子"
 	p, err := st.payload()
 	if err != nil {
-		t.Fatalf("自动预选后不该报错：%v", err)
+		t.Fatalf("最小表单不该报错：%v", err)
 	}
-	if p["node_id"] != "uuid-community" {
-		t.Errorf("node_id = %v，期望 uuid-community", p["node_id"])
+	if _, ok := p["node_id"]; ok {
+		t.Errorf("默认不该发送 node_id：%v", p)
 	}
-	// 界面上直接显示预选结果，用户不必自己再点一次。
+	// 界面上直接说明节点留空即可，不必先选。
 	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	tt.Frame()
-	if !tt.HasText("社区 · 社区讨论") {
-		t.Errorf("没有显示预选的节点：%q", tt.Texts())
+	if !tt.HasText("由 AI 判定分类") {
+		t.Errorf("没有说明 AI 判定：%q", tt.Texts())
 	}
 }
 
-// 发表成功后清空表单，节点选择要保留：node_id 必填，连发两篇通常还发同一个
-// 节点，不能让第二篇因为节点被清空而发不出去。
+// 发表成功后清空表单，节点选择要保留：连发两篇通常还是发到同一个节点，
+// 用户特意选过就别被一次发布悄悄改回去；默认的「留空」也照样留着。
 func TestComposeResetKeepsNode(t *testing.T) {
 	st := composeReady(testApp(t))
 	st.title = "第一篇"
@@ -1244,7 +1288,7 @@ func TestComposeResetKeepsNode(t *testing.T) {
 }
 
 // 节点列表到位前后都要给出明确的下一步：还没读到就说正在读，读到空表或读取
-// 失败就给原因与「重试」，并且都说明拿到节点后才能发布。
+// 失败就给原因与「重试」；节点只是选填的，这几处都要说明留空也能发布。
 func TestComposeNodeSectionStates(t *testing.T) {
 	a := testApp(t)
 	st := newComposeState()
@@ -1274,8 +1318,8 @@ func TestComposeNodeSectionStates(t *testing.T) {
 	st.nodeErr = ""
 	st.nodeLoaded = true
 	tt.Frame()
-	if !tt.HasText("没有可用的节点，暂时不能发布。") {
-		t.Errorf("空表没有说明不能发布：%q", tt.Texts())
+	if !tt.HasText("没有可用的节点，留空发布时由 AI 判定分类。") {
+		t.Errorf("空表没有说明可以留空发布：%q", tt.Texts())
 	}
 }
 

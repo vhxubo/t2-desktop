@@ -16,11 +16,11 @@ import (
 // 带工具条与预览），并按需挂上发帖接口提供的各类组件——投票、评分、竞猜、
 // 兑换码 / 红包、金币池，以及「谁可以看」的可见性门槛。
 //
-// 左边专心写：标题、正文，最下面才是「节点」——node_id 是发帖接口的必填项，
-// 所以节点列表一到就预选第一个，用户改成想要的即可。右边是常驻的控制栏：上面是匿名等
-// 发布设置，下面是六块组件，每块点开在弹窗里填写；已添加的行尾直接有
-// 「移除」，不必再进弹窗，底部还有「全部移除」。凡是可以有多个选项的地方
-// （投票、竞猜、兑换码）都有「批量添加」与批量删除入口。
+// 左边专心写：标题、正文，最下面才是「节点」。节点是选填的：留空就发出去，
+// 由站点的 AI 判定分类；想指定时用两列级联选择挑一个，也随时能清掉。右边是
+// 常驻的控制栏：上面是匿名等发布设置，下面是六块组件，每块点开在弹窗里填写；
+// 已添加的行尾直接有「移除」，不必再进弹窗，底部还有「全部移除」。凡是可以有
+// 多个选项的地方（投票、竞猜、兑换码）都有「批量添加」与批量删除入口。
 //
 // 这是独立的 mygo 窗口而不是主窗口里的一层遮罩。数据、校验与请求在
 // compose.go；这里只负责窗口的开关与界面。
@@ -72,8 +72,8 @@ func (a *app) showComposeWindow() {
 		a.openComposeWindow()
 		return
 	}
-	// 节点列表按需加载：默认由 AI 判定分类，用户展开「手动指定节点」时
-	// 才在视图里拉（见 composeWindowView）。
+	// 节点是选填的（留空由 AI 判定分类），但列表照样先读本地缓存、按新鲜度
+	// 刷新：用户想手动指定时，级联选择里已经有东西可选。
 	a.openComposeWindow()
 }
 
@@ -176,8 +176,8 @@ func (a *app) composeWindowView(c *ui.Context) {
 		st = newComposeState()
 		a.compose = st
 	}
-	// node_id 必填：打开窗口就去读节点（先读本地缓存），列表一到自动预选
-	// 第一个，用户再按需改选。
+	// 节点是选填的：默认留空，由站点的 AI 判定分类。列表照样先读本地缓存、
+	// 再按新鲜度刷新，用户想指定时级联选择里已经有东西可选。
 	a.ensureComposeNodes()
 	// Esc 关闭窗口，但组件弹窗开着时由 Modal 自己吃掉 Esc（只关弹窗，不丢
 	// 草稿，也不关窗口），所以那一帧不再注册窗口级快捷键。
@@ -214,7 +214,7 @@ func (a *app) composeWindowView(c *ui.Context) {
 						a.composeEditorSection(c, st)
 						ui.Divider(c)
 						a.composeMessages(c, st)
-						// 节点排在写作区最后：必选，默认已经预选了第一个。
+						// 节点排在写作区最后：选填，默认留空，由 AI 判定分类。
 						a.composeNodeSection(c, st)
 					})
 				})
@@ -230,9 +230,9 @@ func (a *app) composeWindowView(c *ui.Context) {
 	a.composeModuleDialog(c, st)
 }
 
-// composeTitleField 是写作区第一块：只有标题。节点放在最下面但必须选
-// （node_id 是接口必填项，列表一到就预选第一个），匿名开关挪到右侧栏，
-// 打开窗口时标题就是唯一要动手填的东西。
+// composeTitleField 是写作区第一块：只有标题。节点放在最下面且是选填的
+// （留空由站点的 AI 判定分类），匿名开关挪到右侧栏，打开窗口时标题就是唯一
+// 要动手填的东西。
 func (a *app) composeTitleField(c *ui.Context, st *composeState) {
 	ui.Field(c, "标题", func() {
 		ui.TextInput(c, &st.title).Label("标题").
@@ -246,9 +246,10 @@ func (a *app) composeTitleField(c *ui.Context, st *composeState) {
 	}).Description(fmt.Sprintf("%d / %d 字", utf8.RuneCountInString(st.title), composeTitleMax))
 }
 
-// composeNodeSection 是写作区最下面的一块：节点是必填项，列表一到就自动
-// 预选第一个可发的节点，用户要改时用两列级联选择。没选上（列表还在读、
-// 读取失败或为空）时说明原因并给出「重试」，发布时会拦下并说明缺节点。
+// composeNodeSection 是写作区最下面的一块：节点是选填项，默认留空——发帖后
+// 由站点的 AI 按标题与正文判定分类。想指定节点时用两列级联选择挑一个，面板
+// 顶部与触发框里都能再清掉。列表读取失败或为空也只是少了一个可选项，仍然
+// 可以照常发布。
 func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 	t := c.Theme()
 	ui.Divider(c)
@@ -257,21 +258,21 @@ func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, "节点").FontSize(12).TextColor(t.TextMuted)
-					ui.Text(c, "必选").FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, "选填").FontSize(11).TextColor(t.TextMuted)
 				})
-				state := "请选择要发布到的节点：列表一到会预选第一个，可以换成别的。"
+				state := "留空即可：发布后由 AI 按内容判定分类。"
 				switch node := st.selectedNode(); {
 				case node != nil:
 					state = "发布到：" + node.parentDisplay()
 				case st.nodeID != "":
 					// 选中过但节点表里已经没有了（缓存被换掉）：不要显示一串 uuid。
-					state = "已选的节点已不在列表里，请重新选择。"
+					state = "已选的节点已不在列表里，留空会让 AI 判定分类。"
 				case st.nodeLoading:
-					state = "正在读取节点…"
+					state = "正在读取节点…留空也能发布，由 AI 判定分类。"
 				case st.nodeErr != "":
-					state = "节点读取失败，选好节点后才能发布。"
+					state = "节点读取失败，留空发布时由 AI 判定分类。"
 				case st.nodeLoaded:
-					state = "没有可用的节点，暂时不能发布。"
+					state = "没有可用的节点，留空发布时由 AI 判定分类。"
 				}
 				ui.Text(c, state).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
 			})
@@ -279,9 +280,9 @@ func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 		if len(st.nodes) > 0 {
 			options := nodeCascaderOptions(st.nodes)
 			if len(options) > 0 {
-				// 不给 clearLabel：node_id 必填，面板顶部就没有「清除节点选择」。
+				// 节点选填：面板顶部给出清除入口，清掉就回到「由 AI 判定」。
 				cascader(c, "节点", options, &st.nodeID, &st.nodePick,
-					"", "选择发帖节点")
+					"清除节点选择", "由 AI 判定分类")
 				return
 			}
 		}
@@ -291,15 +292,15 @@ func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 			if st.nodeLoading {
 				ui.Spinner(c).Size(12, 12)
 			}
-			msg := "节点列表还没准备好。"
+			msg := "节点列表还没准备好；留空发布时由 AI 判定分类。"
 			if st.nodeLoading {
 				msg = "正在读取节点…"
 			}
 			switch {
 			case st.nodeErr != "":
-				msg = "节点读取失败：" + st.nodeErr
+				msg = "节点读取失败：" + st.nodeErr + "（不影响发布，留空由 AI 判定分类）"
 			case st.nodeLoaded:
-				msg = "没有可用的节点。"
+				msg = "没有可用的节点，留空发布时由 AI 判定分类。"
 			}
 			ui.Text(c, msg).FontSize(12).TextColor(t.TextMuted).MaxLines(2).Grow(1)
 			if st.nodeErr != "" || st.nodeLoaded {

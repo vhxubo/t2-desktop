@@ -196,9 +196,9 @@ func TestComposeNodesUseFreshCache(t *testing.T) {
 	if len(a.compose.nodes) != 2 || !a.compose.nodeLoaded {
 		t.Fatalf("缓存没有摆进级联选择：%+v", a.compose)
 	}
-	// node_id 必填：缓存读进来就预选第一个可发节点，省得用户自己翻目录。
-	if a.compose.nodeID != "n2" {
-		t.Errorf("缓存加载后应预选第一个可发节点 n2，实际 = %q", a.compose.nodeID)
+	// 节点选填：缓存读进来也不预选，留空发布时由 AI 判定分类。
+	if a.compose.nodeID != "" {
+		t.Errorf("缓存加载后不该预选节点，实际 = %q", a.compose.nodeID)
 	}
 	if a.compose.nodeLoading {
 		t.Error("命中缓存不应进入加载态")
