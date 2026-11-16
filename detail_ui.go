@@ -1874,6 +1874,8 @@ func (a *app) replyField(c *ui.Context, d *detailState, expanded bool) {
 // 作无障碍名与点击测试的命中名）。
 func (a *app) replyFieldActions(c *ui.Context, d *detailState) {
 	t := c.Theme()
+	// 多账号时紧挨着发送按钮写明以哪个账号发出（见 account_badge.go）。
+	a.accountBadge(c)
 	if !a.auth.loggedIn() {
 		login := ui.Button(c, "").
 			Background(ui.Transparent).

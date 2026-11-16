@@ -1,0 +1,63 @@
+package main
+
+import (
+	"github.com/egoist/mygo/ui"
+)
+
+// 「当前账号」标签
+//
+// 多账号时每个账号一个窗口，窗口标题栏里已经有头像与昵称；但评论输入框与
+// 发帖窗口的「发布」离标题栏都很远，写完之后很容易不确认就点下去。这里给
+// 「发送 / 发布」按钮紧挨着挂一枚标签，写明「当前账号 @昵称」。
+//
+// 只有本机挂了一个以上账号时才出现：单账号时标题栏已经说明身份，这枚标签
+// 只会白占版面。名字取这个窗口自己的会话（a.auth），不是账号册里记的
+// 「上次用的那个」：标签必须和真正发请求的那份令牌是同一个人。
+//
+// 用强调色的浅底而不是一行灰字：它要紧挨着主按钮、让人在点下去之前看见，
+// 读起来又必须是一眼扫完的短句（不再写「以某某的身份发布」那种整句）。
+
+// accountBadgeNameMaxWidth 是标签文字的最大宽度：昵称过长时在标签内截断，
+// 不会把「发送」「发布」按钮挤出窗口。
+const accountBadgeNameMaxWidth = 150
+
+// multiAccount 报告本机是否挂了不止一个账号。没有账号册（无头测试、旧的
+// 单窗口路径）按单账号处理。
+func (a *app) multiAccount() bool {
+	return a.book != nil && a.book.accountCount() > 1
+}
+
+// accountBadge 画「当前账号 @昵称」那一枚标签。单账号或未登录时返回零元素，
+// 不占版面。
+func (a *app) accountBadge(c *ui.Context) ui.Element {
+	if !a.multiAccount() || !a.auth.loggedIn() {
+		return ui.Element{}
+	}
+	t := c.Theme()
+	name := a.auth.username()
+	tint := t.Accent.Mix(t.Background, 0.88)
+	badge := ui.Row(c).Gap(5).AlignItems(ui.Center).Padding(2, 7).
+		Radius(999).Shrink(0).Background(tint).
+		Border(1, t.Accent.Mix(t.Background, 0.55)).
+		Cursor(ui.CursorPointer)
+	badge.Children(func() {
+		avatarView(c, name, a.avatarBitmap(a.auth.avatarURL()), userAvatarSize(10))
+		text := "当前账号"
+		if name != "" {
+			text = "当前账号 @" + name
+		}
+		ui.Text(c, text).FontSize(11).Bold().TextColor(t.Accent).SingleLine().
+			MaxWidth(accountBadgeNameMaxWidth).MinWidth(0)
+	})
+	// 无障碍名与悬停提示说清「这个窗口是谁」，以及去哪儿换账号。
+	label := "当前账号"
+	tip := "这个窗口登录的是当前账号；点开账号面板可以查看或切换账号"
+	if name != "" {
+		label = "当前账号 " + name
+		tip = "这个窗口登录的是 @" + name + "；点开账号面板可以查看或切换账号"
+	}
+	badge.Label(label)
+	badge.Tooltip(tip)
+	badge.OnClick(a.showAccounts)
+	return badge
+}

@@ -1008,10 +1008,15 @@ func (a *app) composeFooter(c *ui.Context, st *composeState) {
 			// 清空草稿与各组件，但保留节点选择与已经拉到的节点列表。
 			st.resetComposeForm()
 		}
-		publish := ui.PrimaryButton(c, "发布").Disabled(st.posting)
-		if publish.Clicked() {
-			a.submitCompose()
-		}
+		// 「当前账号」与「发布」贴在一起：多账号时点下去之前就能看清是哪个
+		// 账号发出去（见 account_badge.go）。
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Children(func() {
+			a.accountBadge(c)
+			publish := ui.PrimaryButton(c, "发布").Disabled(st.posting)
+			if publish.Clicked() {
+				a.submitCompose()
+			}
+		})
 	})
 }
 
