@@ -192,9 +192,8 @@ func decodeCommentItem(o object) commentItem {
 			c.Badges = decodeBadges(a)
 		}
 	}
-	if c.Author == "" {
-		c.Author = "匿名"
-	}
+	// 接口没给 author（例如 /v1/me/bookmarks）时保持空，不填「匿名」：
+	// 列表行遇到空作者就不画作者段，副标题里也不会多出一个发帖人。
 
 	post := o.sub("post")
 	if post == nil {
@@ -346,7 +345,11 @@ func commentItemFrom(o object) Item {
 		Title:     title,
 		URL:       commentURL(c),
 	}
-	parts := []string{c.Author}
+	// 接口没给作者时，副标题里不能留一个空段：直接写「帖子 · 时间」。
+	parts := []string{}
+	if c.Author != "" {
+		parts = append(parts, c.Author)
+	}
 	if c.PostTitle != "" {
 		parts = append(parts, c.PostTitle)
 	}
@@ -392,6 +395,89 @@ func commentItemFrom(o object) Item {
 		it.Key = c.PostShortID
 	}
 	return it
+}
+
+// 最新评论页的连续同用户聚合。「最新评论」接口只有一页 50 条，没有翻页可拉，
+// 同一个人连着刷几条就会把这一屏的其他人都挤掉；把这些连续的同名评论收成
+// 一组，默认只露一条，需要时再展开。分组规则：
+//   - 只切分「相邻且 username 相同」的行，绝不跨过中间的人合并：A A A B A A
+//     是两组，合并会让时间线顺序失真（见 groupComments）。
+//   - 「匿名」不参与聚合：不同人的匿名评论都叫这个名字，并到一起就是张冠李戴。
+//   - 一组里还要看它涉及几个帖子：同一个帖子下连着刷是刷帖，横跨多个帖子
+//     是同一个人很活跃，分组行把这两个数分开写（见 commentGroupTitle）。
+
+// anonymousAuthor 是拿不到作者时 commentItemFrom 填的占位名。
+const anonymousAuthor = "匿名"
+
+// commentGroup 是列表里的一组相邻评论。Members 保持接口返回的顺序，首条就是
+// 折叠时露出来的那条；start 是它在整体列表里的下标，用来生成稳定的元素 key
+// （分组在页尾被新的同人评论续上时会变长，下标不会变）。
+type commentGroup struct {
+	start   int
+	members []Item
+}
+
+// groupComments 把相邻且 username 相同的评论收成一组。author 读的是归一后的
+// 作者名，空名与「匿名」一律视为无法归属，各自单独成组（每组只有一条）。
+func groupComments(items []Item) []commentGroup {
+	nameOf := func(it Item) string {
+		if it.Extra == nil {
+			return ""
+		}
+		name := it.Extra.Author
+		if name == "" || name == anonymousAuthor {
+			return ""
+		}
+		return name
+	}
+	var groups []commentGroup
+	for i, it := range items {
+		name := nameOf(it)
+		if n := len(groups); n > 0 && name != "" && nameOf(groups[n-1].members[0]) == name {
+			groups[n-1].members = append(groups[n-1].members, it)
+			continue
+		}
+		groups = append(groups, commentGroup{start: i, members: []Item{it}})
+	}
+	return groups
+}
+
+// commentGroupPosts 数一组评论涉及几个不同的帖子；没有帖子信息（已删除或
+// 接口没给）的条目不计入，标题据此退回「连续评论 N 条」。
+func commentGroupPosts(members []Item) int {
+	seen := make(map[string]bool, 2)
+	for _, it := range members {
+		if it.ShortID != "" {
+			seen[it.ShortID] = true
+		}
+	}
+	return len(seen)
+}
+
+// commentGroupTitle 是分组行的说明。一个帖子下连着刷是刷帖，横跨好几个帖子
+// 是同一个人很活跃，两种情况给出不同的说法，读的人不必再去数。
+func commentGroupTitle(members []Item, posts int) string {
+	n := len(members)
+	switch posts {
+	case 0:
+		return fmt.Sprintf("连续评论 %d 条", n)
+	case 1:
+		if title := members[0].Extra.PostTitle; title != "" {
+			return fmt.Sprintf("在《%s》下连续评论 %d 条", title, n)
+		}
+		return fmt.Sprintf("在同一帖子下连续评论 %d 条", n)
+	default:
+		return fmt.Sprintf("横跨 %d 个帖子连续评论 %d 条", posts, n)
+	}
+}
+
+// commentItemAuthor 读一行的用户名；归一阶段没有作者时按「匿名」显示，与行内
+// 第一列的头像标识保持一致。
+func commentItemAuthor(it Item) string {
+	if it.Extra == nil || it.Extra.Author == "" {
+		return anonymousAuthor
+	}
+	return it.Extra.Author
 }
 
 // looksLikeComment 判断一行动态是评论还是帖子。必须在 overlay 之前调用：

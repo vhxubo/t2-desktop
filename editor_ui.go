@@ -129,7 +129,7 @@ func (a *app) editorPanels(c *ui.Context, t uploadTarget, e *mdEditor,
 		return
 	}
 	if e.imageOpen {
-		a.editorImagePanel(c, t)
+		a.editorImagePanel(c, t, e)
 	}
 }
 
@@ -215,8 +215,8 @@ func (a *app) editorEmojiPanel(c *ui.Context, e *mdEditor, body *string,
 
 // editorImagePanel 是三条上传入口的说明与任务列表：切图库、选文件、粘贴
 // 剪贴板，以及每一张图的排队 / 上传 / 完成 / 失败状态与重试、移除。
-// 入口只有图标，说明在悬浮提示里。
-func (a *app) editorImagePanel(c *ui.Context, t uploadTarget) {
+// 入口只有图标，说明在悬浮提示里；右上角的叉号与表情面板一致，用来收起面板。
+func (a *app) editorImagePanel(c *ui.Context, t uploadTarget, e *mdEditor) {
 	th := c.Theme()
 	ui.Column(c).FillWidth().Padding(8, 10).Gap(8).
 		Background(th.Surface).Children(func() {
@@ -234,6 +234,10 @@ func (a *app) editorImagePanel(c *ui.Context, t uploadTarget) {
 				}
 			}
 			ui.Spacer(c).Grow(1)
+			// 收起面板：与表情面板同一个叉号，两个面板的关闭方式一致。
+			if a.editorIconButton(c, closeIcon, "收起图片", "收起图片面板").Clicked() {
+				e.imageOpen = false
+			}
 		})
 		ui.Text(c, "把图片直接拖进编辑区或粘贴进来，也可以用下面的按钮。支持 JPEG / PNG / WebP，单张上限在图库设置里改。").
 			FontSize(11).TextColor(th.TextMuted).MaxLines(2)

@@ -72,11 +72,11 @@ var profileContentLabels = []string{"帖子", "收藏", "书签", "合集"}
 // profileContentSpecs 是「我的内容」四个分段的端点。字段名与分页方式沿用
 // 接口文档：帖子与合集整页返回，收藏与书签按页返回。
 var profileContentSpecs = []tabSpec{
-	{"我的帖子", "/v1/me/topics", "", "auto", true, pagingOff, kindTopic},
-	{"我的收藏", "/v1/me/favorites", "page=1&limit=50", "posts", true, pagingPages, kindTopic},
+	{Label: "我的帖子", Path: "/v1/me/topics", ListKey: "auto", NeedsAuth: true, Paging: pagingOff, Kind: kindTopic},
+	{Label: "我的收藏", Path: "/v1/me/favorites", Query: "page=1&limit=50", ListKey: "posts", NeedsAuth: true, Paging: pagingPages, Kind: kindTopic},
 	// 书签接口上限已放宽到 100；收藏仍是 50。
-	{"我的书签", "/v1/me/bookmarks", "page=1&limit=100", "items", true, pagingPages, kindComment},
-	{"我的合集", "/v1/me/collections", "", "", true, pagingOff, kindCollection},
+	{Label: "我的书签", Path: "/v1/me/bookmarks", Query: "page=1&limit=100", ListKey: "items", NeedsAuth: true, Paging: pagingPages, Kind: kindComment},
+	{Label: "我的合集", Path: "/v1/me/collections", NeedsAuth: true, Paging: pagingOff, Kind: kindCollection},
 }
 
 // profileNow 单独提出来给测试替换：注册天数按本地时间算。

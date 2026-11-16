@@ -273,4 +273,6 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 			}
 		})
 	})
+	// 预览里的配图也能点开多图预览：和详情页共用同一个弹窗状态。
+	a.imageViewer(c)
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net/url"
 	"sort"
 	"time"
 
@@ -333,7 +334,12 @@ func (a *app) rememberNoticeTarget(id, target string) {
 // (and the comment anchor) opened; anything else goes to the system browser.
 // 通知窗口只是入口：点开帖子时主窗口照常切到详情页，通知窗口自己不关 ——
 // 读完后还能回到原来的消息列表与滚动位置。
-func (a *app) openNotificationTarget(target string) {
+//
+// notifID 是点开的这条消息：目标带评论定位时先只记账，等那层楼出现在评论区
+// 可视区再标为已读（见 markNotificationSeen）。目标没有评论定位（表态了你的
+// 帖子、收藏了你的帖子…）时不动已读状态；交给系统浏览器的目标同样不动，
+// 用户还没在应用里看到内容。
+func (a *app) openNotificationTarget(target, notifID string) {
 	if target == "" {
 		return
 	}
@@ -343,6 +349,10 @@ func (a *app) openNotificationTarget(target string) {
 		return
 	}
 	a.openDetail(it)
+	if notifID != "" && it.CommentID != "" && a.detail != nil {
+		a.detail.notifID = notifID
+		a.detail.notifCommentID = it.CommentID
+	}
 	a.showMainWindow()
 }
 
@@ -428,15 +438,47 @@ func (a *app) markSelectedNotificationsRead() {
 	a.markNotificationsRead(selectedNotificationIDs(a.tabs[idx]))
 }
 
+// publishWritesOK 报告此刻能不能发「写」请求（按条已读、全部已读）。它不看
+// autoLoad：autoLoad 只该拦住加载，不该吞掉一个已经发生的界面动作。无头测试
+// 里 autoLoad 关着、默认客户端仍是线上地址直连 http.DefaultClient，所以额外
+// 要求接口指向本地假服务，避免测试把已读写进线上账号。
+func (a *app) publishWritesOK() bool {
+	if a.auth == nil || !a.auth.loggedIn() {
+		return false
+	}
+	if a.autoLoad {
+		return true
+	}
+	return a.client != nil && isLocalTestBase(a.client.base())
+}
+
+// isLocalTestBase 判断接口地址是不是本地回环地址（无头测试的 httptest 服务）。
+func isLocalTestBase(base string) bool {
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname()
+	return host == "127.0.0.1" || host == "localhost" || host == "::1"
+}
+
 // markNotificationsRead posts one 「按条已读」 request for the whole batch.
 // Repeated clicks on a message already in flight are coalesced, an empty list
 // never reaches the server (id: [] is a 400), and the local list is updated
 // only after the server accepted the batch.
 func (a *app) markNotificationsRead(ids []string) {
-	if !a.autoLoad || !a.auth.loggedIn() {
+	if !a.publishWritesOK() {
 		return
 	}
 	ids = cleanNotificationIDs(ids)
+	a.markNotificationsReadConfirmed(ids)
+}
+
+// markNotificationsReadConfirmed 是已经确认可以发写请求之后的提交路径：点行
+// 标已读、「已读本页」、「已读选中」，以及详情页里「看到了这条消息」都从这里
+// 走，共用同一张在途表：同一条消息在请求落地之前被两个入口先后提交时只发一次，
+// 本地也只扣一次未读数。
+func (a *app) markNotificationsReadConfirmed(ids []string) {
 	if len(ids) == 0 {
 		return
 	}
@@ -493,15 +535,16 @@ func (a *app) applyNotificationRead(st *tabState, ids []string) {
 	for _, id := range ids {
 		read[id] = true
 	}
-	fresh := 0
+	var fresh []string
 	for i := range st.items {
 		n := st.items[i].Notif
 		if n == nil || !read[n.ID] {
 			continue
 		}
 		if !n.IsRead {
+			// 本地已经是已读的消息（两个入口先后提交过同一条）不重复扣未读数。
 			n.IsRead = true
-			fresh++
+			fresh = append(fresh, n.ID)
 		}
 		delete(st.selected, n.ID)
 	}
@@ -514,16 +557,16 @@ func (a *app) applyNotificationRead(st *tabState, ids []string) {
 			out = append(out, it)
 		}
 		st.items = out
-		st.total = max(0, st.total-fresh)
+		st.total = max(0, st.total-len(fresh))
 	}
-	if fresh > 0 {
-		a.unread = max(0, a.unread-fresh)
+	if len(fresh) > 0 {
+		a.unread = max(0, a.unread-len(fresh))
 	}
 	a.refreshUnread()
 }
 
 func (a *app) markAllNotificationsRead() {
-	if !a.autoLoad || !a.auth.loggedIn() {
+	if !a.publishWritesOK() {
 		return
 	}
 	idx := notificationTabIndex()

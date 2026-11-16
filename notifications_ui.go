@@ -546,7 +546,15 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 	})
 	// 可访问名说明这一下点开的是什么：读屏读得到，测试也按它取卡片的位置。
 	card.Label("打开消息：" + v.Action)
-	card.OnClick(func() { a.openNotificationTarget(v.TargetURL) })
+	card.OnClick(func() {
+		// 未读消息把 id 带过去，落地到目标评论后再标为已读；已读的消息不用
+		// 再发一次已读请求。
+		id := ""
+		if unread {
+			id = n.ID
+		}
+		a.openNotificationTarget(v.TargetURL, id)
+	})
 }
 
 // notificationReadAction 是未读消息卡片右上角的「标为已读」。它只是卡片里的

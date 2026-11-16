@@ -1397,8 +1397,8 @@ func TestReplyRowMarksTopicAuthorWithOP(t *testing.T) {
 	}
 }
 
-// 当前账号自己的回复多一圈强调色描边、底色也提亮一档；别人的回复仍是普通的
-// 中性描边。
+// 当前账号自己的回复描一圈半透明的强调色虚线框、底色也提亮一档；别人的回复
+// 仍是普通的中性实线描边。
 func TestReplyRowHighlightsOwnReply(t *testing.T) {
 	a := detailAppWithReplies(t)
 	a.theme.mode = themeLight
@@ -1412,25 +1412,40 @@ func TestReplyRowHighlightsOwnReply(t *testing.T) {
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 
-	mineBorder, mineFill, ok := replyRowEdge(tt, "我自己的回复")
+	mine, ok := replyRowBorder(tt, "我自己的回复")
 	if !ok {
 		t.Fatalf("找不到自己的那条回复：%q", tt.Texts())
 	}
-	otherBorder, otherFill, ok := replyRowEdge(tt, "别人的回复")
+	other, ok := replyRowBorder(tt, "别人的回复")
 	if !ok {
 		t.Fatalf("找不到别人的那条回复：%q", tt.Texts())
 	}
-	if b := int(mineBorder.B) - int(mineBorder.R); b < 150 {
-		t.Errorf("自己的回复应有强调色描边：%v", mineBorder)
+	t.Logf("自己的：%+v", mine)
+	t.Logf("别人的：%+v", other)
+
+	if b := int(mine.border.B) - int(mine.border.R); b < 40 {
+		t.Errorf("自己的回复应有强调色描边：%v", mine.border)
 	}
-	if mineBorder == otherBorder {
-		t.Errorf("自己的回复与别人的回复描边同色：%v", mineBorder)
+	if mine.border == other.border {
+		t.Errorf("自己的回复与别人的回复描边同色：%v", mine.border)
 	}
-	if b := int(otherBorder.B) - int(otherBorder.R); b > 40 {
-		t.Errorf("别人的回复不该有强调色描边：%v", otherBorder)
+	// 半透明：描边只上三分之一的强调色（#2563eb 的 R 只有 37），落在行底色
+	// 上之后要明显更淡。
+	if mine.border.R < 140 {
+		t.Errorf("自己的回复描边应当半透明、比满色强调色淡：%v", mine.border)
 	}
-	if mineFill == otherFill {
-		t.Errorf("自己的回复底色应比别人更亮一档：%v", mineFill)
+	// 虚线：沿左边框上下量，强调色像素分成好几段，段与段之间留空。
+	if mine.dashes < 3 {
+		t.Errorf("自己的回复应为虚线框，只量到 %d 段", mine.dashes)
+	}
+	if b := int(other.border.B) - int(other.border.R); b > 20 {
+		t.Errorf("别人的回复不该有强调色描边：%v", other.border)
+	}
+	if other.dashes > 0 {
+		t.Errorf("别人的回复应为实线，却量到 %d 段：%v", other.dashes, other.border)
+	}
+	if mine.fill == other.fill {
+		t.Errorf("自己的回复底色应比别人更亮一档：%v", mine.fill)
 	}
 }
 
@@ -1470,26 +1485,82 @@ func TestReplyTopicAuthorMatch(t *testing.T) {
 	}
 }
 
-// replyRowEdge 从一条评论的正文往左量这行的描边与底色：正文左边是这行的
-// 内边距（行底色），再往左是 1～2 DIP 的描边。返回的 border 是扫描窗口里
-// 离行底色最远的像素，抗锯齿把描边边缘混成过渡色时也能取到它的本色。
-func replyRowEdge(tt *ui.Tester, text string) (border, fill color.RGBA, ok bool) {
+// replyRowPixels 是量出来的一行评论的描边与底色。
+type replyRowPixels struct {
+	fill   color.RGBA // 正文左边的行底色
+	border color.RGBA // 左描边上最像强调色的那个像素
+	dashes int        // 沿左描边数到的强调色段数：实线是 1，虚线是好几段
+}
+
+// replyRowBorder 从一条评论的正文往左量这行的描边与底色：正文左边是这行的
+// 内边距（行底色），再往左是 1～2 DIP 的描边。虚线意味着某个 y 上可能正好
+// 落在空档里，所以先在正文左侧一小片区域里找出蓝色像素最多的那一列（描边
+// 本身），再沿这一列上下量段数；描边不是蓝色时退回「离行底色最远」的那个
+// 像素，抗锯齿把描边边缘混成过渡色时也能取到它的本色。
+func replyRowBorder(tt *ui.Tester, text string) (replyRowPixels, bool) {
+	var out replyRowPixels
 	r, ok := tt.Find(text)
 	if !ok {
-		return border, fill, false
+		return out, false
 	}
 	im := tt.Image()
 	y := int(r.Y + r.H/2)
-	fill = im.RGBAAt(int(r.X)-2, y)
-	best := -1
+	out.fill = im.RGBAAt(int(r.X)-2, y)
+	// 行底色上下各留白 10～12，正文与头部行之间隔着 Gap：这个窗口只取
+	// 行内部，避开上下的横描边。
+	from, to := y-40, y+12
+	if from < 0 {
+		from = 0
+	}
+	if to >= im.Bounds().Dy() {
+		to = im.Bounds().Dy() - 1
+	}
+	column, most := -1, 0
 	for x := int(r.X) - 3; x >= int(r.X)-22 && x >= 0; x-- {
-		c := im.RGBAAt(x, y)
-		d := rgbDistance(c, fill)
-		if d > best {
-			best, border = d, c
+		n := 0
+		for yy := from; yy <= to; yy++ {
+			if accentTint(im.RGBAAt(x, yy)) {
+				n++
+			}
+		}
+		if n > most {
+			column, most = x, n
 		}
 	}
-	return border, fill, true
+	if column < 0 {
+		// 没有强调色描边：按原来的办法取离行底色最远的像素。
+		column = int(r.X) - 3
+		best := -1
+		for x := int(r.X) - 3; x >= int(r.X)-22 && x >= 0; x-- {
+			if d := rgbDistance(im.RGBAAt(x, y), out.fill); d > best {
+				best, column, out.border = d, x, im.RGBAAt(x, y)
+			}
+		}
+		return out, true
+	}
+	best := -1
+	inDash := false
+	for yy := from; yy <= to; yy++ {
+		c := im.RGBAAt(column, yy)
+		if !accentTint(c) {
+			inDash = false
+			continue
+		}
+		if !inDash {
+			out.dashes++
+			inDash = true
+		}
+		if d := rgbDistance(c, out.fill); d > best {
+			best, out.border = d, c
+		}
+	}
+	return out, true
+}
+
+// accentTint 报告一个像素是不是被强调色（#2563eb 那种蓝）染过：半透明的
+// 描边落在白底上仍然偏蓝，中性灰描边的 B 与 R 只差几个数。
+func accentTint(c color.RGBA) bool {
+	return int(c.B)-int(c.R) > 25
 }
 
 func rgbDistance(a, b color.RGBA) int {

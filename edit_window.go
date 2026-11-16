@@ -194,6 +194,8 @@ func (a *app) editWindowView(c *ui.Context) {
 		ui.Divider(c)
 		a.editWindowFooter(c, st)
 	})
+	// 右栏预览里的配图也能点开多图预览：和详情页共用同一个弹窗状态。
+	a.imageViewer(c)
 }
 
 // editWindowSubtitle 是标题栏里的一行：编辑评论时报评论 id 的前几位，帖子

@@ -19,6 +19,63 @@ const (
 	richMetaFontSize    float32 = 12 // 时间、楼层、节点、原帖、计数、表态
 )
 
+// foldRowView 画一行可见行：分组行交给 commentGroupRow，其余仍走 rowWith。
+func (a *app) foldRowView(c *ui.Context, row foldRow) {
+	if row.group == nil {
+		a.rowWith(c, row.item, a.openItem)
+		return
+	}
+	a.commentGroupRow(c, *row.group, row.total, row.open, func() {
+		a.tabs[a.tab].toggle(*row.group)
+	})
+}
+
+// commentGroupRow 是「最新评论」里连续同一个人时的那道分组行：说明它聚了
+// 几条、是同一帖子下连着刷还是横跨几个帖子，右侧的箭头指出现在能展开 / 收起。
+// 它替下面那条折叠起来、没露出来的评论说话，所以底色比评论行浅一档，
+// 一眼看得出这不是一条评论本身。
+func (a *app) commentGroupRow(c *ui.Context, g commentGroup, total int, open bool, toggle func()) {
+	t := c.Theme()
+	head := g.members[0]
+	author := commentItemAuthor(head)
+	title := commentGroupTitle(g.members, commentGroupPosts(g.members))
+	row := ui.ButtonBase(c).FillWidth().Padding(10, 16).Radius(10).
+		Background(t.Surface).Border(1, t.Border)
+	if row.Hovered() {
+		row.Background(t.SurfaceHover)
+	}
+	row.Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			icon := chevronRightIcon
+			if open {
+				icon = chevronDownIcon
+			}
+			ui.Icon(c, icon).Size(12, 12).TextColor(t.TextMuted).Shrink(0)
+			a.userTag(c, userTagSpec{
+				Name:   author,
+				Avatar: head.Extra.AuthorAvatar,
+				Label:  "@" + author,
+				Size:   richAuthorFontSize,
+				Bold:   true,
+				Badges: head.Extra.AuthorBadges,
+			})
+			ui.Text(c, title).FontSize(richMetaFontSize).TextColor(t.TextMuted).
+				SingleLine().Ellipsis("…").Shrink(1).MinWidth(0)
+			ui.Spacer(c).Grow(1)
+			ui.Textf(c, "共 %d 条", total).FontSize(richMetaFontSize).
+				TextColor(t.TextMuted).Shrink(0)
+		})
+	})
+	if open {
+		row.Label("收起 @" + author + " 的连续评论")
+		row.Tooltip("收起，只留第一条")
+	} else {
+		row.Label("展开 @" + author + " 的连续评论")
+		row.Tooltip("展开这 " + fmt.Sprint(total) + " 条")
+	}
+	row.OnClick(toggle)
+}
+
 // richRow 是最新评论 / 动态专用的行：比通用标题+副标题+元信息多了作者、
 // 被回复人、父评论引用、正文摘要与表情表态 / 打赏汇总。字段都来自 comments.go
 // 的归一结果，普通榜单行不会走到这里。open 决定点击后怎么打开这一行
@@ -44,33 +101,32 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 			// 第一行：谁做了什么 · 时间 · 楼层。
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				author := x.Author
-				if author == "" {
-					author = "匿名"
-				}
 				// 作者与被回复人都是用户名：统一走 userTag，头像跟着 13px
-				// 的昵称走，和详情页评论头部一致。
-				a.userTag(c, userTagSpec{
-					Name:   author,
-					Avatar: x.AuthorAvatar,
-					Label:  "@" + author,
-					Size:   richAuthorFontSize,
-					Bold:   true,
-					Badges: x.AuthorBadges,
-				})
-				if comment {
-					if x.ReplyTo != "" {
-						ui.Text(c, "回复").FontSize(richAuthorFontSize).TextColor(t.TextMuted)
-						a.userTag(c, userTagSpec{
-							Name:   x.ReplyTo,
-							Avatar: x.ReplyToAvatar,
-							Label:  "@" + x.ReplyTo,
-							Size:   richAuthorFontSize,
-							Bold:   true,
-							Badges: x.ReplyToBadges,
-						})
-					} else {
-						ui.Text(c, "评论了帖子").FontSize(richAuthorFontSize).TextColor(t.TextMuted)
-					}
+				// 的昵称走，和详情页评论头部一致。接口没给作者（例如
+				// /v1/me/bookmarks）时整段作者不画，也不编一个「匿名」。
+				if author != "" {
+					a.userTag(c, userTagSpec{
+						Name:   author,
+						Avatar: x.AuthorAvatar,
+						Label:  "@" + author,
+						Size:   richAuthorFontSize,
+						Bold:   true,
+						Badges: x.AuthorBadges,
+					})
+				}
+				if comment && x.ReplyTo != "" {
+					// 没有作者段时，这一行读起来是「回复 @某人」。
+					ui.Text(c, "回复").FontSize(richAuthorFontSize).TextColor(t.TextMuted)
+					a.userTag(c, userTagSpec{
+						Name:   x.ReplyTo,
+						Avatar: x.ReplyToAvatar,
+						Label:  "@" + x.ReplyTo,
+						Size:   richAuthorFontSize,
+						Bold:   true,
+						Badges: x.ReplyToBadges,
+					})
+				} else if comment {
+					ui.Text(c, "评论了帖子").FontSize(richAuthorFontSize).TextColor(t.TextMuted)
 				} else if x.NodeLabel != "" {
 					ui.Text(c, x.NodeLabel).FontSize(richMetaFontSize).TextColor(t.TextMuted)
 				}

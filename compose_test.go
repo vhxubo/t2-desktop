@@ -1090,11 +1090,19 @@ func TestComposeOptionRowsAddRemove(t *testing.T) {
 	if len(st.voteOptions) != 2 {
 		t.Fatalf("添加后行数 = %d，期望 2", len(st.voteOptions))
 	}
-	// 只剩一行时「删除」被禁用，避免删成空列表。
+	// 只剩一行时行尾的删除图标被禁用，避免删成空列表。图标按钮靠无障碍名
+	// 命中，完整说明在 tooltip 里（参见 AGENTS.md 的操作按钮规范）。
 	st.voteOptions = []string{"甲"}
 	tt.Frame()
-	if info, ok := tt.Access("删除"); ok && !info.Disabled {
+	del, ok := tt.Access("删除投票选项 1")
+	if !ok {
+		t.Fatalf("找不到行尾删除按钮：%q", tt.Texts())
+	}
+	if !del.Disabled {
 		t.Errorf("只剩一个选项时删除按钮应当禁用")
+	}
+	if del.Description == "" {
+		t.Errorf("删除按钮应当带 tooltip 说明")
 	}
 	// 到上限后不再加行。
 	st.voteOptions = make([]string, composeOptionMax)

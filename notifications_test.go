@@ -932,6 +932,145 @@ func TestNotificationTargetOpensInMainWindow(t *testing.T) {
 	}
 }
 
+// 点开一条带评论定位的消息：评论还没出现在屏幕上时不标已读；那层楼真正
+// 露出来之后自动提交一次按条已读。
+func TestNotificationCommentClickMarksReadWhenVisible(t *testing.T) {
+	srv, calls := readRecorder(t)
+	a, st := notificationApp(t, srv)
+	// autoLoad 关着：打开详情不拉正文与评论（由测试摆好），按条已读仍发往
+	// 本地假服务。
+	a.autoLoad = false
+	a.openNotificationTarget(siteBaseURL+"/post/social/wEOIDnn?commentId=c1", "n1")
+	if a.detail == nil || a.detail.notifID != "n1" || a.detail.notifCommentID != "c1" {
+		t.Fatalf("点开消息没有记下待已读的评论：%+v", a.detail)
+	}
+	topic, _ := decodeTopic([]byte(detailTopicJSON), "wEOIDnn")
+	a.detail.topic = &topic
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	d := a.detail
+	// 点开消息时评论还没到：待办先挂起；评论到位前的帧不该标已读。
+	d.notifID, d.notifCommentID = "n1", "c1"
+	d.replyList = nil
+	d.replyTotal = 0
+	tt.Frame()
+	if d.notifID != "n1" {
+		t.Fatalf("评论没到时不该落账：notifID=%q", d.notifID)
+	}
+	if got := calls(); len(got) != 0 {
+		t.Fatalf("评论没到时不该发已读请求：%+v", got)
+	}
+	d.replyList = []replyItem{
+		{ID: "c1", Author: "u", Floor: 1, Content: "被回复的那条"},
+		{ID: "c2", Author: "u", Floor: 2, Content: "另一条评论"},
+	}
+	d.replyTotal = 2
+	// 先把列表排好一帧，下一帧目标评论就在可视区里。
+	tt.Frame()
+	if f, l := d.list.Visible(); f > 0 || l < 0 || d.notifID != "" {
+		t.Fatalf("评论到位后仍在可视区外：visible=%d..%d notifID=%q", f, l, d.notifID)
+	}
+	tt.Frame()
+	waitReadCall(t, calls, `{"id":["n1"]}`)
+	// 本地落账在请求结果回来之后：无头测试里它在请求协程里执行，等一拍。
+	deadline := time.Now().Add(5 * time.Second)
+	for !st.items[0].Notif.IsRead && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !st.items[0].Notif.IsRead {
+		t.Error("自动已读没有落到本地消息行")
+	}
+	if d.notifID != "" || d.notifCommentID != "" {
+		t.Error("看完后不该还挂着待已读的消息")
+	}
+	// 只落一次：后续帧不再重复提交。
+	tt.Frame()
+	tt.Frame()
+	if got := calls(); len(got) != 1 || got[0].body != `{"id":["n1"]}` {
+		t.Errorf("自动已读请求 = %+v", got)
+	}
+}
+
+// waitReadCall 等本地假服务收到第一条已读请求再断言：请求本身在协程里发，
+// 帧返回时它可能还没到。
+func waitReadCall(t *testing.T, calls func() []readCall, body string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(calls()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := calls()
+	if len(got) == 0 || got[0].body != body {
+		t.Fatalf("已读请求 = %+v，期望 %s", got, body)
+	}
+}
+
+// 目标评论不在首屏时先保持未读：用户没滚到那层楼就不算看过；滚进可视区
+// 之后才落账。
+func TestNotificationCommentReadWaitsUntilVisible(t *testing.T) {
+	srv, calls := readRecorder(t)
+	a, st := notificationApp(t, srv)
+	a.autoLoad = false
+	a.openNotificationTarget(siteBaseURL+"/post/social/wEOIDnn?commentId=c50", "n1")
+	topic, _ := decodeTopic([]byte(detailTopicJSON), "wEOIDnn")
+	a.detail.topic = &topic
+	rows := make([]replyItem, 0, 60)
+	for i := 0; i < 60; i++ {
+		rows = append(rows, replyItem{
+			ID: fmt.Sprintf("c%d", i), Author: "u", Floor: i + 1,
+			Content: fmt.Sprintf("第%d条评论", i+1),
+		})
+	}
+	a.detail.replyList = rows
+	a.detail.replyTotal = len(rows)
+	a.detail.replyLoaded = true
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	// 这里 autoLoad 关着、评论由测试摆好：先确认没看到评论时没有落账。
+	for i := 0; i < 3; i++ {
+		tt.Frame()
+	}
+	if a.detail.notifID != "n1" || st.items[0].Notif.IsRead {
+		t.Fatal("没看到目标评论就把消息标成了已读")
+	}
+	if got := calls(); len(got) != 0 {
+		t.Fatalf("目标评论还没露出来就提交了已读：%+v", got)
+	}
+
+	// 滚到第 51 层：从下一帧起它在可视区里，消息这才落账。
+	a.detail.list.ScrollTo(50, ui.Start)
+	for i := 0; i < 3; i++ {
+		tt.Frame()
+	}
+	if a.detail.notifID != "" {
+		t.Error("目标评论进入可视区后仍挂着待已读消息")
+	}
+	waitReadCall(t, calls, `{"id":["n1"]}`)
+	deadline := time.Now().Add(5 * time.Second)
+	for !st.items[0].Notif.IsRead && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !st.items[0].Notif.IsRead {
+		t.Error("自动已读没有落到本地消息行")
+	}
+}
+
+// 系统通知 id 里的消息 id 用来按条已读；认不出前缀的 id 不做猜测。
+func TestNoticeMessageID(t *testing.T) {
+	cases := map[string]string{
+		"t2-notification:n1":              "n1",
+		"t2-notification:jimmy-1a2b3c:n1": "n1",
+		"t2-notification:legacy":          "legacy",
+		"other-notification:n1":           "",
+		"":                                "",
+	}
+	for id, want := range cases {
+		if got := noticeMessageID(id); got != want {
+			t.Errorf("noticeMessageID(%q) = %q，期望 %q", id, got, want)
+		}
+	}
+}
+
 // 窗口拉到最小尺寸时列表仍在窗口内滚动，标题栏按钮也还在。
 func TestNotificationWindowFitsMinSize(t *testing.T) {
 	a := notificationWindowApp(t)

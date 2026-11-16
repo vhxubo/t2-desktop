@@ -1351,7 +1351,8 @@ func (b *accountBook) openNotice(id string) {
 			}
 			if target := app.noticeTarget(id); target != "" {
 				b.raiseAccountWindow(acc.ID)
-				app.publish(func() { app.openNotificationTarget(target) })
+				messageID := noticeMessageID(id)
+				app.publish(func() { app.openNotificationTarget(target, messageID) })
 				return
 			}
 		}
@@ -1359,7 +1360,8 @@ func (b *accountBook) openNotice(id string) {
 		if accountID == "" && b.guest != nil {
 			if target := b.guest.noticeTarget(id); target != "" {
 				b.guest.raiseMainWindow()
-				b.guest.publish(func() { b.guest.openNotificationTarget(target) })
+				messageID := noticeMessageID(id)
+				b.guest.publish(func() { b.guest.openNotificationTarget(target, messageID) })
 				return
 			}
 		}

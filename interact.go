@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1005,11 +1006,15 @@ func (a *app) reactionPanel(c *ui.Context, d *detailState, target string) {
 	})
 }
 
-// rewardPanel 是金币气泡里的内容：金额、余额与确认按钮。金额由用户填，
-// 按钮上写着具体数字，点下去才会扣币。
+// rewardPresetAmounts 是打赏气泡里的常用金额：打赏多数是整数，手打一串数字
+// 容易点错，点一下芯片就填进输入框。上限是 500，所以预设值到 500 为止。
+var rewardPresetAmounts = []int{100, 150, 200, 300, 350, 400, 500}
+
+// rewardPanel 是金币气泡里的内容：金额、常用金额、余额与确认按钮。金额由用户
+// 填或点常用金额，按钮上写着具体数字，点下去才会扣币。
 func (a *app) rewardPanel(c *ui.Context, d *detailState, target string) {
 	t := c.Theme()
-	ui.Column(c).Width(260).Gap(8).Children(func() {
+	ui.Column(c).Width(288).Gap(8).Children(func() {
 		ui.Text(c, "打赏金币").FontSize(metaFontSize).TextColor(t.TextMuted)
 		if !a.auth.loggedIn() {
 			a.loginHint(c, "登录后才能打赏。")
@@ -1022,6 +1027,12 @@ func (a *app) rewardPanel(c *ui.Context, d *detailState, target string) {
 			if a.coins != nil && a.coins.balanceOK {
 				ui.Textf(c, "余额 %s", coinThousands(a.coins.balance)).
 					FontSize(11).TextColor(t.TextMuted).SingleLine()
+			}
+		})
+		ui.Text(c, "常用金额").FontSize(11).TextColor(t.TextMuted)
+		ui.Row(c).Gap(4).Wrap().Children(func() {
+			for _, amount := range rewardPresetAmounts {
+				a.rewardAmountChip(c, d, amount)
 			}
 		})
 		ui.Text(c, "会从你的余额扣除，确认后不可撤销。").
@@ -1043,6 +1054,28 @@ func (a *app) rewardPanel(c *ui.Context, d *detailState, target string) {
 			}
 		})
 	})
+}
+
+// rewardAmountChip 是打赏气泡里的一枚常用金额：数字即金额，当前金额高亮，
+// 点一下填进金额输入框。读屏名写成「常用金额 200 金币」，免得一串裸数字说不清
+// 是什么，也不会和下方「打赏 200 金币」的确认按钮撞名。
+func (a *app) rewardAmountChip(c *ui.Context, d *detailState, amount int) {
+	t := c.Theme()
+	chip := ui.Button(c, strconv.Itoa(amount)).FontSize(11).Padding(2, 8).Radius(999)
+	if rewardAmount(d.react.amount) == amount {
+		chip.Background(t.Accent).TextColor(t.AccentText)
+	} else {
+		chip.Background(t.Surface).TextColor(t.TextMuted).Border(1, t.Border)
+	}
+	if d.react.rewardBusy {
+		chip.Disabled(true)
+	}
+	chip.Label(fmt.Sprintf("常用金额 %d 金币", amount)).
+		Tooltip(fmt.Sprintf("点一下把金额填成 %d 金币", amount))
+	if chip.Clicked() {
+		d.react.amount = float64(amount)
+		d.react.rewardErr = ""
+	}
 }
 
 // detailsPanel 是摘要胶囊的气泡内容：每种表情各几次，自己选过的标「我」。

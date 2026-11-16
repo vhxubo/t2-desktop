@@ -1133,3 +1133,47 @@ func TestRestrictedEndpointsUseConfiguredProxy(t *testing.T) {
 		}
 	}
 }
+
+// 领取兑换码是经济类写出口，同样必须经配置的代理，不能因为共用 Client
+// 就假设它天然不会直连。
+func TestRedeemCodeUsesConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var paths []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"message":"经代理领取成功","reward_coins":10}`))
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		Proxy:  p,
+		Base:   "http://upstream.invalid/api",
+		bearer: func() string { return "tok" },
+	}
+	res, err := c.redeemCode(context.Background(), "k1", "CODE-1")
+	if err != nil {
+		t.Fatalf("经代理领取兑换码失败：%v", err)
+	}
+	if !res.CoinsKnown || res.Coins != 10 {
+		t.Errorf("经代理领取的解码 = %+v", res)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"POST /api/v1/redeem-codes/CODE-1/redeem"}
+	if len(paths) != len(want) {
+		t.Fatalf("代理收到 %d 次请求，期望 %d 次：%v", len(paths), len(want), paths)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Errorf("第 %d 次请求 = %s，期望 %s", i+1, paths[i], want[i])
+		}
+	}
+}

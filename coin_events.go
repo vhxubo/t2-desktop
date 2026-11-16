@@ -30,14 +30,16 @@ import "time"
 //	                     participate 🔑
 //	coinEventRestricted  花币解锁受限内容                              submitRestrictedUnlock
 //	                     POST /v1/topics/:id/restricted/unlock 🔑
+//	coinEventRedeem      领取兑换码                                    submitRedeemCode
+//	                     POST /v1/redeem-codes/:code/redeem 🔑
 //	coinEventIncoming    收到表态 / 打赏 / 回复等新通知                pollNotifications
 //	coinEventForeground  回到前台，校准在站点上的金币变动              onBecameActive
 //
-// 金币池注资、兑换码领取、盲盒延期、更换头像这些能力这个应用还没有入口；
+// 金币池注资、盲盒延期、更换头像这些能力这个应用还没有入口；
 // 以后加上时，同样在成功后调用 coinsChanged。用户直接在站点上完成它们
 // 不会产生站内通知，由 coinEventForeground 与标题栏金币数的定时刷新兜底。
-// restricted_unlock 只是本地事件名（文档没给解锁的流水 reason），用来
-// 触发刷新，不拿它去匹配金币流水的文案。
+// restricted_unlock 与 redeem_code 只是本地事件名（文档没给解锁 / 领取的
+// 流水 reason），用来触发刷新，不拿它们去匹配金币流水的文案。
 type coinEvent string
 
 const (
@@ -50,6 +52,7 @@ const (
 	coinEventPandora    coinEvent = "pandora"           // 开盲盒 / 重抽
 	coinEventBet        coinEvent = "bet_participate"   // 参与竞猜
 	coinEventRestricted coinEvent = "restricted_unlock" // 解锁受限内容（本地事件名）
+	coinEventRedeem     coinEvent = "redeem_code"       // 领取兑换码（本地事件名）
 	coinEventIncoming   coinEvent = "incoming"          // 收到表态 / 打赏 / 回复等新通知
 	coinEventForeground coinEvent = "foreground"        // 回到前台校准站点上的变动
 )

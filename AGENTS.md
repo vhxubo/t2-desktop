@@ -49,6 +49,29 @@ a pure white page.
 - 测试用 `tt.HasText(...)` 断言 toast 文案，用 `tt.Advance(...)` 验证它会自己消失；
   toast 只在构建期发出，所以断言前要先 `tt.Frame()` 让窗口领走队列里的提示。
 
+## 操作按钮：图标 + tooltip
+
+**界面上的操作按钮优先用「图标 + tooltip」表现，不写文字标签；所有关闭按钮一律
+如此。** 图标把宽度留给内容，说明放在悬浮提示里，读屏与点击测试靠无障碍名命中。
+
+- 关闭一律用 ✕ 图标 + tooltip「关闭」。窗口标题栏用 `titleBarButton`，详情页悬浮
+  工具条用 `detailToolButton`，编辑器工具条用 `editorIconButton`，对话框标题行 /
+  设置项 / 列表行用 `iconActionButton`（见 `icon_button.go`）。不要写
+  `ui.Button(c, "关闭")`，也不要为某个位置再抄一套图标按钮画法。
+- 通行图标（叉、废纸篓、刷新、返回、收起 / 展开、齿轮、退出、发送）能独立表意的
+  动作都用图标；含义不确定、或同一处并排几个图标会分不清的（账号行里的「打开 /
+  退出」）保留文字。
+- 图标按钮两样必须齐备：`.Label(...)` 给读屏、键盘焦点与点击测试用，`.Tooltip(...)`
+  说明点了会发生什么（不是把 label 复述一遍）。只画图标不挂 Tooltip 等于让人猜。
+- 图标本身只是装饰时（窗口标题、页签、空状态插图）才可以直接 `ui.Icon` 放着。
+- 文字按钮留给这些位置：主操作（发布、保存、签到、投入金币）、对话框底部成对的
+  取消 / 确认、页面级状态里的「重试 / 去登录 / 打开浏览器授权」、带内容的行内按钮
+  （昵称、节点、楼层号）与二选一芯片。
+- 新图标加在 `icons.go`（24×24、`stroke=currentColor` 的线性图标），不要在界面
+  代码里现场拼 SVG。
+- 改按钮文案或换成图标时同步改测试：图标按钮用 `tt.Click("无障碍名")` /
+  `tt.Access("无障碍名")` 命中，`AccessInfo.Description` 就是 tooltip 文案。
+
 ## 项目约定
 
 - Go 桌面应用，界面是 github.com/egoist/mygo 的原生 UI 包 `ui`，没有 webview 页面；
@@ -165,7 +188,7 @@ a pure white page.
 | oauth.md | `auth.go`、`auth_ui.go`、`auth_gate.go` |
 | api-read.md | `api.go`（列表与解码）、`detail.go`、`profile.go`、`attributes.go`（六维属性）、`badges.go`（徽章墙与佩戴状态）、`user_card.go`、`notifications.go`、`follows.go`（关注 / 粉丝名单、关注流未读数） |
 | api-write.md | `compose.go`、`vote.go`（投票与结果分布）、`detail.go`（发评论）、`edit.go`（编辑帖子 / 编辑评论 / 追加附言，界面在 `edit_window.go`）、`comments_status.go`（关闭 / 开启评论）、`follow.go`、`interact.go`、`bookmarks.go`（评论书签）、`collections.go`（新建合集 / 归入与移出） |
-| api-economy.md | `coins.go`、`coins_window.go`、`badges.go`（佩戴切换，scope `write:economy`）、`image_hosts.go`（上传；官方图床只对 Pro 开放）、`image_hosts_adapters.go`（第三方图床协议：Imgur / Tikolu / MJJ.Today / ImgBB / Skyimg / 111666.best / StarDots，来自「通用图片上传助手」脚本） |
+| api-economy.md | `coins.go`、`coins_window.go`、`badges.go`（佩戴切换，scope `write:economy`）、`redeem.go`（兑换码领取，界面在详情页正文末尾）、`reward_pool.go`（金币池状态只读展示，含评论领到的金币）、`image_hosts.go`（上传；官方图床只对 Pro 开放）、`image_hosts_adapters.go`（第三方图床协议：Imgur / Tikolu / MJJ.Today / ImgBB / Skyimg / 111666.best / StarDots，来自「通用图片上传助手」脚本） |
 | 搜索（`/v1/search`） | `search.go`、`search_ui.go` |
 | 节点（`/v1/nodes`） | `nodes.go`（请求、父子关系、本地缓存）、`compose.go`（两列选项）、`cascader.go`（级联选择组件） |
 

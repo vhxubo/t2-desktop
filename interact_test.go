@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -655,6 +656,96 @@ func TestRewardSubmitsFromDialog(t *testing.T) {
 	}
 	if a.detail.react.rewardOpen {
 		t.Error("打赏成功后气泡应关闭")
+	}
+}
+
+// 打赏气泡里给一排常用金额：点芯片只改金额、只改确认按钮上的数字，绝不能因此
+// 直接打赏——扣币必须由用户再点一次确认按钮，期间气泡也不能自己关掉。
+func TestRewardPresetAmounts(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		bodies = append(bodies, body)
+		mu.Unlock()
+		io.WriteString(w, envelopeJSON(`{}`))
+	}))
+	defer srv.Close()
+
+	a := loginApp(t, srv)
+	topic, err := decodeTopic([]byte(interactJSON), "AB12")
+	if err != nil {
+		t.Fatal(err)
+	}
+	topic.URL = "https://2libra.com/post/work/AB12"
+	a.pageName = "detail"
+	a.detail = &detailState{shortID: "AB12", topic: &topic}
+	done := make(chan error, 1)
+	a.onInteractDone = func(err error) { done <- err }
+	a.openRewardPopup(a.detail, reactionTopic)
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if !tt.HasText("常用金额") {
+		t.Errorf("打赏气泡没有常用金额：%q", tt.Texts())
+	}
+	for _, amount := range []int{100, 150, 200, 300, 350, 400, 500} {
+		name := fmt.Sprintf("常用金额 %d 金币", amount)
+		info, ok := tt.Access(name)
+		if !ok {
+			t.Fatalf("缺少常用金额 %d 金币的按钮：%q", amount, tt.Texts())
+		}
+		if info.Description == "" {
+			t.Errorf("常用金额 %d 金币 没有 tooltip", amount)
+		}
+	}
+
+	// 连点两个常用金额：金额跟着变，但一次请求都不发，气泡也不关。
+	for _, amount := range []int{200, 300} {
+		if err := tt.Click(fmt.Sprintf("常用金额 %d 金币", amount)); err != nil {
+			t.Fatalf("点常用金额 %d 失败：%v", amount, err)
+		}
+		tt.Frame()
+		if got := rewardAmount(a.detail.react.amount); got != amount {
+			t.Errorf("点常用金额后金额 = %d，期望 %d", got, amount)
+		}
+		if !tt.HasText(fmt.Sprintf("打赏 %d 金币", amount)) {
+			t.Errorf("确认按钮没跟着金额变：%q", tt.Texts())
+		}
+		if !a.detail.react.rewardOpen {
+			t.Fatalf("点常用金额 %d 后气泡不该关掉", amount)
+		}
+		mu.Lock()
+		n := len(bodies)
+		mu.Unlock()
+		if n != 0 {
+			t.Fatalf("点常用金额 %d 不该发请求，实际 %d 次", amount, n)
+		}
+	}
+	if a.detail.topic.Rewards.Total != 0 {
+		t.Errorf("点常用金额不该记账：%+v", a.detail.topic.Rewards)
+	}
+
+	// 只有再点一次确认按钮才真的打赏，金额就是刚选的那个。
+	if err := tt.Click("打赏 300 金币"); err != nil {
+		t.Fatalf("点确认打赏失败：%v", err)
+	}
+	if err := waitInteract(t, done); err != nil {
+		t.Fatalf("打赏失败：%v", err)
+	}
+	mu.Lock()
+	got := append([]map[string]any(nil), bodies...)
+	mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("打赏请求次数 = %d，期望 1：%v", len(got), got)
+	}
+	if got[0]["amount"] != float64(300) {
+		t.Errorf("打赏金额 = %v，期望 300", got[0]["amount"])
+	}
+	if a.detail.topic.Rewards.Total != 300 {
+		t.Errorf("打赏没有记账：%+v", a.detail.topic.Rewards)
 	}
 }
 

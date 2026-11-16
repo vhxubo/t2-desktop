@@ -20,17 +20,29 @@ import (
 // 解码结果与磁盘字节都由全局图片缓存（image_cache.go）管理：表情进长期
 // 缓存，帖子配图进临时缓存。
 
+// articlePicture 是从源文里认出的一张配图：地址与说明文字。多图预览弹窗
+// （见 image_viewer.go）按这些翻页与另存为。
+type articlePicture struct {
+	URL string
+	Alt string
+}
+
 // articleBlockAt 返回 Markdown 的 Options.Block：接管含表情或配图的段落 /
 // 标题，其余块（代码、列表等）继续交给 Markdown 默认渲染。size 是这类块的
 // 基准字号，0 表示跟随 Markdown 主题；评论区比正文小一号，用自己的一套。
-func (a *app) articleBlockAt(size float32) func(c *ui.Context, d *parser.Document, i int) bool {
+//
+// pictures 按解析好的文档给出这份源文的整组配图（见 newMarkdownOptions 的
+// groupPictures）：Markdown 视图在重新解析之后才逐块调用 Block，这时按文档
+// 收图才对得上号，所以这里拿的是函数而不是一张事先算好的表。
+func (a *app) articleBlockAt(size float32, pictures func(d *parser.Document) []articlePicture) func(c *ui.Context, d *parser.Document, i int) bool {
 	return func(c *ui.Context, d *parser.Document, i int) bool {
-		return a.articleBlock(c, d, i, size)
+		return a.articleBlock(c, d, i, size, pictures(d))
 	}
 }
 
-// articleBlock 接管含表情或配图的段落 / 标题 / 表格，size 见 articleBlockAt。
-func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float32) bool {
+// articleBlock 接管含表情或配图的段落 / 标题 / 表格，size 见 articleBlockAt，
+// pictures 是 d 所在那份 Markdown 的整组配图。
+func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float32, pictures []articlePicture) bool {
 	b := d.Block(i)
 	if b.Kind == parser.Table {
 		// 表格单元格不会经过 Options.Block：Markdown 画表格时直接排每一格。
@@ -38,7 +50,7 @@ func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float3
 		if !a.tableHasImage(d, i) {
 			return false
 		}
-		a.articleTable(c, d, i, size)
+		a.articleTable(c, d, i, size, pictures)
 		return true
 	}
 	if b.Kind != parser.Paragraph && b.Kind != parser.Heading {
@@ -56,7 +68,7 @@ func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float3
 		return true
 	}
 	// 有配图的段落：把段落按图片切成几段文字，图片在段落内部独占一行。
-	a.articleMixedParagraph(c, d, i, size)
+	a.articleMixedParagraph(c, d, i, size, pictures)
 	return true
 }
 
@@ -200,14 +212,18 @@ func (a *app) articleParagraph(c *ui.Context, d *parser.Document, i int, b *pars
 
 // articleMixedParagraph 渲染「文字 + 配图 + 文字」的段落：每个文字
 // 片段仍是可换行的 RichText，配图作为片段之间的独立图片。
-func (a *app) articleMixedParagraph(c *ui.Context, d *parser.Document, i int, size float32) {
+func (a *app) articleMixedParagraph(c *ui.Context, d *parser.Document, i int, size float32, pictures []articlePicture) {
 	base := articleBaseStyle(c, d, i, d.Block(i), size)
-	a.articleMixedInlines(c, d.Inlines(i), base, ui.Start)
+	a.articleMixedInlines(c, d.Inlines(i), base, ui.Start, pictures)
 }
 
 // articleMixedInlines 是 articleMixedParagraph 的实现，也用于表格单元格：
 // 一段内联按顶层配图切成若干段文字，配图在段落内部独占一行。
-func (a *app) articleMixedInlines(c *ui.Context, in []parser.Inline, base articleStyle, align ui.Align) {
+//
+// pictures 是这张表所在那份 Markdown 的全部配图（见 articlePictures）：每张
+// 图点开时打开它所在的那一组并停在自己身上。收图不在这里做——一段内联只
+// 知道自己的图，不知道同一份正文里还有几张，组要按整份源文认。
+func (a *app) articleMixedInlines(c *ui.Context, in []parser.Inline, base articleStyle, align ui.Align, pictures []articlePicture) {
 	col := ui.Column(c).Gap(4)
 	col.Children(func() {
 		from := 0
@@ -217,7 +233,7 @@ func (a *app) articleMixedInlines(c *ui.Context, in []parser.Inline, base articl
 				continue
 			}
 			a.articleTextSegment(c, in, from, k, base, align)
-			a.articlePicture(c, n.Dest, parser.PlainText(in[k+1:n.Next]))
+			a.articlePicture(c, n.Dest, parser.PlainText(in[k+1:n.Next]), pictures)
 			from = n.Next
 		}
 		a.articleTextSegment(c, in, from, len(in), base, align)
@@ -277,13 +293,17 @@ const (
 
 // articlePicture 显示一张正文配图：仍在下载时转圈并说明，失败后给一句说明，
 // 加载完成后按原比例缩到栏宽。配图是帖子里的外部图片，进临时缓存，过期后
-// 自动清理。
+// 自动清理。点一下打开多图预览弹窗（见 image_viewer.go）。
 //
 // 占位按图片的真实宽高来：图片已经在磁盘缓存里时（读文件头，见
 // imageCache.cachedSize），先画一个同样大小的空框，图片解好后原地替换，
 // 下方的文字不会被顶下去。没有登记过加载的图（无头测试不联网、地址不合法）
 // 沿用原来的静态占位，不假装有一张正在下载的图。
-func (a *app) articlePicture(c *ui.Context, dest, alt string) {
+//
+// pictures 是这份正文的全部配图（见 articlePictures），点开预览时按它在整
+// 组里翻页。还在加载或加载失败的占位也能点：加载中点一下先记下，图片到位后
+// 直接弹窗；失败的只留说明，点了什么也不会发生。
+func (a *app) articlePicture(c *ui.Context, dest, alt string, pictures []articlePicture) {
 	th := markdown.DefaultTheme(c.Theme())
 	if alt == "" {
 		alt = "图片"
@@ -299,6 +319,8 @@ func (a *app) articlePicture(c *ui.Context, dest, alt string) {
 		if w > 0 && h > 0 {
 			img.AspectRatio(w / h)
 		}
+		img.Cursor(ui.CursorPointer).Tooltip("点开预览大图")
+		img.OnClick(func() { a.openImageGroup(pictures, dest) })
 		return
 	}
 	state := a.images.state(dest)
@@ -313,9 +335,10 @@ func (a *app) articlePicture(c *ui.Context, dest, alt string) {
 		ph.Children(func() {
 			ui.Text(c, alt).FontSize(12).TextColor(th.Muted).MaxLines(2)
 		})
+		ph.OnClick(func() { a.openImageGroup(pictures, dest) })
 		return
 	}
-	a.articlePicturePending(c, alt, w, h, state)
+	a.articlePicturePending(c, dest, alt, w, h, pictures)
 }
 
 // articlePicturePending 画「加载中」或「加载失败」的配图占位。尺寸已知时仍
@@ -325,7 +348,7 @@ func (a *app) articlePicture(c *ui.Context, dest, alt string) {
 // 占位框只设 Label、不设 RoleImage：mygo 会把显式 RoleImage 盒的子树在访问树
 // 里压平，导致里面的转圈（RoleProgress）无法被读取；加载完成后真正的
 // ui.Image 自带图片角色，这里不必抢。
-func (a *app) articlePicturePending(c *ui.Context, alt string, w, h float32, state imageLoadState) {
+func (a *app) articlePicturePending(c *ui.Context, dest, alt string, w, h float32, pictures []articlePicture) {
 	th := markdown.DefaultTheme(c.Theme())
 	box := ui.Box(c).Radius(4).Background(th.CodeBackground).Center().Clip()
 	if w > 0 && h > 0 {
@@ -334,7 +357,10 @@ func (a *app) articlePicturePending(c *ui.Context, alt string, w, h float32, sta
 		box.FillWidth().Height(imageUnknownSizePlaceholderH)
 	}
 	box.Label(alt)
-	loading := state == imageLoading
+	loading := a.images.state(dest) == imageLoading
+	// 加载中与加载失败的占位都按 articlePicture 的同一套点击处理：加载中点
+	// 一下先记下，图片到位后自动弹出预览（见 wantImage）。
+	box.OnClick(func() { a.wantImageGroup(pictures, dest) })
 	if loading {
 		box.Busy(true)
 	}
@@ -395,7 +421,7 @@ func (a *app) articleHasImage(in []parser.Inline, from, to int) bool {
 //
 // 与默认实现的唯一区别是单元格内容由 article_render.go 自己画，因此配图和
 // :code: 表情在表格里也能显示成图片。
-func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size float32) {
+func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size float32, pictures []articlePicture) {
 	th := markdown.DefaultTheme(c.Theme())
 	b := d.Block(i)
 	cols := len(b.Align)
@@ -461,7 +487,7 @@ func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size float3
 						if k > 0 {
 							box.BorderWidth(0, 0, 0, 1).BorderColor(th.TableBorder)
 						}
-						box.Children(func() { a.articleCell(c, d, cell, s, align) })
+						box.Children(func() { a.articleCell(c, d, cell, s, align, pictures) })
 						k++
 					}
 				})
@@ -472,11 +498,11 @@ func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size float3
 }
 
 // articleCell 画一格内容：有顶层配图时按「文字 + 图片 + 文字」排，否则就是
-// 一段可换行的文字（其中的表情仍是行内图片）。
-func (a *app) articleCell(c *ui.Context, d *parser.Document, cell int, base articleStyle, align ui.Align) {
+// 一段可换行的文字（其中的表情仍是行内图片）。pictures 见 articlePicture。
+func (a *app) articleCell(c *ui.Context, d *parser.Document, cell int, base articleStyle, align ui.Align, pictures []articlePicture) {
 	in := d.Inlines(cell)
 	if a.hasTopLevelPicture(in) {
-		a.articleMixedInlines(c, in, base, align)
+		a.articleMixedInlines(c, in, base, align, pictures)
 		return
 	}
 	a.articleTextSegment(c, in, 0, len(in), base, align)
@@ -544,6 +570,56 @@ func articleLinesWidth(c *ui.Context, spans []ui.Span) float32 {
 	}
 	flush()
 	return widest
+}
+
+// articlePictures 按顺序认出整份文档里的全部配图，供 Options.Group 设置
+// 分组（见 newMarkdownOptions）：段落顶层的配图、表格单元格里的配图，以及
+// 强调 / 链接里的配图都算；行内 :code: 表情与社区图标不算（见 isEmojiImage）。
+// 标题里的图片同样成行显示，也算在内。规则与 articleBlock 同源，所以数出来
+// 的张数与画面里显示的一致。
+func (a *app) articlePictures(d *parser.Document) []articlePicture {
+	var out []articlePicture
+	for i := 0; i < d.Len(); i++ {
+		b := d.Block(i)
+		switch b.Kind {
+		case parser.Table:
+			// 表格的行与单元格也是块：这里只收顶层块，表格自己展开每一格。
+			if !a.tableHasImage(d, i) {
+				continue
+			}
+			for r := i + 1; r < b.Next; r = d.Block(r).Next {
+				for cell := r + 1; cell < d.Block(r).Next; cell = d.Block(cell).Next {
+					in := d.Inlines(cell)
+					collectArticlePictures(&out, a, in, 0, len(in))
+				}
+			}
+			i = b.Next - 1 // 表格的行与单元格不必再当独立块扫一遍
+		case parser.Paragraph, parser.Heading:
+			in := d.Inlines(i)
+			collectArticlePictures(&out, a, in, 0, len(in))
+		}
+	}
+	return out
+}
+
+// collectArticlePictures 递归收集 in[from:to] 里的配图，规则见 articlePictures。
+func collectArticlePictures(out *[]articlePicture, a *app, in []parser.Inline, from, to int) {
+	for k := from; k < to; k = in[k].Next {
+		n := &in[k]
+		switch n.Kind {
+		case parser.Image:
+			if a.isEmojiImage(n.Dest) || strings.TrimSpace(n.Dest) == "" {
+				continue
+			}
+			alt := strings.TrimSpace(parser.PlainText(in[k+1 : n.Next]))
+			if alt == "" {
+				alt = "图片"
+			}
+			*out = append(*out, articlePicture{URL: strings.TrimSpace(n.Dest), Alt: alt})
+		case parser.Emphasis, parser.Strong, parser.Strikethrough, parser.Link:
+			collectArticlePictures(out, a, in, k+1, n.Next)
+		}
+	}
 }
 
 func articleInQuote(d *parser.Document, i int) bool {

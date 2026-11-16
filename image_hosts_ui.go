@@ -163,7 +163,8 @@ func (a *app) imageHostEditor(c *ui.Context) {
 	if h.Builtin {
 		ui.Text(c, "内置预设：字段可改、可停用，不能删除。").
 			FontSize(11).TextColor(t.TextMuted)
-	} else if ui.Button(c, "删除此图库").Clicked() {
+	} else if iconActionButton(c, trashIcon, "删除此图库",
+		"从图库列表里删掉「"+h.Name+"」，之后上传不再选它").Clicked() {
 		a.removeImageHost(h.ID)
 	}
 	// 官方图床的门槛已经在 officialHostStatus 里说过了，这里只给通用图床

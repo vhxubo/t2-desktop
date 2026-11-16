@@ -51,24 +51,29 @@ type tabSpec struct {
 	NeedsAuth bool
 	Paging    pagingMode
 	Kind      itemKind
+	// FoldByAuthor 把相邻的同名评论收成一组、默认只露一条（见 comments.go 的
+	// groupComments）。只给「最新评论」打开：「动态」是按时间混排的关注流，
+	// 聚合等于把关注的人藏起来，不能跟着打开。
+	FoldByAuthor bool
 }
 
 var tabSpecs = []tabSpec{
-	{"首页", "/v1/topics", "page=1&limit=50&parent_slug=All&sort=value", "posts", false, pagingPages, kindTopic},
-	{"今日热议", "/v1/topics/hot", "", "posts", false, pagingPages, kindTopic},
-	{"近期热议", "/v1/topics/hot", "period=7d", "posts", false, pagingPages, kindTopic},
-	{"新发表", "/v1/topics/latest", "", "posts", false, pagingPages, kindTopic},
+	{Label: "首页", Path: "/v1/topics", Query: "page=1&limit=50&parent_slug=All&sort=value", ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
+	{Label: "今日热议", Path: "/v1/topics/hot", ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
+	{Label: "近期热议", Path: "/v1/topics/hot", Query: "period=7d", ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
+	{Label: "新发表", Path: "/v1/topics/latest", ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
 	// 最新评论端点仍只接受 ≤50（服务端返回「每页最多显示 50 条」），
-	// 不要跟着帖子评论的 100 一起改。
-	{"最新评论", "/v1/comments/latest", "limit=50", "items", false, pagingIgnored, kindComment},
-	{"社区讨论", "/v1/topics", "page=1&limit=50&node_id=" + communityNodeID, "posts", false, pagingPages, kindTopic},
-	{"动态", "/v1/me/follows/timeline", "page=1&limit=50", "items", true, pagingPages, kindTimeline},
+	// 不要跟着帖子评论的 100 一起改。它也只有这一页：排在同一帖子下连着
+	// 刷的评论会把别人挤出去，所以打开 FoldByAuthor，相邻同名评论收成一组。
+	{Label: "最新评论", Path: "/v1/comments/latest", Query: "limit=50", ListKey: "items", Paging: pagingIgnored, Kind: kindComment, FoldByAuthor: true},
+	{Label: "社区讨论", Path: "/v1/topics", Query: "page=1&limit=50&node_id=" + communityNodeID, ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
+	{Label: "动态", Path: "/v1/me/follows/timeline", Query: "page=1&limit=50", ListKey: "items", NeedsAuth: true, Paging: pagingPages, Kind: kindTimeline},
 	// 收藏 / 书签 / 我的帖子 / 我的合集不在侧边栏：它们是「我的」窗口里的
 	// 四类内容，端点见 profile.go 的 profileContentSpecs。
 	// 通知走开放 API 的消息列表；字段名是 list（不是 items），筛选另带
 	// type / unread_only，由 notificationQuery 生成。它不再是侧边栏页面：
 	// 入口是标题栏铃铛打开的弹窗，保留这一项是为了复用通用加载与分页。
-	{"通知", notificationsPath, notificationsQuery(notificationFilterAll), "list", true, pagingPages, kindNotification},
+	{Label: "通知", Path: notificationsPath, Query: notificationsQuery(notificationFilterAll), ListKey: "list", NeedsAuth: true, Paging: pagingPages, Kind: kindNotification},
 	// 金币页聚合多个只读端点，不再是侧边栏页面：它是独立的金币窗口，入口
 	// 见 coins_window.go；加载由 coinState 统一调度，不走通用 fetch。
 }
@@ -700,7 +705,9 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 	if post != nil {
 		postNode = post.sub("node", "parent_node")
 	}
-	username := "匿名"
+	// 没有作者对象、或 author 为 null 时 username 保持空：接口没给发帖人信息
+	// 就不编一个「匿名」出来，列表行也不再画作者（见 main.go 的 rowWith）。
+	username := ""
 	avatarURL := ""
 	var authorBadges []badgeInfo
 	if author != nil {
@@ -761,7 +768,7 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 			it.Title = "未命名合集"
 		}
 		parts := []string{"合集"}
-		if username != "" && username != "匿名" {
+		if username != "" {
 			parts = append(parts, username)
 			// 合集行本来就不展示匿名作者：只有真有昵称时才拆出作者段。
 			it.Author = username
@@ -797,7 +804,9 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 			parts = append(parts, nodeName)
 			it.SubtitlePrefix = nodeName + " · "
 		}
-		parts = append(parts, username)
+		if username != "" {
+			parts = append(parts, username)
+		}
 		it.Author = username
 		it.AuthorAvatar = avatarURL
 		it.AuthorBadges = authorBadges

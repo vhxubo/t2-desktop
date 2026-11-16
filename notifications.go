@@ -853,3 +853,14 @@ func splitNotificationNoticeID(id string) (accountID, messageID string) {
 	}
 	return accountID, messageID
 }
+
+// noticeMessageID 是系统通知 id 里那条消息的 id，用于点击后按条标为已读。
+// 认不出通知前缀的 id 返回空串：宁可不动已读状态，也不能拿一个猜出来的 id
+// 去提交（服务端会把它当成真实消息）。
+func noticeMessageID(id string) string {
+	if !strings.HasPrefix(id, noticeIDPrefix) {
+		return ""
+	}
+	_, messageID := splitNotificationNoticeID(id)
+	return messageID
+}

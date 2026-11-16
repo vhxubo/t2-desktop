@@ -228,6 +228,8 @@ func (a *app) composeWindowView(c *ui.Context) {
 	})
 	// 弹窗画在内容之上：和授权弹窗一样放在 view 末尾，才能盖住整扇窗口。
 	a.composeModuleDialog(c, st)
+	// 预览区里的配图同样能点开多图预览：和详情页共用同一个弹窗状态。
+	a.imageViewer(c)
 }
 
 // composeTitleField 是写作区第一块：只有标题。节点放在最下面且是选填的
@@ -523,10 +525,9 @@ func (a *app) composeSidebar(c *ui.Context, st *composeState) {
 						})
 						if on {
 							// 移除就在行尾：不用再打开弹窗，填过的内容仍留在草稿里。
-							remove := ui.Button(c, "移除").
-								Label("移除" + m.name).
-								Tooltip("移除" + m.name + "，填过的内容仍留在草稿里")
-							if remove.Clicked() {
+							// 行尾位置窄，用废纸篓图标，说明与无障碍名一起给出移除的是谁。
+							if iconActionButton(c, trashIcon, "移除"+m.name,
+								"移除"+m.name+"，填过的内容仍留在草稿里").Clicked() {
 								*m.flag(st) = false
 								a.toast(toastCompose, "已移除"+m.name)
 							}
@@ -565,7 +566,11 @@ func (a *app) composeModuleDialog(c *ui.Context, st *composeState) {
 		ui.Column(c).Width(composeModuleDialogWidth).Gap(8).Children(func() {
 			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
 				ui.Text(c, m.name).FontSize(16).Bold().TextColor(t.Text).Grow(1)
-				if ui.Button(c, "关闭").Clicked() {
+				// 关闭是图标按钮：标题行里再放一个「关闭」文字会把名字挤窄，
+				// 叉号是通行画法，点了做什么由 Tooltip 说明。名字带「设置」是
+				// 为了和窗口标题栏的「关闭」区分开，读屏不会念出两个一样的按钮。
+				if iconActionButton(c, closeIcon, "关闭设置",
+					"关闭这个组件的设置窗口，填过的内容仍留在草稿里").Clicked() {
 					st.moduleOpen = false
 				}
 			})
@@ -633,9 +638,10 @@ func (a *app) composeOptionList(c *ui.Context, opts *[]string, checked *[]bool,
 			batchToggled = true
 		}
 		ui.Spacer(c).Grow(1)
-		drop := ui.Button(c, "删除选中").
-			Tooltip(fmt.Sprintf("删除勾选的 %d 个%s", nChecked, label)).
-			Disabled(nChecked == 0)
+		// 批量删除在行尾，用废纸篓图标：勾选数写进 Tooltip，按钮本身不占文字宽度。
+		drop := iconActionButton(c, trashIcon, "删除选中",
+			fmt.Sprintf("删除勾选的 %d 个%s", nChecked, label))
+		drop.Disabled(nChecked == 0)
 		if drop.Clicked() {
 			removeChecked = true
 		}
@@ -697,9 +703,11 @@ func (a *app) composeOptionList(c *ui.Context, opts *[]string, checked *[]bool,
 				Label(fmt.Sprintf("%s %d", label, i+1)).
 				Placeholder(fmt.Sprintf("%s %d", label, i+1)).
 				FillWidth().MaxLength(maxLen)
-			remove := ui.Button(c, "删除").
-				Tooltip(fmt.Sprintf("删除%s %d", label, i+1)).
-				Disabled(len(*opts) <= minCount)
+			// 行尾删除同样是图标按钮：无障碍名带上第几项，读屏与点击测试都能区分。
+			remove := iconActionButton(c, trashIcon,
+				fmt.Sprintf("删除%s %d", label, i+1),
+				fmt.Sprintf("删掉%s %d；至少保留 %d 项", label, i+1, minCount))
+			remove.Disabled(len(*opts) <= minCount)
 			if remove.Clicked() {
 				removeAt = i
 			}

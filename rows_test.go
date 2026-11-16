@@ -92,3 +92,47 @@ func TestCommentRowPostLinkOpensPostItself(t *testing.T) {
 		t.Fatalf("点正文应定位到评论：%+v", b.detail)
 	}
 }
+
+// 接口没给发帖人时列表行不画作者：/v1/me/topics、/v1/me/bookmarks 这类
+// 响应里没有 author 字段，行上不该凭空出现一个「匿名」。
+func TestRowHidesMissingAuthor(t *testing.T) {
+	// 帖子行：只剩节点与时间，作者段整段不出现。
+	post := itemFrom([]byte(`{"short_id":"A1","title":"我的帖子",
+		"node":{"name":"职场","slug":"work"},
+		"created_at":"2026-11-01T10:00:00.000Z"}`), kindTopic)
+	if post.Author != "" || post.SubtitlePrefix != "职场 · " || post.SubtitleSuffix == "" {
+		t.Fatalf("没有作者的帖子行不该拆出作者段：%+v", post)
+	}
+	a := testApp(t)
+	a.tabs[0].loaded = true
+	a.tabs[0].items = []Item{post}
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if tt.HasText("匿名") {
+		t.Errorf("帖子行不该显示「匿名」：%q", tt.Texts())
+	}
+	if !tt.HasText("职场 · ") || !tt.HasText(" · "+relativeTime("2026-11-01T10:00:00.000Z")) {
+		t.Errorf("帖子行丢了节点或时间：%q", tt.Texts())
+	}
+
+	// 评论行（书签）：没有作者就不给作者标识，也不显示「匿名」，但这条评论
+	// 是回复谁的信息照常保留。
+	bookmark := itemFrom([]byte(`{"id":"C1","content":"书签里的评论",`+
+		`"post":{"short_id":"P1","title":"帖子","node":{"slug":"n","name":"节点"}}}`), kindComment)
+	if bookmark.Extra == nil || bookmark.Extra.Author != "" {
+		t.Fatalf("没有作者的评论行不该编一个作者：%+v", bookmark.Extra)
+	}
+	b := profileWindowApp(t)
+	b.profile.tab = profileTabContent
+	b.profile.contentKind = profileContentBookmarks
+	st := &b.profile.content[profileContentBookmarks]
+	st.loaded, st.items = true, []Item{bookmark}
+	bt := ui.NewTester(b.profileWindowView, profileWindowWidth, profileWindowHeight)
+	bt.Frame()
+	if bt.HasText("匿名") {
+		t.Errorf("书签行不该显示「匿名」：%q", bt.Texts())
+	}
+	if !bt.HasText("书签里的评论") || !bt.HasText("原帖：「帖子」") {
+		t.Errorf("书签行丢了正文或原帖：%q", bt.Texts())
+	}
+}

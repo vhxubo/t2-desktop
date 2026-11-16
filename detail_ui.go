@@ -73,6 +73,13 @@ type detailState struct {
 	focusTries   int
 	focusMiss    bool
 
+	// notifID / notifCommentID 是「从通知点进来」的那条消息与它指向的评论。
+	// 消息不在点开时就标为已读：等 notifCommentID 这层楼真正进入评论区可视区
+	// 才落账（见 markNotificationSeen）。notifCommentID 单独存一份，因为用户
+	// 在评论区点「回复 N 楼」会把 focusID 换成父评论。
+	notifID        string
+	notifCommentID string
+
 	// fav 是标题下方作者行收藏按钮的状态；react 是表态条与选择器的状态
 	// （见 interact.go），vote 是正文末尾投票块的状态（见 vote.go）。三者
 	// 都只在 UI 线程读写，网络结果通过 publish 回来。
@@ -82,6 +89,8 @@ type detailState struct {
 	bet   betUIState
 	// restricted 是正文末尾受限内容块的状态（见 restricted.go）。
 	restricted restrictedUIState
+	// redeem 是正文末尾兑换码块的状态（见 redeem.go）。
+	redeem redeemUIState
 	// bmBusy 是正在提交书签的评论 id：一次只提交一条，避免连点把同一条
 	// 评论反复加 / 删（见 bookmarks.go）。
 	bmBusy string
@@ -181,8 +190,10 @@ func newMarkdownOptions(a *app, st mdTextStyle) *markdown.Options {
 			return a.loadImage(u)
 		},
 		// Markdown 默认只画整段图片，段落内的配图与 :code: 表情会只剩
-		// [说明]；这类段落改由 article_render.go 接管。
-		Block:    a.articleBlockAt(st.size),
+		// [说明]；这类段落改由 article_render.go 接管。组图按解析好的文档
+		// 现认（见 articlePictures），点开的预览弹窗正好翻这一份源文里的图：
+		// 正文一份、每条评论各一份，互不掺和。
+		Block:    a.articleBlockAt(st.size, a.picturesForDoc),
 		WrapCode: true,
 		Theme: &markdown.Theme{
 			FontSize:     st.size,
@@ -646,6 +657,9 @@ func (a *app) detailView(c *ui.Context) {
 	})
 	// 表态、打赏与明细都是贴着各自入口的气泡（见 interact.go），在互动区
 	// 构建时已经就地挂好，这里不需要再叠一层弹窗。
+	// 从通知点进来的评论已经露出来：等这一帧画完再提交已读，见
+	// flushSeenNotifications。
+	a.flushSeenNotifications()
 }
 
 // detailReplySurface 是评论区卡片的底色：页面底色与文字色按很小比例混合，
@@ -667,6 +681,12 @@ func (a *app) detailToolBar(c *ui.Context, d *detailState) {
 		Background(t.Surface).Border(1, t.Border).
 		Shadow(0, 3, 12, 0, ui.RGBA(0, 0, 0, 0.16)).
 		Children(func() {
+			// 复制链接排在工具条最左边，作者动作 / 刷新 / 关闭在它右边，中间
+			// 隔一道短竖线：分享帖子与页面操作不是一类事。
+			if href := d.originURL(); href != "" {
+				a.detailCopyButton(c, href, "复制帖子链接", "把这篇帖子的链接复制到剪贴板")
+				ui.Box(c).Width(1).Height(18).Background(t.Border).Shrink(0)
+			}
 			// 只有正文或评论滚离顶部时才出现：工具条始终可达，不会像旧版
 			// 页头那样为了放它固定占掉一行。正文收起时不看它的偏移：那栏
 			// 根本没画出来，按钮留着也只会让人以为评论还能往上滚。
@@ -713,6 +733,48 @@ func (a *app) detailToolButton(c *ui.Context, icon *ui.SVG, label, tip string, o
 		ui.Icon(c, icon).Size(17, 17).TextColor(ink)
 	})
 	b.Label(label).Tooltip(tip).OnClick(onClick)
+}
+
+// detailCopyButton 是工具条里的「复制链接」：把 href 写进系统剪贴板，结果
+// 由主窗口 toast 报告（成功或失败都提示，见 copyToClipboard）。悬停时图标
+// 换强调色，和旁边的页面操作区分开。
+func (a *app) detailCopyButton(c *ui.Context, href, label, tip string) {
+	t := c.Theme()
+	b := ui.Box(c).Size(30, 30).Radius(8).Center().Background(ui.Transparent)
+	hovered := b.Hovered()
+	if hovered {
+		b.Background(t.SurfaceHover)
+	}
+	ink := t.TextMuted
+	if hovered {
+		ink = t.Accent
+	}
+	b.Children(func() {
+		ui.Icon(c, copyLinkIcon).Size(17, 17).TextColor(ink)
+	})
+	b.Label(label).Tooltip(tip)
+	if b.Clicked() {
+		a.copyToClipboard(c, href, toastMain, "已复制链接")
+	}
+}
+
+// copyToClipboard 把一条链接写进剪贴板，并在成功或失败时发一条 toast。
+// 拷贝结果在下一帧之前才回来（见 ui.WriteClipboardThen），所以提示不能在
+// 这里同步发出：先排队，等那个窗口重建时由 drainToasts 交给 c.Toast。写失败
+// 多见于别的程序正占着剪贴板，此时 toast 里说明改用手动复制，而不是静默。
+// c 是发出这次复制的那一帧的 Context：剪贴板服务只在构建期取，不存进应用
+// 状态（元素与 Context 都不跨帧保存）。
+func (a *app) copyToClipboard(c *ui.Context, text string, target toastTarget, okText string) {
+	if text == "" || c == nil {
+		return
+	}
+	c.WriteClipboardThen(text, func(err error) {
+		if err != nil {
+			a.toast(target, "复制失败："+err.Error()+"，可以手动选中链接复制")
+			return
+		}
+		a.toast(target, okText)
+	})
 }
 
 // detailRefreshButton 是悬浮工具条里的刷新按钮：请求在途时换成转圈并禁用，
@@ -822,6 +884,12 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 	}
 	if p.Restricted != nil {
 		a.restrictedSection(c, d)
+	}
+	if p.Redeem != nil {
+		a.redeemSection(c, d)
+	}
+	if p.RewardPool != nil {
+		a.rewardPoolSection(c, p.RewardPool)
 	}
 	// 正文末尾不再画互动行：表态与打赏固定在左栏底部的互动栏里
 	// （见 detailView 的 topicInteractionBar），正文再长也始终可达。
@@ -1159,11 +1227,13 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 			return i
 		}
 		// 实时记录停留位置：视口顶部的行号与评论 ID，供离开时落盘恢复。
-		if first, _ := d.list.Visible(); first >= 0 && first < len(rows) {
+		if first, last := d.list.Visible(); first >= 0 && first < len(rows) {
 			d.stayIdx = first
 			if rows[first].ID != "" {
 				d.stayID = rows[first].ID
 			}
+			// 从通知点进来时，目标评论真的出现在屏幕上才把那条消息标为已读。
+			a.markNotificationSeen(d, first, last)
 		}
 		// MyGo 的 ui.List 是虚拟化滚动区：只构建可视行，长帖也不会一次
 		// 排完所有评论；Grow(1) + MinHeight(0) 让它吃满卡片中间，输入栏
@@ -1182,6 +1252,37 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 		}
 	}
 	a.replyComposer(c, d)
+}
+
+// markNotificationSeen 在「从通知点进来定位的那层楼」真正出现在评论列表可视区
+// 时，把那条消息标为已读：点开只说明用户想看，看到评论才算读过。first / last
+// 是列表上一帧显示出来的行号区间（含两端）；评论还没加载出来、没定位到，或者
+// 用户还停在别处，消息就保持未读，等滚到它再落账。只落一次：发出去之前先把
+// 待办清掉，后面的帧不会重复提交（评论被折叠、切换视图也一样）。
+//
+// 已读请求要等这一帧构建结束才发（见 flushSeenNotifications）：在视图里直接
+// 起请求，结果会比视图先到，等测试绑上的回调就永远收不到。
+func (a *app) markNotificationSeen(d *detailState, first, last int) {
+	if d == nil || d.notifID == "" || d.notifCommentID == "" {
+		return
+	}
+	at := replyIndexByID(d.display, d.notifCommentID)
+	if at < 0 || at < first || at > last {
+		return
+	}
+	a.seenNotifications = append(a.seenNotifications, d.notifID)
+	d.notifID, d.notifCommentID = "", ""
+}
+
+// flushSeenNotifications 把视图里攒下的「看到了」提交为按条已读。它在该帧
+// 构建结束之后调用，发出的请求一定晚于这一帧，不会被紧随其后的测试步骤错过。
+func (a *app) flushSeenNotifications() {
+	if len(a.seenNotifications) == 0 {
+		return
+	}
+	ids := append([]string(nil), a.seenNotifications...)
+	a.seenNotifications = nil
+	a.markNotificationsRead(ids)
 }
 
 // replyHeader 是评论卡片顶部固定的一行：「评论」标题、评论数（点一下回到
@@ -1319,24 +1420,31 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string, isNew bool) {
 	bg := t.Surface
 	border := t.Border
 	borderWidth := float32(1)
+	dashed := false
 	if r.Pinned {
 		border = t.Accent
 	}
-	// 当前账号自己的回复描一圈强调色边框、底色再提亮一点点：一长串别人的
-	// 回复里，一眼就能找到「我发的这条」。边框加宽到 1.5（实际渲染为 2 个
-	// 设备像素），比置顶 / 定位用的 1 DIP 描边更醒目。
+	// 当前账号自己的回复描一圈虚线框、底色再提亮一点点：一长串别人的回复里，
+	// 一眼就能找到「我发的这条」。描边只上三分之一的强调色（其余是底色透出来
+	// 的），再用 1 DIP 的虚线，比置顶 / 定位那种实线强调色描边轻得多，不会把
+	// 正文压下去。
 	if a.isMine(r.Author) {
-		border, borderWidth = t.Accent, 1.5
+		border, borderWidth, dashed = t.Accent.Alpha(0.35), 1, true
 		bg = t.Accent.Mix(t.Surface, 0.94)
 	}
+	// 定位到某条回复时仍是实线强调色：那是「刚跳到这里」的短暂提示，
+	// 和自己那条常驻的虚线框不是一回事。
 	if focusID != "" && r.ID != "" && r.ID == focusID {
 		bg = t.SurfaceHover
-		border, borderWidth = t.Accent, 1.5
+		border, borderWidth, dashed = t.Accent, 1.5, false
 	}
 	left := float32(12)
 	left += float32(r.Depth) * 14
 	row := ui.Column(c).FillWidth().Padding(10, 12, 10, left).Radius(10).
 		Background(bg).Border(borderWidth, border).Gap(6)
+	if dashed {
+		row.BorderStyle(ui.BorderDashed)
+	}
 	hovered := row.Hovered()
 	// 评论已关闭时整条都不能回复；已删除的评论同样不提供回复入口。
 	closed := a.detail != nil && a.detail.topic != nil && a.detail.topic.CommentsClosed
@@ -1399,6 +1507,9 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string, isNew bool) {
 				ui.Text(c, relativeTime(r.CreatedAt)).FontSize(metaSmallFontSize).
 					TextColor(t.TextMuted)
 			}
+			// 从帖子金币池里领到过金币的评论，在时间后面标出合计：这是这条
+			// 评论拿到的额外收入，只有它自己有，不必再去翻金币流水。
+			a.replyRewardPoolWinnings(c, r)
 			// 楼层号放在这一行的最右侧：它是每层楼的标识，靠边排列不会把
 			// 作者与时间挤散，长昵称也不会和它抢位置。只有顶层评论才有
 			// floor；楼中楼服务端给的是 null，不能拿 flat_floor 当楼层号，
@@ -1532,10 +1643,41 @@ func (a *app) replyFooter(c *ui.Context, r replyItem, closed bool) {
 			a.replyEditEntry(c, d, r)
 		}
 		a.bookmarkEntry(c, d, r)
+		a.replyCopyEntry(c, d, r)
 		if !closed {
 			a.replyEntry(c, d, r)
 		}
 	})
+}
+
+// replyCopyEntry 是评论底行的「复制链接」：把这条评论的永久链接写进剪贴板
+// （地址与楼层号点开的那个一样，见 replyPermalink）。已删除的评论和还在
+// 加载中的评论没有可用的链接，不出这个入口。
+func (a *app) replyCopyEntry(c *ui.Context, d *detailState, r replyItem) {
+	if r.ID == "" || r.Deleted {
+		return
+	}
+	href := replyPermalink(d.topic, d.fallbackURL, r)
+	if href == "" {
+		return
+	}
+	t := c.Theme()
+	b := ui.Box(c).Size(20, 20).Radius(6).Center().Background(ui.Transparent)
+	hovered := b.Hovered()
+	if hovered {
+		b.Background(t.SurfaceHover)
+	}
+	ink := t.TextMuted
+	if hovered {
+		ink = t.Text
+	}
+	b.Children(func() {
+		ui.Icon(c, copyLinkIcon).Size(14, 14).TextColor(ink)
+	})
+	b.Label("复制评论链接").Tooltip("把这条评论的链接复制到剪贴板")
+	if b.Clicked() {
+		a.copyToClipboard(c, href, toastMain, "已复制评论链接")
+	}
 }
 
 // bookmarkEntry 是评论底行的书签图标：已加书签时填实并换成强调色。未登录

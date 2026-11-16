@@ -12,6 +12,7 @@ import (
 	updatenative "github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
+	"github.com/egoist/mygo/ui/markdown/parser"
 )
 
 type tabState struct {
@@ -33,11 +34,26 @@ type tabState struct {
 	authWait bool
 	gen      uint64
 
+	// fold 是「最新评论」页的连续同用户聚合：相邻同名评论收成一组，默认
+	// 每组只露第一条（见 comments.go 的 groupComments）。它是 items 的派生
+	// 数据，items 每次变动后由 refold 重算，不单独维护顺序。
+	fold tabFold
+
 	// 通知（弹窗）专用：分段筛选、正在提交已读的 id 与勾选批量。
 	filter     int
 	reading    map[string]bool
 	selected   map[string]bool
 	markingAll bool
+}
+
+// tabFold 存一页的分组结果与展开状态。
+type tabFold struct {
+	on bool // 这个 tab 开着聚合；只有它为真时才读 groups
+	// groups 覆盖 items 的全部行并保持原顺序；start 是组首条在 items 里的下标。
+	groups []commentGroup
+	// open 记哪几组被展开了。键是组首条评论的评论 ID，不放下标：列表会定时
+	// 刷新，新评论插到最前面时下标整体后移，用下标会把展开状态挪到别组头上。
+	open map[string]bool
 }
 
 // app holds only data and widget state. Never store ui.Element or *Context:
@@ -56,6 +72,21 @@ type app struct {
 	win       *mygo.Window
 	srv       ui.Services
 	autoLoad  bool
+
+	// viewer 是多图预览弹窗的状态（见 image_viewer.go）：正文与每条评论各自
+	// 成组，点任意一张配图打开这一组，左右翻页、滚轮缩放、右键另存为。它挂在
+	// 账号窗口上而不是详情页上：同一个详情页的正文、评论视图与独立窗口都可能
+	// 打开同一组图。viewerNoteTimer 让另存为的结果说明到点自己撤掉。
+	// viewerDoc / viewerPics 是「上一次认过图的那份解析结果」的小缓存：Markdown
+	// 视图逐块问一遍，同一份文档不必每块都重认（见 picturesForDoc）。
+	// 都只在 UI 线程读写。
+	viewer          *imageViewer
+	viewerNoteTimer *time.Timer
+	viewerDoc       *parser.Document
+	viewerPics      []articlePicture
+	// saveImagePathHook 是「另存为」系统对话框的测试替身：headless 里没有原生
+	// 对话框，测试把它换成直接返回一个路径。为 nil 时走 mygo.Dialog.Save。
+	saveImagePathHook func(raw string) (string, error)
 
 	// 设置窗口里的代理草稿。保存前只改这些字段，不影响正在使用的 transport；
 	// 点「保存」才写入 proxy.json 并立即切换。保存结果见 toasts.go 的 toast。
@@ -320,6 +351,10 @@ type app struct {
 	// id 里带账号段（见 notificationNativeID），多账号时点击才知道该找哪个
 	// 窗口。
 	noticeTargets map[string]string
+	// seenNotifications 是一帧里「看到了就标已读」的消息：详情页在评论列表里
+	// 发现目标评论进入了可视区时记下来，该帧构建结束再发请求（见
+	// markNotificationSeen / flushSeenNotifications）。
+	seenNotifications []string
 
 	// onReplyPosted is a hook invoked after a reply is posted (or fails),
 	// carrying the created reply and any error. It runs wherever publish
@@ -492,6 +527,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 	a.md = newMarkdownOptions(a, postTextStyle)
 	a.commentMd = newMarkdownOptions(a, commentTextStyle)
 	a.bioMd = newMarkdownOptions(a, bioTextStyle)
+	a.viewer = &imageViewer{}
 	return a
 }
 
@@ -608,6 +644,7 @@ func (a *app) loadSpec(st *tabState, spec tabSpec, page int, replay func()) {
 				if page == 1 {
 					st.err = friendlyError(err)
 					st.items = nil
+					st.fold.reset()
 				} else {
 					// 已有内容时续拉失败：保留当前列表，在列表底部提示。
 					st.moreErr = friendlyError(err)
@@ -617,6 +654,7 @@ func (a *app) loadSpec(st *tabState, spec tabSpec, page int, replay func()) {
 			st.moreErr = ""
 			if page == 1 {
 				st.items = res.Items
+				st.fold.reset()
 				st.list.ScrollTo(0, ui.Start)
 				st.noMore = len(res.Items) == 0
 			} else {
@@ -640,11 +678,104 @@ func (a *app) loadSpec(st *tabState, spec tabSpec, page int, replay func()) {
 			st.totalPages = res.TotalPages
 			st.page = page
 			st.loaded = true
+			// 分组按整份 items 重算：第 2 页正好接上第 1 页末尾的同一个人时，
+			// 尾部那一组要跟着变长，不能因为分两次到达就断成两组。
+			st.refold(spec)
 			// 列表行里的作者、被回复人与通知操作者都要带头像：数据到了就
 			// 先预取，渲染时只读缓存，不在每帧里发请求。
 			a.prefetchItemAvatars(res.Items)
 		})
 	}()
+}
+
+// refold 按当前 items 重算聚合分组。只对开着 FoldByAuthor 的端点做，其余
+// tab 留一组「每行自成一组」的空结果。
+func (st *tabState) refold(spec tabSpec) {
+	st.fold.on = spec.FoldByAuthor
+	if !spec.FoldByAuthor {
+		st.fold.groups = nil
+		st.fold.open = nil
+		return
+	}
+	st.fold.groups = groupComments(st.items)
+}
+
+// reset 在整页重载（回到第 1 页）时清掉展开状态：刷新后还留着一堆展开的旧组，
+// 会把刚刷新的一屏又撑长；分页追加不动它，用户展开过的那几组保持原样。
+func (f *tabFold) reset() {
+	f.groups = nil
+	f.open = nil
+}
+
+// open 报告某一组当前是否展开。组键取组首条的评论 ID，没有 ID 时退回它在
+// items 里的下标——这种行不会与别的组撞键。
+func (f *tabFold) openFor(g commentGroup) bool {
+	if len(f.open) == 0 {
+		return false
+	}
+	return f.open[foldKey(g)]
+}
+
+// toggle 折叠 / 展开一组并返回它现在是否展开。
+func (st *tabState) toggle(g commentGroup) bool {
+	if st.fold.open == nil {
+		st.fold.open = make(map[string]bool)
+	}
+	key := foldKey(g)
+	next := !st.fold.open[key]
+	if next {
+		st.fold.open[key] = true
+	} else {
+		delete(st.fold.open, key)
+	}
+	return next
+}
+
+func foldKey(g commentGroup) string {
+	head := g.members[0]
+	if id := head.CommentID; id != "" {
+		return id
+	}
+	return "at:" + strconv.Itoa(g.start)
+}
+
+// foldRow 是折叠后在列表里出现的一行：要么是一条评论本身，要么是那个组的
+// 分组行。group 非 nil 时这一行是分组行，total / open 只对它有意义。
+type foldRow struct {
+	item  Item
+	group *commentGroup
+	total int
+	open  bool
+}
+
+// foldRows 展开成列表真正要画的可见行。多条的组先出分组行（展开 / 收起入口
+// 就挂在它上面），折叠时只跟首条，展开时逐条跟全部成员；单条的组不画分组行。
+func (st *tabState) foldRows() []foldRow {
+	if !st.fold.on || len(st.fold.groups) == 0 {
+		rows := make([]foldRow, len(st.items))
+		for i, it := range st.items {
+			rows[i] = foldRow{item: it}
+		}
+		return rows
+	}
+	rows := make([]foldRow, 0, len(st.items))
+	for gi := range st.fold.groups {
+		g := &st.fold.groups[gi]
+		if len(g.members) == 1 {
+			rows = append(rows, foldRow{item: g.members[0]})
+			continue
+		}
+		open := st.fold.openFor(*g)
+		rows = append(rows, foldRow{group: g, total: len(g.members), open: open})
+		members := g.members
+		if !open {
+			members = members[:1]
+		}
+		for _, it := range members {
+			rows = append(rows, foldRow{item: it})
+		}
+	}
+	return rows
 }
 
 // ensureLoaded is a guarded job: it starts at most one request per tab
@@ -672,6 +803,7 @@ func (a *app) reloadCurrent() {
 	st.authWait = false
 	st.loaded = false
 	st.items = nil
+	st.fold.reset()
 	st.err = ""
 	st.moreErr = ""
 	st.noMore = false
@@ -939,11 +1071,12 @@ func (a *app) view(c *ui.Context) {
 	a.dialogs(c)
 }
 
-// dialogs 画出全局授权弹窗。列表页、登录回退页与详情页共用，放在内容之后
-// 叠在最上层。通知与设置都不在这里：它们各自是独立的窗口。
+// dialogs 画出全局授权弹窗与多图预览。列表页、登录回退页与详情页共用，放在
+// 内容之后叠在最上层。通知与设置都不在这里：它们各自是独立的窗口。
 func (a *app) dialogs(c *ui.Context) {
 	a.authDialog(c)
 	a.closePromptDialog(c)
+	a.imageViewer(c)
 }
 
 // sidebarFooter 是主页侧边栏底部的固定区：从上到下是外观的三档图标、账号
@@ -1207,15 +1340,21 @@ func (a *app) body(c *ui.Context) {
 		})
 		return
 	}
-	items := st.items
+	// 列表画的是「可见行」而不是 items 本身：最新评论开着连续同用户聚合，
+	// 折叠的组在这里变成「分组行 + 首条」两行（见 foldRows）。Key 也按可见行
+	// 给，展开 / 折叠引起行数变化时列表状态按 key 对齐，不会串行。
+	rows := st.foldRows()
 	st.list.Key = func(i int) any {
-		if i >= 0 && i < len(items) {
-			return items[i].Key
+		if i >= 0 && i < len(rows) {
+			if g := rows[i].group; g != nil {
+				return "g:" + foldKey(*g)
+			}
+			return rows[i].item.Key
 		}
 		return i
 	}
-	ui.List(c, &st.list, len(items), func(i int) {
-		a.row(c, items[i])
+	ui.List(c, &st.list, len(rows), func(i int) {
+		a.foldRowView(c, rows[i])
 	}).Grow(1).Padding(8, 16).Gap(14)
 	a.loadMoreFooter(c, st.moreErr, st.loading, func() {
 		a.load(a.tab, st.page)
@@ -1256,10 +1395,6 @@ func (a *app) loadMoreFooter(c *ui.Context, errText string, loading bool, retry 
 	})
 }
 
-func (a *app) row(c *ui.Context, it Item) {
-	a.rowWith(c, it, a.openItem)
-}
-
 // rowWith 画一行列表项，但由调用方决定点开它的动作。「我的」窗口渲染同一
 // 批行时传 openProfileItem：正文在主窗口打开，本窗口留着不动。
 func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
@@ -1282,7 +1417,9 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 			ui.Text(c, it.Title).FontSize(16).Bold().MaxLines(2).TextColor(titleColor)
 			// 副标题里的作者用统一用户标识渲染：头像跟着 11px 的昵称走，
 			// 同时保留「节点 · 昵称 · 发帖时间」的原有顺序；节点名或时间太长时
-			// 允许折行，不把右侧的元信息挤出去。
+			// 允许折行，不把右侧的元信息挤出去。Author 为空说明接口没给发帖人
+			// （「我的」窗口的 /v1/me/topics、/v1/me/bookmarks 就是这样），
+			// 这时整段作者不画，也不退回副标题里的空作者段。
 			switch {
 			case it.Author != "":
 				ui.Row(c).MinWidth(0).AlignItems(ui.Center).Wrap().Children(func() {
@@ -1297,8 +1434,10 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 						Color:  t.TextMuted,
 						Badges: it.AuthorBadges,
 					})
-					if it.SubtitleSuffix != "" {
-						ui.Text(c, it.SubtitleSuffix).FontSize(11).
+					// 有节点前缀时后缀自带「 · 」；没有前缀时昵称就是这一段的
+					// 开头，得自己补上分隔符，别让「·」落在最前面。
+					if suffix := strings.TrimPrefix(it.SubtitleSuffix, " · "); suffix != "" {
+						ui.Text(c, " · "+suffix).FontSize(11).
 							TextColor(t.TextMuted).SingleLine()
 					}
 				})
@@ -1381,7 +1520,10 @@ func (a *app) loginView(c *ui.Context) {
 	ui.Divider(c)
 	ui.Column(c).Fill().Padding(20, 24).Gap(12).Children(func() {
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "← 返回").Clicked() {
+			// 返回是图标按钮：这一行左边只放一个左箭头，标题就能贴住左边，
+			// 点了会放弃还没完成的授权，这件事写在 Tooltip 里。
+			if iconActionButton(c, chevronLeftIcon, "返回",
+				"回到列表；离开这一页会放弃还没完成的授权").Clicked() {
 				// 从授权弹窗的「粘贴回调」来到这一页时，离开就等于放弃这次
 				// 授权：把待重跑调用一起丢掉，避免以后突然执行过期操作。
 				if a.hasPendingAuthorization() {

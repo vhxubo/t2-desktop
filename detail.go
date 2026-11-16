@@ -71,6 +71,12 @@ type topicDetail struct {
 	// Restricted 是隐藏内容的门槛（api-read.md 的 extra.restricted）：
 	// 未解锁时只有条件，已解锁时可能带正文，字段按受限内容的容错解码读取。
 	Restricted *restrictedInfo
+	// Redeem 是兑换码块（api-read.md 的 extra.redeem_codes）：只有脱敏值，
+	// 已领取的码才带完整 code。领取入口见 redeem.go。
+	Redeem *redeemBlock
+	// RewardPool 是随帖的金币池状态。线上写在详情顶层 d.reward_pool，
+	// 早期文档写在 d.extra.reward_pool：两处都认，见 decodeTopicRewardPool。
+	RewardPool *rewardPoolInfo
 	// 收藏状态：favorited 只在带令牌时有意义。字段缺失时 FavoriteKnown 为
 	// false，按钮按未收藏展示，点一下以服务端结果为准。
 	Favorited     bool
@@ -179,8 +185,12 @@ type replyItem struct {
 	// is_bookmarked；匿名响应没有这个键，不能当成「没加书签」。
 	Bookmarked    bool
 	BookmarkKnown bool
-	Depth         int
-	Children      []replyItem
+	// RewardPoolWinnings 是这条评论从帖子金币池里领到的金币（元为单位，按
+	// 笔保留）。服务端下发 reward_pool_rewards: [{"amount": 53}]，没有命中
+	// 时是空数组。楼中楼不会中奖，所以 children 里通常都是空的。
+	RewardPoolWinnings []int
+	Depth              int
+	Children           []replyItem
 	// HasChildren 标记这条评论在原始数据里带子树（楼中楼）。flattenReplies
 	// 把树摊平后 Children 被清空，但保留这个标志，供楼层视图在评论旁显示
 	// 折叠 / 展开入口，并据此隐藏被折叠的子回复。
@@ -340,6 +350,11 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 	t.Bet = decodeTopicBet(o)
 	// 受限内容门槛：文档写在 extra.restricted，顶层也认。
 	t.Restricted = decodeTopicRestricted(o)
+	// 兑换码块同样写在 extra.redeem_codes：详情只给脱敏值，领取要用户
+	// 自己粘贴完整码（见 redeem.go）。
+	t.Redeem = decodeTopicRedeem(o)
+	// 金币池：线上在顶层 d.reward_pool，早期文档在 d.extra.reward_pool。
+	t.RewardPool = decodeTopicRewardPool(o)
 	return t, nil
 }
 
@@ -493,6 +508,7 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 	// 线上 API 的字段是 reactions_summary；reactions 是旧文档 / 示例里的名字。
 	r.Reactions = decodeReactionStats(o["reactions_summary"], o["reactions"], o["my_reactions"])
 	r.Rewards = decodeRewards(o["rewards"])
+	r.RewardPoolWinnings = decodeRewardPoolWinnings(o["reward_pool_rewards"])
 	if depth < 8 { // guard against pathological nesting
 		for _, child := range rawArray(o["children"]) {
 			r.Children = append(r.Children, decodeReply(child, depth+1))
