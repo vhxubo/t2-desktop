@@ -25,7 +25,8 @@ import (
 //	回复    GET /v1/users/:userName/replies
 //	徽章    GET /v1/users/:userName/badges 与 /badges/equipped
 //
-// 关注是这里唯一的写操作，走 follow.go 的同一个提交路径（scope interact）。
+// 关注是这里唯一的互动写操作，走 follow.go 的同一个提交路径（scope interact）；
+// 本人还可以编辑介绍（POST /v1/me/about，见 about_edit.go）。
 //
 // 简介正文在单独的 about 端点，字段与实测说明见下面 userAbout 的注释；
 // 资料里的 has_readme 只说明有没有。资料卡同样没有「获赞」这类聚合数字，
@@ -315,6 +316,16 @@ type userCardState struct {
 	aboutLoaded  bool
 	aboutErr     string
 	about        userAbout
+	// 编辑个人介绍（仅本人）：草稿、公开开关与提交状态。保存会消耗 500
+	// 金币，审核通过后异步扣除，见 about_edit.go。
+	aboutEditOpen bool
+	aboutDraft    string
+	aboutPublic   bool
+	aboutBusy     bool
+	aboutErrEdit  string
+	aboutKey      string
+	aboutSig      string
+	aboutGen      uint64
 
 	tab     int
 	topics  userCardList
@@ -672,6 +683,12 @@ func (a *app) refreshUserCardForAuth() {
 	cs.aboutLoading = false // 在途请求的 seq 已过期，结果会被丢弃
 	cs.aboutErr = ""
 	cs.about = userAbout{}
+	cs.aboutEditOpen = false
+	cs.aboutBusy = false
+	cs.aboutErrEdit = ""
+	cs.aboutKey = ""
+	cs.aboutSig = ""
+	cs.aboutGen++
 	cs.badges.seq++
 	cs.badges.loaded = false
 	cs.badges.loading = false // 在途请求的 seq 已过期，结果会被丢弃

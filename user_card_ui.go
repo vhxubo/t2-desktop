@@ -183,6 +183,7 @@ func (a *app) userCardWindowView(c *ui.Context) {
 			}
 		})
 	})
+	a.userCardAboutEditor(c)
 	a.ensureUserCardLoaded()
 }
 
@@ -315,7 +316,15 @@ func (a *app) userCardBio(c *ui.Context, cs *userCardState) {
 	// MinHeight(0)：窗口缩到最小时先压这一块（里面的介绍框会跟着缩短），
 	// 否则内容会把统计、标签页与列表顶出窗口。
 	ui.Column(c).FillWidth().MinHeight(0).Padding(10, 16).Gap(4).Children(func() {
-		ui.Text(c, "个人简介").FontSize(11).TextColor(t.TextMuted).SingleLine()
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(6).Children(func() {
+			ui.Text(c, "个人简介").FontSize(11).TextColor(t.TextMuted).SingleLine()
+			ui.Spacer(c).Grow(1)
+			// 只有本人、且介绍已经读到，才给编辑入口：没读到正文就编辑，
+			// 容易用空草稿覆盖掉原来的内容。
+			if a.userCardSelf() && cs.aboutLoaded && cs.aboutErr == "" {
+				a.smallAction(c, "编辑介绍", cs.aboutBusy, a.openUserCardAboutEditor)
+			}
+		})
 		switch {
 		case cs.aboutErr != "":
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
@@ -326,10 +335,10 @@ func (a *app) userCardBio(c *ui.Context, cs *userCardState) {
 		case !cs.aboutLoaded || cs.aboutLoading:
 			ui.Text(c, "正在读取个人介绍…").FontSize(userCardBioFontSize).TextColor(t.Text)
 		case strings.TrimSpace(cs.about.Content) == "":
-			// 没填写和「仅自己可见」都是空正文，但原因不同，不能混为一谈。
+			// 没填写和「仅社区成员可见」都是空正文，但原因不同，不能混为一谈。
 			text := "这位用户还没有填写个人介绍。"
 			if cs.about.PublicKnown && !cs.about.IsPublic {
-				text = "这位用户的个人介绍仅自己可见。"
+				text = "这位用户的个人介绍仅在社区内可见。"
 			}
 			ui.Text(c, text).FontSize(userCardBioFontSize).TextColor(t.Text)
 		default:
@@ -372,7 +381,7 @@ func userCardAboutMeta(about userAbout) string {
 		if about.IsPublic {
 			parts = append(parts, "介绍公开")
 		} else {
-			parts = append(parts, "介绍仅自己可见")
+			parts = append(parts, "介绍仅社区成员可见")
 		}
 	}
 	if t, ok := profileTime(about.UpdatedAt); ok {

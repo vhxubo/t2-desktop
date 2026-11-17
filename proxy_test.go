@@ -1369,3 +1369,45 @@ func TestAvatarEndpointsUseConfiguredProxy(t *testing.T) {
 		}
 	}
 }
+
+// 个人介绍写也是经济写出口：必须经配置的代理，带幂等键与两个字段。
+func TestUpdateMyAboutUsesConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var paths, bodies, keys []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		bodies = append(bodies, string(body))
+		keys = append(keys, r.Header.Get("Idempotency-Key"))
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"content":"经代理保存","is_public":true}`))
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		Proxy:  p,
+		Base:   "http://upstream.invalid/api",
+		bearer: func() string { return "tok" },
+	}
+	if _, err := c.updateMyAbout(context.Background(), "key-1", "新介绍", true); err != nil {
+		t.Fatalf("经代理保存介绍失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != 1 || paths[0] != "POST /api/v1/me/about" {
+		t.Fatalf("代理收到的请求 = %v", paths)
+	}
+	if bodies[0] != `{"content":"新介绍","is_public":true}` {
+		t.Errorf("请求体 = %q", bodies[0])
+	}
+	if keys[0] != "key-1" {
+		t.Errorf("幂等键 = %q", keys[0])
+	}
+}

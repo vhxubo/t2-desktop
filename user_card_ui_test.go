@@ -75,7 +75,7 @@ func TestUserCardAboutRenders(t *testing.T) {
 	}
 }
 
-// 介绍的四种状态：读取中、没有填写、仅自己可见、读取失败（带重试）。
+// 介绍的四种状态：读取中、没有填写、仅社区成员可见、读取失败（带重试）。
 func TestUserCardAboutStates(t *testing.T) {
 	a := userCardTestApp(t)
 	cs := a.userCard
@@ -95,7 +95,7 @@ func TestUserCardAboutStates(t *testing.T) {
 	// 不公开且没有正文：不能写成「没有填写」。
 	cs.about = userAbout{PublicKnown: true}
 	tt.Frame()
-	if !tt.HasText("仅自己可见") || tt.HasText("还没有填写个人介绍") {
+	if !tt.HasText("仅在社区内可见") || tt.HasText("还没有填写个人介绍") {
 		t.Errorf("不公开的介绍状态不对：%q", tt.Texts())
 	}
 
