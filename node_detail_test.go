@@ -29,9 +29,8 @@ func TestFetchNodeDetail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取节点详情失败：%v", err)
 	}
-	if d.Slug != "work" || d.Name != "职场" || d.Description != "工作中的大小事" ||
-		d.ParentSlug != "life" || d.PostCount != 42 {
-		t.Errorf("节点详情 = %+v", d)
+	if d.Description != "工作中的大小事" {
+		t.Errorf("节点简介 = %+v", d)
 	}
 	if _, err := c.fetchNodeDetail(context.Background(), ""); err == nil {
 		t.Error("空 slug 应当报错")
@@ -57,7 +56,7 @@ func TestLoadNodeDetail(t *testing.T) {
 	if len(paths) != 1 || paths[0] != "/v1/nodes/community" {
 		t.Errorf("请求路径 = %v", paths)
 	}
-	if st.nodeDetail.Name != "社区讨论" || st.nodeDetailErr != "" {
+	if st.nodeDetail.Description != "聊聊社区" || st.nodeDetailErr != "" {
 		t.Errorf("节点详情没有回填：%+v / %q", st.nodeDetail, st.nodeDetailErr)
 	}
 }
@@ -67,7 +66,7 @@ func TestComposeShowsNodeDescription(t *testing.T) {
 	a := testApp(t)
 	st := composeReady(a)
 	st.nodeDetailSlug = "community"
-	st.nodeDetail = nodeDetail{Slug: "community", Name: "社区讨论", Description: "聊聊社区里的事"}
+	st.nodeDetail = nodeDetail{Description: "聊聊社区里的事"}
 
 	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	tt.Frame()

@@ -40,7 +40,6 @@ type scoreEntry struct {
 	Category   string
 	CreatedAt  string
 	Author     string
-	AuthorID   string
 	Avatar     string
 	IsPro      bool
 	Badges     []badgeInfo
@@ -51,7 +50,6 @@ type scorePage struct {
 	Items      []scoreEntry
 	Total      int
 	Page       int
-	Limit      int
 	TotalPages int
 }
 
@@ -71,14 +69,13 @@ func decodeScoreCategories(d json.RawMessage) []string {
 }
 
 func decodeScores(d json.RawMessage) scorePage {
-	out := scorePage{Limit: scorePageSize}
+	out := scorePage{}
 	o := asObject(d)
 	if o == nil {
 		return out
 	}
 	out.Total = o.num("total")
 	out.Page = o.num("page")
-	out.Limit = o.num("limit")
 	out.TotalPages = o.num("total_pages")
 	for _, raw := range rawArray(o["items"]) {
 		item := asObject(raw)
@@ -103,7 +100,6 @@ func decodeScores(d json.RawMessage) scorePage {
 			Category:  score.str("category"),
 			CreatedAt: score.str("created_at", "createdAt"),
 			Author:    author.str("username"),
-			AuthorID:  author.str("id"),
 			Avatar:    authorAvatar(author),
 			IsPro:     author.flag("is_pro", "isPro"),
 			Badges:    decodeBadges(author),
@@ -122,9 +118,6 @@ func decodeScores(d json.RawMessage) scorePage {
 	}
 	if out.Page <= 0 {
 		out.Page = 1
-	}
-	if out.Limit <= 0 {
-		out.Limit = scorePageSize
 	}
 	if out.TotalPages <= 0 && len(out.Items) > 0 {
 		out.TotalPages = 1

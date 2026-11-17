@@ -434,6 +434,9 @@ func (a *app) scoreRow(c *ui.Context, e scoreEntry) {
 							Name: e.Author, Avatar: e.Avatar, Badges: e.Badges, Size: 11,
 						})
 					}
+					if e.IsPro {
+						userCardChip(c, "PRO", t.Accent)
+					}
 					if when := relativeTime(e.CreatedAt); when != "" {
 						ui.Text(c, when).FontSize(10).TextColor(t.TextMuted).SingleLine()
 					}

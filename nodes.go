@@ -314,14 +314,9 @@ func nodeCacheFresh(at time.Time) bool {
 --------------------------------------------------------------- */
 
 // nodeDetail 是 GET /v1/nodes/:slug 的单节点信息。列表里已经给了 slug / name /
-// post_count，简介只在详情响应里可靠，所以选中节点后再补一次。
+// post_count，只有简介需要单独补一次，所以这里只保留 description。
 type nodeDetail struct {
-	Slug        string
-	Name        string
 	Description string
-	ParentSlug  string
-	Dimension   string
-	PostCount   int
 }
 
 func (c *Client) fetchNodeDetail(ctx context.Context, slug string) (nodeDetail, error) {
@@ -340,12 +335,7 @@ func (c *Client) fetchNodeDetail(ctx context.Context, slug string) (nodeDetail, 
 		return nodeDetail{}, errors.New("节点详情响应为空")
 	}
 	return nodeDetail{
-		Slug:        o.str("slug"),
-		Name:        o.str("name"),
 		Description: o.str("description"),
-		ParentSlug:  o.str("parent_slug"),
-		Dimension:   o.str("dimension"),
-		PostCount:   o.num("post_count"),
 	}, nil
 }
 
