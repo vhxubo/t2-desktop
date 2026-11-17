@@ -388,6 +388,49 @@ func scopeTooltip(scope string) string {
 	return scope
 }
 
+// loginWindowGrant 说明这次授权回来的令牌实际拿到了哪些权限，以及申请过但
+// 没拿到的（用户拒绝、或在站内「授权应用」页逐项关掉了某项）。后者必须当场
+// 说出来：只申请不授予时，回头看「本次申请」会以为已经拿到了。
+//
+// 判断依据是授权地址里申请过的 scope（AuthManager.requestedScopesList）与
+// 令牌里的 scope，不猜测服务端行为。
+func (b *accountBook) loginWindowGrant(c *ui.Context) {
+	p := b.pendingLogin()
+	if p == nil {
+		return
+	}
+	// 给已有账号补权限时，令牌在窗口自己的会话上（pending 里那次临时授权
+	// 的令牌已经换成这个账号的存储了），从账号册取最准。
+	if p.accountID != "" {
+		if acc := b.account(p.accountID); acc != nil {
+			b.loginWindowGrantFor(c, acc.auth)
+			return
+		}
+	}
+	b.loginWindowGrantFor(c, p.auth)
+}
+
+// loginWindowGrantFor 画某个会话的权限核对：授权地址里申请过的与令牌里拿到
+// 的逐项对比。
+func (b *accountBook) loginWindowGrantFor(c *ui.Context, auth *AuthManager) {
+	t := c.Theme()
+	if auth == nil {
+		return
+	}
+	granted := auth.scopes()
+	if len(granted) == 0 {
+		return
+	}
+	got, missing := grantedAndMissing(auth.requestedScopesList(), granted)
+	ui.Text(c, "已获得："+strings.Join(got, "、")).FontSize(10).
+		TextColor(t.Text).SingleLine()
+	if len(missing) > 0 {
+		ui.Text(c, "未获得："+strings.Join(missing, "、")+
+			"（在 2Libra 的「授权应用」页里被关掉或未同意；需要时重新授权并在授权页勾选）").
+			FontSize(10).TextColor(t.Danger).MaxLines(3)
+	}
+}
+
 // loginWindowLabels 是内置浏览器窗口的标题与说明：添加账号时是「登录另一个
 // 账号」，给已有账号补权限时写明是哪个账号 —— 用户在那个窗口里登录，得先
 // 知道该登谁。
@@ -415,6 +458,7 @@ func (b *accountBook) loginWindowFooter(c *ui.Context) {
 	// 打不开授权页时由中间那块说明与「重试」负责，底部不再重复一个重新授权。
 	left := b.loginLeftAuthorizePage() && b.loginErr == ""
 	ui.Column(c).FillWidth().Padding(8, 12).Gap(8).Children(func() {
+		b.loginWindowGrant(c)
 		if left {
 			ui.Text(c, "登录完成后如果页面没有回到授权页，点「重新授权」重新载入授权页："+
 				"这个窗口已经登录，不用再输一次密码。").

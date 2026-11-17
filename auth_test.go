@@ -353,6 +353,35 @@ func TestWrapAuthErrorShowsProxyAndFallback(t *testing.T) {
 	}
 }
 
+// requestedScopesList 是这次授权地址里真正申请过的 scope：默认范围加上补
+// 的那几项。登录窗口用它展示「本次申请」，finishLogin 用它对比服务端实际
+// 授予了什么（申请了但没授予要能看出来）。
+func TestRequestedScopesIncludeExtraScopes(t *testing.T) {
+	m := newAuthManager(t.TempDir())
+	if _, err := m.BeginScopes(context.Background(), []string{"write:topic"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m.Cancel)
+
+	got := m.requestedScopesList()
+	if !containsString(got, "write:topic") {
+		t.Fatalf("申请过的 scope = %v，缺少 write:topic", got)
+	}
+	for _, want := range strings.Fields(defaultScopes) {
+		if !containsString(got, want) {
+			t.Errorf("申请过的 scope = %v，缺少默认项 %q", got, want)
+		}
+	}
+
+	granted, missing := grantedAndMissing(got, strings.Fields(defaultScopes))
+	if !containsString(missing, "write:topic") {
+		t.Errorf("未授予列表 = %v，应包含 write:topic", missing)
+	}
+	if containsString(granted, "write:topic") {
+		t.Errorf("已授予列表不该包含 write:topic：%v", granted)
+	}
+}
+
 // 令牌响应体读到一半才超时（"Client Timeout ... while reading body"），
 // 是打包后登录报错的真实现场。确认 postForm 在这个阶段也套上了诊断提示，
 // 而不是把裸的 context deadline exceeded 直接抛给界面。

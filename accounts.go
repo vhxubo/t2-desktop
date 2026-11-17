@@ -634,6 +634,8 @@ func (b *accountBook) beginAccountLogin(auth *AuthManager, targetID string, extr
 		b.showPanel()
 		return
 	}
+	// 只记 scope，不打印完整授权地址（里面带 state 与 PKCE）。
+	log.Printf("开始授权：target=%q 申请 scope=%q", targetID, strings.Join(auth.requestedScopesList(), " "))
 	p := &accountLogin{auth: auth, accountID: targetID, url: authorize}
 	embedded := b.embeddedLoginReady(targetID)
 	p.embedded = embedded
@@ -729,6 +731,7 @@ func (b *accountBook) finishAccountLogin(auth *AuthManager, err error) {
 			b.setLoginMsg(err.Error())
 			return
 		}
+		b.noteGrantedScopes(p.auth)
 		b.openWindow(acc.ID)
 	})
 }
@@ -766,6 +769,29 @@ func (b *accountBook) failAccountWindowAuth(p *accountLogin, err error) {
 		app.authGate.open = false
 		app.pageName = "login"
 	})
+}
+
+// noteGrantedScopes 把这次授权实际拿到的 scope 写进账号面板状态：申请了但
+// 没拿到的（应用未审核这项、用户在站内「授权应用」页逐项关掉）必须当场说
+// 出来，否则用户只看到「登录成功」，下一次发帖才发现仍然缺 write:topic。
+func (b *accountBook) noteGrantedScopes(auth *AuthManager) {
+	if auth == nil {
+		return
+	}
+	requested := auth.requestedScopesList()
+	if len(requested) == 0 {
+		return
+	}
+	granted := auth.scopes()
+	_, missing := grantedAndMissing(requested, granted)
+	msg := b.loginStatus()
+	if len(missing) > 0 {
+		msg = strings.TrimSpace(msg + " 但服务端没有授予：" + strings.Join(missing, "、") +
+			"。请检查 2Libra「OAuth 应用」里申请的范围、以及「授权应用」里有没有被逐项关掉。")
+	} else {
+		msg = strings.TrimSpace(msg + " 本次申请的权限已全部授予。")
+	}
+	b.setLoginMsg(msg)
 }
 
 // persistLogin 把一次成功授权落进账号册。给已有账号重新授权时先核对身份：

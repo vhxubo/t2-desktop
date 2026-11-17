@@ -31,6 +31,9 @@ func (a *app) authDialogFor(c *ui.Context, owner toastTarget) {
 			}
 			ui.Text(c, "点「前往授权」会在浏览器里打开授权页；回调被接受后，刚才被中断的操作会自动继续。").
 				FontSize(12).TextColor(t.TextMuted).MaxLines(3)
+			ui.Text(c, "这次授权会重新申请："+strings.Join(a.auth.requestedScopePreview(need.Scopes), "、")+
+				"。授权页上要整体同意；如果之后仍缺某项，去 2Libra 的「授权应用」页确认它没被单独关掉。").
+				FontSize(11).TextColor(t.TextMuted).MaxLines(3)
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Spacer(c).Grow(1)
 				if ui.Button(c, "取消").Clicked() {

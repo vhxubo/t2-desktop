@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -33,7 +34,6 @@ const (
 	defaultRedirectURI = appIdentifier + ":/callback"
 	clientID           = "e3cf9b14c5104d85af2c2b2a8ce2da36"
 	defaultScopes      = "read profile read:me write:comment interact read:economy"
-
 	// Some platforms normalise :/callback into ://callback before handing
 	// the URL to the app. This is the same native callback, not a second
 	// login method, so it is accepted as a spelling variant only.
@@ -44,6 +44,10 @@ const (
 	// 授权即可。邀请码 7OzoT5x6M 由 2Libra 下发，绑定本应用的推广来源。
 	signupURL = "https://2libra.com/auth/signup/7OzoT5x6M"
 )
+
+// defaultScopesList 是 defaultScopes 的逐项形式：申请新 scope 时按它拼授权
+// 地址，登录窗口再按它列出「本次申请」。
+var defaultScopesList = strings.Fields(defaultScopes)
 
 type tokenData struct {
 	AccessToken  string `json:"access_token"`
@@ -166,7 +170,8 @@ type AuthManager struct {
 	// (mygo.Secrets); tests inject a file-backed store via tokenStoreFactory.
 	store tokenStore
 	// requestedScopes 是这次令牌实际申请过的 scope（mergeScopes 的结果）。
-	// 授权页按它列出要申请的权限；申没申请到才是下次缺权限时该补什么。
+	// 授权页按它列出要申请的权限；申没申请到才是下次缺权限时该补什么。重新
+	// 登录时用账号已有的令牌 scope 初始化，窗口里就能核对这次补到了哪些。
 	requestedScopes string
 }
 
@@ -202,6 +207,9 @@ func newAuthManagerFor(dir string, proxy *proxyManager, key string) *AuthManager
 	// left behind by an older build is ignored entirely.
 	if loaded, err := m.store.load(); err == nil && loaded != nil && loaded.AccessToken != "" {
 		m.token = loaded
+		// 重新授权时以账号已有的令牌权限为起点：授权地址要在这个基础上补缺的
+		// scope，登录窗口随后用它核对这次补到了哪些。
+		m.requestedScopes = loaded.Scope
 	}
 	return m
 }
@@ -485,6 +493,13 @@ func (m *AuthManager) requestedScopesList() []string {
 	return strings.Fields(m.requestedScopes)
 }
 
+// requestedScopePreview 是「点前往授权之后会申请哪些 scope」：默认范围加上
+// extra，和 BeginScopes 拼授权地址用的是同一个 mergeScopes。授权弹窗据此
+// 先告诉用户这次会申请什么，不必等浏览器打开才看见。
+func (m *AuthManager) requestedScopePreview(extra []string) []string {
+	return strings.Fields(mergeScopes(extra))
+}
+
 // scopeLabel 是 scope 在界面上的中文说明。profile.go 的「我的 · 权限与账号」
 // 与登录窗口的待申请清单共用这一份，文案两边一致。
 func scopeLabel(scope string) string {
@@ -736,8 +751,8 @@ func (m *AuthManager) authorizeURL(p *pendingLogin, scope string) string {
 // requested (a revoked `write:comment`, a newer endpoint's scope); the next
 // authorization must ask for it explicitly or the browser page cannot grant it.
 func mergeScopes(extra []string) string {
-	seen := make(map[string]struct{}, len(extra)+4)
-	merged := make([]string, 0, len(extra)+4)
+	seen := make(map[string]struct{}, len(extra)+len(defaultScopesList)+4)
+	merged := make([]string, 0, len(extra)+len(defaultScopesList)+4)
 	add := func(s string) {
 		s = strings.TrimSpace(s)
 		if s == "" {
@@ -749,7 +764,7 @@ func mergeScopes(extra []string) string {
 		seen[s] = struct{}{}
 		merged = append(merged, s)
 	}
-	for _, s := range strings.Fields(defaultScopes) {
+	for _, s := range defaultScopesList {
 		add(s)
 	}
 	for _, s := range extra {
@@ -880,6 +895,18 @@ func (m *AuthManager) finishLogin(ctx context.Context, p *pendingLogin, r loginR
 	}
 	if err := m.storeToken(t); err != nil {
 		return fmt.Errorf("令牌已获取但保存失败：%w", err)
+	}
+	requested := m.requestedScopesList()
+	granted := strings.Fields(t.Scope)
+	_, missing := grantedAndMissing(requested, granted)
+	if len(missing) > 0 {
+		// 申请了但没授予：授权页可能没列出它（应用未开通 / 审核范围不含），
+		// 也可能用户在站内「授权应用」页逐项关掉了。把差别写进日志，用户不用
+		// 猜是请求没带上，还是服务端没给。
+		log.Printf("授权完成，但以下 scope 未授予：%s（申请：%s；拿到：%s）",
+			strings.Join(missing, " "), strings.Join(requested, " "), strings.Join(granted, " "))
+	} else {
+		log.Printf("授权完成，服务端授予 scope：%s", strings.Join(granted, " "))
 	}
 	m.fetchIdentity(ctx, t.AccessToken)
 	_ = m.verify(ctx, t.AccessToken)

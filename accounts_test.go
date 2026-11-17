@@ -948,6 +948,33 @@ func TestUseSystemBrowserKeepsTheSameAuthorization(t *testing.T) {
 	}
 }
 
+// 授权成功后面板要当场说明服务端实际给了哪些权限：申请了 write:topic 却没
+// 授予时，不能只显示「已重新登录」，否则用户下次发动态才发现还是缺权限。
+func TestNoteGrantedScopesWarnsMissing(t *testing.T) {
+	b := testBook(t)
+	m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
+	m.store = &memoryTokenStore{}
+	m.token = &tokenData{
+		AccessToken: "tok",
+		Username:    "jimmy",
+		Scope:       "read profile read:me write:comment interact read:economy",
+	}
+	m.requestedScopes = m.token.Scope + " write:topic"
+
+	b.noteGrantedScopes(m)
+	msg := b.loginStatus()
+	if !strings.Contains(msg, "write:topic") || !strings.Contains(msg, "没有授予") {
+		t.Errorf("面板没有说明 write:topic 未授予：%q", msg)
+	}
+
+	// 申请的都拿到了：说明已全部授予，不留一个让人担心的空白。
+	m.token.Scope += " write:topic"
+	b.noteGrantedScopes(m)
+	if msg := b.loginStatus(); !strings.Contains(msg, "全部授予") {
+		t.Errorf("权限齐全时面板提示不对：%q", msg)
+	}
+}
+
 // 内置浏览器窗口的界面：说明这是独立会话，webview 还没建出来时给进度，
 // 起不来时给原因与「重试 / 改用系统浏览器」两个出口。
 func TestLoginWindowViewStates(t *testing.T) {
@@ -973,13 +1000,14 @@ func TestLoginWindowViewStates(t *testing.T) {
 }
 
 // 补权限的内置浏览器窗口要写明给哪个账号重新授权：窗口是独立会话，用户得
-// 知道该在里面登录谁，才不会再登错账号。
+// 知道该在里面登录谁，才不会再登错账号。同时要列出这次申请过的 scope：
+// 「发动态要的 write:topic 到底申请了没有」直接看这一行。
 func TestLoginWindowNamesReauthTarget(t *testing.T) {
 	b := testBook(t)
 	acc := addTestAccount(t, b, "jimmy")
 	m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
 	m.store = &memoryTokenStore{}
-	if _, err := m.BeginScopes(context.Background(), nil); err != nil {
+	if _, err := m.BeginScopes(context.Background(), []string{"write:topic"}); err != nil {
 		t.Fatal(err)
 	}
 	b.mu.Lock()
@@ -992,7 +1020,7 @@ func TestLoginWindowNamesReauthTarget(t *testing.T) {
 
 	tt := ui.NewTester(b.loginWindowView, loginWindowWidth, loginWindowHeight)
 	tt.Frame()
-	for _, want := range []string{"重新授权", "「jimmy」", "要重新授权的"} {
+	for _, want := range []string{"重新授权", "「jimmy」", "要重新授权的", "本次申请", "write:topic"} {
 		if !tt.HasText(want) {
 			t.Errorf("补权限的授权窗口缺少 %q：%q", want, tt.Texts())
 		}
