@@ -17,7 +17,8 @@ import "time"
 // 里会改变金币的操作与接入位置：
 //
 //	coinEventSign        签到 POST /v1/me/sign                      signInNow
-//	coinEventPost        发帖 POST /v1/topics 🔑（含随帖扣费的金币池、    submitCompose
+//	coinEventPost        发帖 / 发动态 POST /v1/topics 或           submitCompose
+//	                     /v1/topics/moments 🔑（含随帖扣费的金币池、  submitMoment
 //	                     兑换码红包等字段）
 //	coinEventReply       回复 POST /v1/topics/:short_id/replies     submitReply
 //	coinEventReaction    表态 POST /v1/topics/:id/reaction 或        toggleReaction

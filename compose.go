@@ -11,12 +11,13 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 「发帖」窗口的数据、校验与请求。
+// 「发帖 / 发动态」窗口的数据、校验与请求。
 //
 // 端点与字段名逐字照抄 openapi v1 的 api-write.md：
 //
-//	GET  /v1/nodes      节点列表（顶层自带 children；?parent=<slug> 取子节点）
-//	POST /v1/topics 🔑  发帖（必须带 Idempotency-Key，成功返回 201）
+//	GET  /v1/nodes              节点列表（顶层自带 children；?parent=<slug> 取子节点）
+//	POST /v1/topics 🔑          发帖（必须带 Idempotency-Key，成功返回 201）
+//	POST /v1/topics/moments 🔑  发一条 1～500 字的短动态
 //
 // 发帖的可选块按文档的字段名原样组装：vote（投票）、score（评分）、
 // bet（竞猜）、redeem_codes（兑换码 / 红包）、reward_pool（金币池）与
@@ -34,6 +35,8 @@ import (
 const (
 	composeTitleMax   = 500
 	composeContentMax = 20000
+	// composeMomentMax 是动态正文上限（POST /v1/topics/moments）。
+	composeMomentMax = 500
 
 	composeVoteTitleMax  = 16
 	composeOptionMax     = 20 // vote.options 上限
@@ -62,8 +65,16 @@ const (
 	composeGuardAttrHi  = 10
 )
 
-// composeNode 是一个可发帖的节点。指定节点时用的是 uuid（node_id），不是
-// slug；级联选择按 id 记选中项，显示时才换成名字。
+// 「发帖」窗口的两种模式：发正式帖子，或发一条短动态。动态没有标题、节点与
+// 附加组件，只有 1～500 字的正文。
+const (
+	composeModePost = iota
+	composeModeMoment
+)
+
+var composeModeLabels = []string{"帖子", "动态"}
+
+// composeNode 是一个可发帖的节点。指定节点时用的是 uuid（node_id），不是// slug；级联选择按 id 记选中项，显示时才换成名字。
 type composeNode struct {
 	ID         string
 	Slug       string
@@ -238,6 +249,17 @@ type composeState struct {
 	guardLevel     float64
 	guardAttr      string
 	guardAttrValue float64
+
+	// 模式：帖子 / 动态。两边的草稿分开存，切换模式不会互相覆盖。
+	mode        int
+	lastMode    int
+	momentDraft string
+	momentField ui.Handle
+	momentBusy  bool
+	momentErr   string
+	momentKey   string
+	momentSig   string
+	momentGen   uint64
 
 	// 提交状态
 	posting bool
@@ -817,15 +839,39 @@ func (c *Client) createTopic(ctx context.Context, payload map[string]any, key st
 	})
 }
 
+// createMoment 发一条短动态。响应与发帖一样是 201 + 创建好的对象；动态没有
+// 节点，原文地址按无节点帖子拼。
+func (c *Client) createMoment(ctx context.Context, key, content string) (createdTopic, error) {
+	return withAuthRetry(c, ctx, func(token string) (createdTopic, error) {
+		d, err := c.postJSON(ctx, c.apiURL("/v1/topics/moments"), token, key,
+			map[string]any{"content": content})
+		if err != nil {
+			return createdTopic{}, err
+		}
+		shortID := asObject(d).str("short_id", "shortId")
+		return createdTopic{ShortID: shortID, URL: topicURL(shortID, "")}, nil
+	})
+}
+
 // resetComposeForm 在发表成功后清空正文与各组件。节点列表与手动指定的节点
 // 都留着：默认本来就不指定（由 AI 判定），而用户特意选过节点时，连着发两篇
 // 通常还是发到同一个节点，不该被一次发布悄悄改回去。
 func (st *composeState) resetComposeForm() {
+	mode := st.mode
 	nodes, nodesAt, loaded, pick := st.nodes, st.nodesAt, st.nodeLoaded, st.nodePick
 	id := st.nodeID
 	*st = *newComposeState()
+	st.mode = mode
 	st.nodes, st.nodesAt, st.nodeLoaded, st.nodePick = nodes, nodesAt, loaded, pick
 	st.nodeID = id
+}
+
+// resetMomentForm 清掉动态草稿与错误，保留幂等键以外的模式状态。
+func (st *composeState) resetMomentForm() {
+	st.momentDraft = ""
+	st.momentErr = ""
+	st.momentKey = ""
+	st.momentSig = ""
 }
 
 // ------------------------------------------------------------------

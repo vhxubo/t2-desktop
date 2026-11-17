@@ -54,9 +54,37 @@ const (
 ---------------------------------------------------------------- */
 
 // showCompose 是「发帖」窗口的全局入口：任何窗口、任何 goroutine 都能调用。
-// 它把工作挪到主线程；窗口已经开着就只把它带到前台，不会开出第二个。
+// 它把工作挪到主线程；窗口已经开着就只把它带到前台，不会开出第二个。从
+// 「发帖」入口进来时总是切回帖子模式；动态入口见 showMomentCompose。
 func (a *app) showCompose() {
-	a.publish(a.showComposeWindow)
+	a.publish(func() {
+		if a.compose == nil {
+			a.compose = newComposeState()
+		}
+		a.compose.mode = composeModePost
+		a.showComposeWindow()
+	})
+}
+
+// showMomentCompose 是「发动态」入口：复用同一扇窗口，切到动态模式。
+func (a *app) showMomentCompose() {
+	a.publish(a.showMomentComposeWindow)
+}
+
+func (a *app) showMomentComposeWindow() {
+	if a.compose == nil {
+		a.compose = newComposeState()
+	}
+	a.compose.mode = composeModeMoment
+	a.showComposeWindow()
+}
+
+// composeWindowTitle 是窗口标题栏 / 任务栏上的名字。
+func composeWindowTitle(mode int) string {
+	if mode == composeModeMoment {
+		return "发动态"
+	}
+	return "发帖"
 }
 
 // showComposeWindow 在主线程上真正打开窗口。草稿留在 a.compose 里，关掉再
@@ -68,7 +96,13 @@ func (a *app) showComposeWindow() {
 	}
 	if !a.auth.loggedIn() {
 		// 没登录就先授权；回来后把窗口打开，用户不用再点一次 FAB。
-		a.requestLogin("登录 2Libra 后才能发帖。", a.showCompose)
+		after := a.showCompose
+		msg := "登录 2Libra 后才能发帖。"
+		if a.compose.mode == composeModeMoment {
+			after = a.showMomentComposeWindow
+			msg = "登录 2Libra 后才能发动态。"
+		}
+		a.requestLogin(msg, after)
 		a.openComposeWindow()
 		return
 	}
@@ -94,7 +128,7 @@ func (a *app) openComposeWindow() {
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             a.subWindowTitle("发帖"),
+		Title:             a.subWindowTitle(composeWindowTitle(a.compose.mode)),
 		Width:             composeWindowWidth,
 		Height:            composeWindowHeight,
 		MinWidth:          composeWinMinWidth,
@@ -168,13 +202,27 @@ func (a *app) composeWindowView(c *ui.Context) {
 	c.Root().Background(t.Background)
 	// 本窗口里发起的操作结果以 toast 显示在这里，不退回主窗口。
 	a.drainToasts(c, a.claimsToasts(toastCompose))
-	// Ctrl+Enter 发布：写长文的常用手势。
-	c.OnShortcut(ui.Ctrl, ui.KeyEnter, a.submitCompose)
+	// Ctrl+Enter 发布：写长文的常用手势。动态模式下发的是短动态。
+	c.OnShortcut(ui.Ctrl, ui.KeyEnter, func() {
+		if a.compose != nil && a.compose.mode == composeModeMoment {
+			a.submitMoment()
+			return
+		}
+		a.submitCompose()
+	})
 
 	st := a.compose
 	if st == nil {
 		st = newComposeState()
 		a.compose = st
+	}
+	// 模式切换后窗口标题也跟着变；窗口还没建时由 openComposeWindow 用当前
+	// 模式命名。
+	if st.mode != st.lastMode {
+		st.lastMode = st.mode
+		if a.composeWin != nil {
+			a.composeWin.SetTitle(a.subWindowTitle(composeWindowTitle(st.mode)))
+		}
 	}
 	// 节点是选填的：默认留空，由站点的 AI 判定分类。列表照样先读本地缓存、
 	// 再按新鲜度刷新，用户想指定时级联选择里已经有东西可选。
@@ -185,14 +233,19 @@ func (a *app) composeWindowView(c *ui.Context) {
 		c.OnShortcut(0, ui.KeyEscape, a.closeComposeWindow)
 	}
 
+	title := "发帖"
+	hint := "· 支持 Markdown"
+	if st.mode == composeModeMoment {
+		title, hint = "发动态", "· 最多 500 字"
+	}
 	ui.Column(c).Fill().Children(func() {
 		// 自绘标题栏：拖动窗口，右上角是最小化与关闭。
 		ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
 			Background(t.Surface).DragWindow().Children(func() {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "发帖").FontSize(13).Bold().SingleLine().TextColor(t.Text)
-				ui.Text(c, "· 支持 Markdown").FontSize(11).SingleLine().TextColor(t.TextMuted)
+				ui.Text(c, title).FontSize(13).Bold().SingleLine().TextColor(t.Text)
+				ui.Text(c, hint).FontSize(11).SingleLine().TextColor(t.TextMuted)
 				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
@@ -204,24 +257,34 @@ func (a *app) composeWindowView(c *ui.Context) {
 		})
 		ui.Divider(c)
 
-		// 主体分两栏：左边专心写，右边常驻组件入口。两栏各自滚动，正文
-		// 写多长都不会把组件列表顶出视野。
-		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
-				ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-					ui.Column(c).FillWidth().Padding(18, 20).Gap(14).Children(func() {
-						a.composeTitleField(c, st)
-						a.composeEditorSection(c, st)
-						ui.Divider(c)
-						a.composeMessages(c, st)
-						// 节点排在写作区最后：选填，默认留空，由 AI 判定分类。
-						a.composeNodeSection(c, st)
+		// 模式切换：帖子与动态共用一扇窗口，草稿各自保留。
+		ui.Row(c).FillWidth().Padding(6, 14).Children(func() {
+			ui.Segmented(c, &st.mode, composeModeLabels...)
+		})
+		ui.Divider(c)
+
+		if st.mode == composeModeMoment {
+			a.composeMomentBody(c, st)
+		} else {
+			// 主体分两栏：左边专心写，右边常驻组件入口。两栏各自滚动，正文
+			// 写多长都不会把组件列表顶出视野。
+			ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+				ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
+					ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+						ui.Column(c).FillWidth().Padding(18, 20).Gap(14).Children(func() {
+							a.composeTitleField(c, st)
+							a.composeEditorSection(c, st)
+							ui.Divider(c)
+							a.composeMessages(c, st)
+							// 节点排在写作区最后：选填，默认留空，由 AI 判定分类。
+							a.composeNodeSection(c, st)
+						})
 					})
 				})
+				ui.Box(c).Width(1).AlignSelf(ui.Stretch).Background(t.Border)
+				a.composeSidebar(c, st)
 			})
-			ui.Box(c).Width(1).AlignSelf(ui.Stretch).Background(t.Border)
-			a.composeSidebar(c, st)
-		})
+		}
 
 		ui.Divider(c)
 		a.composeFooter(c, st)
@@ -230,6 +293,42 @@ func (a *app) composeWindowView(c *ui.Context) {
 	a.composeModuleDialog(c, st)
 	// 预览区里的配图同样能点开多图预览：和详情页共用同一个弹窗状态。
 	a.imageViewer(c)
+}
+
+// composeMomentBody 是动态模式：只有一段 1～500 字的正文，不显示标题、节点
+// 与附加组件。结果以 toast 报告，失败原因留在框里。
+func (a *app) composeMomentBody(c *ui.Context, st *composeState) {
+	t := c.Theme()
+	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+		ui.Column(c).FillWidth().Padding(18, 20).Gap(12).Children(func() {
+			ui.Text(c, "写一条动态").FontSize(14).Bold()
+			ui.Text(c, "短内容，最多 500 字；不需要标题和节点。").
+				FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+			ui.TextArea(c, &st.momentDraft).Label("动态内容").
+				Lines(8, 12).FillWidth().MaxLength(composeMomentMax).
+				Placeholder("此刻想说什么？").
+				Bind(&st.momentField)
+			count := utf8.RuneCountInString(st.momentDraft)
+			color := t.TextMuted
+			if count >= composeMomentMax {
+				color = t.Danger
+			}
+			ui.Textf(c, "%d / %d 字", count, composeMomentMax).
+				FontSize(10).TextColor(color)
+			if st.momentErr != "" {
+				ui.Text(c, st.momentErr).FontSize(12).TextColor(t.Danger).MaxLines(3)
+			}
+			if a.auth.loggedIn() && !a.hasAuthScope("write:topic") {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "当前授权还不能发动态，需要补充 write:topic 权限。").
+						FontSize(12).TextColor(t.TextMuted).MaxLines(2).Grow(1)
+					if ui.Button(c, "去授权").Clicked() {
+						a.demandAuthorization(scopeNeed([]string{"write:topic"}), nil)
+					}
+				})
+			}
+		})
+	})
 }
 
 // composeTitleField 是写作区第一块：只有标题。节点放在最下面且是选填的
@@ -1000,31 +1099,55 @@ func (a *app) composeMessages(c *ui.Context, st *composeState) {
 }
 
 // composeFooter 是窗口底部固定的一条：左边是草稿状态，右边是「发布」。
+// 动态模式复用同一条，只换提示、清空范围与按钮文字。
 func (a *app) composeFooter(c *ui.Context, st *composeState) {
 	t := c.Theme()
+	moment := st.mode == composeModeMoment
+	busy := st.posting
+	if moment {
+		busy = st.momentBusy
+	}
 	ui.Row(c).FillWidth().Padding(10, 16).Gap(10).AlignItems(ui.Center).Children(func() {
-		if st.posting {
+		if busy {
 			ui.Spinner(c).Size(14, 14)
 			ui.Text(c, "正在发布…").FontSize(12).TextColor(t.TextMuted).SingleLine()
 		} else {
 			hint := "Ctrl+Enter 发布"
+			if moment {
+				hint = "Ctrl+Enter 发布动态"
+			}
 			if !a.auth.loggedIn() {
 				hint = "发帖需要登录 2Libra"
+				if moment {
+					hint = "发动态需要登录 2Libra"
+				}
 			}
 			ui.Text(c, hint).FontSize(11).TextColor(t.TextMuted).SingleLine()
 		}
 		ui.Spacer(c).Grow(1)
-		if ui.Button(c, "清空").Clicked() && !st.posting {
-			// 清空草稿与各组件，但保留节点选择与已经拉到的节点列表。
-			st.resetComposeForm()
+		if ui.Button(c, "清空").Clicked() && !busy {
+			if moment {
+				st.resetMomentForm()
+			} else {
+				// 清空草稿与各组件，但保留节点选择与已经拉到的节点列表。
+				st.resetComposeForm()
+			}
 		}
 		// 「当前账号」与「发布」贴在一起：多账号时点下去之前就能看清是哪个
 		// 账号发出去（见 account_badge.go）。
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Children(func() {
 			a.accountBadge(c)
-			publish := ui.PrimaryButton(c, "发布").Disabled(st.posting)
+			label := "发布"
+			if moment {
+				label = "发布动态"
+			}
+			publish := ui.PrimaryButton(c, label).Disabled(busy)
 			if publish.Clicked() {
-				a.submitCompose()
+				if moment {
+					a.submitMoment()
+				} else {
+					a.submitCompose()
+				}
 			}
 		})
 	})
@@ -1102,6 +1225,68 @@ func (a *app) submitCompose() {
 			}
 			// 发帖会扣金币（随帖的金币池、兑换码红包也都算在这一笔里）：
 			// 发出全局金币刷新事件，标题栏与金币窗口一起更新。
+			a.coinsChanged(coinEventPost)
+			if a.onPostPublished != nil {
+				a.onPostPublished(created, nil)
+			}
+		})
+	}()
+}
+
+// submitMoment 发一条短动态。与发帖共用 write:topic 与同一套授权重跑；正文
+// 1～500 字，空白内容不发请求。成功后清空草稿并用 toast 报告，不留在页面里。
+func (a *app) submitMoment() {
+	st := a.compose
+	if st == nil || st.momentBusy {
+		return
+	}
+	if !a.auth.loggedIn() {
+		a.requestLogin("登录 2Libra 后才能发动态。", a.submitMoment)
+		return
+	}
+	content := strings.TrimSpace(st.momentDraft)
+	if content == "" {
+		st.momentErr = "动态内容不能为空"
+		return
+	}
+	if utf8.RuneCountInString(content) > composeMomentMax {
+		st.momentErr = fmt.Sprintf("动态不能超过 %d 个字符", composeMomentMax)
+		return
+	}
+	if st.momentKey == "" || st.momentSig != content {
+		st.momentKey = randomURLSafe(24)
+		st.momentSig = content
+	}
+	key := st.momentKey
+	st.momentBusy = true
+	st.momentErr = ""
+	st.momentGen++
+	gen := st.momentGen
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		created, err := a.client.createMoment(ctx, key, content)
+		a.publish(func() {
+			if a.compose != st || st.momentGen != gen {
+				return
+			}
+			st.momentBusy = false
+			if err != nil {
+				if a.handleAuthError(err, func() { a.submitMoment() }) {
+					return
+				}
+				st.momentErr = friendlyError(err)
+				if a.onPostPublished != nil {
+					a.onPostPublished(createdTopic{}, err)
+				}
+				return
+			}
+			st.momentKey = ""
+			st.momentSig = ""
+			st.resetMomentForm()
+			a.toast(toastCompose, "动态已发布")
+			// 动态可能产生内容检查等扣费：走全局金币刷新，已经加载过的
+			// 余额与流水一起更新。
 			a.coinsChanged(coinEventPost)
 			if a.onPostPublished != nil {
 				a.onPostPublished(created, nil)
