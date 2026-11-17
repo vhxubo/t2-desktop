@@ -60,16 +60,10 @@ func topicPostscriptPath(shortID string) string {
 	return topicPath(shortID) + "/postscript"
 }
 
-// editTopic 提交帖子的标题 / 正文。空串表示「这一项不改」，不会发出去：
-// 文档要求传了的字段必须非空。
-func (c *Client) editTopic(ctx context.Context, shortID, title, content string) error {
-	payload := map[string]any{}
-	if title != "" {
-		payload["title"] = title
-	}
-	if content != "" {
-		payload["content"] = content
-	}
+// editTopic 提交帖子要改的字段。调用方只放真正改动过的键：文档要求传了的
+// 字段必须非空，空串也等于「提交了空值」；清除可见性门槛用
+// access_guard_type: "none"，不是省略字段。
+func (c *Client) editTopic(ctx context.Context, shortID string, payload map[string]any) error {
 	if len(payload) == 0 {
 		return fmt.Errorf("没有要修改的内容")
 	}
@@ -101,6 +95,81 @@ func (c *Client) addPostscript(ctx context.Context, shortID, content, key string
 	return err
 }
 
+// editGuardKeep 是编辑窗口可见范围下拉框的第一项：不发送任何 access_guard_*
+// 字段，保持帖子当前的限制。发帖窗口的「所有人可见」对应「不设置」，而编辑
+// 窗口清除限制必须显式发送 access_guard_type: "none"，两者不能混用。
+const editGuardKeep = "keep"
+
+// editGuardLabels / editGuardValues 是编辑窗口的下拉框选项，顺序一一对应。
+// 第一项是「保持当前设置」，避免在读响应没有带门槛字段时，改个标题就把作者
+// 原来的限制悄悄清掉。
+var editGuardLabels = []string{"保持当前设置", "所有人可见", "登录用户可见", "达到等级可见", "满足属性可见"}
+
+var editGuardValues = []string{editGuardKeep, guardNone, guardLogin, guardLevel, guardAttribute}
+
+func guardFromEditLabel(label string) string {
+	for i, l := range editGuardLabels {
+		if l == label {
+			return editGuardValues[i]
+		}
+	}
+	return editGuardKeep
+}
+
+func editGuardLabel(typ string) string {
+	for i, v := range editGuardValues {
+		if v == typ {
+			return editGuardLabels[i]
+		}
+	}
+	return editGuardKeep
+}
+
+// normalizeGuardType 把服务端可能回传的 "none" / 空串统一成 guardNone。
+func normalizeGuardType(typ string) string {
+	switch strings.ToLower(strings.TrimSpace(typ)) {
+	case "", "none":
+		return guardNone
+	case guardLogin:
+		return guardLogin
+	case guardLevel:
+		return guardLevel
+	case guardAttribute:
+		return guardAttribute
+	}
+	return strings.ToLower(strings.TrimSpace(typ))
+}
+
+// guardSelection 是可见性门槛的一份取值。Type 取 guardNone / guardLogin /
+// guardLevel / guardAttribute；Level 与 Attr* 只在对应类型下有值。
+type guardSelection struct {
+	Type      string
+	Level     int
+	Attr      string
+	AttrValue int
+}
+
+// editGuard 把详情里的 access_guard_* 转成编辑窗口的初始值。读响应没有带
+// 这个字段、或类型不认识时返回 false：窗口从「保持当前设置」开始，作者仍可
+// 主动重新设置或清除，但不会因为一个默认值而误改。
+func (t *topicDetail) editGuard() (guardSelection, bool) {
+	if t == nil || !t.GuardKnown {
+		return guardSelection{}, false
+	}
+	typ := normalizeGuardType(t.GuardType)
+	switch typ {
+	case guardNone, guardLogin, guardLevel, guardAttribute:
+	default:
+		return guardSelection{}, false
+	}
+	return guardSelection{
+		Type:      typ,
+		Level:     t.GuardLevel,
+		Attr:      strings.TrimSpace(t.GuardAttr),
+		AttrValue: t.GuardAttrValue,
+	}, true
+}
+
 // editState 是编辑窗口的全部状态。只在 UI 线程读写；后台请求完成后通过
 // publish 回填，窗口关掉就整体丢弃（不做草稿持久化：编辑是一次性的短操作，
 // 留一份旧正文反而会在下次打开时盖掉最新内容）。
@@ -111,6 +180,15 @@ type editState struct {
 
 	title string // 只有编辑帖子时有
 	body  string
+
+	// 可见范围：只对编辑帖子有意义。guardChoice 存下拉框文案；origGuard /
+	// guardKnown 是打开窗口时详情里的原值，用来判断「真的改了」。
+	guardChoice    string
+	guardLevel     float64
+	guardAttr      string
+	guardAttrValue float64
+	origGuard      guardSelection
+	guardKnown     bool
 	// origTitle / origBody 是打开窗口时的原文：用来判断「有没有改动」，
 	// 也是正文不能清空这条校验的基准。
 	origTitle, origBody string
@@ -138,18 +216,34 @@ type editState struct {
 }
 
 func newTopicEditState(t *topicDetail, mdOpts *markdown.Options) *editState {
-	return &editState{
-		kind:       editKindTopic,
-		shortID:    t.ShortID,
-		title:      t.Title,
-		body:       t.Content,
-		origTitle:  strings.TrimSpace(t.Title),
-		origBody:   t.Content,
-		emojis:     t.Emojis,
-		mdOpts:     mdOpts, // 正文排版（a.md）
-		winPreview: true,
-		mdEditor:   newMDEditor(),
+	st := &editState{
+		kind:           editKindTopic,
+		shortID:        t.ShortID,
+		title:          t.Title,
+		body:           t.Content,
+		origTitle:      strings.TrimSpace(t.Title),
+		origBody:       t.Content,
+		guardChoice:    editGuardKeep,
+		guardLevel:     composeGuardLevelLo,
+		guardAttrValue: 0,
+		emojis:         t.Emojis,
+		mdOpts:         mdOpts, // 正文排版（a.md）
+		winPreview:     true,
+		mdEditor:       newMDEditor(),
 	}
+	if guard, ok := t.editGuard(); ok {
+		st.origGuard = guard
+		st.guardKnown = true
+		st.guardChoice = editGuardLabel(guard.Type)
+		if guard.Level >= composeGuardLevelLo {
+			st.guardLevel = float64(guard.Level)
+		}
+		st.guardAttr = guard.Attr
+		if guard.AttrValue >= 0 {
+			st.guardAttrValue = float64(guard.AttrValue)
+		}
+	}
+	return st
 }
 
 func newReplyEditState(shortID string, r replyItem, mdOpts *markdown.Options) *editState {
@@ -228,10 +322,84 @@ func (st *editState) hint() string {
 // changed 报告这份编辑有没有实际改动。标题按去空白后比较，正文按原样比较：
 // 多一个空格也是改动，不能替用户裁掉。
 func (st *editState) changed() bool {
-	if st.kind == editKindTopic && strings.TrimSpace(st.title) != st.origTitle {
-		return true
+	if st.kind == editKindTopic {
+		if strings.TrimSpace(st.title) != st.origTitle {
+			return true
+		}
+		if st.guardChanged() {
+			return true
+		}
 	}
 	return st.body != st.origBody
+}
+
+// selectedGuard 把下拉框的当前选择转成请求体取值。guardKeep 不会走到这里：
+// 调用方先看 guardChanged。
+func (st *editState) selectedGuard() guardSelection {
+	sel := guardSelection{Type: guardFromEditLabel(st.guardChoice)}
+	if sel.Type == guardLevel {
+		sel.Level = int(st.guardLevel)
+	}
+	if sel.Type == guardAttribute {
+		sel.Attr = strings.TrimSpace(st.guardAttr)
+		sel.AttrValue = int(st.guardAttrValue)
+	}
+	return sel
+}
+
+// guardChanged 报告可见范围是否被作者改过。保持当前设置永远不算改动；原值
+// 没读到时，作者主动选了某一项就算改动（那是一次明确的重设）。
+func (st *editState) guardChanged() bool {
+	if st.kind != editKindTopic || st.guardChoice == editGuardKeep {
+		return false
+	}
+	sel := st.selectedGuard()
+	if !st.guardKnown {
+		return true
+	}
+	if sel.Type != st.origGuard.Type {
+		return true
+	}
+	switch sel.Type {
+	case guardLevel:
+		return sel.Level != st.origGuard.Level
+	case guardAttribute:
+		return sel.Attr != st.origGuard.Attr || sel.AttrValue != st.origGuard.AttrValue
+	}
+	return false
+}
+
+// guardPayload 把改过的可见范围写进编辑请求体。清除限制必须显式发
+// access_guard_type: "none"（api-write.md 的编辑帖子一节）；没改就一个字段
+// 都不发，避免把作者在网页端设的门槛冲掉。
+func (st *editState) guardPayload(p map[string]any) error {
+	if !st.guardChanged() {
+		return nil
+	}
+	sel := st.selectedGuard()
+	switch sel.Type {
+	case guardNone:
+		p["access_guard_type"] = "none"
+	case guardLogin:
+		p["access_guard_type"] = guardLogin
+	case guardLevel:
+		if sel.Level < composeGuardLevelLo || sel.Level > composeGuardLevelHi {
+			return fmt.Errorf("可见等级应在 %d～%d 之间", composeGuardLevelLo, composeGuardLevelHi)
+		}
+		p["access_guard_type"] = guardLevel
+		p["access_guard_level"] = sel.Level
+	case guardAttribute:
+		if sel.Attr == "" {
+			return fmt.Errorf("按属性可见需要填写 D20 属性名")
+		}
+		if sel.AttrValue < 0 || sel.AttrValue > composeGuardAttrHi {
+			return fmt.Errorf("属性值应在 0～%d 之间", composeGuardAttrHi)
+		}
+		p["access_guard_type"] = guardAttribute
+		p["access_guard_attr"] = sel.Attr
+		p["access_guard_attr_value"] = sel.AttrValue
+	}
+	return nil
 }
 
 // payload 组装请求体并完成校验：返回的 error 就是 toast 里那句话。
@@ -261,6 +429,9 @@ func (st *editState) payload() (map[string]any, error) {
 		} else {
 			p["content"] = st.body
 		}
+		if err := st.guardPayload(p); err != nil {
+			return nil, err
+		}
 		return p, nil
 	case editKindReply:
 		if strings.TrimSpace(st.body) == "" {
@@ -281,8 +452,7 @@ func (st *editState) submit(ctx context.Context, c *Client, payload map[string]a
 	content, _ := payload["content"].(string)
 	switch st.kind {
 	case editKindTopic:
-		title, _ := payload["title"].(string)
-		return c.editTopic(ctx, st.shortID, title, content)
+		return c.editTopic(ctx, st.shortID, payload)
 	case editKindReply:
 		return c.editReply(ctx, st.replyID, content)
 	case editKindPostscript:
@@ -342,6 +512,14 @@ func (a *app) applyEdit(st *editState) {
 		d.topic.Title = strings.TrimSpace(st.title)
 		d.topic.Content = st.body
 		d.topic.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		if st.guardChanged() {
+			sel := st.selectedGuard()
+			d.topic.GuardKnown = true
+			d.topic.GuardType = sel.Type
+			d.topic.GuardLevel = sel.Level
+			d.topic.GuardAttr = sel.Attr
+			d.topic.GuardAttrValue = sel.AttrValue
+		}
 		// 列表行里的标题也要跟着换：返回列表时不该还是旧标题。
 		a.renameTopicRows(d.shortID, d.topic.Title)
 	case editKindReply:

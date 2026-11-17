@@ -1111,7 +1111,7 @@ func (a *app) composeMessages(c *ui.Context, st *composeState) {
 		return
 	}
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "已发表："+st.okTitle).FontSize(12).TextColor(t.Success).MaxLines(2).Grow(1)
+		ui.Text(c, composeReceiptText(st)).FontSize(12).TextColor(t.Success).MaxLines(2).Grow(1)
 		if ui.Button(c, "在应用内打开").Clicked() {
 			it := Item{ShortID: st.okShortID, URL: st.okURL}
 			a.closeComposeWindow()
@@ -1124,6 +1124,25 @@ func (a *app) composeMessages(c *ui.Context, st *composeState) {
 			}
 		}
 	})
+}
+
+// composeNodePending 判断创建响应是不是还需要等 AI 分区：响应明确给了
+// nebula，或者用户没选节点而响应又没带 node。选了节点但响应缺节点时不猜。
+func composeNodePending(created createdTopic, nodeChosen bool) bool {
+	return created.NodeSlug == nebulaNodeSlug || (!nodeChosen && created.NodeSlug == "")
+}
+
+// composeReceiptText 是发表成功那一行的文案：节点还在由 AI 分配时补一句
+// 「节点分配中…」，分好后由 topic_node.go 换回普通回执。
+func composeReceiptText(st *composeState) string {
+	if st == nil {
+		return ""
+	}
+	text := "已发表：" + st.okTitle
+	if st.okPending {
+		text += "（节点分配中…）"
+	}
+	return text
 }
 
 // composeFooter 是窗口底部固定的一条：左边是草稿状态，右边是「发布」。
@@ -1217,9 +1236,15 @@ func (a *app) submitCompose() {
 		st.keySig = string(sig)
 	}
 	key := st.key
+	// 没有 node_id 就是交给站点的 AI 自动分区：即使创建响应里没带 node，
+	// 也按「节点待定」处理并轮询，别让回执与详情页停在两套说法上。
+	_, nodeChosen := payload["node_id"]
 	st.posting = true
 	st.err = ""
 	st.okShortID, st.okURL, st.okTitle = "", "", ""
+	// 新的一次发布不再关心上一条回执：停掉它的节点轮询，成功后按新帖重启。
+	a.stopComposeNodeWatch(st)
+	st.okPending = false
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
@@ -1247,6 +1272,12 @@ func (a *app) submitCompose() {
 			st.okTitle = title
 			st.okShortID = created.ShortID
 			st.okURL = created.URL
+			// 不选节点时帖子先落在星云：回执上标明「节点分配中…」，并按
+			// 文档要求轮询详情，分好后把原文链接换成正式地址。
+			st.okPending = composeNodePending(created, nodeChosen)
+			if st.okPending {
+				a.watchComposeNode(st, created.ShortID)
+			}
 			// 刚发的帖子应该出现在列表里：把当前 tab 重新拉一遍。
 			if a.autoLoad {
 				a.reloadCurrent()

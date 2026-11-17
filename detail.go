@@ -91,6 +91,14 @@ type topicDetail struct {
 	CollectionID    string
 	CollectionName  string
 	CollectionKnown bool
+	// AccessGuard* 是可见性门槛（登录 / 等级 / 属性）。读接口的稳定字段表里
+	// 没有它，但线上详情会带；GuardKnown 区分「确实不限制」与「响应没有这个
+	// 字段」：编辑窗口在后者只能让作者重新选，不能替他清掉已有门槛。
+	GuardType      string
+	GuardLevel     int
+	GuardAttr      string
+	GuardAttrValue int
+	GuardKnown     bool
 	// Reactions 是帖子收到的表情表态汇总；Rewards 是打赏合计与打赏者。
 	Reactions []reactionStat
 	Rewards   rewardStat
@@ -347,6 +355,22 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 			t.Tags = append(t.Tags, name)
 		}
 	}
+	// 可见性门槛：文档只把 access_guard_* 列在编辑端点的请求体里，读响应
+	// 可能平铺在顶层，也可能收在 access_guard 对象里；两种都认。字段缺失时
+	// 保持 GuardKnown=false，编辑窗口据此只允许「重新设置」，不会默认清除。
+	if g := o.sub("access_guard"); g != nil {
+		t.GuardKnown = true
+		t.GuardType = g.str("type", "access_guard_type")
+		t.GuardLevel = g.num("level", "access_guard_level")
+		t.GuardAttr = g.str("attr", "attribute", "access_guard_attr")
+		t.GuardAttrValue = g.num("attr_value", "attribute_value", "access_guard_attr_value")
+	} else if o.has("access_guard_type", "access_guard_level", "access_guard_attr") {
+		t.GuardKnown = true
+		t.GuardType = o.str("access_guard_type")
+		t.GuardLevel = o.num("access_guard_level")
+		t.GuardAttr = o.str("access_guard_attr")
+		t.GuardAttrValue = o.num("access_guard_attr_value")
+	}
 	t.Emojis = decodeEmojiURLs(o["emojis"])
 	t.Reactions = decodeReactionStats(o["reactions_summary"], o["reactions"], o["my_reactions"])
 	t.Rewards = decodeRewards(o["rewards"])
@@ -376,6 +400,11 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 // 节点名。父节点名来自 node.parent；只有 parent_slug 时（老响应 / 列表接口）
 // 拿不到父名，同样只显示一级，不拿 slug 顶替。
 func (t *topicDetail) categoryPath() string {
+	if t.pendingNode() {
+		// 不选节点发帖时服务端先把帖子放在「星云」，识别完成后才挪到正式
+		// 节点；这一段等待期不要把「星云」当成真正的分类展示。
+		return "节点寻找中…"
+	}
 	switch {
 	case t.NodeParentName != "" && t.NodeName != "":
 		return t.NodeParentName + " · " + t.NodeName

@@ -957,7 +957,7 @@ func TestEditEndpointsUseConfiguredProxy(t *testing.T) {
 		bearer: func() string { return "tok" },
 	}
 	ctx := context.Background()
-	if err := c.editTopic(ctx, "a1b2", "新标题", "新正文"); err != nil {
+	if err := c.editTopic(ctx, "a1b2", map[string]any{"title": "新标题", "content": "新正文"}); err != nil {
 		t.Fatalf("经代理编辑帖子失败：%v", err)
 	}
 	if err := c.editReply(ctx, "c1", "新评论"); err != nil {

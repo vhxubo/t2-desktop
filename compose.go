@@ -111,6 +111,9 @@ func (n composeNode) nameDisplay() string {
 type createdTopic struct {
 	ShortID string
 	URL     string
+	// NodeSlug 是创建响应里的节点 slug：不选节点发帖时是 nebula，客户端
+	// 要轮询详情，直到服务端的 AI 把它挪到正式节点（见 topic_node.go）。
+	NodeSlug string
 }
 
 // 可见性门槛的取值。空串表示不限制（不发送 access_guard_* 字段）。
@@ -276,6 +279,14 @@ type composeState struct {
 	okTitle   string
 	okShortID string
 	okURL     string
+	// okPending 表示这篇帖子还在等 AI 分配节点：回执上说明「节点分配中…」，
+	// 分好后会更新 okURL（见 topic_node.go）。nodeWatch* 是轮询的定时器与
+	// 代数，只在 UI 线程读写。
+	okPending        bool
+	nodeWatchTimer   *time.Timer
+	nodeWatchGen     uint64
+	nodeWatchTries   int
+	nodeWatchShortID string
 	// key 是这一次提交的幂等键。网络超时后用同一个键重试不会重复发帖；
 	// 发表成功后清掉，下一次发帖换新的。keySig 是铸键时那份请求体的摘要：
 	// 同一个键配不同的请求体会被服务端判成 idempotency_key_reuse（409），
@@ -842,7 +853,7 @@ func (c *Client) createTopic(ctx context.Context, payload map[string]any, key st
 		if node := o.sub("node", "parent_node"); node != nil {
 			slug = node.str("slug")
 		}
-		return createdTopic{ShortID: shortID, URL: topicURL(shortID, slug)}, nil
+		return createdTopic{ShortID: shortID, URL: topicURL(shortID, slug), NodeSlug: slug}, nil
 	})
 }
 
@@ -864,6 +875,15 @@ func (c *Client) createMoment(ctx context.Context, key, content string) (created
 // 都留着：默认本来就不指定（由 AI 判定），而用户特意选过节点时，连着发两篇
 // 通常还是发到同一个节点，不该被一次发布悄悄改回去。
 func (st *composeState) resetComposeForm() {
+	// 清空表单等于放弃上一条回执：停掉还在跑的节点轮询，别让它在后台
+	// 继续为一条已经不在界面上的帖子发请求。
+	if st.nodeWatchTimer != nil {
+		st.nodeWatchTimer.Stop()
+		st.nodeWatchTimer = nil
+	}
+	st.nodeWatchGen++
+	st.nodeWatchShortID = ""
+	st.nodeWatchTries = 0
 	mode := st.mode
 	nodes, nodesAt, loaded, pick := st.nodes, st.nodesAt, st.nodeLoaded, st.nodePick
 	id := st.nodeID

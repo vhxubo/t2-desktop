@@ -23,6 +23,11 @@ type detailState struct {
 	topicLoading                  bool
 	topicErr                      string
 	topicGen                      uint64
+	// nodeWatch* 跟踪「节点寻找中」：不选节点发的帖子先落在星云，服务端
+	// 异步分配。定时器只在 UI 线程读写，网络结果经 publish 回来。
+	nodeWatchTimer *time.Timer
+	nodeWatchGen   uint64
+	nodeWatchTries int
 	// 本地正文缓存：cachedAt 是缓存写入时间；fromCache 表示当前正文来自
 	// cache/offline.json；cacheNote 是详情页顶部的一行离线说明。
 	cachedAt  time.Time
@@ -297,6 +302,9 @@ func (a *app) openDetail(it Item) {
 	// 换帖子就把独立写评论窗口收起来：它绑的是上一份 detailState 的草稿，
 	// 留着会让人以为写的是刚打开的这一篇。
 	a.closeReplyWindow()
+	// 上一页如果还在等 AI 分配节点，先把它的轮询停掉；内联返回同一篇时
+	// closeDetail 会重新启动（见下方弹栈分支）。
+	a.stopDetailNodeWatch(a.detail)
 	if a.pageName == "detail" && a.detail != nil {
 		// Inline navigation: keep the post we came from so "✕ 关闭" walks
 		// back through the chain before dropping to the list.
@@ -367,11 +375,14 @@ func (a *app) closeDetail() {
 	// 离开评论区前把浏览状态（视图、停留位置、折叠、新评论基线）落盘，下次
 	// 回到同一篇时沿用。inline 跳转（压栈）和真正回到列表都会走到这里。
 	if a.detail != nil {
+		a.stopDetailNodeWatch(a.detail)
 		a.saveReplyView(a.detail)
 	}
 	if n := len(a.detailStack); n > 0 {
 		a.detail = a.detailStack[n-1]
 		a.detailStack = a.detailStack[:n-1]
+		// 返回的这一页可能还在等 AI 分配节点：重新开始轮询（离开时停掉了）。
+		a.watchPendingNode(a.detail)
 		// 退回上一篇同样是「进入详情」：正文重新展开，收起状态不跨页面保留。
 		a.detail.bodyCollapsed = false
 		// 临时回复身份也不跨页面：返回栈里那一页就算上次换过账号，回来时
@@ -420,6 +431,14 @@ func (a *app) loadTopic() {
 			d.topic = &topic
 			d.fromCache = false
 			d.cacheNote = ""
+			// 不选节点发的帖子会先停在星云：显示「节点寻找中…」，并在后台
+			// 轮询到服务端分配好为止（见 topic_node.go）。已经确定节点的
+			// 帖子要停掉可能还在跑的旧轮询。
+			if topic.pendingNode() {
+				a.watchPendingNode(d)
+			} else {
+				a.stopDetailNodeWatch(d)
+			}
 			a.prefetchAvatars(topic.Avatar)
 			// 收藏状态随详情下发（带上令牌才有意义）；交给作者行的收藏按钮。
 			syncFavorite(d, topic, a.auth.username())
@@ -1091,6 +1110,10 @@ func (a *app) topicNotice(c *ui.Context, d *detailState) {
 		color ui.Color
 	}
 	var notes []notice
+	// 节点还在由 AI 分配时说明一句：这不是加载失败，帖子也还没出现在列表里。
+	if d.topic != nil && d.topic.pendingNode() {
+		notes = append(notes, notice{"节点由 AI 自动分配，通常几秒后完成。", t.TextMuted})
+	}
 	if d.focusID != "" {
 		text, color := "来自评论定位", t.TextMuted
 		if d.focusMiss {

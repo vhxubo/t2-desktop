@@ -102,7 +102,7 @@ func TestEditTopicSendsOnlyChangedFields(t *testing.T) {
 	defer srv.Close()
 	a := signedInApp(t, srv.URL)
 
-	if err := a.client.editTopic(context.Background(), "a1b2", "新标题", ""); err != nil {
+	if err := a.client.editTopic(context.Background(), "a1b2", map[string]any{"title": "新标题"}); err != nil {
 		t.Fatalf("编辑帖子失败：%v", err)
 	}
 	calls, auth, key, body := rec.snapshot()
@@ -120,7 +120,8 @@ func TestEditTopicSendsOnlyChangedFields(t *testing.T) {
 	}
 
 	// 两项都改：都发出去。
-	if err := a.client.editTopic(context.Background(), "a1b2", "标题", "正文"); err != nil {
+	if err := a.client.editTopic(context.Background(), "a1b2",
+		map[string]any{"title": "标题", "content": "正文"}); err != nil {
 		t.Fatalf("编辑帖子失败：%v", err)
 	}
 	_, _, _, body = rec.snapshot()
@@ -128,7 +129,7 @@ func TestEditTopicSendsOnlyChangedFields(t *testing.T) {
 		t.Errorf("请求体 = %v，期望 title + content", body)
 	}
 	// 什么都不改时不该发请求。
-	if err := a.client.editTopic(context.Background(), "a1b2", "", ""); err == nil {
+	if err := a.client.editTopic(context.Background(), "a1b2", map[string]any{}); err == nil {
 		t.Error("空请求体应当报错")
 	}
 }
@@ -271,6 +272,167 @@ func TestEditChanged(t *testing.T) {
 	r.body = "新评论"
 	if !r.changed() {
 		t.Error("评论改了却没认出来")
+	}
+}
+
+// 详情里的可见性门槛要能读出来，编辑窗口才能显示「当前」并只在改动时发送。
+func TestDecodeTopicAccessGuard(t *testing.T) {
+	topic, err := decodeTopic([]byte(`{
+		"short_id":"g1","title":"限制帖",
+		"access_guard_type":"attribute","access_guard_attr":"力量","access_guard_attr_value":3
+	}`), "g1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !topic.GuardKnown || topic.GuardType != guardAttribute ||
+		topic.GuardAttr != "力量" || topic.GuardAttrValue != 3 {
+		t.Errorf("顶层门槛没有解出来：%+v", topic)
+	}
+
+	nested, err := decodeTopic([]byte(`{
+		"short_id":"g2","title":"限制帖",
+		"access_guard":{"type":"level","level":5}
+	}`), "g2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !nested.GuardKnown || nested.GuardType != guardLevel || nested.GuardLevel != 5 {
+		t.Errorf("嵌套门槛没有解出来：%+v", nested)
+	}
+
+	absurd, err := decodeTopic([]byte(`{"short_id":"g3","title":"普通帖"}`), "g3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if absurd.GuardKnown {
+		t.Error("没有门槛字段时不该声称知道当前限制")
+	}
+}
+
+// 编辑窗口的可见范围：原值没读到时默认「保持当前设置」，作者主动选了才发
+// access_guard_*；清除限制必须显式发 "none"。
+func TestEditGuardPayload(t *testing.T) {
+	level := &topicDetail{
+		ShortID: "a1b2", Title: "标题", Content: "正文",
+		GuardKnown: true, GuardType: guardLevel, GuardLevel: 5,
+	}
+	st := newTopicEditState(level, nil)
+	if st.guardChoice != editGuardLabel(guardLevel) || st.guardLevel != 5 {
+		t.Errorf("门槛没有预填：choice=%q level=%v", st.guardChoice, st.guardLevel)
+	}
+	if st.changed() {
+		t.Error("刚打开就报有改动")
+	}
+	p, err := st.payload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p["access_guard_type"]; ok {
+		t.Errorf("没改可见范围却发了门槛字段：%v", p)
+	}
+
+	// 只改等级：发 type + level，不发属性字段。
+	st.guardLevel = 6
+	if !st.changed() {
+		t.Error("改了等级却没认出来")
+	}
+	p, err = st.payload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p["access_guard_type"] != guardLevel || p["access_guard_level"] != 6 {
+		t.Errorf("等级门槛请求体 = %v", p)
+	}
+	if _, ok := p["access_guard_attr"]; ok {
+		t.Errorf("等级门槛不该带属性：%v", p)
+	}
+
+	// 清除限制：必须是 "none"，不是省略字段。
+	st.guardChoice = editGuardLabel(guardNone)
+	p, err = st.payload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p["access_guard_type"] != "none" {
+		t.Errorf("清除限制请求体 = %v", p)
+	}
+	if _, ok := p["access_guard_level"]; ok {
+		t.Errorf("清除限制不该再带等级：%v", p)
+	}
+
+	// 属性门槛：属性名必填，数值 0～10。
+	attr := newTopicEditState(&topicDetail{
+		ShortID: "a1b2", Title: "标题", Content: "正文",
+		GuardKnown: true, GuardType: guardAttribute, GuardAttr: "力量", GuardAttrValue: 2,
+	}, nil)
+	attr.guardChoice = editGuardLabel(guardAttribute)
+	attr.guardAttr = ""
+	if _, err := attr.payload(); err == nil || !strings.Contains(err.Error(), "属性名") {
+		t.Errorf("缺属性名应报错：%v", err)
+	}
+	attr.guardAttr = "敏捷"
+	attr.guardAttrValue = 4
+	p, err = attr.payload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p["access_guard_type"] != guardAttribute || p["access_guard_attr"] != "敏捷" ||
+		p["access_guard_attr_value"] != 4 {
+		t.Errorf("属性门槛请求体 = %v", p)
+	}
+
+	// 原值未知：默认严格保持，主动选「所有人可见」才算一次明确的重设。
+	unknown := newTopicEditState(&topicDetail{ShortID: "a1b2", Title: "标题", Content: "正文"}, nil)
+	if unknown.guardChoice != editGuardKeep || unknown.guardChanged() {
+		t.Errorf("原值未知时不该默认改门槛：choice=%q", unknown.guardChoice)
+	}
+	unknown.guardChoice = editGuardLabel(guardNone)
+	if !unknown.guardChanged() {
+		t.Error("主动清除门槛没有被认出来")
+	}
+	p, err = unknown.payload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p["access_guard_type"] != "none" {
+		t.Errorf("未知原值时清除门槛请求体 = %v", p)
+	}
+}
+
+// 编辑窗口把当前可见范围摆在选项下方；改成「所有人可见」后请求里带 none。
+func TestTopicEditSendsGuardChange(t *testing.T) {
+	rec := &editRecorder{}
+	srv := newEditServer(t, rec)
+	defer srv.Close()
+	a := signedInApp(t, srv.URL)
+
+	a.detail = &detailState{
+		shortID: "a1b2",
+		topic: &topicDetail{
+			ShortID: "a1b2", Title: "标题", Content: "正文", Author: "jimmy",
+			GuardKnown: true, GuardType: guardLogin,
+		},
+	}
+	st := newTopicEditState(a.detail.topic, a.md)
+	st.guardChoice = editGuardLabel(guardNone)
+	a.edit = st
+
+	tt := ui.NewTester(a.editWindowView, editWindowWidth, editWindowHeight)
+	tt.Frame()
+	if !tt.HasText("当前：登录用户可见。") {
+		t.Errorf("没有显示当前可见范围：%q", tt.Texts())
+	}
+	if err := tt.Click("保存修改"); err != nil {
+		t.Fatalf("点不到保存：%v", err)
+	}
+	waitFor(t, func() bool { return a.edit == nil }, "保存请求没有完成")
+
+	_, _, _, body := rec.snapshot()
+	if body["access_guard_type"] != "none" {
+		t.Errorf("清除限制请求体 = %v", body)
+	}
+	if !a.detail.topic.GuardKnown || a.detail.topic.GuardType != guardNone {
+		t.Errorf("页面上的门槛没有更新：%+v", a.detail.topic)
 	}
 }
 

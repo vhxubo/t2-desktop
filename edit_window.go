@@ -220,6 +220,7 @@ func (a *app) editWindowBody(c *ui.Context, st *editState) {
 		ui.Text(c, st.hint()).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
 		if st.kind == editKindTopic {
 			a.editTitleField(c, st)
+			a.editGuardField(c, st)
 		}
 		a.editEditorSection(c, st)
 	})
@@ -233,6 +234,54 @@ func (a *app) editTitleField(c *ui.Context, st *editState) {
 			MaxLength(composeTitleMax).Bind(&st.titleField)
 	}).Description(fmt.Sprintf("%d / %d 字",
 		utf8.RuneCountInString(st.title), composeTitleMax))
+}
+
+// editGuardField 是编辑帖子时的可见范围：默认停在「保持当前设置」，只有作者
+// 主动换选项才发 access_guard_* 字段。读响应没带当前门槛时也保留这一项，
+// 避免改个标题就把网页端设的限制清掉。
+func (a *app) editGuardField(c *ui.Context, st *editState) {
+	t := c.Theme()
+	ui.Column(c).FillWidth().Gap(4).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+			ui.Text(c, "可见范围").FontSize(11).TextColor(t.TextMuted)
+			ui.Select(c, &st.guardChoice, editGuardLabels).Label("可见范围").Width(180)
+			switch guardFromEditLabel(st.guardChoice) {
+			case guardLevel:
+				ui.NumberInput(c, &st.guardLevel,
+					composeGuardLevelLo, composeGuardLevelHi, 1).Label("最低可见等级").Width(120)
+				ui.Text(c, "级及以上").FontSize(11).TextColor(t.TextMuted)
+			case guardAttribute:
+				ui.TextInput(c, &st.guardAttr).Label("D20 属性名").
+					Placeholder("如 力量 / 智力").Width(160)
+				ui.NumberInput(c, &st.guardAttrValue, 0, composeGuardAttrHi, 1).
+					Label("属性下限").Width(120)
+			}
+		})
+		hint := "选「所有人可见」会清除现有门槛；停在「保持当前设置」则不改可见范围。"
+		if st.guardKnown {
+			hint = "当前：" + editGuardSummary(st.origGuard) + "。" + hint
+		}
+		ui.Text(c, hint).FontSize(10).TextColor(t.TextMuted).MaxLines(2)
+	})
+}
+
+// editGuardSummary 是一行「当前可见范围」的说明。属性名缺失时只报属性门槛，
+// 不编一个空名字。
+func editGuardSummary(g guardSelection) string {
+	switch g.Type {
+	case guardNone:
+		return "所有人可见"
+	case guardLogin:
+		return "登录用户可见"
+	case guardLevel:
+		return fmt.Sprintf("Lv.%d 及以上可见", g.Level)
+	case guardAttribute:
+		if g.Attr == "" {
+			return "按 D20 属性可见"
+		}
+		return fmt.Sprintf("%s ≥ %d 可见", g.Attr, g.AttrValue)
+	}
+	return "未知"
 }
 
 // editEditorSection 是正文区：工具条、按需展开的表情 / 图片面板，然后是
