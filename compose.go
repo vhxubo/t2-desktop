@@ -178,6 +178,13 @@ type composeState struct {
 	// 用。默认空串：不发送 node_id，发帖后由站点 AI 判定分类（见 payload）。
 	nodePick cascaderState
 	nodeID   string
+	// 选中节点的简介：GET /v1/nodes/:slug 单独读一次，列表响应里没有可靠的
+	// 简介字段。nodeDetailSlug 记录这份简介属于哪个节点。
+	nodeDetailSlug    string
+	nodeDetail        nodeDetail
+	nodeDetailLoading bool
+	nodeDetailErr     string
+	nodeDetailSeq     uint64
 
 	// 基础字段：界面只留标题与正文；匿名开关在右侧栏的「发布设置」里。
 	// 文档里 title_prefix / tip / contact / status 这类补充字段不再展示，

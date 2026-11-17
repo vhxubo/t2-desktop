@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/url"
 	"sync"
@@ -306,4 +307,86 @@ func (a *app) storeNodeCache(nodes []composeNode, at time.Time) {
 // 在后台再刷新一次。
 func nodeCacheFresh(at time.Time) bool {
 	return !at.IsZero() && time.Since(at) < nodeCacheTTL
+}
+
+/* ------------------------------------------------------------------
+   单个节点详情
+--------------------------------------------------------------- */
+
+// nodeDetail 是 GET /v1/nodes/:slug 的单节点信息。列表里已经给了 slug / name /
+// post_count，简介只在详情响应里可靠，所以选中节点后再补一次。
+type nodeDetail struct {
+	Slug        string
+	Name        string
+	Description string
+	ParentSlug  string
+	Dimension   string
+	PostCount   int
+}
+
+func (c *Client) fetchNodeDetail(ctx context.Context, slug string) (nodeDetail, error) {
+	if slug == "" {
+		return nodeDetail{}, errors.New("还不知道要读哪个节点")
+	}
+	u := c.apiURL("/v1/nodes/" + url.PathEscape(slug))
+	d, err := withAuthRetry(c, ctx, func(token string) (json.RawMessage, error) {
+		return c.getJSON(ctx, u, token)
+	})
+	if err != nil {
+		return nodeDetail{}, err
+	}
+	o := asObject(d)
+	if o == nil {
+		return nodeDetail{}, errors.New("节点详情响应为空")
+	}
+	return nodeDetail{
+		Slug:        o.str("slug"),
+		Name:        o.str("name"),
+		Description: o.str("description"),
+		ParentSlug:  o.str("parent_slug"),
+		Dimension:   o.str("dimension"),
+		PostCount:   o.num("post_count"),
+	}, nil
+}
+
+// ensureNodeDetail 在用户选中某个节点后补一次简介。已经有这个 slug 的结论
+// （成功或失败）就不再自动重试；换节点后才会重新发请求。
+func (a *app) ensureNodeDetail(st *composeState) {
+	if st == nil || !a.autoLoad || st.nodeDetailLoading {
+		return
+	}
+	node := st.selectedNode()
+	if node == nil || node.Slug == "" || st.nodeDetailSlug == node.Slug {
+		return
+	}
+	a.loadNodeDetail(st, node.Slug)
+}
+
+func (a *app) loadNodeDetail(st *composeState, slug string) {
+	if st == nil || slug == "" || st.nodeDetailLoading {
+		return
+	}
+	st.nodeDetailSlug = slug
+	st.nodeDetailSeq++
+	seq := st.nodeDetailSeq
+	st.nodeDetailLoading = true
+	st.nodeDetailErr = ""
+	st.nodeDetail = nodeDetail{}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	go func() {
+		defer cancel()
+		d, err := a.client.fetchNodeDetail(ctx, slug)
+		a.publish(func() {
+			if a.compose != st || st.nodeDetailSeq != seq {
+				return
+			}
+			st.nodeDetailLoading = false
+			if err != nil {
+				st.nodeDetailErr = friendlyError(err)
+				return
+			}
+			st.nodeDetail = d
+			st.nodeDetailErr = ""
+		})
+	}()
 }

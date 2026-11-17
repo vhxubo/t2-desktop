@@ -1502,3 +1502,52 @@ func TestScoresEndpointsUseConfiguredProxy(t *testing.T) {
 		t.Errorf("评分请求 = %s", paths[1])
 	}
 }
+
+// 本人资料与单节点详情也是新读出口：必须经配置的代理。
+func TestMyProfileAndNodeDetailUseConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var paths []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/api/v1/me":
+			_, _ = fmt.Fprint(w, envelopeJSON(`{"username":"reader","level":7}`))
+		case "/api/v1/nodes/community":
+			_, _ = fmt.Fprint(w, envelopeJSON(`{"slug":"community","name":"社区讨论","description":"聊聊社区"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		Proxy:  p,
+		Base:   "http://upstream.invalid/api",
+		bearer: func() string { return "tok" },
+	}
+	if _, err := c.fetchMyProfile(context.Background()); err != nil {
+		t.Fatalf("经代理读本人资料失败：%v", err)
+	}
+	if _, err := c.fetchNodeDetail(context.Background(), "community"); err != nil {
+		t.Fatalf("经代理读节点详情失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"GET /api/v1/me", "GET /api/v1/nodes/community"}
+	if len(paths) != len(want) {
+		t.Fatalf("代理收到 %v，期望 %v", paths, want)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Errorf("第 %d 个请求 = %s，期望 %s", i+1, paths[i], want[i])
+		}
+	}
+}

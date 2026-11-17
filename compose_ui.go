@@ -376,6 +376,26 @@ func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 					state = "没有可用的节点，留空发布时由 AI 判定分类。"
 				}
 				ui.Text(c, state).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+				// 选中节点后补一条简介：列表响应不带可靠的 description，
+				// 单独读一次 GET /v1/nodes/:slug。失败只影响这条说明。
+				if node := st.selectedNode(); node != nil && st.nodeDetailSlug == node.Slug {
+					switch {
+					case st.nodeDetailLoading:
+						ui.Text(c, "正在读取节点简介…").FontSize(11).TextColor(t.TextMuted)
+					case st.nodeDetailErr != "":
+						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, "节点简介暂时不可用").FontSize(11).
+								TextColor(t.Danger).MaxLines(1)
+							a.smallAction(c, "重试", false, func() {
+								a.loadNodeDetail(st, node.Slug)
+							})
+						})
+					case strings.TrimSpace(st.nodeDetail.Description) != "":
+						ui.Text(c, strings.TrimSpace(st.nodeDetail.Description)).
+							FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+					}
+				}
+				a.ensureNodeDetail(st)
 			})
 		})
 		if len(st.nodes) > 0 {

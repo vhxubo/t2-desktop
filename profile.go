@@ -241,6 +241,19 @@ func (c *Client) fetchAccountProfile(ctx context.Context, name string) (accountP
 	return decodeAccountProfile(d), nil
 }
 
+// fetchMyProfile 读「我的」窗口的本人资料。它不需要用户名，返回结构与
+// GET /v1/users/:username 一致，但会带上 show_setting 这类本人字段；scope
+// profile。失败时调用方可以退回公开资料，页面不至于空着。
+func (c *Client) fetchMyProfile(ctx context.Context) (accountProfile, error) {
+	d, err := withAuthRetry(c, ctx, func(token string) (json.RawMessage, error) {
+		return c.getJSON(ctx, c.apiURL("/v1/me"), token)
+	})
+	if err != nil {
+		return accountProfile{}, err
+	}
+	return decodeAccountProfile(d), nil
+}
+
 func decodeAccountProfile(d json.RawMessage) accountProfile {
 	o := asObject(d)
 	if o == nil {
@@ -378,7 +391,18 @@ func (a *app) loadProfileInfo(name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	go func() {
 		defer cancel()
-		p, err := a.client.fetchAccountProfile(ctx, name)
+		// 本人优先用 GET /v1/me（不需要用户名，字段更完整）；失败再退回公开
+		// 资料端点，页面不能因为一次接口问题就整块空着。
+		var p accountProfile
+		var err error
+		if a.auth.loggedIn() && strings.EqualFold(name, a.auth.username()) {
+			p, err = a.client.fetchMyProfile(ctx)
+			if err != nil {
+				p, err = a.client.fetchAccountProfile(ctx, name)
+			}
+		} else {
+			p, err = a.client.fetchAccountProfile(ctx, name)
+		}
 		a.publish(func() {
 			if a.profile != ps || ps.infoSeq != seq {
 				return
