@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -16,9 +18,28 @@ import (
 //	评论里的 reward_pool_rewards: [{"amount": 53}]：这条评论从池里领到的金币
 //	POST /v1/topics/:short_id/reward-pool 🔑  注资（200～1000 金币，需开通）
 //
-// 领取由服务端在浏览帖子时按概率完成，客户端不调接口；注资这个应用还没有入口，
-// 但发帖时可以随帖带上初始金币（见 compose.go 的金币池块）。所以这里只做只读
-// 展示：正文末尾一块状态，评论头部标出这条评论领到了多少。
+// 领取由服务端在浏览帖子时按概率完成，客户端不调接口；发帖时可以随帖带上
+// 初始金币（见 compose.go 的金币池块）。已存在的池子可以从详情页的「投入
+// 金币」补币：金额 200～1000，带幂等键，成功后才刷新余额与池子状态。
+
+// 金币池注资金额范围（文档：200～1000）。
+const (
+	rewardPoolCoinsLo = 200
+	rewardPoolCoinsHi = 1000
+)
+
+// rewardPoolUIState 是详情页金币池注资气泡的状态。只在 UI 线程读写；网络
+// 结果经 publish 回来。key / sig 与打赏同一套规则：金额不变的重试复用同一个
+// 幂等键，金额变了才换键。
+type rewardPoolUIState struct {
+	open   bool
+	amount float64
+	busy   bool
+	err    string
+	key    string
+	sig    string
+	gen    uint64
+}
 
 // rewardPoolInfo 是帖子的金币池状态。实测只有三个字段：current_coins（池子里
 // 还剩多少金币）、finished（是否已结束）、is_expired（是否已过期）。命中记录
@@ -60,6 +81,40 @@ func decodeTopicRewardPool(o object) *rewardPoolInfo {
 	p.Finished = raw.flag("finished")
 	p.Expired = raw.flag("is_expired", "expired")
 	return &p
+}
+
+// topicRewardPoolPath 是给已有金币池补币的端点。路径里的 short_id 优先于
+// 请求体里的 post_id，所以 body 只带 coins。
+func topicRewardPoolPath(shortID string) string {
+	return topicPath(shortID) + "/reward-pool"
+}
+
+// rewardPoolBody 是 POST /v1/topics/:short_id/reward-pool 的请求体。
+type rewardPoolBody struct {
+	Coins int `json:"coins"`
+}
+
+// fundRewardPool 给金币池注资。这个端点标了 🔑：同一笔注资的超时重试与授权后
+// 重放必须复用同一个 key，金额变了才换新 key。
+func (c *Client) fundRewardPool(ctx context.Context, shortID, key string, coins int) error {
+	_, err := withAuthRetry(c, ctx, func(token string) (struct{}, error) {
+		_, err := c.postJSON(ctx, c.apiURL(topicRewardPoolPath(shortID)), token, key,
+			rewardPoolBody{Coins: coins})
+		return struct{}{}, err
+	})
+	return err
+}
+
+// syncRewardPool 在详情刷新后收掉指向旧池子的注资气泡：池子没了、结束或过期，
+// 就不该还留着一颗可以继续投入的按钮。
+func syncRewardPool(d *detailState, t *topicDetail) {
+	if d == nil || t == nil {
+		return
+	}
+	p := t.RewardPool
+	if p == nil || p.Finished || p.Expired {
+		d.pool.open = false
+	}
 }
 
 // decodeRewardPoolWinnings 解一条评论的 reward_pool_rewards。条目形如
@@ -115,9 +170,9 @@ func rewardPoolStateText(p *rewardPoolInfo) string {
 }
 
 // rewardPoolSection 画正文末尾的金币池状态：池里还剩多少、现在是哪种状态。
-// 它是只读块，没有任何入口——领取由服务端在浏览时按概率完成，注资这个应用
-// 还没有入口（见文件头的说明）。
-func (a *app) rewardPoolSection(c *ui.Context, p *rewardPoolInfo) {
+// 池子还在进行时右上角给一个「投入金币」入口，点开贴着按钮的气泡填金额；
+// 结束或过期的池子不再提供注资。
+func (a *app) rewardPoolSection(c *ui.Context, d *detailState, p *rewardPoolInfo) {
 	if p == nil || !p.Known {
 		return
 	}
@@ -128,6 +183,16 @@ func (a *app) rewardPoolSection(c *ui.Context, p *rewardPoolInfo) {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Text(c, "金币池").FontSize(commentFontSize).Bold()
 			ui.Spacer(c).Grow(1)
+			if d != nil && !p.Finished && !p.Expired {
+				btn := ui.Button(c, "投入金币").FontSize(11).Padding(2, 8).Shrink(0)
+				btn.Label("投入金币").Tooltip("给这个金币池补充金币（200～1000）")
+				if btn.Clicked() {
+					a.openRewardPoolPopup(d)
+				}
+				ui.Popover(c, btn, &d.pool.open, func() {
+					a.rewardPoolPanel(c, d)
+				})
+			}
 			ui.Text(c, rewardPoolStateText(p)).FontSize(metaSmallFontSize).
 				TextColor(t.TextMuted)
 		})
@@ -137,6 +202,178 @@ func (a *app) rewardPoolSection(c *ui.Context, p *rewardPoolInfo) {
 		}
 		ui.Text(c, line).FontSize(metaFontSize).TextColor(t.TextMuted).MaxLines(3)
 	})
+}
+
+/* ------------------------------------------------------------------
+   注资气泡
+--------------------------------------------------------------- */
+
+// openRewardPoolPopup 打开金币池注资气泡。未登录时先走全局授权弹窗，成功后
+// 同一次点击自动重开；金额为空或越界时先填最小值。
+func (a *app) openRewardPoolPopup(d *detailState) {
+	if d == nil || a.detail != d {
+		return
+	}
+	if !a.auth.loggedIn() {
+		a.requestLogin("登录后才能给金币池注资。", func() {
+			if a.detail == d {
+				a.openRewardPoolPopup(d)
+			}
+		})
+		return
+	}
+	d.pool.open = true
+	d.pool.err = ""
+	if d.pool.amount < rewardPoolCoinsLo {
+		d.pool.amount = rewardPoolCoinsLo
+	}
+	if d.pool.amount > rewardPoolCoinsHi {
+		d.pool.amount = rewardPoolCoinsHi
+	}
+}
+
+// rewardPoolPanel 是注资气泡：金额、常用金额、余额与确认按钮。金额由用户填
+// 或点常用金额，按钮上写着具体数字，点下去才会扣币。
+func (a *app) rewardPoolPanel(c *ui.Context, d *detailState) {
+	t := c.Theme()
+	ui.Column(c).Width(300).Gap(8).Children(func() {
+		ui.Text(c, "给金币池注资").FontSize(metaFontSize).TextColor(t.TextMuted)
+		if d == nil || d.topic == nil || d.topic.RewardPool == nil {
+			return
+		}
+		if !a.auth.loggedIn() {
+			a.loginHint(c, "登录后才能给金币池注资。")
+			return
+		}
+		if p := d.topic.RewardPool; p.CoinsKnown {
+			ui.Textf(c, "池中还有 %d 金币。", p.CurrentCoins).
+				FontSize(11).TextColor(t.TextMuted)
+		}
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.NumberInput(c, &d.pool.amount, rewardPoolCoinsLo, rewardPoolCoinsHi, 50).
+				Label("注资金额").Width(120)
+			ui.Text(c, "金币").FontSize(metaFontSize).TextColor(t.TextMuted)
+			if a.coins != nil && a.coins.balanceOK {
+				ui.Textf(c, "余额 %s", coinThousands(a.coins.balance)).
+					FontSize(11).TextColor(t.TextMuted).SingleLine()
+			}
+		})
+		ui.Text(c, "常用金额").FontSize(11).TextColor(t.TextMuted)
+		ui.Row(c).Gap(4).Wrap().Children(func() {
+			for _, amount := range []int{200, 500, 1000} {
+				a.rewardPoolAmountChip(c, d, amount)
+			}
+		})
+		ui.Text(c, "会从你的余额扣除，确认后不可撤销。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		if d.pool.err != "" {
+			ui.Text(c, d.pool.err).FontSize(11).TextColor(t.Danger).MaxLines(2)
+		}
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Spacer(c).Grow(1)
+			if d.pool.busy {
+				ui.Spinner(c).Size(13, 13)
+				ui.Text(c, "正在投入…").FontSize(11).TextColor(t.TextMuted)
+				return
+			}
+			btn := ui.PrimaryButton(c,
+				fmt.Sprintf("投入 %d 金币", rewardPoolAmount(d.pool.amount)))
+			if btn.Clicked() {
+				a.submitRewardPool(d)
+			}
+		})
+	})
+}
+
+// rewardPoolAmountChip 是一枚常用注资金额：当前金额高亮，点一下填进输入框。
+// 读屏名带上「常用金额」，免得和下面的确认按钮撞名。
+func (a *app) rewardPoolAmountChip(c *ui.Context, d *detailState, amount int) {
+	t := c.Theme()
+	chip := ui.Button(c, strconv.Itoa(amount)).FontSize(11).Padding(2, 8).Radius(999)
+	if rewardPoolAmount(d.pool.amount) == amount {
+		chip.Background(t.Accent).TextColor(t.AccentText)
+	} else {
+		chip.Background(t.Surface).TextColor(t.TextMuted).Border(1, t.Border)
+	}
+	chip.Label("常用金额 " + strconv.Itoa(amount) + " 金币")
+	chip.Tooltip("填入 " + strconv.Itoa(amount) + " 金币")
+	if chip.Clicked() {
+		d.pool.amount = float64(amount)
+		d.pool.err = ""
+	}
+}
+
+// rewardPoolAmount 把输入框里的浮点数收成 200～1000 的整数。
+func rewardPoolAmount(amount float64) int {
+	n := int(math.Round(amount))
+	if n < rewardPoolCoinsLo {
+		return rewardPoolCoinsLo
+	}
+	if n > rewardPoolCoinsHi {
+		return rewardPoolCoinsHi
+	}
+	return n
+}
+
+// submitRewardPool 提交一笔金币池注资。同一笔（金额不变）的超时重试与授权后
+// 重放复用同一个幂等键；金额变了才换新键。成功后收起气泡、刷新余额并重读详情，
+// 让池子的余额以服务端为准。
+func (a *app) submitRewardPool(d *detailState) {
+	if d == nil || a.detail != d || d.pool.busy || d.topic == nil || d.topic.RewardPool == nil {
+		return
+	}
+	if !a.auth.loggedIn() {
+		a.requestLogin("登录后才能给金币池注资。", func() {
+			if a.detail == d {
+				a.submitRewardPool(d)
+			}
+		})
+		return
+	}
+	amount := rewardPoolAmount(d.pool.amount)
+	sig := fmt.Sprintf("%s|%d", d.shortID, amount)
+	if d.pool.key == "" || d.pool.sig != sig {
+		d.pool.key = randomURLSafe(24)
+		d.pool.sig = sig
+	}
+	key := d.pool.key
+	d.pool.busy = true
+	d.pool.err = ""
+	d.pool.gen++
+	gen := d.pool.gen
+	actor := a.auth.username()
+	ctx, cancel := context.WithTimeout(context.Background(), interactTimeout)
+	go func() {
+		defer cancel()
+		err := a.client.fundRewardPool(ctx, d.shortID, key, amount)
+		a.publish(func() {
+			if a.detail != d || d.pool.gen != gen {
+				return
+			}
+			d.pool.busy = false
+			if !a.auth.loggedIn() || a.auth.username() != actor {
+				return
+			}
+			if err != nil {
+				if a.handleAuthError(err, func() { a.submitRewardPool(d) }) {
+					return
+				}
+				d.pool.err = friendlyError(err)
+				return
+			}
+			// 成功才清键与收起气泡：失败时界面停在原金额，重试仍用同一个键。
+			d.pool.key = ""
+			d.pool.sig = ""
+			d.pool.open = false
+			d.pool.err = ""
+			if p := d.topic.RewardPool; p != nil && p.CoinsKnown {
+				p.CurrentCoins += amount
+			}
+			a.toast(toastMain, fmt.Sprintf("已向金币池投入 %d 金币", amount))
+			a.coinsChanged(coinEventRewardPool)
+			a.loadTopic()
+		})
+	}()
 }
 
 // replyRewardPoolWinnings 是评论头部的一枚小标签：这条评论从帖子金币池里

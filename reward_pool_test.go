@@ -1,7 +1,15 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -145,7 +153,7 @@ func TestRewardPoolSectionAndReplyWinnings(t *testing.T) {
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	for _, want := range []string{"金币池", "池中还有 320 金币", "进行中", "金币池 +74"} {
+	for _, want := range []string{"金币池", "池中还有 320 金币", "进行中", "金币池 +74", "投入金币"} {
 		if !tt.HasText(want) {
 			t.Errorf("详情页缺少 %q：%q", want, tt.Texts())
 		}
@@ -172,5 +180,182 @@ func TestRewardPoolSectionHiddenWithoutPool(t *testing.T) {
 		if tt.HasText(want) {
 			t.Errorf("没有 reward_pool 时不应画金币池块（命中 %q）：%q", want, tt.Texts())
 		}
+	}
+}
+
+/* ------------------------------------------------------------------
+   注资：路径 / 请求体 / 幂等键，以及气泡与提交链路
+--------------------------------------------------------------- */
+
+// 注资端点必须打到文档路径，body 只有 coins；路径里的 short_id 要转义。
+func TestFundRewardPoolRequest(t *testing.T) {
+	if got, want := topicRewardPoolPath("POOL01"), "/v1/topics/POOL01/reward-pool"; got != want {
+		t.Errorf("注资路径 = %q，期望 %q", got, want)
+	}
+	if got, want := topicRewardPoolPath("a/b"), "/v1/topics/a%2Fb/reward-pool"; got != want {
+		t.Errorf("short_id 转义不对：%q，期望 %q", got, want)
+	}
+
+	type request struct {
+		method, path, key, auth, body string
+	}
+	reqCh := make(chan request, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("请求体不是 JSON：%v", err)
+		}
+		raw, _ := json.Marshal(body)
+		reqCh <- request{
+			method: r.Method, path: r.URL.Path,
+			key: r.Header.Get("Idempotency-Key"), auth: r.Header.Get("Authorization"),
+			body: string(raw),
+		}
+		fmt.Fprint(w, envelopeJSON(`{}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{Base: srv.URL + "/api", bearer: func() string { return "tok" }}
+	if err := c.fundRewardPool(context.Background(), "POOL01", "key-1", 300); err != nil {
+		t.Fatalf("注资请求失败：%v", err)
+	}
+	req := <-reqCh
+	if req.method != http.MethodPost || req.path != "/api/v1/topics/POOL01/reward-pool" {
+		t.Errorf("注资请求 = %s %s", req.method, req.path)
+	}
+	if req.key != "key-1" || req.auth != "Bearer tok" {
+		t.Errorf("幂等键 / 鉴权不对：%q / %q", req.key, req.auth)
+	}
+	if req.body != `{"coins":300}` {
+		t.Errorf("请求体 = %s，期望仅 coins", req.body)
+	}
+}
+
+// 金额收成 200～1000 的整数，越界夹到边界。
+func TestRewardPoolAmount(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want int
+	}{
+		{0, 200}, {-50, 200}, {199.4, 200}, {200, 200},
+		{300.6, 301}, {999, 999}, {1000, 1000}, {5000, 1000},
+	}
+	for _, c := range cases {
+		if got := rewardPoolAmount(c.in); got != c.want {
+			t.Errorf("rewardPoolAmount(%v) = %d，期望 %d", c.in, got, c.want)
+		}
+	}
+}
+
+// 提交成功后收起气泡、刷新金币事件，并按已知余额就地加上这笔钱。
+func TestRewardPoolFundingSubmits(t *testing.T) {
+	reqCh := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/topics/POOL01/reward-pool" {
+			t.Errorf("注资请求 = %s %s", r.Method, r.URL.Path)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		reqCh <- string(raw) + "|" + r.Header.Get("Idempotency-Key")
+		fmt.Fprint(w, envelopeJSON(`{}`))
+	}))
+	defer srv.Close()
+
+	a := loginApp(t, srv)
+	a.openDetail(Item{ShortID: "POOL01", URL: "https://2libra.com/post/work/POOL01"})
+	topic, err := decodeTopic([]byte(`{
+		"short_id":"POOL01","title":"有池子的帖子","content":"一段正文。",
+		"author":{"username":"jimmy"},"reward_pool":{"current_coins":320}
+	}`), "POOL01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.detail.topic = &topic
+	a.detail.pool.amount = 300
+	a.detail.pool.open = true
+
+	done := make(chan coinEvent, 1)
+	a.onCoinsChanged = func(e coinEvent) { done <- e }
+	a.submitRewardPool(a.detail)
+	select {
+	case e := <-done:
+		if e != coinEventRewardPool {
+			t.Errorf("金币事件 = %q，期望 %q", e, coinEventRewardPool)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("注资没有完成")
+	}
+
+	req := <-reqCh
+	if !strings.HasPrefix(req, `{"coins":300}|`) {
+		t.Errorf("请求体 / 键 = %q", req)
+	}
+	key := strings.TrimPrefix(req, `{"coins":300}|`)
+	if !keyPattern.MatchString(key) {
+		t.Errorf("幂等键格式不对：%q", key)
+	}
+	if a.detail.pool.open || a.detail.pool.key != "" || a.detail.pool.busy {
+		t.Errorf("成功后气泡状态没收拾：%+v", a.detail.pool)
+	}
+	if a.detail.topic.RewardPool == nil || a.detail.topic.RewardPool.CurrentCoins != 620 {
+		t.Errorf("本地池子余额没有加上：%+v", a.detail.topic.RewardPool)
+	}
+}
+
+// 面板：金额、常用金额、余额与确认按钮都在；按钮上写着实际金额。
+func TestRewardPoolFundingPanel(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+
+	a := loginApp(t, srv)
+	a.openDetail(Item{ShortID: "POOL01", URL: "https://2libra.com/post/work/POOL01"})
+	topic, err := decodeTopic([]byte(`{
+		"short_id":"POOL01","title":"有池子的帖子","content":"一段正文。",
+		"author":{"username":"jimmy"},"reward_pool":{"current_coins":320}
+	}`), "POOL01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.detail.topic = &topic
+	a.detail.replyLoaded = true
+	a.detail.pool.amount = 300
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if err := tt.Click("投入金币"); err != nil {
+		t.Fatalf("点「投入金币」失败：%v", err)
+	}
+	tt.Frame()
+	if !a.detail.pool.open {
+		t.Fatalf("点「投入金币」没有打开注资气泡")
+	}
+	for _, want := range []string{
+		"投入金币", "给金币池注资", "池中还有 320 金币。",
+		"常用金额", "投入 300 金币", "会从你的余额扣除",
+	} {
+		if !tt.HasText(want) {
+			t.Errorf("注资面板缺少 %q：%q", want, tt.Texts())
+		}
+	}
+}
+
+// 池子结束 / 过期 / 消失后，注资气泡必须收起。
+func TestSyncRewardPoolClosesPopup(t *testing.T) {
+	cases := []*topicDetail{
+		{RewardPool: nil},
+		{RewardPool: &rewardPoolInfo{Known: true, Finished: true}},
+		{RewardPool: &rewardPoolInfo{Known: true, Expired: true}},
+	}
+	for _, topic := range cases {
+		d := &detailState{pool: rewardPoolUIState{open: true}}
+		syncRewardPool(d, topic)
+		if d.pool.open {
+			t.Errorf("池子 %+v 结束 / 消失后气泡仍开着", topic.RewardPool)
+		}
+	}
+
+	d := &detailState{pool: rewardPoolUIState{open: true}}
+	syncRewardPool(d, &topicDetail{RewardPool: &rewardPoolInfo{Known: true, CurrentCoins: 10}})
+	if !d.pool.open {
+		t.Error("进行中的池子不该收起气泡")
 	}
 }

@@ -1280,3 +1280,45 @@ func TestUserBadgesAndHotTagsUseConfiguredProxy(t *testing.T) {
 		}
 	}
 }
+
+// 金币池注资是新的经济写出口：同样必须经配置的代理，且带幂等键与 coins。
+func TestRewardPoolFundingUsesConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var paths, bodies, keys []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		bodies = append(bodies, string(body))
+		keys = append(keys, r.Header.Get("Idempotency-Key"))
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, envelopeJSON(`{}`))
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		Proxy:  p,
+		Base:   "http://upstream.invalid/api",
+		bearer: func() string { return "tok" },
+	}
+	if err := c.fundRewardPool(context.Background(), "POOL01", "key-1", 300); err != nil {
+		t.Fatalf("经代理注资金币池失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != 1 || paths[0] != "POST /api/v1/topics/POOL01/reward-pool" {
+		t.Fatalf("代理收到的请求 = %v，期望注资 POST", paths)
+	}
+	if bodies[0] != `{"coins":300}` {
+		t.Errorf("请求体 = %q", bodies[0])
+	}
+	if keys[0] != "key-1" {
+		t.Errorf("幂等键 = %q", keys[0])
+	}
+}
