@@ -92,7 +92,9 @@ func (a *app) editorToastTarget(t uploadTarget) toastTarget {
 	case uploadTargetEdit:
 		return toastEdit
 	}
-	return toastMain
+	// 评论用的编辑器在主窗口与独立写评论窗口里各有一个：窗口开着就提示在
+	// 那里，否则退回主窗口。
+	return a.replyAuthTarget()
 }
 
 // uploadImageAlt 把文件名清成能安全写进 Markdown 链接文字与 URL 里的样子：
@@ -521,7 +523,7 @@ func (a *app) finishUpload(id uint64, url string, err error) {
 			// 官方图床缺 upload scope 时交给全局授权链路：补上权限后自动
 			// 重传这一张，草稿与占位符都留在原地，不用重新拖一次。这种
 			// 情况下只提示「等待授权」，不要再弹一条吓人的上传失败。
-			if a.handleAuthError(err, func() { a.retryUpload(id) }) {
+			if a.handleAuthErrorFor(target, err, func() { a.retryUpload(id) }) {
 				a.toast(target, "上传图片需要额外授权，授权完成后会自动重传："+j.Name)
 			} else {
 				a.toast(target, "图片上传失败："+j.Err)

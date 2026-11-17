@@ -53,7 +53,7 @@ func TestGroupCommentsKeepsAnonymousSeparate(t *testing.T) {
 	}
 }
 
-// 分组行的说明要分清「同一个帖子下连着刷」和「横跨好几个帖子」。
+// 展开入口的悬浮说明要分清「同一个帖子下连着刷」和「横跨好几个帖子」。
 func TestCommentGroupTitle(t *testing.T) {
 	same := []Item{
 		commentRow(0, "a", "S1", "社会观察"),
@@ -82,8 +82,8 @@ func TestCommentGroupTitle(t *testing.T) {
 	}
 }
 
-// 默认折叠：5 条同人连续评论只出「分组行 + 首条」两行；展开后 5 条全出，
-// 收起又回到两行。单条评论不画分组行，普通 tab 也不分组。
+// 默认折叠：5 条同人连续评论只出「首条 + 展开入口」一行；展开后 5 条全出，
+// 收起又回到一行。单条评论不画入口，普通 tab 也不分组。
 func TestFoldRowsDefaultShowsFirstOnly(t *testing.T) {
 	a := testApp(t)
 	st := a.tabs[4]
@@ -93,35 +93,35 @@ func TestFoldRowsDefaultShowsFirstOnly(t *testing.T) {
 	st.refold(tabSpecs[4])
 
 	rows := st.foldRows()
-	if len(rows) != 2 {
-		t.Fatalf("折叠后可见行 = %d，期望 2（分组行 + 首条）", len(rows))
+	if len(rows) != 1 {
+		t.Fatalf("折叠后可见行 = %d，期望 1（首条带展开入口）", len(rows))
 	}
 	if rows[0].group == nil || rows[0].total != 5 {
-		t.Errorf("第一行不是 5 条的分组行：%+v", rows[0])
+		t.Errorf("首条不是 5 条组的组首：%+v", rows[0])
 	}
-	if rows[1].item.CommentID != "c0" {
-		t.Errorf("露出来的不是最早那条：%q", rows[1].item.CommentID)
+	if rows[0].item.CommentID != "c0" {
+		t.Errorf("露出来的不是最早那条：%q", rows[0].item.CommentID)
 	}
 
 	st.toggle(*rows[0].group)
 	rows = st.foldRows()
-	if len(rows) != 6 {
-		t.Fatalf("展开后可见行 = %d，期望 6（分组行 + 5 条）", len(rows))
+	if len(rows) != 5 {
+		t.Fatalf("展开后可见行 = %d，期望 5", len(rows))
 	}
 	if !rows[0].open {
-		t.Error("展开后分组行没有标成已展开")
+		t.Error("展开后组首没有标成已展开")
 	}
 
 	st.toggle(*rows[0].group)
-	if rows = st.foldRows(); len(rows) != 2 {
-		t.Errorf("收起后可见行 = %d，期望 2", len(rows))
+	if rows = st.foldRows(); len(rows) != 1 {
+		t.Errorf("收起后可见行 = %d，期望 1", len(rows))
 	}
 
-	// 单条评论不画分组行：分组结果本身只有一组一条。
+	// 单条评论不画入口：分组结果本身只有一组一条。
 	one := &tabState{items: []Item{commentRow(0, "a", "S1", "帖子标题")}}
 	one.refold(tabSpecs[4])
 	if rows := one.foldRows(); len(rows) != 1 || rows[0].group != nil {
-		t.Errorf("单条评论不该画分组行：%+v", rows)
+		t.Errorf("单条评论不该画展开入口：%+v", rows)
 	}
 
 	// 「动态」等没打开聚合的 tab 一律逐行列出。
@@ -132,6 +132,32 @@ func TestFoldRowsDefaultShowsFirstOnly(t *testing.T) {
 	plain.refold(tabSpecs[6])
 	if rows := plain.foldRows(); len(rows) != 2 {
 		t.Errorf("没开聚合的 tab 不该合并：%d 行", len(rows))
+	}
+}
+
+// 两条以内不折叠：这么小的聚合一屏也占不了几行，收起来反而多一次点击。
+// 到第三条才收成一组，默认只露首条加展开入口。
+func TestFoldSkipsSmallGroups(t *testing.T) {
+	st := &tabState{}
+	for i := 0; i < 2; i++ {
+		st.items = append(st.items, commentRow(i, "a", "S1", "帖子标题"))
+	}
+	st.refold(tabSpecs[4])
+	rows := st.foldRows()
+	if len(rows) != 2 {
+		t.Fatalf("两条的组可见行 = %d，期望 2（逐条列出）", len(rows))
+	}
+	for _, row := range rows {
+		if row.group != nil {
+			t.Errorf("两条以内不该画展开入口：%+v", row)
+		}
+	}
+
+	st.items = append(st.items, commentRow(2, "a", "S1", "帖子标题"))
+	st.refold(tabSpecs[4])
+	rows = st.foldRows()
+	if len(rows) != 1 || rows[0].group == nil || rows[0].total != 3 {
+		t.Errorf("超过两条没有收成一组：%+v", rows)
 	}
 }
 
@@ -162,8 +188,8 @@ func TestFoldResetsOnReload(t *testing.T) {
 	}
 }
 
-// 列表里的默认表现：5 条同人连续评论只露一条正文，点分组行展开到全部，
-// 再点一次收起。这同时守住「聚合不会丢内容」。
+// 列表里的默认表现：5 条同人连续评论只露一条正文，展开入口挂在首条评论
+// 下方、左对齐；点它展开到全部，再点一次收起。这同时守住「聚合不会丢内容」。
 func TestLatestCommentsFoldInList(t *testing.T) {
 	a := testApp(t)
 	a.tab = 4
@@ -189,18 +215,38 @@ func TestLatestCommentsFoldInList(t *testing.T) {
 			t.Errorf("折叠时不该出现 %q：%q", body, tt.Texts())
 		}
 	}
-	if !tt.HasText("共 5 条") {
-		t.Errorf("分组行没有写出条数：%q", tt.Texts())
+	entry, ok := tt.Access("展开 @dannyng 的连续评论")
+	if !ok {
+		t.Fatalf("首条评论下方没有展开入口：%q", tt.Texts())
+	}
+	first, ok := tt.Find(bodies[0])
+	if !ok {
+		t.Fatalf("首条正文没有渲染：%q", tt.Texts())
+	}
+	if entry.Bounds.Y < first.Y+first.H {
+		t.Errorf("展开入口不在第一条评论下方（入口 %.1f，正文底 %.1f）",
+			entry.Bounds.Y, first.Y+first.H)
+	}
+	if entry.Bounds.X >= first.X {
+		t.Errorf("展开入口没有左对齐（入口 %.1f，正文 %.1f）", entry.Bounds.X, first.X)
 	}
 
 	if err := tt.Click("展开 @dannyng 的连续评论"); err != nil {
-		t.Fatalf("点分组行失败：%v", err)
+		t.Fatalf("点展开入口失败：%v", err)
 	}
 	tt.Frame()
 	for _, body := range bodies {
 		if !tt.HasText(body) {
 			t.Errorf("展开后缺少 %q：%q", body, tt.Texts())
 		}
+	}
+	collapse, ok := tt.Access("收起 @dannyng 的连续评论")
+	if !ok {
+		t.Fatalf("展开后没有收起入口：%q", tt.Texts())
+	}
+	if d := collapse.Bounds.Y - entry.Bounds.Y; d > 0.5 || d < -0.5 {
+		t.Errorf("展开后入口挪了 %.1f DIP（%.1f -> %.1f）",
+			d, entry.Bounds.Y, collapse.Bounds.Y)
 	}
 
 	if err := tt.Click("收起 @dannyng 的连续评论"); err != nil {
@@ -215,14 +261,14 @@ func TestLatestCommentsFoldInList(t *testing.T) {
 	}
 }
 
-// 展开 / 收起不能让人眼前一跳：分组行必须留在原位，它下面露出来的评论
-// 往上长，而不是整屏跟着顶上去。列表很短、还没占满视口时最容易被顶动——
-// 滚动位置会被夹到内容末尾，分组行就跑到屏幕中间去了。
+// 展开 / 收起不能让人眼前一跳：入口必须留在原位，它下面露出来的评论
+// 往下长，而不是整屏跟着顶上去。列表很短、还没占满视口时最容易被顶动——
+// 滚动位置会被夹到内容末尾，入口就跟着第一条评论一起跑到屏幕中间去了。
 func TestFoldToggleKeepsGroupRowInPlace(t *testing.T) {
 	a := testApp(t)
 	a.tab = 4
 	st := a.tabs[4]
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 4; i++ {
 		st.items = append(st.items, commentRow(i, "a", "S1", "帖子标题"))
 	}
 	st.loaded = true
@@ -230,9 +276,9 @@ func TestFoldToggleKeepsGroupRowInPlace(t *testing.T) {
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	before, ok := tt.Find("共 2 条")
+	before, ok := tt.Access("展开 @a 的连续评论")
 	if !ok {
-		t.Fatalf("分组行没有渲染：%q", tt.Texts())
+		t.Fatalf("首条评论下方没有展开入口：%q", tt.Texts())
 	}
 
 	if err := tt.Click("展开 @a 的连续评论"); err != nil {
@@ -241,12 +287,13 @@ func TestFoldToggleKeepsGroupRowInPlace(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		tt.Frame()
 	}
-	after, ok := tt.Find("共 2 条")
+	after, ok := tt.Access("收起 @a 的连续评论")
 	if !ok {
-		t.Fatalf("展开后分组行不见了：%q", tt.Texts())
+		t.Fatalf("展开后入口不见了：%q", tt.Texts())
 	}
-	if d := after.Y - before.Y; d > 0.5 || d < -0.5 {
-		t.Errorf("展开后分组行跳了 %.1f DIP（%.1f -> %.1f）", d, before.Y, after.Y)
+	if d := after.Bounds.Y - before.Bounds.Y; d > 0.5 || d < -0.5 {
+		t.Errorf("展开后入口跳了 %.1f DIP（%.1f -> %.1f）",
+			d, before.Bounds.Y, after.Bounds.Y)
 	}
 
 	if err := tt.Click("收起 @a 的连续评论"); err != nil {
@@ -255,17 +302,18 @@ func TestFoldToggleKeepsGroupRowInPlace(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		tt.Frame()
 	}
-	back, ok := tt.Find("共 2 条")
+	back, ok := tt.Access("展开 @a 的连续评论")
 	if !ok {
-		t.Fatalf("收起后分组行不见了：%q", tt.Texts())
+		t.Fatalf("收起后入口不见了：%q", tt.Texts())
 	}
-	if d := back.Y - before.Y; d > 0.5 || d < -0.5 {
-		t.Errorf("收起后分组行跳了 %.1f DIP（%.1f -> %.1f）", d, before.Y, back.Y)
+	if d := back.Bounds.Y - before.Bounds.Y; d > 0.5 || d < -0.5 {
+		t.Errorf("收起后入口跳了 %.1f DIP（%.1f -> %.1f）",
+			d, before.Bounds.Y, back.Bounds.Y)
 	}
 }
 
-// 视口里已经有一屏内容时同样不许跳：展开 / 收起之后分组行仍钉在原来的位置。
-// 页面很长，列表要滚动才画得出下面的行，被测的分组刚好在首屏。
+// 视口里已经有一屏内容时同样不许跳：展开 / 收起之后入口仍钉在原来的位置。
+// 页面很长，列表要滚动才画得出下面的行，被测的组刚好在首屏。
 func TestFoldToggleKeepsGroupRowInPlaceWhileScrolled(t *testing.T) {
 	a := testApp(t)
 	a.tab = 4
@@ -274,8 +322,9 @@ func TestFoldToggleKeepsGroupRowInPlaceWhileScrolled(t *testing.T) {
 		commentRow(0, "a", "S1", "帖子标题"),
 		commentRow(1, "a", "S1", "帖子标题"),
 		commentRow(2, "a", "S1", "帖子标题"),
+		commentRow(3, "a", "S1", "帖子标题"),
 	}
-	for i := 3; i < 20; i++ {
+	for i := 4; i < 20; i++ {
 		rows = append(rows, commentRow(i, "u"+string(rune('0'+i)), "S1", "帖子标题"))
 	}
 	st.items = rows
@@ -284,34 +333,34 @@ func TestFoldToggleKeepsGroupRowInPlaceWhileScrolled(t *testing.T) {
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	box, ok := tt.Find("共 3 条")
-	if !ok || box.H == 0 {
-		t.Fatalf("分组行没有渲染：%+v %v", box, ok)
+	box, ok := tt.Access("展开 @a 的连续评论")
+	if !ok || box.Bounds.H == 0 {
+		t.Fatalf("首条评论下方没有展开入口：%+v %v", box, ok)
 	}
 	// 组本来就是折叠的：先展开再收起，「收起」这一次才点得到。
-	check := func(label string, wantY float32, frames int) {
+	check := func(click, after string, wantY float32, frames int) {
 		t.Helper()
-		if err := tt.Click(label); err != nil {
-			t.Fatalf("点 %q 失败：%v", label, err)
+		if err := tt.Click(click); err != nil {
+			t.Fatalf("点 %q 失败：%v", click, err)
 		}
 		for i := 0; i < frames; i++ {
 			tt.Frame()
 		}
-		got, ok := tt.Find("共 3 条")
+		got, ok := tt.Access(after)
 		if !ok {
-			t.Fatalf("%q 之后分组行不见了：%q", label, tt.Texts())
+			t.Fatalf("%q 之后入口不见了：%q", click, tt.Texts())
 		}
-		if d := got.Y - wantY; d > 0.5 || d < -0.5 {
-			t.Errorf("%q 之后分组行跳了 %.1f DIP（%.1f -> %.1f）", label, d, wantY, got.Y)
+		if d := got.Bounds.Y - wantY; d > 0.5 || d < -0.5 {
+			t.Errorf("%q 之后入口跳了 %.1f DIP（%.1f -> %.1f）", click, d, wantY, got.Bounds.Y)
 		}
 	}
 
-	check("展开 @a 的连续评论", box.Y, 3)
-	check("收起 @a 的连续评论", box.Y, 3)
+	check("展开 @a 的连续评论", "收起 @a 的连续评论", box.Bounds.Y, 3)
+	check("收起 @a 的连续评论", "展开 @a 的连续评论", box.Bounds.Y, 3)
 }
 
-// 点展开 / 收起时分组行的位置由列表自己端住：动作里不碰滚动位置，列表把
-// 行数变化当作「上面加了行」处理，被点的分组行留在原处。
+// 点展开 / 收起时入口所在的首条评论行由列表自己端住：动作里不碰滚动位置，
+// 多出来的成员接在入口后面，被点的入口留在原处。
 func TestFoldToggleLeavesScrollAlone(t *testing.T) {
 	a := testApp(t)
 	a.tab = 4
@@ -319,6 +368,8 @@ func TestFoldToggleLeavesScrollAlone(t *testing.T) {
 	st.items = []Item{
 		commentRow(0, "a", "S1", "帖子标题"),
 		commentRow(1, "a", "S1", "帖子标题"),
+		commentRow(2, "a", "S1", "帖子标题"),
+		commentRow(3, "a", "S1", "帖子标题"),
 	}
 	st.refold(tabSpecs[4])
 	before := len(st.foldRows())

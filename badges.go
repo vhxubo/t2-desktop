@@ -300,7 +300,7 @@ func (a *app) loadProfileBadges() {
 				ps.badgeErr = friendlyError(err)
 				// 缺 profile 权限（旧令牌）或登录失效时走全局授权链路，
 				// 授权成功后重跑这次加载；普通网络错误只留在页面里重试。
-				a.handleAuthError(err, a.loadProfileBadges)
+				a.handleAuthErrorFor(toastProfile, err, a.loadProfileBadges)
 				return
 			}
 			for i := range badges {
@@ -377,7 +377,7 @@ func (a *app) toggleProfileBadge(badgeID, name string, equip bool, key string) {
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() { a.toggleProfileBadge(badgeID, name, equip, key) }) {
+				if a.handleAuthErrorFor(toastProfile, err, func() { a.toggleProfileBadge(badgeID, name, equip, key) }) {
 					return
 				}
 				a.toast(toastProfile, friendlyError(err))

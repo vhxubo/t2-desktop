@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -122,6 +123,130 @@ func TestMomentValidation(t *testing.T) {
 	}
 	if a.compose.momentBusy {
 		t.Error("校验失败不该进入提交状态")
+	}
+}
+
+// 动态缺 write:topic：补授权要真的把 write:topic 带进授权地址，不能只申请
+// 默认范围。发动态与发帖共用这个 scope，但动态的入口没有节点 / 标题可以提示
+// 用户，更容易在授权这一步漏掉。
+func TestMomentMissingScopeAsksForWriteTopic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"c":403,"code":"insufficient_scope",`+
+			`"m":"缺少权限范围","required_scope":["write:topic"],"d":null}`)
+	}))
+	defer srv.Close()
+
+	b := testBook(t)
+	acc := addTestAccount(t, b, "jimmy")
+	b.webview = true
+	b.afterReady = true
+	var authorizeURL string
+	b.openLogin = func(u string) error { authorizeURL = u; return nil }
+	a := newAppWithDeps(b.deps(), acc)
+	a.autoLoad = false
+	acc.app = a
+	a.client.Base = srv.URL + "/api"
+	a.client.HTTP = srv.Client()
+	a.compose = newComposeState()
+	a.compose.mode = composeModeMoment
+	a.compose.momentDraft = "你好"
+
+	a.submitMoment()
+	waitFor(t, func() bool { return a.authGate.open }, "动态缺权限的授权弹窗")
+	if got := a.authGate.need.Scopes; len(got) != 1 || got[0] != "write:topic" {
+		t.Fatalf("授权弹窗登记的 scope = %v，期望 write:topic", got)
+	}
+
+	a.authorizeGate()
+	t.Cleanup(func() { b.cancelLogin(); a.auth.Cancel() })
+	if authorizeURL == "" {
+		t.Fatal("没有打开内置浏览器授权页")
+	}
+	u, err := url.Parse(authorizeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope := " " + u.Query().Get("scope") + " "; !strings.Contains(scope, " write:topic ") {
+		t.Errorf("授权地址没有申请 write:topic：%q", scope)
+	}
+}
+
+// 服务端只回 insufficient_scope、没带 required_scope 时，客户端也必须知道
+// 动态要的是 write:topic：否则授权窗口只申请默认范围，登录回来仍然发不出去。
+func TestMomentMissingScopeWithoutRequiredScopeStillAsksWriteTopic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"c":403,"code":"insufficient_scope",`+
+			`"m":"缺少权限范围","d":null}`)
+	}))
+	defer srv.Close()
+
+	b := testBook(t)
+	acc := addTestAccount(t, b, "jimmy")
+	b.webview = true
+	b.afterReady = true
+	var authorizeURL string
+	b.openLogin = func(u string) error { authorizeURL = u; return nil }
+	a := newAppWithDeps(b.deps(), acc)
+	a.autoLoad = false
+	acc.app = a
+	a.client.Base = srv.URL + "/api"
+	a.client.HTTP = srv.Client()
+	a.compose = newComposeState()
+	a.compose.mode = composeModeMoment
+	a.compose.momentDraft = "你好"
+
+	a.submitMoment()
+	waitFor(t, func() bool { return a.authGate.open }, "动态缺权限的授权弹窗")
+	if got := a.authGate.need.Scopes; len(got) != 1 || got[0] != "write:topic" {
+		t.Fatalf("授权弹窗登记的 scope = %v，期望 write:topic", got)
+	}
+
+	a.authorizeGate()
+	t.Cleanup(func() { b.cancelLogin(); a.auth.Cancel() })
+	if authorizeURL == "" {
+		t.Fatal("没有打开内置浏览器授权页")
+	}
+	u, err := url.Parse(authorizeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope := " " + u.Query().Get("scope") + " "; !strings.Contains(scope, " write:topic ") {
+		t.Errorf("授权地址没有申请 write:topic：%q", scope)
+	}
+}
+
+// 未登录时打开动态窗口：登录授权一次就要把 write:topic 一起申请，登录回来
+// 不用再补第二次授权。
+func TestMomentLoginAsksWriteTopicUpFront(t *testing.T) {
+	b := testBook(t)
+	b.afterReady = true
+	var authorizeURL string
+	b.openURL = func(u string) error { authorizeURL = u; return nil }
+	a := newGuestApp(b)
+	a.autoLoad = false
+
+	a.compose = newComposeState()
+	a.compose.mode = composeModeMoment
+	a.showComposeWindow()
+	if !a.authGate.open {
+		t.Fatal("未登录打开动态窗口没有弹授权窗")
+	}
+	if got := a.authGate.need.Scopes; len(got) != 1 || got[0] != "write:topic" {
+		t.Fatalf("登录前登记的 scope = %v，期望 write:topic", got)
+	}
+	a.authorizeGate()
+	t.Cleanup(b.cancelLogin)
+	if authorizeURL == "" {
+		t.Fatal("没有打开授权页")
+	}
+	u, err := url.Parse(authorizeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope := " " + u.Query().Get("scope") + " "; !strings.Contains(scope, " write:topic ") {
+		t.Errorf("登录授权地址没有申请 write:topic：%q", scope)
 	}
 }
 

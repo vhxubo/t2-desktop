@@ -1114,13 +1114,18 @@ func (a *app) detailsPanel(c *ui.Context, d *detailState, target string) {
 }
 
 // loginHint 是气泡里的登录提示：未登录时用户已经点开了入口，就地给一个
-// 去登录的出口，不在弹窗里再套一层弹窗。
-func (a *app) loginHint(c *ui.Context, message string) {
+// 去登录的出口，不在弹窗里再套一层弹窗。owner 是气泡所在的窗口。
+func (a *app) loginHintFor(c *ui.Context, owner toastTarget, message string) {
 	t := c.Theme()
 	ui.Text(c, message).FontSize(12).TextColor(t.TextMuted).MaxLines(2)
 	if ui.PrimaryButton(c, "去登录").Clicked() {
-		a.requestLogin(message, nil)
+		a.requestLoginFor(owner, message, nil)
 	}
+}
+
+// loginHint 是主窗口气泡里的登录提示。
+func (a *app) loginHint(c *ui.Context, message string) {
+	a.loginHintFor(c, toastMain, message)
 }
 
 // rewardBadge 是打赏汇总胶囊：只显示金币合计，悬停给出次数与打赏者。

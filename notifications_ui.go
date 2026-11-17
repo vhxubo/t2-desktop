@@ -113,7 +113,7 @@ func (a *app) showNotificationWindow() {
 	}
 	a.refreshUnread()
 	if a.autoLoad {
-		a.load(idx, 1)
+		a.loadFor(toastNotifications, idx, 1)
 	}
 	// headless 测试没有主循环：碰 mygo 的窗口会等待一个不存在的处理者，
 	// 所以只把状态准备好，测试直接渲染 notificationsWindowView。
@@ -150,6 +150,7 @@ func (a *app) showNotificationWindow() {
 	win.OnClosed(func() {
 		a.notifWin = nil
 		a.setNotificationWindowShown(false)
+		a.authGateWindowClosed(toastNotifications)
 	})
 	a.setNotificationWindowShown(true)
 }
@@ -282,6 +283,8 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 			a.notificationsList(c, st)
 		})
 	})
+	// 缺权限时就在这个窗口里弹授权：消息列表的请求是从这里发起的。
+	a.authDialogFor(c, toastNotifications)
 }
 
 // notificationSearchRow 是通知窗口里的关键词搜索：在自己的通知里按内容
@@ -329,7 +332,7 @@ func (a *app) applyNotificationKeyword(st *tabState, keyword string) {
 	st.page = 1
 	st.list.ScrollTo(0, ui.Start)
 	if idx := notificationTabIndex(); idx >= 0 {
-		a.load(idx, 1)
+		a.loadFor(toastNotifications, idx, 1)
 	}
 }
 
@@ -339,7 +342,7 @@ func (a *app) notificationActions(c *ui.Context, st *tabState) {
 	t := c.Theme()
 	ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
 		a.smallAction(c, "全部已读", st.markingAll || (a.unread == 0 && !hasUnreadItem(st.items)),
-			func() { a.markAllNotificationsRead() })
+			func() { a.markAllNotificationsRead(toastNotifications) })
 		// 「已读本页」= 把当前已加载的未读消息一次性标为已读；它与站点 Web 的
 		// 同名操作一致，底层就是一次带 id 列表的 POST。
 		loadedUnread := len(unreadNotificationIDs(st.items))
@@ -348,10 +351,10 @@ func (a *app) notificationActions(c *ui.Context, st *tabState) {
 			loadedLabel = fmt.Sprintf("已读本页 %d", loadedUnread)
 		}
 		a.smallAction(c, loadedLabel, st.loading || loadedUnread == 0,
-			func() { a.markLoadedNotificationsRead() })
+			func() { a.markLoadedNotificationsRead(toastNotifications) })
 		if n := notificationSelectionCount(st); n > 0 {
 			a.smallAction(c, fmt.Sprintf("已读选中 %d", n), false,
-				func() { a.markSelectedNotificationsRead() })
+				func() { a.markSelectedNotificationsRead(toastNotifications) })
 		}
 		a.smallAction(c, "刷新", st.loading, func() { a.reloadNotifications() })
 		switch {
@@ -383,7 +386,7 @@ func (a *app) notificationsList(c *ui.Context, st *tabState) {
 			}
 			if strings.Contains(st.err, "登录") || strings.Contains(st.err, "授权") {
 				if ui.Button(c, "去授权").Clicked() {
-					a.requestLogin("登录并授权后才能继续查看「通知」。",
+					a.requestLoginFor(toastNotifications, "登录并授权后才能继续查看「通知」。",
 						func() { a.reloadNotifications() })
 				}
 			}
@@ -425,7 +428,7 @@ func (a *app) notificationsList(c *ui.Context, st *tabState) {
 			a.notificationRow(c, items[i])
 		}).Grow(1).MinHeight(0).Padding(4, 0).Gap(8)
 		a.loadMoreFooter(c, st.moreErr, st.loading, func() {
-			a.load(idx, st.page)
+			a.loadFor(toastNotifications, idx, st.page)
 		})
 		// 无限滚动：滚到底且还有下一页时自动加载。续拉失败后停在提示上，
 		// 等用户点「重试」，避免每次重建都重发同一个失败的请求。
@@ -433,7 +436,7 @@ func (a *app) notificationsList(c *ui.Context, st *tabState) {
 			len(st.items) > 0 && st.list.AtEnd() {
 			hasMore := st.totalPages == 0 || st.page < st.totalPages
 			if hasMore {
-				a.load(idx, st.page+1)
+				a.loadFor(toastNotifications, idx, st.page+1)
 			}
 		}
 	}
@@ -502,7 +505,7 @@ func (a *app) setNotificationFilter(filter int) {
 	st.moreErr = ""
 	st.page = 1
 	st.list.ScrollTo(0, ui.Start)
-	a.load(idx, 1)
+	a.loadFor(toastNotifications, idx, 1)
 }
 
 func (a *app) reloadNotifications() {
@@ -521,7 +524,7 @@ func (a *app) reloadNotifications() {
 	st.moreErr = ""
 	st.noMore = false
 	st.list.ScrollTo(0, ui.Start)
-	a.load(idx, 1)
+	a.loadFor(toastNotifications, idx, 1)
 }
 
 // notificationRow 一条消息就是一张和列表同宽的卡片：勾选框、未读点与「标为
@@ -569,7 +572,7 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 				}
 				ui.Spacer(c).Grow(1)
 				if unread {
-					a.notificationReadAction(c, reading, func() { a.markNotificationRead(n.ID) })
+					a.notificationReadAction(c, reading, func() { a.markNotificationRead(toastNotifications, n.ID) })
 				}
 			})
 			switch {

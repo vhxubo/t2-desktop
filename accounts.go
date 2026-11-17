@@ -61,8 +61,8 @@ type accountRecord struct {
 	AddedAt  int64  `json:"added_at,omitempty"`
 }
 
-// accountsFile 是 accounts.json 的内容。Active 只是「上次用的那个」，用来决定
-// 启动时先把哪个窗口带到前台，不影响别的账号。
+// accountsFile 是 accounts.json 的内容。Active 是「上次用的那个」，启动时只
+// 打开它的窗口；别的账号留在账号册里，从账号面板 / 托盘按需打开。
 type accountsFile struct {
 	Version  int              `json:"version"`
 	Active   string           `json:"active,omitempty"`
@@ -196,6 +196,12 @@ type accountBook struct {
 	// newLoginAuth 造一次账号授权用的临时会话（令牌先只放内存）。测试里换成
 	// 指向 httptest 的实现，生产用真实 API 与共享代理。
 	newLoginAuth func() *AuthManager
+	// openLogin 打开内置浏览器授权窗口。默认是 openLoginWindow；测试里换成
+	// 记录调用，无头环境建不了原生窗口。
+	openLogin func(string) error
+	// openPanel 打开账号面板。默认是 showPanelWindow；测试里换成空实现，
+	// 无头环境建不了原生窗口。
+	openPanel func()
 }
 
 // newAccountBook 建账号册：装载共享服务、读账号索引、迁移旧版单账号会话。
@@ -223,6 +229,8 @@ func newAccountBook(dir string) *accountBook {
 		m.store = &memoryTokenStore{}
 		return m
 	}
+	b.openLogin = b.openLoginWindow
+	b.openPanel = b.showPanelWindow
 	if err := b.kv.load(); err != nil {
 		log.Printf("离线缓存不可用：%v", err)
 	}
@@ -572,19 +580,35 @@ func (b *accountBook) changedHook() func() {
 // 直接授权最快）；已经有账号时用内置浏览器的独立会话，否则系统浏览器会把
 // 授权码发给网页里正登着的那个账号，用户得先去网页端退出登录。
 func (b *accountBook) startAddAccount() {
+	b.startAddAccountScopes(nil)
+}
+
+// startAddAccountScopes 是带额外 scope 的添加账号：从未登录的发帖 / 发动态
+// 窗口发起登录时，一次授权就把 write:topic 一起申请下来，登录回来不用再补
+// 第二次授权。作用域只影响这一次授权，不会写进账号索引。
+func (b *accountBook) startAddAccountScopes(scopes []string) {
 	if b.pendingLogin() != nil {
 		b.setLoginMsg("已经有一次授权在进行，请先完成它，或点「取消」。")
 		b.showPanel()
 		return
 	}
 	// 令牌先只放内存：这时还不知道授权回来的是哪个账号，拿不到它的存储键。
-	b.beginAccountLogin(b.newLoginAuth(), "", nil)
+	b.beginAccountLogin(b.newLoginAuth(), "", scopes)
 }
 
-// reloginAccount 给一个令牌已失效的账号重新授权。授权也用一份临时会话：
-// 授权回来的昵称会和这个账号核对，不是同一个人就另算新账号，绝不把别人的
-// 令牌装到它头上（见 persistLogin）。
+// reloginAccount 给一个令牌已失效的账号重新授权。
 func (b *accountBook) reloginAccount(id string) {
+	b.reauthorizeAccount(id, nil)
+}
+
+// reauthorizeAccount 给一个已有账号重新授权：extraScopes 是补权限时要追加的
+// scope（普通重新登录为 nil）。
+//
+// 多账号时一律走内置浏览器的独立会话：系统浏览器里登着的可能正是另一个账号，
+// 补到的权限会落到别人头上。授权仍用一份临时会话，授权回来的昵称和这个账号
+// 核对，不是同一个人就另算新账号，绝不把别人的令牌装到它头上（见
+// persistLogin）。
+func (b *accountBook) reauthorizeAccount(id string, extraScopes []string) {
 	acc := b.account(id)
 	if acc == nil {
 		return
@@ -594,7 +618,7 @@ func (b *accountBook) reloginAccount(id string) {
 		b.showPanel()
 		return
 	}
-	b.beginAccountLogin(b.newLoginAuth(), id, nil)
+	b.beginAccountLogin(b.newLoginAuth(), id, extraScopes)
 }
 
 // beginAccountLogin 是上面两条入口的共同实现：认领全局唯一的那次授权、拿
@@ -613,9 +637,11 @@ func (b *accountBook) beginAccountLogin(auth *AuthManager, targetID string, extr
 	p := &accountLogin{auth: auth, accountID: targetID, url: authorize}
 	embedded := b.embeddedLoginReady(targetID)
 	p.embedded = embedded
+	// 提示语要在拿 b.mu 之前算：它要按 id 查账号名（见 loginWaitingMessage）。
+	msg := b.loginWaitingMessage(embedded, targetID)
 	b.mu.Lock()
 	b.pending = p
-	b.loginMsg = loginWaitingMessage(embedded)
+	b.loginMsg = msg
 	b.mu.Unlock()
 	b.showPanel()
 	if !embedded {
@@ -626,7 +652,7 @@ func (b *accountBook) beginAccountLogin(auth *AuthManager, targetID string, extr
 		}
 		return
 	}
-	if err := b.openLoginWindow(authorize); err != nil {
+	if err := b.openLogin(authorize); err != nil {
 		// 内置浏览器起不来（缺 WebView2 运行时、平台不支持）：收起那个窗口、
 		// 退回系统浏览器 —— 用户至少还有一条能走通的路。
 		b.closeLoginWindow()
@@ -640,15 +666,31 @@ func (b *accountBook) beginAccountLogin(auth *AuthManager, targetID string, extr
 			b.redrawPanel()
 			return
 		}
-		b.setLoginMsg(loginWaitingMessage(false))
+		b.setLoginMsg(b.loginWaitingMessage(false, targetID))
 	}
 	b.redrawPanel()
 }
 
-// loginWaitingMessage 是面板上等待授权时的那句话，按授权方式分开说。
-func loginWaitingMessage(embedded bool) string {
+// loginWaitingMessage 是面板上等待授权时的那句话，按授权方式与目标账号分开说。
+func (b *accountBook) loginWaitingMessage(embedded bool, targetID string) string {
+	name := ""
+	if targetID != "" {
+		name = "这个账号"
+		if acc := b.account(targetID); acc != nil {
+			name = acc.name()
+		}
+	}
 	if embedded {
+		if name != "" {
+			return "已在内置浏览器窗口里打开授权页：那个窗口是独立会话，请登录要重新授权的「" +
+				name + "」账号。"
+		}
 		return "已在内置浏览器窗口里打开授权页：那个窗口是独立会话，可以直接登录要挂的另一个账号。"
+	}
+	if name != "" {
+		// 内置浏览器起不来的兜底：系统浏览器里可能登着别的账号，提醒一句。
+		return "内置浏览器不可用，已在系统浏览器打开授权页：请确认里面登录的是「" +
+			name + "」，同意后会自动跳回。"
 	}
 	return "已在浏览器打开授权页，同意后会自动跳回。"
 }
@@ -678,6 +720,7 @@ func (b *accountBook) finishAccountLogin(auth *AuthManager, err error) {
 			b.setLoginMsg(friendlyError(err))
 			if p.accountID != "" {
 				b.bindSession(b.account(p.accountID))
+				b.failAccountWindowAuth(p, err)
 			}
 			return
 		}
@@ -687,6 +730,41 @@ func (b *accountBook) finishAccountLogin(auth *AuthManager, err error) {
 			return
 		}
 		b.openWindow(acc.ID)
+	})
+}
+
+// abortAccountWindowAuth 告诉发起这次授权的账号窗口：这次授权没成，窗口里等
+// 重跑的调用要一起丢掉，免得以后某次授权成功时突然执行一个早就过期的操作。
+// 只在主线程调用；窗口没开时什么都不做。
+func (b *accountBook) abortAccountWindowAuth(p *accountLogin, reason string) {
+	if p == nil || p.accountID == "" {
+		return
+	}
+	acc := b.account(p.accountID)
+	if acc == nil || acc.app == nil {
+		return
+	}
+	app := acc.app
+	app.publish(func() { app.cancelAuthGate(reason) })
+}
+
+// failAccountWindowAuth 告诉发起这次授权的账号窗口授权失败：把登录回退页摆
+// 出来（那里可以重新发起），待重跑的调用保留到下一次成功授权。
+func (b *accountBook) failAccountWindowAuth(p *accountLogin, err error) {
+	if p == nil || p.accountID == "" {
+		return
+	}
+	acc := b.account(p.accountID)
+	if acc == nil || acc.app == nil {
+		return
+	}
+	app := acc.app
+	msg := friendlyError(err)
+	app.publish(func() {
+		app.loginMsg = msg
+		app.status = msg
+		app.authGate.open = false
+		app.pageName = "login"
 	})
 }
 
@@ -704,8 +782,11 @@ func (b *accountBook) persistLogin(p *accountLogin) (*account, error) {
 				b.setLoginMsg("已重新登录：" + target.name())
 				return target, nil
 			}
-			b.setLoginMsg("授权回来的是「" + name + "」，不是「" + target.name() +
-				"」。已把它添成另一个账号；原来那个仍需要重新登录。")
+			msg := "授权回来的是「" + name + "」，不是「" + target.name() +
+				"」。已把它添成另一个账号；原来那个仍需要重新登录。"
+			b.setLoginMsg(msg)
+			// 这个窗口等的那次授权落到别人头上了：待重跑调用一并丢掉。
+			b.abortAccountWindowAuth(p, msg)
 			return b.adoptLogin(p.auth)
 		}
 	}
@@ -848,8 +929,10 @@ func (b *accountBook) cancelLogin() {
 	p.auth.Cancel()
 	b.closeLoginWindow()
 	if p.accountID != "" {
-		// 重新登录被取消：把会话的处理函数交还给窗口 / 账号册。
+		// 重新登录被取消：把会话的处理函数交还给窗口 / 账号册，并告诉窗口
+		// 这次补授权没有发生 —— 那里等重跑的调用一并丢掉。
 		b.bindSession(b.account(p.accountID))
+		b.abortAccountWindowAuth(p, "已取消授权")
 	}
 	b.setLoginMsg("已取消这次授权")
 	b.redrawPanel()
@@ -896,7 +979,8 @@ func (b *accountBook) openWindowNow(id string) {
 		return
 	}
 	if !b.afterReady {
-		// 应用还没就绪（启动阶段先记下要开的窗口，见 restoreWindows）。
+		// 应用还没就绪时建不了窗口：启动窗口统一由 restoreWindows 在就绪后
+		// 打开（见 accounts.go）。
 		return
 	}
 	app := newAccountApp(b, acc)
@@ -978,25 +1062,47 @@ func (b *accountBook) logoutAccount(id string) {
 	}
 }
 
-// restoreWindows 按账号册把窗口开出来：每个账号一个主窗口，最近用过的那个
-// 提到前台。没有账号时开未登录窗口 —— 不登录也能浏览公开内容。
+// restoreWindows 按账号册开启动窗口：只打开最近用过的那个账号的主窗口，
+// 登录了几个账号，屏幕上也只有这一个主页面。别的账号都留在账号册里，从
+// 账号面板或托盘按需打开。没有账号时才开未登录窗口 —— 不登录也能浏览公开
+// 内容。
 func (b *accountBook) restoreWindows() {
 	b.afterReady = true
-	accounts := b.snapshotAccounts()
-	if len(accounts) == 0 {
-		b.openGuestWindowNow()
+	b.openStartupWindow(b.openWindowNow, b.openGuestWindowNow)
+}
+
+// openStartupWindow 是 restoreWindows 的可测试骨架：只挑选并打开一个启动
+// 窗口。openAccount / openGuest 在测试里换成记录调用，避免真建原生窗口。
+//
+// 挑选时不看会话是否还有效：登录已失效的账号照样开它的主窗口，主页面本来
+// 就能浏览公开内容，失效只影响需要登录的部分，启动不该因此换成登录页或
+// 干脆不开窗口。
+func (b *accountBook) openStartupWindow(openAccount func(string), openGuest func()) {
+	id := b.startupWindowAccount()
+	if id == "" {
+		openGuest()
 		return
 	}
-	active := b.activeAccountID()
-	for _, acc := range accounts {
-		b.openWindowNow(acc.ID)
+	if id != b.activeAccountID() {
+		// 最近用过的账号已经不在册里：把兜底选中的这个记成 active，下次
+		// 启动还从它开始。
+		b.setActive(id)
 	}
-	if active != "" {
-		if acc := b.account(active); acc != nil && acc.app != nil {
-			acc.app.raiseMainWindow()
-		}
-	}
+	openAccount(id)
 	b.redrawPanel()
+}
+
+// startupWindowAccount 返回启动时该打开哪个账号的窗口：最近用过的账号还在
+// 册里就用它，否则用第一个。账号册为空时返回空 id（开未登录窗口）。
+func (b *accountBook) startupWindowAccount() string {
+	accounts := b.snapshotAccounts()
+	if len(accounts) == 0 {
+		return ""
+	}
+	if active := b.activeAccountID(); b.account(active) != nil {
+		return active
+	}
+	return accounts[0].ID
 }
 
 // activeAccountID 返回最近用过的账号 id。
@@ -1276,6 +1382,8 @@ func (b *accountBook) claimLogin(m *AuthManager) {
 		// 被取代的那次授权可能正开在内置浏览器窗口里：窗口一并收起，别留一个
 		// 已经作废的授权页在屏幕上。
 		b.closeLoginWindow()
+		// 它的账号窗口也要知道：待重跑的调用不能再留着。
+		b.abortAccountWindowAuth(dropped, "这次授权已被另一次授权取代，请重新发起。")
 	}
 	for _, acc := range b.snapshotAccounts() {
 		if acc.auth != nil && acc.auth != m {

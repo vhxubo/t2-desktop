@@ -34,7 +34,7 @@ func (a *app) showFollows(tab int) {
 // showFollowsWindow 在主线程上真正打开窗口。打开时补齐当前分段的首屏。
 func (a *app) showFollowsWindow(tab int) {
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录 2Libra 后才能查看关注与粉丝。", func() { a.showFollows(tab) })
+		a.requestLoginFor(toastProfile, "登录 2Libra 后才能查看关注与粉丝。", func() { a.showFollows(tab) })
 		return
 	}
 	if a.follows == nil {
@@ -77,6 +77,7 @@ func (a *app) showFollowsWindow(tab int) {
 	win.OnClosed(func() {
 		a.followsWin = nil
 		a.setFollowsWindowShown(false)
+		a.authGateWindowClosed(toastFollows)
 	})
 	a.setFollowsWindowShown(true)
 }
@@ -160,7 +161,7 @@ func (a *app) followsWindowView(c *ui.Context) {
 		})
 	})
 	a.ensureFollowsLoaded()
-	a.authDialog(c)
+	a.authDialogFor(c, toastFollows)
 }
 
 // followsListBody 画当前分段的名单：加载中、失败、空与列表四种状态。

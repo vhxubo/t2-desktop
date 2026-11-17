@@ -121,6 +121,7 @@ func (a *app) onMainWindowClosed() {
 	a.closeAboutWindow()
 	a.closeFollowsWindow()
 	a.closeUserCardWindow()
+	a.closeViewerWindow()
 	if a.book == nil {
 		return
 	}
@@ -149,6 +150,7 @@ func (a *app) closeAllWindows() {
 	a.closeAboutWindow()
 	a.closeFollowsWindow()
 	a.closeUserCardWindow()
+	a.closeViewerWindow()
 	win := a.win
 	a.win = nil
 	if win != nil {

@@ -102,8 +102,10 @@ func (a *app) showComposeWindow() {
 			after = a.showMomentComposeWindow
 			msg = "登录 2Libra 后才能发动态。"
 		}
-		a.requestLogin(msg, after)
+		// 先开窗口再登记授权：弹窗只画在发帖窗口里，登记时它必须已经存在。
+		// 登录授权一次就把发帖需要的 write:topic 一起申请下来。
 		a.openComposeWindow()
+		a.requestLoginWithScopesFor(toastCompose, msg, []string{"write:topic"}, after)
 		return
 	}
 	// 节点是选填的（留空由 AI 判定分类），但列表照样先读本地缓存、按新鲜度
@@ -140,7 +142,10 @@ func (a *app) openComposeWindow() {
 		Content:           ui.View(a.composeWindowView),
 	})
 	a.composeWin = win
-	win.OnClosed(func() { a.composeWin = nil })
+	win.OnClosed(func() {
+		a.composeWin = nil
+		a.authGateWindowClosed(toastCompose)
+	})
 }
 
 // closeComposeWindow 关掉发帖窗口：主窗口关闭或退出登录时调用。草稿留在
@@ -291,8 +296,11 @@ func (a *app) composeWindowView(c *ui.Context) {
 	})
 	// 弹窗画在内容之上：和授权弹窗一样放在 view 末尾，才能盖住整扇窗口。
 	a.composeModuleDialog(c, st)
-	// 预览区里的配图同样能点开多图预览：和详情页共用同一个弹窗状态。
-	a.imageViewer(c)
+	// 预览区里的配图同样能点开多图预览；预览是一扇独立窗口，这里只在图片
+	// 到位后补开它（见 viewerTick）。
+	a.viewerTick()
+	// 缺权限时就在这个窗口里弹授权：发帖 / 发动态的请求是从这里发起的。
+	a.authDialogFor(c, toastCompose)
 }
 
 // composeMomentBody 是动态模式：只有一段 1～500 字的正文，不显示标题、节点
@@ -323,7 +331,7 @@ func (a *app) composeMomentBody(c *ui.Context, st *composeState) {
 					ui.Text(c, "当前授权还不能发动态，需要补充 write:topic 权限。").
 						FontSize(12).TextColor(t.TextMuted).MaxLines(2).Grow(1)
 					if ui.Button(c, "去授权").Clicked() {
-						a.demandAuthorization(scopeNeed([]string{"write:topic"}), nil)
+						a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}), nil)
 					}
 				})
 			}
@@ -1095,7 +1103,7 @@ func (a *app) composeMessages(c *ui.Context, st *composeState) {
 			ui.Text(c, "当前授权还不能发帖，需要补充 write:topic 权限。").
 				FontSize(12).TextColor(t.TextMuted).MaxLines(2).Grow(1)
 			if ui.Button(c, "去授权").Clicked() {
-				a.demandAuthorization(scopeNeed([]string{"write:topic"}), nil)
+				a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}), nil)
 			}
 		})
 	}
@@ -1186,7 +1194,7 @@ func (a *app) submitCompose() {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录 2Libra 后才能发帖。", a.submitCompose)
+		a.requestLoginWithScopesFor(toastCompose, "登录 2Libra 后才能发帖。", []string{"write:topic"}, a.submitCompose)
 		return
 	}
 	payload, err := st.payload()
@@ -1222,7 +1230,7 @@ func (a *app) submitCompose() {
 			}
 			st.posting = false
 			if err != nil {
-				a.handleAuthError(err, func() {
+				a.handleAuthErrorWithScopesFor(toastCompose, err, []string{"write:topic"}, func() {
 					if a.compose == st {
 						a.submitCompose()
 					}
@@ -1261,7 +1269,7 @@ func (a *app) submitMoment() {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录 2Libra 后才能发动态。", a.submitMoment)
+		a.requestLoginWithScopesFor(toastCompose, "登录 2Libra 后才能发动态。", []string{"write:topic"}, a.submitMoment)
 		return
 	}
 	content := strings.TrimSpace(st.momentDraft)
@@ -1292,7 +1300,7 @@ func (a *app) submitMoment() {
 			}
 			st.momentBusy = false
 			if err != nil {
-				if a.handleAuthError(err, func() { a.submitMoment() }) {
+				if a.handleAuthErrorWithScopesFor(toastCompose, err, []string{"write:topic"}, func() { a.submitMoment() }) {
 					return
 				}
 				st.momentErr = friendlyError(err)

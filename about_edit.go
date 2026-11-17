@@ -108,7 +108,7 @@ func (a *app) submitUserCardAbout() {
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() { a.submitUserCardAbout() }) {
+				if a.handleAuthErrorFor(toastUserCard, err, func() { a.submitUserCardAbout() }) {
 					return
 				}
 				cs.aboutErrEdit = friendlyError(err)

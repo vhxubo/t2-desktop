@@ -114,6 +114,7 @@ func (a *app) openEditWindow(st *editState) {
 	a.editWin = win
 	win.OnClosed(func() {
 		a.editWin = nil
+		a.authGateWindowClosed(toastEdit)
 		// 窗口关掉就丢掉这份编辑：它是原文的一份快照，留着下次打开会盖掉
 		// 页面上已经更新的内容。
 		a.edit = nil
@@ -194,8 +195,11 @@ func (a *app) editWindowView(c *ui.Context) {
 		ui.Divider(c)
 		a.editWindowFooter(c, st)
 	})
-	// 右栏预览里的配图也能点开多图预览：和详情页共用同一个弹窗状态。
-	a.imageViewer(c)
+	// 右栏预览里的配图也能点开多图预览；预览是一扇独立窗口，这里只在图片
+	// 到位后补开它（见 viewerTick）。
+	a.viewerTick()
+	// 缺权限时就在这个窗口里弹授权：保存 / 追加附言的请求是从这里发起的。
+	a.authDialogFor(c, toastEdit)
 }
 
 // editWindowSubtitle 是标题栏里的一行：编辑评论时报评论 id 的前几位，帖子
@@ -358,7 +362,7 @@ func (a *app) submitEdit() {
 			if err != nil {
 				// 缺权限时先补授权，回调成功后按同样的内容重发一次，用户不用
 				// 重新输入。
-				a.handleAuthError(err, func() {
+				a.handleAuthErrorFor(toastEdit, err, func() {
 					if a.edit == st {
 						a.submitEdit()
 					}

@@ -86,22 +86,10 @@ var profileContentSpecs = []tabSpec{
 // profileNow 单独提出来给测试替换：注册天数按本地时间算。
 var profileNow = func() time.Time { return time.Now() }
 
-// profileScopeLabels 把授权范围翻成一句人话。未列出的范围原样展示，新
-// scope 上线时不会显示成空白，也不会假装认识它。
-var profileScopeLabels = map[string]string{
-	"profile":       "读取个人资料与头像",
-	"read":          "读取公开内容",
-	"read:me":       "读取我的内容（收藏 / 书签 / 通知）",
-	"read:economy":  "读取金币余额、流水与签到状态",
-	"write:comment": "发表评论",
-	"write:topic":   "发表帖子",
-	"write:economy": "金币变动（签到 / 打赏 / 佩戴徽章 / 解锁）",
-	"interact":      "收藏、关注等互动",
-	"upload":        "上传图片",
-}
-
+// profileScopeLabel 把授权范围翻成一句人话（映射表见 login_window.go 的
+// scopeLabels，登录窗口的「本次申请」用的是同一份）。未列出的范围原样展示。
 func profileScopeLabel(scope string) string {
-	if label, ok := profileScopeLabels[scope]; ok {
+	if label := scopeLabel(scope); label != "" {
 		return label
 	}
 	return scope
@@ -432,7 +420,7 @@ func (a *app) loadProfileContent(kind, page int) {
 	if ps == nil || kind < 0 || kind >= profileContentCount {
 		return
 	}
-	a.loadSpec(&ps.content[kind], profileContentSpecs[kind], page,
+	a.loadSpec(toastProfile, &ps.content[kind], profileContentSpecs[kind], page,
 		func() { a.loadProfileContent(kind, page) })
 }
 

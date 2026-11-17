@@ -101,7 +101,7 @@ func (a *app) submitFollow(fs *followState, follow bool, target toastTarget, cur
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, replay) {
+				if a.handleAuthErrorFor(target, err, replay) {
 					return
 				}
 				a.toast(target, friendlyError(err))

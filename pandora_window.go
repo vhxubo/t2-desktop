@@ -80,6 +80,7 @@ func (a *app) showPandoraWindow() {
 	win.OnClosed(func() {
 		a.pandoraWin = nil
 		a.setPandoraWindowShown(false)
+		a.authGateWindowClosed(toastPandora)
 	})
 	a.setPandoraWindowShown(true)
 }
@@ -205,7 +206,7 @@ func (a *app) pandoraWindowView(c *ui.Context) {
 		})
 	})
 	a.ensurePandoraLoaded()
-	a.authDialog(c)
+	a.authDialogFor(c, toastPandora)
 }
 
 // pandoraHeaderStatus 是窗口标题栏里的一行状态，只说明今天走到了哪一步。

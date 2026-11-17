@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"image"
+	"image/draw"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -15,13 +17,26 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 多图预览弹窗：正文与每条评论各自成组，组内左右翻页、滚轮缩放、右键另存为。
+// 多图预览窗口：正文与每条评论各自成组，组内左右翻页、滚轮缩放、拖动平移、
+// 右键另存为；预览是一扇独立窗口，不内嵌在详情页里。
 
 const viewerPicPrefix = "https://example.com/pics/"
 
-// viewerZoom 返回弹窗当前的缩放（0 表示还没算过）。只有测试从这里读，界面
+// viewerZoom 返回窗口当前的缩放（0 表示还没算过）。只有测试从这里读，界面
 // 自己按布局算，不需要这层访问器。
 func viewerZoom(a *app) float32 { return a.viewer.zoom }
+
+// viewerPanState 返回窗口当前的平移（窗口 DIP），测试用它断言拖动确实挪了图。
+func viewerPanState(a *app) (float32, float32) { return a.viewer.panX, a.viewer.panY }
+
+// viewerSquareBitmap 造一张透明的宽图，正中一块绿色方块：平移之后绿色方块的
+// 位置跟着走，用 markerBounds 就能量出图片实际画在哪。
+func viewerSquareBitmap(w, h, side int) *ui.Bitmap {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	x, y := (w-side)/2, (h-side)/2
+	draw.Draw(img, image.Rect(x, y, x+side, y+side), &image.Uniform{C: marker}, image.Point{}, draw.Src)
+	return ui.NewBitmap(img)
+}
 
 // viewerDetailApp 打开一篇带配图的详情：正文段落里两张图、附言里一张，前
 // replyCount 条评论各带一组自己的三张图，用来验证「正文与单条评论各自独立
@@ -48,7 +63,7 @@ func viewerDetailApp(t *testing.T, replyCount int) *app {
 	}
 	a.detail.replyTotal = replyCount
 	a.detail.replyLoaded = true
-	// 每张图都当作已经加载好：弹窗里要立刻能翻、能缩、能存。
+	// 每张图都当作已经加载好：窗口里要立刻能翻、能缩、能存。
 	a.images.put(viewerPicPrefix+"p1.png", solidBitmap(800, 400, marker))
 	a.images.put(viewerPicPrefix+"p2.png", solidBitmap(800, 600, marker))
 	a.images.put(viewerPicPrefix+"p3.png", solidBitmap(400, 800, marker))
@@ -60,17 +75,29 @@ func viewerDetailApp(t *testing.T, replyCount int) *app {
 	return a
 }
 
-// openViewer 跑一帧让正文画出来，再点那张图打开预览。
-func openViewer(t *testing.T, tt *ui.Tester, label string) {
+// openViewer 在详情窗口里点一张配图，再为独立预览窗口建一个 tester 返回。
+// 预览不再画在详情窗口里，所以两个窗口各用一个 tester。
+func openViewer(t *testing.T, a *app, tt *ui.Tester, label string) *ui.Tester {
 	t.Helper()
 	tt.Frame()
 	if err := tt.Click(label); err != nil {
 		t.Fatalf("点开配图 %q 失败：%v（%q）", label, err, tt.Texts())
 	}
-	tt.Frame()
-	if !tt.HasText(imageViewerHint) {
-		t.Fatalf("点了 %q 没有弹出多图预览：%q", label, tt.Texts())
+	if !a.viewer.open {
+		t.Fatalf("点了 %q 没有打开预览：%q", label, tt.Texts())
 	}
+	vt := newViewerTester(a)
+	vt.Frame()
+	if !vt.HasText(imageViewerHint) {
+		t.Fatalf("预览窗口没有画出来：%q", vt.Texts())
+	}
+	return vt
+}
+
+// newViewerTester 是预览窗口自己的 tester：窗口内容只由 imageViewerWindowView
+// 构建，与详情、发帖这些窗口无关。
+func newViewerTester(a *app) *ui.Tester {
+	return ui.NewTester(a.imageViewerWindowView, 1100, 760)
 }
 
 // viewerStatus 是工具条上「第几张 / 共几张」那一行的开头。
@@ -100,102 +127,112 @@ func viewerZoomText(tt *ui.Tester) string {
 	return ""
 }
 
-// 点正文段落的第二张图：弹窗停在第二张；方向键在正文这一段文字的图之间
+// 点正文段落的第二张图：预览停在第二张；方向键在正文这一段文字的图之间
 // 翻页，到头不绕回，也不会翻到附言或评论的图上去。
 func TestImageViewerPagesWithinGroup(t *testing.T) {
 	a := viewerDetailApp(t, 1)
 	tt := ui.NewTester(a.view, 1100, 760)
-	openViewer(t, tt, "二")
-	if viewerLine(tt, 2, 2) == "" {
-		t.Fatalf("弹窗没有停在点开的那张：%q", tt.Texts())
+	vt := openViewer(t, a, tt, "二")
+	if viewerLine(vt, 2, 2) == "" {
+		t.Fatalf("预览没有停在点开的那张：%q", vt.Texts())
 	}
 	// 最后一张：下一张按钮禁用，按 → 也不动。
-	if next, ok := tt.Access(imageViewerNext); !ok || !next.Disabled {
+	if next, ok := vt.Access(imageViewerNext); !ok || !next.Disabled {
 		t.Errorf("最后一页的「下一张」应禁用：%+v", next)
 	}
-	tt.Key(0, ui.KeyRight)
-	tt.Frame()
-	if viewerLine(tt, 2, 2) == "" {
-		t.Errorf("到头后按 → 不该绕回第一张：%q", tt.Texts())
+	vt.Key(0, ui.KeyRight)
+	vt.Frame()
+	if viewerLine(vt, 2, 2) == "" {
+		t.Errorf("到头后按 → 不该绕回第一张：%q", vt.Texts())
 	}
 	// 按 ← 回到第一张；第一张的「上一张」禁用。
-	tt.Key(0, ui.KeyLeft)
-	tt.Frame()
-	if viewerLine(tt, 1, 2) == "" {
-		t.Errorf("按 ← 没有回到上一张：%q", tt.Texts())
+	vt.Key(0, ui.KeyLeft)
+	vt.Frame()
+	if viewerLine(vt, 1, 2) == "" {
+		t.Errorf("按 ← 没有回到上一张：%q", vt.Texts())
 	}
-	if prev, ok := tt.Access(imageViewerPrev); !ok || !prev.Disabled {
+	if prev, ok := vt.Access(imageViewerPrev); !ok || !prev.Disabled {
 		t.Errorf("第一页的「上一张」应禁用：%+v", prev)
 	}
 	// 工具条上的「下一张」也能翻。
-	if err := tt.Click(imageViewerNext); err != nil {
-		t.Fatalf("点「下一张」失败：%v（%q）", err, tt.Texts())
+	if err := vt.Click(imageViewerNext); err != nil {
+		t.Fatalf("点「下一张」失败：%v（%q）", err, vt.Texts())
 	}
-	tt.Frame()
-	if viewerLine(tt, 2, 2) == "" {
-		t.Errorf("点「下一张」没有翻过去：%q", tt.Texts())
+	vt.Frame()
+	if viewerLine(vt, 2, 2) == "" {
+		t.Errorf("点「下一张」没有翻过去：%q", vt.Texts())
 	}
 	// 一组几张看得出来：正文段落两张，不掺附言与评论。
-	if tt.HasText(viewerStatus(2, 3)) || tt.HasText(viewerStatus(2, 6)) {
-		t.Errorf("正文组的张数对不上：%q", tt.Texts())
+	if vt.HasText(viewerStatus(2, 3)) || vt.HasText(viewerStatus(2, 6)) {
+		t.Errorf("正文组的张数对不上：%q", vt.Texts())
 	}
 }
 
 // 正文与单条评论各自独立成组：点评论里的图，只在这条评论自己的三张之间翻，
-// 不掺正文与附言；关掉再点附言，又是附言自己的一组。
+// 不掺正文与附言；关掉窗口再点附言，又是附言自己的一组。
 func TestImageViewerCommentIsItsOwnGroup(t *testing.T) {
 	a := viewerDetailApp(t, 1)
 	tt := ui.NewTester(a.view, 1100, 760)
-	openViewer(t, tt, "r1-1")
-	if viewerLine(tt, 1, 3) == "" {
-		t.Fatalf("评论应是它自己的三张：%q", tt.Texts())
+	vt := openViewer(t, a, tt, "r1-1")
+	if viewerLine(vt, 1, 3) == "" {
+		t.Fatalf("评论应是它自己的三张：%q", vt.Texts())
 	}
-	tt.Key(0, ui.KeyRight)
-	tt.Frame()
-	if viewerLine(tt, 2, 3) == "" {
-		t.Errorf("评论组里没有翻到第二张：%q", tt.Texts())
+	vt.Key(0, ui.KeyRight)
+	vt.Frame()
+	if viewerLine(vt, 2, 3) == "" {
+		t.Errorf("评论组里没有翻到第二张：%q", vt.Texts())
 	}
-	tt.Key(0, ui.KeyLeft)
-	tt.Frame()
-	if viewerLine(tt, 1, 3) == "" {
-		t.Errorf("评论组里没有翻回第一张：%q", tt.Texts())
+	vt.Key(0, ui.KeyLeft)
+	vt.Frame()
+	if viewerLine(vt, 1, 3) == "" {
+		t.Errorf("评论组里没有翻回第一张：%q", vt.Texts())
 	}
 	// 附言是另一份源文，同样自成一组：只有它自己那一张。它排在正文末尾，
 	// 先把左栏正文滚到底，等附言露出来再点。
-	if err := tt.Click(imageViewerClose); err != nil {
-		t.Fatalf("关不掉预览：%v（%q）", err, tt.Texts())
+	if err := vt.Click(imageViewerClose); err != nil {
+		t.Fatalf("关不掉预览：%v（%q）", err, vt.Texts())
 	}
-	tt.Frame()
-	if tt.HasText(imageViewerHint) {
-		t.Fatalf("点关闭后弹窗还在：%q", tt.Texts())
+	vt.Frame()
+	if a.viewer.open || vt.HasText(imageViewerHint) {
+		t.Fatalf("点关闭后预览窗口还在：%q", vt.Texts())
 	}
 	a.detail.bodyScroll.Y = math.MaxFloat32
 	tt.Frame()
 	if err := tt.Click("三"); err != nil {
 		t.Fatalf("点开附言配图失败：%v（%q）", err, tt.Texts())
 	}
-	tt.Frame()
-	if viewerLine(tt, 1, 1) == "" {
-		t.Errorf("附言的组只有它自己那一张：%q", tt.Texts())
+	vt = newViewerTester(a)
+	vt.Frame()
+	if viewerLine(vt, 1, 1) == "" {
+		t.Errorf("附言的组只有它自己那一张：%q", vt.Texts())
 	}
 }
 
-// 弹窗开着时点遮罩下面的正文不会穿透：底下那张图不会因此又开一次、也不会
-// 把弹窗换成别的组。
-func TestImageViewerBlocksClicksBehind(t *testing.T) {
+// 预览是单独一扇窗口：详情窗口里不再叠一层遮罩，点开以后详情页照常能点；
+// 在详情里点另一张图，预览窗口跟着换组。
+func TestImageViewerIsSeparateWindow(t *testing.T) {
 	a := viewerDetailApp(t, 0)
 	tt := ui.NewTester(a.view, 1100, 760)
-	openViewer(t, tt, "一")
-	// 正文第二张大致在左栏中上位置；点它只会落到遮罩上，弹窗照旧停在第一张。
-	if err := tt.Click("二"); err != nil {
-		// 被遮罩挡住时 Click 会明确报错，这正是期望：正文不在可点范围内。
-		if !strings.Contains(err.Error(), "not the input target") {
-			t.Fatalf("点正文图的报错不符合预期：%v", err)
-		}
-	}
+	vt := openViewer(t, a, tt, "一")
 	tt.Frame()
-	if viewerLine(tt, 1, 2) == "" {
-		t.Errorf("遮罩下的点击把弹窗换组了：%q", tt.Texts())
+	if tt.HasText(imageViewerHint) {
+		t.Errorf("预览仍内嵌在详情窗口里：%q", tt.Texts())
+	}
+	// 独立窗口没有挡住详情页：点第二张会切到另一组。
+	if err := tt.Click("二"); err != nil {
+		t.Fatalf("预览开着时详情页点不动：%v（%q）", err, tt.Texts())
+	}
+	vt.Frame()
+	if viewerLine(vt, 2, 2) == "" {
+		t.Errorf("点详情里的另一张没有换组：%q", vt.Texts())
+	}
+	// 工具条上的最小化只收起窗口，不会顺手把它关掉。
+	if err := vt.Click(imageViewerMinimize); err != nil {
+		t.Fatalf("点「最小化」失败：%v（%q）", err, vt.Texts())
+	}
+	vt.Frame()
+	if !vt.HasText(imageViewerHint) {
+		t.Errorf("点最小化之后预览被关掉了：%q", vt.Texts())
 	}
 }
 
@@ -203,55 +240,56 @@ func TestImageViewerBlocksClicksBehind(t *testing.T) {
 func TestImageViewerWheelZooms(t *testing.T) {
 	a := viewerDetailApp(t, 0)
 	tt := ui.NewTester(a.view, 1100, 760)
-	openViewer(t, tt, "一")
+	vt := openViewer(t, a, tt, "一")
 	// 第一张 800×400 缩到 1:1；向下滚一格变成 0.8，再回来。
-	tt.Wheel(550, 400, 0, -1)
-	tt.Frame()
+	vt.Wheel(550, 400, 0, -1)
+	vt.Frame()
 	if v := viewerZoom(a); v != imageViewerWheel {
 		t.Errorf("滚轮向上没有放大：zoom = %v", v)
 	}
-	if got, want := viewerZoomText(tt), viewerPercent(imageViewerWheel); got != want {
+	if got, want := viewerZoomText(vt), viewerPercent(imageViewerWheel); got != want {
 		t.Errorf("工具条没有跟着显示 %s：%q", want, got)
 	}
-	tt.Wheel(550, 400, 0, 1)
-	tt.Frame()
+	vt.Wheel(550, 400, 0, 1)
+	vt.Frame()
 	if v := viewerZoom(a); v != 1 {
 		t.Errorf("滚轮向下没有缩小：zoom = %v", v)
 	}
-	tt.Wheel(550, 400, 0, 1)
-	tt.Frame()
+	vt.Wheel(550, 400, 0, 1)
+	vt.Frame()
 	if v := viewerZoom(a); v != 1/imageViewerWheel {
 		t.Errorf("连滚两格向下应缩到 %v：zoom = %v", 1/imageViewerWheel, v)
 	}
 	if a.detail.bodyScroll.Y != 0 {
-		t.Errorf("弹窗里的滚轮把正文滚走了：Y = %v", a.detail.bodyScroll.Y)
+		t.Errorf("预览窗口里的滚轮把正文滚走了：Y = %v", a.detail.bodyScroll.Y)
 	}
 	// 连放大到顶：夹在最大倍数上。
 	for i := 0; i < 40; i++ {
-		tt.Wheel(550, 400, 0, -1)
+		vt.Wheel(550, 400, 0, -1)
 	}
-	tt.Frame()
+	vt.Frame()
 	if viewerZoom(a) != imageViewerMaxZoom {
 		t.Errorf("放大到顶时 zoom = %v，想要 %v", viewerZoom(a), imageViewerMaxZoom)
 	}
-	if zoomIn, ok := tt.Access(imageViewerZoomIn); !ok || !zoomIn.Disabled {
+	if zoomIn, ok := vt.Access(imageViewerZoomIn); !ok || !zoomIn.Disabled {
 		t.Errorf("放到最大时「放大」应禁用：%+v", zoomIn)
 	}
 	// 减号键缩小一点，0 键还原成原尺寸。
-	tt.Key(0, ui.KeyMinus)
-	tt.Frame()
+	vt.Key(0, ui.KeyMinus)
+	vt.Frame()
 	if viewerZoom(a) != imageViewerMaxZoom/imageViewerKeyZoom {
 		t.Errorf("减号键没有缩小：zoom = %v", viewerZoom(a))
 	}
-	tt.Key(0, ui.Key0)
-	tt.Frame()
-	if got := viewerZoomText(tt); got != "100%" {
+	vt.Key(0, ui.Key0)
+	vt.Frame()
+	if got := viewerZoomText(vt); got != "100%" {
 		t.Errorf("0 键没有还原成原尺寸：%q", got)
 	}
-	// 滚轮不会被弹窗吃掉之后又把下面的正文滚走：关掉弹窗，正文还在原处。
-	if err := tt.Click(imageViewerClose); err != nil {
+	// 预览里的滚轮与按键不该动到详情窗口：关掉窗口，正文还在原处。
+	if err := vt.Click(imageViewerClose); err != nil {
 		t.Fatalf("关不掉预览：%v", err)
 	}
+	vt.Frame()
 	tt.Frame()
 	for _, want := range []string{"第一段", "第二段"} {
 		if !tt.HasText(want) {
@@ -259,42 +297,115 @@ func TestImageViewerWheelZooms(t *testing.T) {
 		}
 	}
 	if a.detail.bodyScroll.Y != 0 {
-		t.Errorf("弹窗里的滚轮把正文滚走了：Y = %v", a.detail.bodyScroll.Y)
+		t.Errorf("预览窗口里的滚轮把正文滚走了：Y = %v", a.detail.bodyScroll.Y)
 	}
 }
 
-// Esc 只关弹窗：不会顺手把详情页也关掉。
+// 放大到超出舞台后，按住左键直接拖动图片：图跟着鼠标走，拖到边就停住（不会
+// 露出空边），松手不关窗口；点图片也不关，点空白处才关。
+func TestImageViewerDragsImage(t *testing.T) {
+	a := testApp(t)
+	a.openDetail(Item{ShortID: "VIEW004", URL: "https://2libra.com/post/work/VIEW004"})
+	a.detail.replyLoaded = true
+	raw := viewerPicPrefix + "wide.png"
+	a.images.put(raw, viewerSquareBitmap(1600, 800, 120))
+	a.viewer.group = imageViewerGroup{Items: []articlePicture{{URL: raw, Alt: "宽图"}}}
+	a.viewer.open = true
+	a.viewer.zoom = 1 // 原尺寸比 1100×760 的舞台大，才拖得动
+	vt := newViewerTester(a)
+	vt.Frame()
+
+	before := markerBounds(vt.Image())
+	vt.Press(550, 380)
+	vt.Move(400, 350)
+	vt.Release(400, 350)
+	vt.Frame()
+	if !vt.HasText(imageViewerHint) {
+		t.Fatalf("拖动图片把预览关闭了：%q", vt.Texts())
+	}
+	if px, py := viewerPanState(a); px != -150 || py != -30 {
+		t.Fatalf("拖动后平移 = (%v, %v)，想要 (-150, -30)", px, py)
+	}
+	after := markerBounds(vt.Image())
+	if dx, dy := after.Min.X-before.Min.X, after.Min.Y-before.Min.Y; dx != -150 || dy != -30 {
+		t.Errorf("图片跟着指针挪了 (%d, %d)，想要 (-150, -30)", dx, dy)
+	}
+
+	// 继续往右下猛拖：停在图片边缘贴住舞台的位置，不会拖出空边。
+	vt.Press(550, 380)
+	vt.Move(5000, 5000)
+	vt.Release(5000, 5000)
+	vt.Frame()
+	lay := viewerLayoutFor(1100, 760)
+	if px, py := viewerPanState(a); px != viewerPanLimit(1600, lay.stageW) || py != viewerPanLimit(800, lay.stageH) {
+		t.Errorf("拖到边后平移 = (%v, %v)，想要 (%v, %v)",
+			px, py, viewerPanLimit(1600, lay.stageW), viewerPanLimit(800, lay.stageH))
+	}
+	if !vt.HasText(imageViewerHint) {
+		t.Errorf("拖到边之后预览被关掉了：%q", vt.Texts())
+	}
+
+	// 拖完点空白处照旧关闭。
+	vt.ClickAt(4, 400)
+	vt.Frame()
+	if a.viewer.open || vt.HasText(imageViewerHint) {
+		t.Errorf("拖动之后点空白处没有关掉预览：%q", vt.Texts())
+	}
+}
+
+// 图片没放大到超出舞台时拖不动：没有可看的局部，拖动也不该把图挪歪。单击图片
+// 本身只是结束这一次手势，不关窗口。
+func TestImageViewerDragNeedsZoom(t *testing.T) {
+	a := viewerDetailApp(t, 0)
+	tt := ui.NewTester(a.view, 1100, 760)
+	vt := openViewer(t, a, tt, "一")
+	vt.Press(550, 380)
+	vt.Move(400, 350)
+	vt.Release(400, 350)
+	vt.Frame()
+	if px, py := viewerPanState(a); px != 0 || py != 0 {
+		t.Errorf("没放大的图被拖动了：平移 = (%v, %v)", px, py)
+	}
+	vt.ClickAt(550, 380)
+	vt.Frame()
+	if !vt.HasText(imageViewerHint) {
+		t.Errorf("点图片本身不该关掉预览：%q", vt.Texts())
+	}
+}
+
+// Esc 只关预览窗口：不会顺手把详情页也关掉。
 func TestImageViewerEscapeClosesViewerOnly(t *testing.T) {
 	a := viewerDetailApp(t, 0)
 	tt := ui.NewTester(a.view, 1100, 760)
-	openViewer(t, tt, "一")
-	tt.Key(0, ui.KeyEscape)
-	tt.Frame()
-	if tt.HasText(imageViewerHint) {
-		t.Fatalf("Esc 没有关掉预览：%q", tt.Texts())
+	vt := openViewer(t, a, tt, "一")
+	vt.Key(0, ui.KeyEscape)
+	vt.Frame()
+	if a.viewer.open || vt.HasText(imageViewerHint) {
+		t.Fatalf("Esc 没有关掉预览：%q", vt.Texts())
 	}
 	if a.pageName != "detail" || a.detail == nil {
 		t.Errorf("Esc 把详情页也关掉了：page=%q", a.pageName)
 	}
+	tt.Frame()
 	if !tt.HasText("第一段") {
 		t.Errorf("详情页正文不见了：%q", tt.Texts())
 	}
 }
 
-// 点遮罩的空白处也能关掉弹窗（和授权弹窗一样）。
+// 点预览窗口的空白处也能关掉它。
 func TestImageViewerBackdropCloses(t *testing.T) {
 	a := viewerDetailApp(t, 0)
 	tt := ui.NewTester(a.view, 1100, 760)
-	openViewer(t, tt, "一")
-	tt.ClickAt(4, 4)
-	tt.Frame()
-	if tt.HasText(imageViewerHint) {
-		t.Errorf("点空白处没有关掉预览：%q", tt.Texts())
+	vt := openViewer(t, a, tt, "一")
+	vt.ClickAt(4, 400)
+	vt.Frame()
+	if a.viewer.open || vt.HasText(imageViewerHint) {
+		t.Errorf("点空白处没有关掉预览：%q", vt.Texts())
 	}
 }
 
 // 右键另存为：在图上按右键弹出菜单，菜单里有「另存为」，点了把原图写到选好
-// 的路径，弹窗底部报告结果，弹窗自己留着。
+// 的路径，窗口底部报告结果，窗口自己留着。
 func TestImageViewerRightClickSaveAs(t *testing.T) {
 	a := viewerDetailApp(t, 0)
 	raw := solidPNG(t, 40, 30, marker)
@@ -309,31 +420,31 @@ func TestImageViewerRightClickSaveAs(t *testing.T) {
 		return target, nil
 	}
 	tt := ui.NewTester(a.view, 1100, 760)
-	openViewer(t, tt, "一")
+	vt := openViewer(t, a, tt, "一")
 	// 图片 800×400 缩到 1:1 后比窗口还宽，正中一定落在图上；右键之前先挪到
-	// 那里，弹窗按指针位置判断右键是不是落在图上。
-	tt.Move(550, 380)
-	tt.RightClickAt(550, 380)
-	tt.Frame()
-	if !tt.HasText(imageViewerSave) {
-		t.Fatalf("图上右键没有弹出「另存为」菜单：%q", tt.Texts())
+	// 那里，预览按指针位置判断右键是不是落在图上。
+	vt.Move(550, 380)
+	vt.RightClickAt(550, 380)
+	vt.Frame()
+	if !vt.HasText(imageViewerSave) {
+		t.Fatalf("图上右键没有弹出「另存为」菜单：%q", vt.Texts())
 	}
-	startViewerSave(t, tt)
+	startViewerSave(t, vt)
 	data := waitViewerSave(t, a, target)
 	if !bytes.Equal(data, raw) {
 		t.Errorf("写出来的不是原图：%d 字节", len(data))
 	}
-	tt.Frame()
-	if !tt.HasText("已另存为 保存的图.png") {
-		t.Errorf("没有说明另存结果：%q", tt.Texts())
+	vt.Frame()
+	if !vt.HasText("已另存为 保存的图.png") {
+		t.Errorf("没有说明另存结果：%q", vt.Texts())
 	}
-	if !tt.HasText(imageViewerHint) {
-		t.Errorf("另存为之后弹窗不该自己关掉：%q", tt.Texts())
+	if !vt.HasText(imageViewerHint) {
+		t.Errorf("另存为之后预览不该自己关掉：%q", vt.Texts())
 	}
 }
 
 // 在图片外面（图周围的空白、工具栏上）右键不弹「另存为」：那里没有图可存。
-// 菜单一旦弹出就跟着指针走，所以每一种情况都开一个新的弹窗来验。
+// 菜单一旦弹出就跟着指针走，所以每一种情况都开一个新的预览来验。
 func TestImageViewerRightClickOffImageHasNoMenu(t *testing.T) {
 	cases := []struct {
 		name string
@@ -345,20 +456,19 @@ func TestImageViewerRightClickOffImageHasNoMenu(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			// 开着弹窗的前提下右键（弹窗本身在预览前就先画出来，不经过图片
-			// 上的点击）：点图片外面不该冒出一份「另存为」菜单。
+			// 预览窗口直接开着：点图片外面不该冒出一份「另存为」菜单。
 			a := viewerDetailApp(t, 0)
 			a.viewer.open = true
 			a.viewer.group = imageViewerGroup{Items: []articlePicture{{URL: viewerPicPrefix + "p1.png", Alt: "一"}}}
-			tt := ui.NewTester(a.view, 1100, 760)
-			tt.Frame()
-			if b := imageBounds(viewerLayoutFor(1100, 760), 800, 400, 1); b.Contains(c.x, c.y) {
+			vt := newViewerTester(a)
+			vt.Frame()
+			if b := imageBounds(viewerLayoutFor(1100, 760), 800, 400, 1, 0, 0); b.Contains(c.x, c.y) {
 				t.Fatalf("测试坐标 %v,%v 落在图片 %+v 里", c.x, c.y, b)
 			}
-			tt.RightClickAt(c.x, c.y)
-			tt.Frame()
-			if tt.Menu() != nil || a.viewer.menuOpen {
-				t.Errorf("%s右键不该弹出「另存为」：%q", c.name, tt.Menu())
+			vt.RightClickAt(c.x, c.y)
+			vt.Frame()
+			if vt.Menu() != nil || a.viewer.menuOpen {
+				t.Errorf("%s右键不该弹出「另存为」：%q", c.name, vt.Menu())
 			}
 		})
 	}
@@ -371,16 +481,16 @@ func TestImageViewerSaveAsFailureReports(t *testing.T) {
 		return filepath.Join(t.TempDir(), "没有这个目录", "x.png"), nil
 	}
 	tt := ui.NewTester(a.view, 1100, 760)
-	openViewer(t, tt, "一")
-	startViewerSave(t, tt)
+	vt := openViewer(t, a, tt, "一")
+	startViewerSave(t, vt)
 	waitViewerIdle(t, a)
 	_, note := a.viewer.viewerSaveState()
 	if !strings.HasPrefix(note, "另存为失败：") {
 		t.Errorf("失败说明 = %q", note)
 	}
-	tt.Frame()
-	if !tt.HasText(note) {
-		t.Errorf("失败没有写在弹窗底部：%q", tt.Texts())
+	vt.Frame()
+	if !vt.HasText(note) {
+		t.Errorf("失败没有写在预览底部：%q", vt.Texts())
 	}
 }
 
@@ -389,20 +499,20 @@ func TestImageViewerSaveAsCanceledIsQuiet(t *testing.T) {
 	a := viewerDetailApp(t, 0)
 	a.saveImagePathHook = func(string) (string, error) { return "", nil }
 	tt := ui.NewTester(a.view, 1100, 760)
-	openViewer(t, tt, "一")
-	startViewerSave(t, tt)
+	vt := openViewer(t, a, tt, "一")
+	startViewerSave(t, vt)
 	waitViewerIdle(t, a)
 	if _, note := a.viewer.viewerSaveState(); note != "" {
 		t.Errorf("取消之后不该留说明：%q", note)
 	}
-	tt.Frame()
-	if tt.HasText(imageViewerSaving) || tt.HasText("另存为失败：") {
-		t.Errorf("取消之后不该有提示：%q", tt.Texts())
+	vt.Frame()
+	if vt.HasText(imageViewerSaving) || vt.HasText("另存为失败：") {
+		t.Errorf("取消之后不该有提示：%q", vt.Texts())
 	}
 }
 
-// 预览按原图重新解码：正文里那张按栏宽缩到 1600 像素，放大就糊；弹窗自己再
-// 解一份「预览档」，长边 2000 的图在弹窗里仍是 2000。
+// 预览按原图重新解码：正文里那张按栏宽缩到 1600 像素，放大就糊；窗口自己再
+// 解一份「预览档」，长边 2000 的图在窗口里仍是 2000。
 func TestImageViewerDecodesOriginalForZoom(t *testing.T) {
 	pixels := solidPNG(t, 2000, 1000, marker)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -427,6 +537,8 @@ func TestImageViewerDecodesOriginalForZoom(t *testing.T) {
 
 	a.viewer.group = imageViewerGroup{Items: []articlePicture{{URL: raw, Alt: "大图"}}}
 	a.viewer.open = true
+	// 预览档由预览窗口的构建按需解码：循环里要重建的是它，不是详情窗口。
+	vt := newViewerTester(a)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		src := a.images.source(viewerCacheKey(raw))
@@ -439,7 +551,7 @@ func TestImageViewerDecodesOriginalForZoom(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("原图没有解成预览档")
 		}
-		tt.Frame()
+		vt.Frame()
 		time.Sleep(10 * time.Millisecond)
 	}
 }
@@ -492,16 +604,36 @@ func TestImageViewerOpensWhenPendingImageArrives(t *testing.T) {
 		t.Fatalf("点加载中的占位失败：%v（%q）", err, tt.Texts())
 	}
 	tt.Frame()
-	if tt.HasText(imageViewerHint) {
-		t.Fatalf("图片没到之前不该弹窗：%q", tt.Texts())
+	if a.viewer.open || tt.HasText(imageViewerHint) {
+		t.Fatalf("图片没到之前不该打开预览：%q", tt.Texts())
 	}
 	a.images.put(viewerPicPrefix+"p1.png", solidBitmap(800, 400, marker))
 	tt.Frame()
-	if !tt.HasText(imageViewerHint) {
-		t.Fatalf("图片到位后没有自动打开预览：%q", tt.Texts())
+	if !a.viewer.open {
+		t.Fatalf("图片到位后没有自动打开预览")
 	}
-	if viewerLine(tt, 1, 2) == "" {
-		t.Errorf("自动打开时应停在点的那张：%q", tt.Texts())
+	vt := newViewerTester(a)
+	vt.Frame()
+	if !vt.HasText(imageViewerHint) {
+		t.Fatalf("图片到位后预览窗口没有画出来：%q", vt.Texts())
+	}
+	if viewerLine(vt, 1, 2) == "" {
+		t.Errorf("自动打开时应停在点的那张：%q", vt.Texts())
+	}
+}
+
+// 另存为的结果提示留在预览窗口里：预览是独立窗口，不该把结果丢给可能被它
+// 盖住的主窗口。
+func TestViewerToastShowsInItsWindow(t *testing.T) {
+	a := viewerDetailApp(t, 0)
+	a.toast(toastViewer, "已另存为 图片.png")
+	vt := newViewerTester(a)
+	vt.Frame()
+	if !vt.HasText("已另存为 图片.png") {
+		t.Errorf("预览窗口没有显示自己的提示：%q", vt.Texts())
+	}
+	if len(a.toasts) != 0 {
+		t.Errorf("提示显示后没有出队：%+v", a.toasts)
 	}
 }
 

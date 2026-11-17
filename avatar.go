@@ -90,7 +90,7 @@ func (a *app) openAvatarPopup(ps *profileState) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能更换头像。", func() {
+		a.requestLoginFor(toastProfile, "登录后才能更换头像。", func() {
 			if a.profile == ps {
 				a.openAvatarPopup(ps)
 			}
@@ -108,7 +108,7 @@ func (a *app) pickAvatar(ps *profileState) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能更换头像。", func() {
+		a.requestLoginFor(toastProfile, "登录后才能更换头像。", func() {
 			if a.profile == ps {
 				a.pickAvatar(ps)
 			}
@@ -143,7 +143,7 @@ func (a *app) uploadAvatarFile(ps *profileState, path string) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能更换头像。", func() {
+		a.requestLoginFor(toastProfile, "登录后才能更换头像。", func() {
 			if a.profile == ps {
 				a.uploadAvatarFile(ps, path)
 			}
@@ -176,7 +176,7 @@ func (a *app) uploadAvatarFile(ps *profileState, path string) {
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() {
+				if a.handleAuthErrorFor(toastProfile, err, func() {
 					a.uploadAvatarFile(ps, path)
 				}) {
 					return
@@ -198,7 +198,7 @@ func (a *app) resetAvatar(ps *profileState) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能重置头像。", func() {
+		a.requestLoginFor(toastProfile, "登录后才能重置头像。", func() {
 			if a.profile == ps {
 				a.resetAvatar(ps)
 			}
@@ -221,7 +221,7 @@ func (a *app) resetAvatar(ps *profileState) {
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() { a.resetAvatar(ps) }) {
+				if a.handleAuthErrorFor(toastProfile, err, func() { a.resetAvatar(ps) }) {
 					return
 				}
 				ps.avatarErr = friendlyError(err)

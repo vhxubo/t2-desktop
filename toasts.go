@@ -32,6 +32,7 @@ const (
 	toastReply                            // 独立写评论窗口：发送结果
 	toastEdit                             // 编辑窗口：保存 / 追加附言的结果
 	toastFollows                          // 关注与粉丝窗口：回关 / 取关
+	toastViewer                           // 图片预览窗口：另存为结果
 )
 
 // toastNote 是一条等着显示的提示。
@@ -66,6 +67,8 @@ func (a *app) toastWindow(target toastTarget) *mygo.Window {
 		return a.editWin
 	case toastFollows:
 		return a.followsWin
+	case toastViewer:
+		return a.viewerWin
 	}
 	return a.win
 }
@@ -125,7 +128,7 @@ func (a *app) mainClaimsToasts(target toastTarget) bool {
 	return a.toastWindow(target) == nil
 }
 
-// claimsToasts 是通知、设置、「我的」、金币、发帖、用户资料与搜索窗口用的
+// claimsToasts 是通知、设置、「我的」、金币、发帖、图片预览这些附属窗口用的
 // 规则：只显示发给自己的提示。
 func (a *app) claimsToasts(mine toastTarget) func(toastTarget) bool {
 	return func(target toastTarget) bool { return target == mine }

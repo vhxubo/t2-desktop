@@ -122,6 +122,226 @@ func TestAuthPromptOpensBrowserWithMissingScope(t *testing.T) {
 	}
 }
 
+// 缺权限的窗口自己弹授权窗：发帖窗口缺 write:topic 时，弹窗只出现在发帖
+// 窗口里，主窗口与别的附属窗口不跟着闪一个。
+func TestAuthPromptStaysInOriginatingWindow(t *testing.T) {
+	a := testApp(t)
+	a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}), func() {})
+
+	if !a.authGate.wants(toastCompose) {
+		t.Errorf("发帖窗口应显示授权弹窗：%+v", a.authGate)
+	}
+	if a.authGate.wants(toastMain) {
+		t.Error("主窗口不该显示发帖窗口缺权限的弹窗")
+	}
+
+	ct := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	ct.Frame()
+	for _, want := range []string{"需要授权", "缺少的权限范围：write:topic", "前往授权", "取消"} {
+		if !ct.HasText(want) {
+			t.Errorf("发帖窗口里的授权弹窗缺少 %q：%q", want, ct.Texts())
+		}
+	}
+
+	mt := ui.NewTester(a.view, 1100, 760)
+	mt.Frame()
+	if mt.HasText("需要授权") || mt.HasText("缺少的权限范围：write:topic") {
+		t.Errorf("主窗口不该跟着弹发帖窗口的授权窗：%q", mt.Texts())
+	}
+
+	// 在这个窗口里取消，清掉的是同一份授权状态。
+	if err := ct.Click("取消"); err != nil {
+		t.Fatalf("在发帖窗口里取消失败：%v", err)
+	}
+	if a.authGate.open || a.hasPendingAuthorization() {
+		t.Errorf("取消后授权状态应清空：%+v", a.authGate)
+	}
+}
+
+// 同一个账号的两个窗口同时缺权限时，两处都弹；一次授权解决两条被中断的
+// 调用。主窗口仍然不跟着弹。
+func TestAuthPromptShowsInEveryFailingWindow(t *testing.T) {
+	a := testApp(t)
+	a.userCard = newUserCardState("amy")
+	replays := 0
+	a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}), func() { replays++ })
+	a.demandAuthorizationFor(toastUserCard, scopeNeed([]string{"interact"}), func() { replays++ })
+
+	for _, owner := range []toastTarget{toastCompose, toastUserCard} {
+		if !a.authGate.wants(owner) {
+			t.Errorf("缺少权限的窗口 %v 应显示授权弹窗", owner)
+		}
+	}
+	if a.authGate.wants(toastMain) {
+		t.Error("主窗口不该显示别的窗口缺权限的弹窗")
+	}
+	for i, scope := range []string{"write:topic", "interact"} {
+		if a.authGate.need.Scopes[i] != scope {
+			t.Errorf("合并后的 scope = %v，第 %d 项应为 %q", a.authGate.need.Scopes, i, scope)
+		}
+	}
+	if a.authGate.need.Message == "" {
+		t.Error("弹窗应保留一条说明")
+	}
+
+	ct := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	ct.Frame()
+	if !ct.HasText("缺少的权限范围：write:topic、interact") {
+		t.Errorf("发帖窗口没有列出合并后的 scope：%q", ct.Texts())
+	}
+	ut := ui.NewTester(a.userCardWindowView, userCardWindowWidth, userCardWindowHeight)
+	ut.Frame()
+	if !ut.HasText("缺少的权限范围：write:topic、interact") {
+		t.Errorf("资料卡窗口没有列出合并后的 scope：%q", ut.Texts())
+	}
+	mt := ui.NewTester(a.view, 1100, 760)
+	mt.Frame()
+	if mt.HasText("需要授权") {
+		t.Errorf("主窗口不该跟着弹：%q", mt.Texts())
+	}
+	if replays != 0 {
+		t.Errorf("还没授权就重跑了 %d 次", replays)
+	}
+}
+
+// 关掉某个窗口只丢掉它自己等重跑的调用；别的窗口缺权限的那一份继续留着。
+// 最后一个发起窗口也关掉时整次授权作废。
+func TestAuthGateDropsCallsOfClosedWindow(t *testing.T) {
+	a := testApp(t)
+	composeRuns, cardRuns := 0, 0
+	a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}), func() { composeRuns++ })
+	a.demandAuthorizationFor(toastUserCard, scopeNeed([]string{"interact"}), func() { cardRuns++ })
+
+	a.authGateWindowClosed(toastCompose)
+	if a.authGate.wants(toastCompose) {
+		t.Error("关掉的窗口不该继续显示授权弹窗")
+	}
+	if !a.authGate.wants(toastUserCard) {
+		t.Error("还开着的窗口应继续显示授权弹窗")
+	}
+	if got := len(a.authGate.replays); got != 1 {
+		t.Fatalf("关掉窗口后待重跑调用 = %d，期望只剩 1 条", got)
+	}
+	a.replayAuthorizedCalls()
+	if composeRuns != 0 || cardRuns != 1 {
+		t.Errorf("重跑次数 compose=%d card=%d，期望 0/1", composeRuns, cardRuns)
+	}
+
+	// 另一条也关掉：授权状态整体清空，不会残留一个没人能看到的弹窗。
+	a.demandAuthorizationFor(toastUserCard, scopeNeed([]string{"interact"}), nil)
+	a.authGateWindowClosed(toastUserCard)
+	if a.authGate.open || a.hasPendingAuthorization() {
+		t.Errorf("最后一个发起窗口关掉后应清空授权状态：%+v", a.authGate)
+	}
+}
+
+// 多账号下补权限不能借系统浏览器的登录态：账号窗口的「前往授权」要开在
+// 账号册的内置浏览器里（独立会话），并且仍然申请缺失的 scope。
+func TestScopeReauthUsesEmbeddedBrowserForAccountWindow(t *testing.T) {
+	b := testBook(t)
+	acc := addTestAccount(t, b, "jimmy")
+	b.webview = true
+	b.afterReady = true
+	var embeddedURL string
+	b.openLogin = func(u string) error { embeddedURL = u; return nil }
+	var systemURL string
+	b.openURL = func(u string) error { systemURL = u; return nil }
+
+	a := newAppWithDeps(b.deps(), acc)
+	a.autoLoad = false
+	acc.app = a
+	replayed := 0
+	a.demandAuthorization(scopeNeed([]string{"write:vote"}), func() { replayed++ })
+	a.authorizeGate()
+
+	if systemURL != "" {
+		t.Errorf("多账号补授权不该打开系统浏览器：%s", systemURL)
+	}
+	p := b.pendingLogin()
+	if p == nil {
+		t.Fatal("没有登记等待中的授权")
+	}
+	if p.accountID != acc.ID {
+		t.Errorf("等待授权的账号 = %q，期望 %q", p.accountID, acc.ID)
+	}
+	if !p.embedded {
+		t.Error("补授权应走内置浏览器")
+	}
+	if p.auth == a.auth {
+		t.Error("补授权应挂在临时会话上，不能拿窗口里的会话去换别人的令牌")
+	}
+	if embeddedURL == "" {
+		t.Fatal("没有打开内置浏览器授权页")
+	}
+	u, err := url.Parse(embeddedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(" "+u.Query().Get("scope")+" ", " write:vote ") {
+		t.Errorf("授权 URL 没有申请缺失的 scope：%q", u.Query().Get("scope"))
+	}
+
+	// 取消这次补授权：窗口里登记的待重跑调用一并丢掉。
+	b.cancelLogin()
+	if a.hasPendingAuthorization() {
+		t.Error("取消后仍留着待重跑的调用")
+	}
+	if replayed != 0 {
+		t.Error("取消后不该重跑被中断的调用")
+	}
+	if !strings.Contains(a.loginMsg, "已取消授权") {
+		t.Errorf("取消后窗口提示不对：%q", a.loginMsg)
+	}
+}
+
+// 内置浏览器里补权限成功后，窗口换成新会话并自动重跑被中断的操作 —— 与系统
+// 浏览器深链走的是同一条完成路径。
+func TestScopeReauthReplaysAfterEmbeddedLogin(t *testing.T) {
+	srv := newTestTokenServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"c":0,"d":{"access_token":"NEW","refresh_token":"R","token_type":"Bearer","expires_in":3600}}`)
+	})
+	b := testBook(t)
+	acc := addTestAccount(t, b, "jimmy")
+	b.webview = true
+	b.afterReady = true
+	b.openLogin = func(string) error { return nil }
+	b.newLoginAuth = func() *AuthManager {
+		m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
+		m.store = &memoryTokenStore{}
+		m.apiBase = srv.URL + "/api"
+		m.http = srv.Client()
+		return m
+	}
+
+	a := newAppWithDeps(b.deps(), acc)
+	a.autoLoad = false
+	acc.app = a
+	replayed := atomic.Int32{}
+	a.demandAuthorization(scopeNeed([]string{"write:vote"}), func() { replayed.Add(1) })
+	a.authorizeGate()
+
+	p := b.pendingLogin()
+	if p == nil || !p.embedded {
+		t.Fatalf("没有在内置浏览器里开始补授权：%+v", p)
+	}
+	u, err := url.Parse(p.url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.handleDeepLink(defaultRedirectURI + "?code=c&state=" + u.Query().Get("state"))
+
+	waitFor(t, func() bool { return replayed.Load() == 1 }, "授权成功后重跑被中断的调用")
+	if a.auth.accessToken() != "NEW" {
+		t.Errorf("窗口仍用旧会话：%q", a.auth.accessToken())
+	}
+	if a.hasPendingAuthorization() {
+		t.Error("重跑完成后授权状态应清空")
+	}
+	if b.pendingLogin() != nil {
+		t.Error("授权结束后不该还挂着 pending")
+	}
+}
+
 // 取消授权会丢弃待重跑的调用：它们不能在某次无关登录成功后被突然执行。
 func TestAuthPromptCancelDropsPendingCall(t *testing.T) {
 	a := testApp(t)

@@ -629,7 +629,7 @@ func (a *app) toggleUserCardFollow(follow bool) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能关注这位用户。", func() {
+		a.requestLoginFor(toastUserCard, "登录后才能关注这位用户。", func() {
 			if a.userCard == cs {
 				a.toggleUserCardFollow(follow)
 			}

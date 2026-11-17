@@ -165,6 +165,9 @@ type AuthManager struct {
 	// store persists the session. Production uses the OS credential store
 	// (mygo.Secrets); tests inject a file-backed store via tokenStoreFactory.
 	store tokenStore
+	// requestedScopes 是这次令牌实际申请过的 scope（mergeScopes 的结果）。
+	// 授权页按它列出要申请的权限；申没申请到才是下次缺权限时该补什么。
+	requestedScopes string
 }
 
 func newAuthManager(dir string) *AuthManager {
@@ -473,8 +476,40 @@ func (m *AuthManager) scopes() []string {
 	return strings.Fields(m.token.Scope)
 }
 
-// avatarURL is the avatar address cached with the session, empty until the
-// profile endpoint has been read.
+// requestedScopesList 返回这次授权地址里真正申请过的 scope。授权回来的令牌
+// 里的 scope 可能少几项（用户拒绝、在站内授权页逐项关掉了某些权限），两者
+// 一对比就知道这次授权有没有真的拿到要申请的权限。
+func (m *AuthManager) requestedScopesList() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return strings.Fields(m.requestedScopes)
+}
+
+// scopeLabel 是 scope 在界面上的中文说明。profile.go 的「我的 · 权限与账号」
+// 与登录窗口的待申请清单共用这一份，文案两边一致。
+func scopeLabel(scope string) string {
+	if label, ok := scopeLabels[scope]; ok {
+		return label
+	}
+	return ""
+}
+
+// grantedAndMissing 对比这次申请过的 scope 与令牌里实际拿到的，返回已授予与
+// 没拿到两部分（都保序）。用户没拿到的那些才是下次授权该再申请的东西。
+func grantedAndMissing(requested, granted []string) (got, missing []string) {
+	have := make(map[string]struct{}, len(granted))
+	for _, s := range granted {
+		have[s] = struct{}{}
+	}
+	for _, s := range requested {
+		if _, ok := have[s]; ok {
+			got = append(got, s)
+			continue
+		}
+		missing = append(missing, s)
+	}
+	return got, missing
+}
 func (m *AuthManager) avatarURL() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -750,9 +785,10 @@ func (m *AuthManager) BeginScopes(ctx context.Context, extraScopes []string) (st
 
 	m.mu.Lock()
 	m.pending = p
+	m.requestedScopes = mergeScopes(extraScopes)
 	m.mu.Unlock()
 	go m.awaitLogin(ctx, p)
-	return m.authorizeURL(p, mergeScopes(extraScopes)), nil
+	return m.authorizeURL(p, m.requestedScopes), nil
 }
 
 // cancelPending drops the in-flight authorization, if any. Its goroutine

@@ -1279,71 +1279,73 @@ func TestTopicInteractionEntriesLargerThanCommentOnes(t *testing.T) {
 	}
 }
 
-// 发送按钮贴在输入框右端：输入框占满整条，按钮才会落在右边缘，不会停在
-// 文字区后面、浮在框的中间。
-func TestReplyComposerSendSitsAtRightEdge(t *testing.T) {
+// 发送按钮浮在评论框右下角，不再在输入栏行尾占一格：输入框铺满整条
+// （右边缘一直到评论框边框内侧），按钮压在文字区右下角的上方。折叠态与
+// 展开态都贴右下角，展开时输入框长高，按钮不会退回行尾。
+func TestReplyComposerSendFloatsBottomRight(t *testing.T) {
 	a := detailAppWithReplies(t)
-	tt := ui.NewTester(a.view, 1100, 760)
-	tt.Frame()
-
-	area, ok := tt.Find("写评论")
-	if !ok {
-		t.Fatal("找不到回复输入框")
-	}
-	send, ok := tt.Find("发送")
-	if !ok {
-		t.Fatal("找不到发送按钮")
-	}
-	// 两者之间只该有这一行的 8px 间距；差得多说明输入框没有吃满宽度。
-	if gap := send.X - (area.X + area.W); gap < 0 || gap > 16 {
-		t.Errorf("发送按钮没贴在输入框右端：间距 %.0f（输入框右边缘 %.0f，按钮左边缘 %.0f）",
-			gap, area.X+area.W, send.X)
-	}
-}
-
-// 折叠态的评论框只有一行高：输入框、发送按钮与账号标签一起上下居中，和占位
-// 文字站在同一条中线上，不会因为按钮比输入框矮半行而整体往下一沉。展开后
-// 文字长成多行，按钮改回贴着最后一行。
-func TestReplyComposerCollapsedRowCentered(t *testing.T) {
-	a := detailAppWithReplies(t)
-	a.theme.mode = themeLight
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 
 	mid := func(r ui.Rect) float32 { return r.Y + r.H/2 }
-	area, ok := tt.Find("写评论")
-	if !ok {
-		t.Fatalf("找不到回复输入框：%q", tt.Texts())
-	}
-	send, ok := tt.Find("发送")
-	if !ok {
-		t.Fatalf("找不到发送按钮：%q", tt.Texts())
-	}
-	if d := mid(area) - mid(send); d > 1 || d < -1 {
-		t.Errorf("折叠态发送按钮应与输入框上下居中：输入框中线 %.1f / 按钮中线 %.1f",
-			mid(area), mid(send))
+	check := func(state string) (ui.Rect, ui.Rect) {
+		t.Helper()
+		area, ok := tt.Find("写评论")
+		if !ok {
+			t.Fatalf("%s找不到回复输入框：%q", state, tt.Texts())
+		}
+		send, ok := tt.Find("发送")
+		if !ok {
+			t.Fatalf("%s找不到发送按钮：%q", state, tt.Texts())
+		}
+		// 按钮落在输入框的横向范围里：输入框没有在它左边就收住。
+		if send.X >= area.X+area.W {
+			t.Errorf("%s发送按钮应浮在输入框右下角，而不是又占一列：area=%+v send=%+v",
+				state, area, send)
+		}
+		// 输入框铺到评论框右端，按钮右边缘与它基本齐平（最多差一点内边距）。
+		if gap := (area.X + area.W) - (send.X + send.W); gap < -6 || gap > 14 {
+			t.Errorf("%s输入框应铺到评论框右端，发送按钮浮在它上面：差 %.1f（area=%+v send=%+v）",
+				state, gap, area, send)
+		}
+		// 右下角：按钮中线在输入框中线以下，底边贴着输入框底边。
+		if mid(send) <= mid(area) {
+			t.Errorf("%s发送按钮应浮在输入框右下角：输入框中线 %.1f / 按钮中线 %.1f",
+				state, mid(area), mid(send))
+		}
+		if gap := (area.Y + area.H) - (send.Y + send.H); gap < -6 || gap > 8 {
+			t.Errorf("%s发送按钮应与输入框底边齐平：差 %.1f", state, gap)
+		}
+		return area, send
 	}
 
-	// 选中展开：输入框长高，发送按钮沉到底部贴着最后一行。
+	area, _ := check("折叠态")
+	// 选中展开：输入框长高，按钮仍浮在右下角。
 	tt.ClickAt(area.X+area.W/2, area.Y+area.H/2)
 	tt.Frame()
-	area, ok = tt.Find("写评论")
-	if !ok {
-		t.Fatal("输入框消失")
-	}
-	send, ok = tt.Find("发送")
-	if !ok {
-		t.Fatal("展开后找不到发送按钮")
-	}
+	area, _ = tt.Find("写评论")
 	if area.H < 60 {
 		t.Fatalf("输入框应已展开：%+v", area)
 	}
-	if d := mid(send) - mid(area); d < 10 {
-		t.Errorf("展开态发送按钮应沉到底部：输入框中线 %.1f / 按钮中线 %.1f",
-			mid(area), mid(send))
+	check("展开态")
+}
+
+// 浮在右下角的发送按钮仍然点得到：它压在输入框上，但要点在按钮上，不能被
+// 下面的输入框吃掉。空草稿点一下只走提交校验（提示「评论内容不能为空」），
+// 不发请求，正好用来验证命中。
+func TestReplyComposerFloatingSendIsClickable(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if _, ok := tt.Find("发送"); !ok {
+		t.Fatalf("找不到发送按钮：%q", tt.Texts())
 	}
-	if gap := (area.Y + area.H) - (send.Y + send.H); gap > 1 || gap < -1 {
-		t.Errorf("展开态发送按钮应与输入框底边齐平：差 %.1f", gap)
+	if err := tt.Click("发送"); err != nil {
+		t.Fatalf("浮在右下角的发送按钮点不到：%v", err)
+	}
+	tt.Frame()
+	if !tt.HasText("评论内容不能为空") {
+		t.Errorf("点发送应走到提交校验：%q", tt.Texts())
 	}
 }
 

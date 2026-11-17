@@ -10,6 +10,21 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// scopeLabels 是 scope 的中文说明。profile.go 的「我的 · 权限与账号」与登录
+// 窗口的「本次申请」共用这一份，两处文案始终一致；未列出的 scope 原样展示，
+// 新 scope 上线时不会显示成空白，也不会假装认识它。
+var scopeLabels = map[string]string{
+	"profile":       "读取个人资料与头像",
+	"read":          "读取公开内容",
+	"read:me":       "读取我的内容（收藏 / 书签 / 通知）",
+	"read:economy":  "读取金币余额、流水与签到状态",
+	"write:comment": "发表评论",
+	"write:topic":   "发表帖子、动态与投票",
+	"write:economy": "金币变动（签到 / 打赏 / 佩戴徽章 / 解锁）",
+	"interact":      "收藏、关注等互动",
+	"upload":        "上传图片",
+}
+
 // 内置浏览器授权窗口
 //
 // 第二个及以后的账号不能靠系统浏览器：那里的 2libra.com 会话多半还登着另一个
@@ -254,10 +269,12 @@ func (b *accountBook) useSystemBrowserForLogin() {
 	if p == nil || p.url == "" {
 		return
 	}
+	// 提示语要在拿 b.mu 之前算：它要按 id 查账号名（见 loginWaitingMessage）。
+	msg := b.loginWaitingMessage(false, p.accountID)
 	b.mu.Lock()
 	if b.pending == p {
 		b.pending.embedded = false
-		b.loginMsg = loginWaitingMessage(false)
+		b.loginMsg = msg
 	}
 	b.mu.Unlock()
 	b.closeLoginWindow()
@@ -289,6 +306,7 @@ func (b *accountBook) loginWindowView(c *ui.Context) {
 	t := c.Theme()
 	c.Root().Background(t.Background)
 	c.OnShortcut(0, ui.KeyEscape, b.cancelLogin)
+	title, subtitle, desc := b.loginWindowLabels()
 
 	ui.Column(c).Fill().Children(func() {
 		ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
@@ -296,8 +314,8 @@ func (b *accountBook) loginWindowView(c *ui.Context) {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, loginIcon).Size(16, 16).TextColor(t.Accent)
-				ui.Text(c, "登录另一个账号").FontSize(13).Bold().SingleLine().TextColor(t.Text)
-				ui.Text(c, "独立会话").FontSize(11).TextColor(t.TextMuted).SingleLine()
+				ui.Text(c, title).FontSize(13).Bold().SingleLine().TextColor(t.Text)
+				ui.Text(c, subtitle).FontSize(11).TextColor(t.TextMuted).SingleLine()
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := b.loginWin; win != nil {
@@ -309,9 +327,10 @@ func (b *accountBook) loginWindowView(c *ui.Context) {
 		ui.Divider(c)
 
 		ui.Row(c).FillWidth().Padding(8, 12).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "这个窗口是独立会话：不会用到系统浏览器里的登录状态，"+
-				"可以直接登录要挂的另一个账号。").
-				FontSize(11).TextColor(t.TextMuted).MaxLines(3).Grow(1)
+			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+				ui.Text(c, desc).FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+				b.loginWindowScopes(c)
+			})
 		})
 		ui.Divider(c)
 
@@ -333,6 +352,59 @@ func (b *accountBook) loginWindowView(c *ui.Context) {
 		ui.Divider(c)
 		b.loginWindowFooter(c)
 	})
+}
+
+// loginWindowScopes 列出这次授权地址里真正申请过的权限：授权页上也有一份
+// 同样的清单，这里先写出来，用户不用开授权页就知道要点同意哪些权限，也能
+// 核对「发动态要的 write:topic 到底申请了没有」。
+func (b *accountBook) loginWindowScopes(c *ui.Context) {
+	t := c.Theme()
+	p := b.pendingLogin()
+	if p == nil || p.auth == nil {
+		return
+	}
+	scopes := p.auth.requestedScopesList()
+	if len(scopes) == 0 {
+		return
+	}
+	ui.Text(c, "本次申请：").FontSize(10).TextColor(t.TextMuted)
+	ui.Row(c).FillWidth().Gap(4).Wrap().Children(func() {
+		for _, scope := range scopes {
+			chip := ui.Box(c).Padding(1, 6).Radius(6).
+				Background(t.Surface).Border(1, t.Border)
+			chip.Children(func() {
+				ui.Text(c, scope).FontSize(10).TextColor(t.TextMuted).SingleLine()
+			})
+			chip.Label("申请权限 " + scope).Tooltip(scopeTooltip(scope))
+		}
+	})
+}
+
+// scopeTooltip 是 scope 的中文说明；没有说明时就写 scope 本身。
+func scopeTooltip(scope string) string {
+	if label := scopeLabel(scope); label != "" {
+		return scope + "：" + label
+	}
+	return scope
+}
+
+// loginWindowLabels 是内置浏览器窗口的标题与说明：添加账号时是「登录另一个
+// 账号」，给已有账号补权限时写明是哪个账号 —— 用户在那个窗口里登录，得先
+// 知道该登谁。
+func (b *accountBook) loginWindowLabels() (title, subtitle, desc string) {
+	p := b.pendingLogin()
+	if p == nil || p.accountID == "" {
+		return "登录另一个账号", "独立会话",
+			"这个窗口是独立会话：不会用到系统浏览器里的登录状态，" +
+				"可以直接登录要挂的另一个账号。"
+	}
+	name := "这个账号"
+	if acc := b.account(p.accountID); acc != nil {
+		name = "「" + acc.name() + "」"
+	}
+	return "重新授权", name,
+		"这个窗口是独立会话：不会用到系统浏览器里的登录状态，请登录要重新授权的" +
+			name + "账号。"
 }
 
 // loginWindowFooter 是窗口底部的出口。站点登录完成后往往停在自己的页面上、

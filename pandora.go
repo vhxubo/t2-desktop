@@ -531,7 +531,7 @@ func (a *app) loadPandoraStatus() {
 			}
 			st.loading = false
 			if err != nil {
-				if a.handleAuthError(err, a.reloadPandora) {
+				if a.handleAuthErrorFor(toastPandora, err, a.reloadPandora) {
 					st.wait = true
 					return
 				}
@@ -577,7 +577,7 @@ func (a *app) pandoraAction(kind string) {
 		if kind == "extend" {
 			loginText = "登录 2Libra 后才能延期潘多拉盲盒。"
 		}
-		a.requestLogin(loginText, func() { a.pandoraAction(kind) })
+		a.requestLoginFor(toastPandora, loginText, func() { a.pandoraAction(kind) })
 		return
 	}
 	switch kind {
@@ -645,7 +645,7 @@ func (a *app) pandoraAction(kind string) {
 					a.reloadPandora()
 					return
 				}
-				if a.handleAuthError(err, func() { a.pandoraAction(kind) }) {
+				if a.handleAuthErrorFor(toastPandora, err, func() { a.pandoraAction(kind) }) {
 					return
 				}
 				a.toast(toastPandora, friendlyError(err))

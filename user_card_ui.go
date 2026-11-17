@@ -94,6 +94,7 @@ func (a *app) showUserCardWindow(username string) {
 		a.userCardWin = nil
 		a.userCard = nil // 关掉就丢掉这份资料，下次打开重新拉
 		a.setUserCardWindowShown(false)
+		a.authGateWindowClosed(toastUserCard)
 	})
 	a.setUserCardWindowShown(true)
 }
@@ -185,6 +186,11 @@ func (a *app) userCardWindowView(c *ui.Context) {
 	})
 	a.userCardAboutEditor(c)
 	a.ensureUserCardLoaded()
+	// 资料里的个人介绍也是 Markdown：配图点开后预览是一扇独立窗口，这里只在
+	// 图片到位后补开它（见 viewerTick）。
+	a.viewerTick()
+	// 缺权限时就在这个窗口里弹授权：关注 / 保存介绍等请求是从这里发起的。
+	a.authDialogFor(c, toastUserCard)
 }
 
 // userCardTitleBar 是自绘标题栏：左边是人形图标与「用户资料」，右边是
@@ -564,7 +570,7 @@ func (a *app) openUserCardCollection(it Item) {
 	if name == "" {
 		name = "未命名合集"
 	}
-	cs.collBrowse = newCollectionBrowse(collectionItem{ID: it.Key, Name: name}, cs.username)
+	cs.collBrowse = newCollectionBrowse(collectionItem{ID: it.Key, Name: name}, cs.username, toastUserCard)
 	a.loadCollectionTopics(cs.collBrowse, 1)
 }
 

@@ -1039,6 +1039,23 @@ func TestComposeMissingScopeGoesToAuthGate(t *testing.T) {
 	if st.title != "需要授权" {
 		t.Errorf("等授权期间草稿不该丢：%q", st.title)
 	}
+	// 弹窗属于发帖窗口：主窗口不跟着弹，发帖窗口里能直接看到。
+	if !a.authGate.wants(toastCompose) {
+		t.Errorf("发帖窗口应显示授权弹窗：%+v", a.authGate)
+	}
+	if a.authGate.wants(toastMain) {
+		t.Error("主窗口不该显示发帖窗口缺权限的弹窗")
+	}
+	mt := ui.NewTester(a.view, 1100, 760)
+	mt.Frame()
+	if mt.HasText("缺少的权限范围：write:topic") {
+		t.Errorf("主窗口跟着弹了发帖窗口的授权窗：%q", mt.Texts())
+	}
+	ct := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	ct.Frame()
+	if !ct.HasText("缺少的权限范围：write:topic") {
+		t.Errorf("发帖窗口里没有授权弹窗：%q", ct.Texts())
+	}
 }
 
 // 兑换码框支持换行、逗号、中文逗号与分号分隔，空项被丢掉。

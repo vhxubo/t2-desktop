@@ -124,6 +124,14 @@ type detailState struct {
 	// 的开关，默认显示。
 	composerDetached bool
 	winPreview       bool
+	// replyAsID 是这篇帖子临时换用的回复账号 id（零值表示窗口自己的账号）：
+	// 只对这一篇的评论生效，关闭或离开详情页就清空，不落盘，也不改变窗口的
+	// 登录身份与阅读状态（见 reply_identity.go）。
+	replyAsID string
+	// identityOpen / identityHost 是「换个账号回复」气泡的展开状态与它所在的
+	// 窗口：气泡只在点开它的那扇窗口里画，主窗口与独立写评论窗口不会同时弹。
+	identityOpen bool
+	identityHost replySurface
 }
 
 func (d *detailState) originURL() string {
@@ -295,6 +303,9 @@ func (a *app) openDetail(it Item) {
 		if len(a.detailStack) >= 20 {
 			a.detailStack = a.detailStack[1:]
 		}
+		// 离开这一页就把临时回复身份作废：换帖子后还借别人的令牌回评论，
+		// 很容易忘了自己是谁（见 reply_identity.go）。
+		a.resetReplyIdentity(a.detail)
 		a.detailStack = append(a.detailStack, a.detail)
 	} else {
 		a.detailStack = nil
@@ -363,6 +374,9 @@ func (a *app) closeDetail() {
 		a.detailStack = a.detailStack[:n-1]
 		// 退回上一篇同样是「进入详情」：正文重新展开，收起状态不跨页面保留。
 		a.detail.bodyCollapsed = false
+		// 临时回复身份也不跨页面：返回栈里那一页就算上次换过账号，回来时
+		// 也要先按窗口自己的账号算（压栈时已经清过一次，这里再兜一层）。
+		a.resetReplyIdentity(a.detail)
 		return
 	}
 	a.detail = nil
@@ -1172,25 +1186,33 @@ func (a *app) topicSubtitle(c *ui.Context, p *topicDetail) {
 }
 
 // topicSourceFooter 占满整个窗口底部，放在最底部：数据来源声明 + 可点击原文
-// 链接（点一下用系统浏览器打开）。这一行从进入详情起就画出来，正文是否加载
-// 完成都不改变它占的高度，正文出现时两栏卡片不会先高后矮地跳一下；原文地址
-// 用打开这一帖时带进来的链接兜底，正文到了再换成规范的永久链接。
+// 链接（点一下用系统浏览器打开），右侧是多账号时的「当前账号」标签。这一行
+// 从进入详情起就画出来，正文是否加载完成都不改变它占的高度，正文出现时两栏
+// 卡片不会先高后矮地跳一下；原文地址用打开这一帖时带进来的链接兜底，正文到了
+// 再换成规范的永久链接。
+//
+// 把账号标签放在这里而不是评论输入栏里：它正好在评论框正下方的右下角，
+// 点发送之前抬眼看得到，又不会分掉输入框的宽度（见 reply_identity.go）。
+// 版权声明与原文链接自己占一个会折行的左栏，窄窗口下也不会和标签叠在一起。
 func (a *app) topicSourceFooter(c *ui.Context, d *detailState) {
 	t := c.Theme()
 	ui.Divider(c)
-	ui.Row(c).Padding(8, 16).Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
-		ui.Text(c, "内容来自 2Libra 用户，版权归原作者所有。").FontSize(11).TextColor(t.TextMuted)
-		origin := d.originURL()
-		if origin == "" {
-			return
-		}
-		ui.Text(c, "原文链接：").FontSize(11).TextColor(t.TextMuted)
-		link := ui.Button(c, truncate(origin, 60)).
-			Background(ui.Transparent).Border(0, t.Border).
-			TextColor(t.Accent).FontSize(11).Padding(0, 2)
-		if link.Clicked() {
-			a.openExternal(origin)
-		}
+	ui.Row(c).Padding(8, 16).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Grow(1).MinWidth(0).Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
+			ui.Text(c, "内容来自 2Libra 用户，版权归原作者所有。").FontSize(11).TextColor(t.TextMuted)
+			origin := d.originURL()
+			if origin == "" {
+				return
+			}
+			ui.Text(c, "原文链接：").FontSize(11).TextColor(t.TextMuted)
+			link := ui.Button(c, truncate(origin, 60)).
+				Background(ui.Transparent).Border(0, t.Border).
+				TextColor(t.Accent).FontSize(11).Padding(0, 2)
+			if link.Clicked() {
+				a.openExternal(origin)
+			}
+		})
+		a.replyIdentityBadge(c, d, replySurfaceDetail)
 	})
 }
 
@@ -1286,7 +1308,7 @@ func (a *app) flushSeenNotifications() {
 	}
 	ids := append([]string(nil), a.seenNotifications...)
 	a.seenNotifications = nil
-	a.markNotificationsRead(ids)
+	a.markNotificationsRead(toastMain, ids)
 }
 
 // replyHeader 是评论卡片顶部固定的一行：「评论」标题、评论数（点一下回到
@@ -2005,7 +2027,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				// replyWindowBody），展开输入框时才出现，正好压在工具条右端。
 				// 登录后字数挪到评论费用状态栏里（见 comment_cost_ui.go），
 				// 那里同时报发评金币与徽章建议，同一条链上不重复写两遍。
-				if !a.commentCostBarVisible() {
+				if d.replyAsID != "" || !a.commentCostBarVisible() {
 					ui.Text(c, fmt.Sprintf("%d 字", utf8.RuneCountInString(d.draft))).
 						FontSize(11).TextColor(t.TextMuted).SingleLine()
 				}
@@ -2019,25 +2041,44 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 			// 评论费用状态栏：字数、预计发评金币、可省金币的徽章与「走个面」
 			// 活跃度开关。它和工具条一样带 KeepFocus，按上面的按钮不会让输入框
 			// 失焦缩回一行。
-			a.commentCostBar(c, d.draft)
+			//
+			// 临时换成别的账号回复时这组数字不适用（费用、徽章与潘多拉事件都
+			// 是窗口自己账号的），先收起；字数退回到工具条右侧照常显示。
+			if d.replyAsID == "" {
+				a.commentCostBar(c, d.draft)
+			}
 		}
 		// 展开时上面会多出工具条、视图切换与面板。MyGo 的节点身份由
 		// 「父节点 + 子节点序号」推导，若不给这一行固定 key，多出来的兄弟
 		// 会把输入框挤到另一个 ID 上，焦点随之丢失（发送后折不回一行）。
 		// 输入框本身是复合控件不能带 key，key 给包着它的 Row。
 		c.Key("reply-composer-row")
-		// 折叠态整行只有一行高：输入框、发送按钮与账号标签上下居中，与占位
-		// 文字的中线对齐，不会因为按钮比单行输入框矮半行而整体往下一沉。
-		// 展开后文字会长成多行，按钮改回沉到底部，贴着最后一行。
-		align := ui.End
-		if !expanded {
-			align = ui.Center
-		}
-		ui.Row(c).FillWidth().Gap(8).AlignItems(align).Children(func() {
-			a.replyField(c, d, expanded)
+		// 输入框铺满整条：发送按钮不在行尾占一格，而是浮在评论框右下角
+		// （下面用 Absolute 摆位），输入栏整行都归输入。
+		ui.Row(c).FillWidth().Children(func() {
+			area := a.replyTextArea(c, d, replyFieldInline, expanded)
+			// 给浮在右下角的按钮留出正文位置：输入框本身仍吃满整行（点哪儿
+			// 都能接着写），只是文字最右一段不落到按钮底下。左右内边距沿用
+			// 输入框自己的默认值，只把右侧加宽。
+			pad := t.Space(1.5)
+			padX := t.Space(2.5)
+			area.Padding(pad, padX+replySendFloatReserve, pad, padX)
 		})
+		// 发送 / 登录后评论浮在右下角：不参与上面那一行的排版，评论框因此
+		// 不再被发送按钮切掉右侧一截。Absolute 按父节点（评论框）的边框内
+		// 侧定位，和折叠 / 展开无关，两种状态都贴着右下角。
+		actions := a.replyFieldActions(c, d)
+		actions.Absolute().Bottom(replySendFloatInset).Right(replySendFloatInset)
 	})
 }
+
+// 发送按钮浮在评论框右下角时的位置与留白：inset 是它离评论框边框的距离，
+// reserve 是正文让出的右侧宽度（实心发送按钮最宽 44，加上 inset 与一点间隙；
+// 空草稿时按钮只有 28 宽，同样的留白让文字离它更远）。
+const (
+	replySendFloatInset   float32 = 6
+	replySendFloatReserve float32 = 40
+)
 
 // replyDetachedHint 是草稿在独立窗口里时页面上的那一行：说明去哪儿了，以及
 // 把草稿收回页面评论框的入口。文字不复制一份到这里，免得两处不同步。
@@ -2057,13 +2098,14 @@ func (a *app) replyDetachedHint(c *ui.Context, d *detailState) {
 }
 
 // replyTextArea 画输入框本身。页面里的评论框与独立窗口共用它，只是行数与
-// 占位文案不同；窗口里它占满左栏高度，页面里随内容长到 10 行。
+// 占位文案不同；窗口里它占满左栏高度，页面里随内容长到 10 行。页面里的发送
+// 按钮浮在评论框右下角（见 replyInput），输入框因此可以占满整条宽度。
 func (a *app) replyTextArea(c *ui.Context, d *detailState, mode replyFieldMode, expanded bool) ui.Element {
 	t := c.Theme()
 	// 多行文本区即 Markdown 编辑器：透明背景、去边框，融入外层输入框。
-	// 三个模式都 Grow(1)：输入框占满整条，右侧的发送按钮才会贴在框的右端，
-	// 而不是停在文字区后面、浮在框中间。OnPaste 让直接粘进来的图片自动上传
-	// （见 pasteIntoEditor），文字仍按原样插入。
+	// 三个模式都 Grow(1)：输入框占满整条，不再给行尾的动作让位。
+	// OnPaste 让直接粘进来的图片自动上传（见 pasteIntoEditor），文字仍按
+	// 原样插入。
 	area := ui.TextArea(c, &d.draft).Label("写评论").FontSize(commentFontSize).
 		MinHeight(0).Background(ui.Transparent).
 		Border(0, t.Border).
@@ -2085,75 +2127,74 @@ func (a *app) replyTextArea(c *ui.Context, d *detailState, mode replyFieldMode, 
 	return area
 }
 
-// replyField 是页面里评论框的那一行：输入框 + 右侧那一个动作。窗口里的
-// 输入框自己占满左栏，动作在底部的页脚里（见 replyWindowBody）。
-func (a *app) replyField(c *ui.Context, d *detailState, expanded bool) {
-	a.replyTextArea(c, d, replyFieldInline, expanded)
-	if d.posting {
-		ui.Spinner(c).Size(16, 16)
-	}
-	a.replyFieldActions(c, d)
-}
-
-// replyFieldActions 是输入框右侧那一个动作：未登录时是「登录后评论」，登录后
-// 是发送按钮。两个动作都只显示图标，文字说明交由 Tooltip（Label 仍保留文字
-// 作无障碍名与点击测试的命中名）。
-func (a *app) replyFieldActions(c *ui.Context, d *detailState) {
+// replyFieldActions 画输入框右下角那一个动作：未登录时是「登录后评论」，
+// 登录后是发送按钮。两个动作都只显示图标，文字说明交由 Tooltip（Label 仍
+// 保留文字作无障碍名与点击测试的命中名）。
+//
+// 它返回一个 Row，由调用方决定摆在哪里：页面里浮在评论框右下角（见
+// replyInput），独立写评论窗口里放在页脚、和账号标签并排（见
+// replyWindowBody）。发送中时转圈也在这里，跟着动作一起走。
+func (a *app) replyFieldActions(c *ui.Context, d *detailState) ui.Element {
 	t := c.Theme()
-	// 多账号时紧挨着发送按钮写明以哪个账号发出（见 account_badge.go）。
-	a.accountBadge(c)
-	if !a.auth.loggedIn() {
-		login := ui.Button(c, "").
-			Background(ui.Transparent).
-			Border(0, t.Border).
-			TextColor(t.Text).
-			Padding(4, 6).
-			Radius(6)
-		login.Children(func() {
-			ui.Icon(c, loginIcon).Size(16, 16).TextColor(t.Text)
-		})
-		login.Label("登录后评论").Tooltip("登录后才能发表评论")
-		if login.Clicked() {
-			var replay func()
-			if strings.TrimSpace(d.draft) != "" {
-				replay = func() {
-					if a.detail == d {
-						a.submitReply()
+	row := ui.Row(c).AlignItems(ui.Center).Gap(6).Shrink(0)
+	row.Children(func() {
+		if d.posting {
+			ui.Spinner(c).Size(16, 16)
+		}
+		if !a.auth.loggedIn() {
+			login := ui.Button(c, "").
+				Background(ui.Transparent).
+				Border(0, t.Border).
+				TextColor(t.Text).
+				Padding(4, 6).
+				Radius(6)
+			login.Children(func() {
+				ui.Icon(c, loginIcon).Size(16, 16).TextColor(t.Text)
+			})
+			login.Label("登录后评论").Tooltip("登录后才能发表评论")
+			if login.Clicked() {
+				var replay func()
+				if strings.TrimSpace(d.draft) != "" {
+					replay = func() {
+						if a.detail == d {
+							a.submitReply()
+						}
 					}
 				}
+				a.requestLoginFor(a.replyAuthTarget(), "登录后才能发表评论。", replay)
 			}
-			a.requestLogin("登录后才能发表评论。", replay)
+			return
 		}
-		return
-	}
-	// 空草稿时发送按钮只是一枚弱化的图标：没有内容可发，实心的强调色按钮
-	// 会把整条输入栏的重量压到右边，看着像「已经可以发」。有内容才换成实心
-	// 的主按钮，这时它才是这一行里唯一该被看见的动作。
-	empty := strings.TrimSpace(d.draft) == ""
-	send := ui.Button(c, "").
-		Background(ui.Transparent).
-		Border(0, t.Border).
-		Padding(4, 6).
-		Radius(8)
-	ink := t.TextMuted
-	if !empty {
-		send = ui.PrimaryButton(c, "").Radius(8)
-		ink = t.AccentText
-	}
-	if send.Hovered() && !d.posting {
-		ink = t.Text
-		if empty {
-			send.Background(t.SurfaceHover)
+		// 空草稿时发送按钮只是一枚弱化的图标：没有内容可发，实心的强调色
+		// 按钮会把整条输入栏的重量压到右边，看着像「已经可以发」。有内容才
+		// 换成实心的主按钮，这时它才是这一行里唯一该被看见的动作。
+		empty := strings.TrimSpace(d.draft) == ""
+		send := ui.Button(c, "").
+			Background(ui.Transparent).
+			Border(0, t.Border).
+			Padding(4, 6).
+			Radius(8)
+		ink := t.TextMuted
+		if !empty {
+			send = ui.PrimaryButton(c, "").Radius(8)
+			ink = t.AccentText
 		}
-	}
-	send.Disabled(d.posting)
-	send.Children(func() {
-		ui.Icon(c, sendIcon).Size(16, 16).TextColor(ink)
+		if send.Hovered() && !d.posting {
+			ink = t.Text
+			if empty {
+				send.Background(t.SurfaceHover)
+			}
+		}
+		send.Disabled(d.posting)
+		send.Children(func() {
+			ui.Icon(c, sendIcon).Size(16, 16).TextColor(ink)
+		})
+		send.Label("发送").Tooltip("发送评论")
+		if send.Clicked() {
+			a.submitReply()
+		}
 	})
-	send.Label("发送").Tooltip("发送评论")
-	if send.Clicked() {
-		a.submitReply()
-	}
+	return row
 }
 
 // replyCommunityEmojis 是当前帖子自带的社区表情表；没有正文数据时为空。
@@ -2168,6 +2209,15 @@ func (a *app) replyCommunityEmojis(d *detailState) map[string]string {
 // 自定义图标（同名短码以帖子为准），和详情页正文渲染走的是同一份合并。
 func (a *app) replyEmojis(d *detailState) map[string]emojiInfo {
 	return mergeEmojiMaps(a.emojis, a.replyCommunityEmojis(d))
+}
+
+// replyAuthTarget 是评论相关请求的授权窗口：草稿在独立写评论窗口里写，弹窗
+// 就回到那个窗口；否则回到主窗口。
+func (a *app) replyAuthTarget() toastTarget {
+	if a.replyWindowOpen() {
+		return toastReply
+	}
+	return toastMain
 }
 
 // replyToast 把评论输入相关的结果弹在「正在写」的那个窗口里：草稿在独立
@@ -2197,18 +2247,32 @@ func (a *app) submitReply() {
 		a.replyToast("评论内容不能为空")
 		return
 	}
+	// 这次提交用哪个账号：窗口自己的，还是详情页上临时换的那个。身份在
+	// 提交前固定下来，发送过程中再切换账号也不影响已经在路上的这一条
+	// （见 reply_identity.go）。
+	identity := a.replyIdentityFor(d)
 	// 潘多拉的「多说多写」对评论字数有硬要求：没到门槛就发不出去，先在本地
-	// 拦下来，免得白跑一次请求（判断依据见 comment_cost.go）。
-	if short, minLength := a.commentCostShortfall(content); short > 0 {
-		a.replyToast(fmt.Sprintf("还差 %d 字才能发送（潘多拉要求 ≥%d 字）", short, minLength))
-		return
+	// 拦下来，免得白跑一次请求（判断依据见 comment_cost.go）。这条规则属于
+	// 窗口自己的账号，临时换账号回复时不适用。
+	if !identity.Switched {
+		if short, minLength := a.commentCostShortfall(content); short > 0 {
+			a.replyToast(fmt.Sprintf("还差 %d 字才能发送（潘多拉要求 ≥%d 字）", short, minLength))
+			return
+		}
 	}
 	if n := editorPendingUploads(d.draft); n > 0 {
 		a.replyToast("还有 " + strconv.Itoa(n) + " 张图片未处理完，请等上传结束或移除后再发送")
 		return
 	}
-	if !a.auth.loggedIn() {
-		a.replyToast("请先登录后再评论")
+	if identity.Auth == nil || !identity.Auth.loggedIn() {
+		switch {
+		case identity.Switched && identity.Name == "":
+			a.replyToast("回复用的账号已不在本机账号里，请换一个账号或切回当前账号")
+		case identity.Switched:
+			a.replyToast("「" + identity.Name + "」的登录已失效，请换一个账号或切回当前账号")
+		default:
+			a.replyToast("请先登录后再评论")
+		}
 		return
 	}
 	if d.topic != nil && d.topic.CommentsClosed {
@@ -2232,34 +2296,47 @@ func (a *app) submitReply() {
 		}
 	}
 	d.posting = true
+	client := a.replyClientFor(identity)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	go func() {
 		defer cancel()
-		created, err := a.client.createReply(ctx, d.shortID, content, target)
+		created, err := client.createReply(ctx, d.shortID, content, target)
 		a.publish(func() {
 			if a.detail != d {
 				return // navigated away; drop the stale result
 			}
 			d.posting = false
 			if err != nil {
-				// 缺 write:comment 时先补授权，回调成功后按同样的内容与父评论
-				// 重发一次，用户不用重新输入。
-				a.handleAuthError(err, func() {
-					if a.detail == d {
-						a.submitReply()
+				if identity.Switched {
+					// 借用别的账号时不能弹本窗口的授权弹窗：那会重新授权窗口
+					// 自己的账号，重跑后仍然发不出去。请用户去那个账号的窗口
+					// 补授权，草稿保持原样。
+					if need, ok := authNeedFromError(err); ok {
+						a.replyToast("以 @" + identity.Name + " 回复失败：" + need.Message +
+							"请先打开该账号的窗口完成授权后再试。")
+					} else {
+						a.replyToast("以 @" + identity.Name + " 回复失败：" + friendlyError(err))
 					}
-				})
-				a.replyToast(friendlyError(err))
+				} else {
+					// 缺 write:comment 时先补授权，回调成功后按同样的内容与父
+					// 评论重发一次，用户不用重新输入。
+					a.handleAuthErrorFor(a.replyAuthTarget(), err, func() {
+						if a.detail == d {
+							a.submitReply()
+						}
+					})
+					a.replyToast(friendlyError(err))
+				}
 				if a.onReplyPosted != nil {
 					a.onReplyPosted(replyItem{}, err)
 				}
 				return
 			}
 			if created.Author == "" || created.Author == "匿名" {
-				if u := a.auth.username(); u != "" {
+				if u := identity.Auth.username(); u != "" {
 					created.Author = u
 					if created.Avatar == "" {
-						created.Avatar = a.auth.avatarURL()
+						created.Avatar = identity.Auth.avatarURL()
 					}
 				}
 			}
@@ -2314,8 +2391,9 @@ func (a *app) submitReply() {
 			}
 			d.replyTotal++
 			a.prefetchAvatars(created.Avatar)
-			// 评论会扣金币：发出全局金币刷新事件，标题栏与金币窗口一起更新。
-			a.coinsChanged(coinEventReply)
+			// 评论会扣金币：扣的是真正发这条评论的账号，通知它自己的窗口刷新
+			//（临时借用别的账号时不能刷新成本窗口的余额，见 reply_identity.go）。
+			a.noteReplyCoins(identity)
 			if a.onReplyPosted != nil {
 				a.onReplyPosted(created, nil)
 			}

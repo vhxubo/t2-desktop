@@ -52,7 +52,7 @@ func (a *app) profileAvatarPanel(c *ui.Context, ps *profileState) {
 	ui.Column(c).Width(300).Gap(8).Children(func() {
 		ui.Text(c, "换一张头像").FontSize(metaFontSize).TextColor(t.TextMuted)
 		if !a.auth.loggedIn() {
-			a.loginHint(c, "登录后才能更换头像。")
+			a.loginHintFor(c, toastProfile, "登录后才能更换头像。")
 			return
 		}
 		ui.Text(c, "支持 JPEG / PNG / WebP，单张不超过 5 MB。首次设置免费，之后每次可能扣除金币。").

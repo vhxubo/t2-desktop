@@ -19,16 +19,18 @@ import (
 // collectionBrowse 是一个正在浏览的合集。list 就是普通的一页列表状态：
 // 加载走 loadSpec，与侧边栏列表共用分页、去重与错误处理。
 type collectionBrowse struct {
-	id    string
-	name  string
-	owner string // 合集所属用户名；空表示就是当前账号自己
-	list  tabState
+	id     string
+	name   string
+	owner  string // 合集所属用户名；空表示就是当前账号自己
+	target toastTarget
+	list   tabState
 }
 
 // newCollectionBrowse 由合集列表里的一项造出浏览状态。owner 是列表的归属者：
-// 从「我的」进来时为空（就是自己），从资料卡进来时是那个人的用户名。
-func newCollectionBrowse(item collectionItem, owner string) *collectionBrowse {
-	return &collectionBrowse{id: item.ID, name: item.Name, owner: owner}
+// 从「我的」进来时为空（就是自己），从资料卡进来时是那个人的用户名。target
+// 是这份列表所在的窗口：缺权限时授权弹窗要回到那里。
+func newCollectionBrowse(item collectionItem, owner string, target toastTarget) *collectionBrowse {
+	return &collectionBrowse{id: item.ID, name: item.Name, owner: owner, target: target}
 }
 
 // collectionTopicsSpec 是合集内帖子列表的端点。api-read.md 的「合集」一节
@@ -52,7 +54,7 @@ func (a *app) loadCollectionTopics(b *collectionBrowse, page int) {
 	if b == nil || b.id == "" || page < 1 {
 		return
 	}
-	a.loadSpec(&b.list, collectionTopicsSpec(b.id), page, func() {
+	a.loadSpec(b.target, &b.list, collectionTopicsSpec(b.id), page, func() {
 		a.loadCollectionTopics(b, page)
 	})
 }

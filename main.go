@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strconv"
 	"strings"
@@ -34,8 +35,8 @@ type tabState struct {
 	authWait bool
 	gen      uint64
 
-	// fold 是「最新评论」页的连续同用户聚合：相邻同名评论收成一组，默认
-	// 每组只露第一条（见 comments.go 的 groupComments）。它是 items 的派生
+	// fold 是「最新评论」页的连续同用户聚合：相邻同名评论收成一组，超过两条
+	// 才默认只露第一条（见 comments.go 的 groupComments）。它是 items 的派生
 	// 数据，items 每次变动后由 refold 重算，不单独维护顺序。
 	fold tabFold
 
@@ -77,14 +78,16 @@ type app struct {
 	srv       ui.Services
 	autoLoad  bool
 
-	// viewer 是多图预览弹窗的状态（见 image_viewer.go）：正文与每条评论各自
-	// 成组，点任意一张配图打开这一组，左右翻页、滚轮缩放、右键另存为。它挂在
-	// 账号窗口上而不是详情页上：同一个详情页的正文、评论视图与独立窗口都可能
-	// 打开同一组图。viewerNoteTimer 让另存为的结果说明到点自己撤掉。
+	// viewer 是多图预览窗口的状态（见 image_viewer.go）：正文与每条评论各自
+	// 成组，点任意一张配图打开这一组，左右翻页、滚轮缩放、按住左键拖动平移、
+	// 右键另存为。预览画在自己的窗口里，不内嵌到详情页；同一个账号的多个窗口
+	// 共用这一份状态与这一扇预览窗口。viewerNoteTimer 让另存为的结果说明到点
+	// 自己撤掉。
 	// viewerDoc / viewerPics 是「上一次认过图的那份解析结果」的小缓存：Markdown
 	// 视图逐块问一遍，同一份文档不必每块都重认（见 picturesForDoc）。
 	// 都只在 UI 线程读写。
 	viewer          *imageViewer
+	viewerWin       *mygo.Window
 	viewerNoteTimer *time.Timer
 	viewerDoc       *parser.Document
 	viewerPics      []articlePicture
@@ -588,6 +591,7 @@ func (a *app) publish(fn func()) {
 		a.redrawUserCardWindow()
 		a.redrawSearchWindow()
 		a.redrawFollowsWindow()
+		a.redrawViewerWindow()
 	})
 }
 
@@ -600,6 +604,12 @@ func (a *app) redrawNotificationWindow() {
 }
 
 func (a *app) load(idx, page int) {
+	a.loadFor(toastMain, idx, page)
+}
+
+// loadFor 是指定窗口的列表加载：通知窗口、资料窗口里的内容都复用这一套分页
+// 与错误处理，缺权限时授权弹窗要回到发起请求的那个窗口。
+func (a *app) loadFor(owner toastTarget, idx, page int) {
 	if idx < 0 || idx >= len(a.tabs) {
 		return
 	}
@@ -609,13 +619,13 @@ func (a *app) load(idx, page int) {
 		// 分段筛选与关键词搜索直接改接口参数，不额外请求参数名。
 		spec.Query = notificationsQuery(st.filter, st.keyword)
 	}
-	a.loadSpec(st, spec, page, func() { a.load(idx, page) })
+	a.loadSpec(owner, st, spec, page, func() { a.loadFor(owner, idx, page) })
 }
 
 // loadSpec 是通用的列表加载：把 spec 的第 page 页拉回来填进 st。「我的」
-// 窗口里的四类内容也走这条路，所以它按 spec 而不是按侧边栏下标工作。
-// replay 是授权补上权限后重跑这次请求用的回调。
-func (a *app) loadSpec(st *tabState, spec tabSpec, page int, replay func()) {
+// 窗口里的四类内容也走这条路，所以它按 spec 而不是按侧边栏下标工作。owner
+// 是发起这次加载的窗口；replay 是授权补上权限后重跑这次请求用的回调。
+func (a *app) loadSpec(owner toastTarget, st *tabState, spec tabSpec, page int, replay func()) {
 	if st == nil || page < 1 {
 		return
 	}
@@ -646,7 +656,7 @@ func (a *app) loadSpec(st *tabState, spec tabSpec, page int, replay func()) {
 			if err != nil {
 				// 首页因授权失败时，弹窗负责去补权限；把这一页标成等待授权，
 				// 避免每帧重建都再发一次注定失败的请求。
-				if a.handleAuthError(err, replay) {
+				if a.handleAuthErrorFor(owner, err, replay) {
 					st.authWait = true
 				}
 				if page == 1 {
@@ -747,8 +757,13 @@ func foldKey(g commentGroup) string {
 	return "at:" + strconv.Itoa(g.start)
 }
 
-// foldRow 是折叠后在列表里出现的一行：要么是一条评论本身，要么是那个组的
-// 分组行。group 非 nil 时这一行是分组行，total / open 只对它有意义。
+// foldMinSize 是开始折叠的组大小：两条以内直接全部列出，超过两条才收成
+// 「首条评论 + 展开入口」，免得两条的小聚合还要多点一次。
+const foldMinSize = 3
+
+// foldRow 是折叠后在列表里出现的一行。group 非 nil 时这一行是组首条评论：
+// 它下面接着挂展开 / 收起入口（见 rows.go 的 foldRowView），total / open
+// 只对这样的行有意义。折叠时组里其余成员不出现，展开后各自成行跟在后面。
 type foldRow struct {
 	item  Item
 	group *commentGroup
@@ -756,8 +771,9 @@ type foldRow struct {
 	open  bool
 }
 
-// foldRows 展开成列表真正要画的可见行。多条的组先出分组行（展开 / 收起入口
-// 就挂在它上面），折叠时只跟首条，展开时逐条跟全部成员；单条的组不画分组行。
+// foldRows 展开成列表真正要画的可见行。超过两条的组先出首条评论，展开 /
+// 收起入口挂在它下面（不是另起一行卡片）；折叠时组里只露这一条，展开时逐条
+// 跟全部成员。两条以内的组、单条的组与没开聚合的 tab 都逐行列出。
 func (st *tabState) foldRows() []foldRow {
 	if !st.fold.on || len(st.fold.groups) == 0 {
 		rows := make([]foldRow, len(st.items))
@@ -769,17 +785,18 @@ func (st *tabState) foldRows() []foldRow {
 	rows := make([]foldRow, 0, len(st.items))
 	for gi := range st.fold.groups {
 		g := &st.fold.groups[gi]
-		if len(g.members) == 1 {
-			rows = append(rows, foldRow{item: g.members[0]})
+		if len(g.members) < foldMinSize {
+			for _, it := range g.members {
+				rows = append(rows, foldRow{item: it})
+			}
 			continue
 		}
 		open := st.fold.openFor(*g)
-		rows = append(rows, foldRow{group: g, total: len(g.members), open: open})
-		members := g.members
+		rows = append(rows, foldRow{item: g.members[0], group: g, total: len(g.members), open: open})
 		if !open {
-			members = members[:1]
+			continue
 		}
-		for _, it := range members {
+		for _, it := range g.members[1:] {
 			rows = append(rows, foldRow{item: it})
 		}
 	}
@@ -1079,12 +1096,13 @@ func (a *app) view(c *ui.Context) {
 	a.dialogs(c)
 }
 
-// dialogs 画出全局授权弹窗与多图预览。列表页、登录回退页与详情页共用，放在
-// 内容之后叠在最上层。通知与设置都不在这里：它们各自是独立的窗口。
+// dialogs 画出全局授权弹窗与关闭询问，并补开还在等图片的预览。列表页、登录
+// 回退页与详情页共用，放在内容之后叠在最上层。预览本身是一扇独立窗口，不画
+// 在这里；这里只负责在图片到位后把它打开（见 viewerTick）。
 func (a *app) dialogs(c *ui.Context) {
-	a.authDialog(c)
+	a.viewerTick()
+	a.authDialogFor(c, toastMain)
 	a.closePromptDialog(c)
-	a.imageViewer(c)
 }
 
 // sidebarFooter 是主页侧边栏底部的固定区：从上到下是外观的三档图标、账号
@@ -1349,14 +1367,11 @@ func (a *app) body(c *ui.Context) {
 		return
 	}
 	// 列表画的是「可见行」而不是 items 本身：最新评论开着连续同用户聚合，
-	// 折叠的组在这里变成「分组行 + 首条」两行（见 foldRows）。Key 也按可见行
-	// 给，展开 / 折叠引起行数变化时列表状态按 key 对齐，不会串行。
+	// 折叠的组在这里只出一行首条评论（展开入口挂在它下面，见 foldRows）。
+	// Key 按可见行的条目给，展开 / 收起引起行数变化时列表状态按 key 对齐。
 	rows := st.foldRows()
 	st.list.Key = func(i int) any {
 		if i >= 0 && i < len(rows) {
-			if g := rows[i].group; g != nil {
-				return "g:" + foldKey(*g)
-			}
 			return rows[i].item.Key
 		}
 		return i
@@ -1575,7 +1590,7 @@ func (a *app) loginView(c *ui.Context) {
 			FontSize(12).TextColor(t.TextMuted)
 		ui.TextInput(c, &a.callbackURL).Label("回调链接").Placeholder(defaultRedirectURI + "?code=...&state=...").FillWidth()
 		if ui.Button(c, "用回调链接完成登录").Clicked() {
-			if err := a.auth.Complete(a.callbackURL); err != nil {
+			if err := a.completeLoginCallback(a.callbackURL); err != nil {
 				a.loginMsg = err.Error()
 			} else {
 				a.loginMsg = "已收到回调，正在用授权码换取令牌…"
@@ -1586,6 +1601,19 @@ func (a *app) loginView(c *ui.Context) {
 			FontSize(11).TextColor(t.TextMuted).MaxLines(4)
 		ui.Spacer(c).Grow(1)
 	})
+}
+
+// completeLoginCallback 是登录回退页上「用回调链接完成登录」：账号窗口的补
+// 授权挂在账号册上（内置浏览器那条路），回调也要交给它；未登录窗口与没有
+// 账号册的单窗口路径才用本窗口自己的会话。
+func (a *app) completeLoginCallback(raw string) error {
+	if a.book != nil && a.accountID != "" {
+		if a.book.completeCallback(raw) {
+			return nil
+		}
+		return errors.New("现在没有在等回调的授权，请先点「打开浏览器授权」")
+	}
+	return a.auth.Complete(raw)
 }
 
 // handleCallbackURL receives the OS deep link. The PKCE verifier is held in
@@ -1659,7 +1687,7 @@ func (a *app) startLogin() {
 }
 
 // startLoginFromPage 是登录回退页上的「打开浏览器授权」：未登录窗口里就是
-// 添加账号，账号窗口里则是给这个账号补权限。
+// 添加账号，账号窗口里则是给这个账号补权限（多账号时走内置浏览器）。
 func (a *app) startLoginFromPage() {
 	if a.book != nil && a.accountID == "" {
 		a.book.startAddAccount()
@@ -1688,6 +1716,12 @@ func (a *app) openSignup() {
 // startLoginWithScopes 是上面那条流程的唯一实现：额外 scope 来自全局授权
 // 弹窗登记的缺失权限，普通登录传 nil 只申请默认范围。
 func (a *app) startLoginWithScopes(scopes []string) {
+	// 账号窗口的补授权挂在账号册上：多账号时它开内置浏览器的独立会话，而不是
+	// 系统浏览器 —— 系统浏览器里登着的可能是另一个账号，授权码会落到别人头上。
+	if a.book != nil && a.accountID != "" {
+		a.book.reauthorizeAccount(a.accountID, scopes)
+		return
+	}
 	// 一次只允许一次授权在等回调（回调只带 code 与 state）：这个账号窗口先
 	// 认领，别的窗口 / 账号面板上正在等的授权让位。
 	if a.book != nil {

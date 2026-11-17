@@ -80,6 +80,9 @@ var (
 	bookmarkIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12v17l-6-4.5L6 21z"/></svg>`))
 	// 书签（已加）：同一个形状填满，与收藏一样靠形状区分状态。
 	bookmarkOnIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12v17l-6-4.5L6 21z"/></svg>`))
+	// 换账号：一左一右两枚反向箭头（swap），放在详情页评论框下方的身份标签
+	// 里，提示「这枚标签可以点开换个账号回复」（见 reply_identity.go）。
+	swapAccountIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h13"/><path d="M13 3l4 4-4 4"/><path d="M20 17H7"/><path d="M11 13l-4 4 4 4"/></svg>`))
 )
 
 // editorIcons 供评论输入框（与发帖编辑器共用）的 Markdown 工具条、插入按钮
@@ -130,8 +133,8 @@ var (
 	collapseIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>`))
 )
 
-// viewerIcons 供多图预览弹窗（见 image_viewer.go）使用：左右翻页、放大、缩小、
-// 还原与另存为。均为 24×24、stroke=currentColor 的线性图标。
+// viewerIcons 供多图预览窗口（见 image_viewer.go）使用：左右翻页、放大、缩小、
+// 还原、另存为与最小化。均为 24×24、stroke=currentColor 的线性图标。
 var (
 	// 上一张：左箭头。
 	prevImageIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>`))
@@ -145,4 +148,6 @@ var (
 	actualSizeIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9V3h6"/><path d="M21 9V3h-6"/><path d="M3 15v6h6"/><path d="M21 15v6h-6"/></svg>`))
 	// 另存为：向下的箭头落进托盘，与常见的「下载 / 保存」一致。
 	saveImageIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11"/><path d="M7 10l5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>`))
+	// 最小化：一条横线，与窗口标题栏的最小化按钮同一含义。
+	minimizeIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>`))
 )

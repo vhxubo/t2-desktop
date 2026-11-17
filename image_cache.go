@@ -43,9 +43,9 @@ import (
 const (
 	imageCacheStable imageCategory = iota
 	imageCacheTemporary
-	// imageCacheViewer 是帖子配图的「预览档」：多图预览弹窗要把图放大到好几倍，
+	// imageCacheViewer 是帖子配图的「预览档」：多图预览窗口要把图放大到好几倍，
 	// 按正文那一档（长边 1600）解码的原图一放大就糊。预览档按长边 3200 解码，
-	// 只给弹窗用，仍然落在临时目录、同样按 imageCacheTTL 清理；正文里按栏宽
+	// 只给预览窗口用，仍然落在临时目录、同样按 imageCacheTTL 清理；正文里按栏宽
 	// 缩小显示时还是用省内存的临时档（见 image_viewer.go 的 viewerImage）。
 	imageCacheViewer
 )

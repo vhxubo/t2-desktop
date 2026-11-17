@@ -78,7 +78,10 @@ func (a *app) showSettingsWindow() {
 		Content:           ui.View(a.settingsWindowView),
 	})
 	a.settingsWin = win
-	win.OnClosed(func() { a.settingsWin = nil })
+	win.OnClosed(func() {
+		a.settingsWin = nil
+		a.authGateWindowClosed(toastSettings)
+	})
 }
 
 // reloadImageHostSettings 在真正新开设置窗口时重读图库配置，并清掉上一次
@@ -180,6 +183,8 @@ func (a *app) settingsWindowView(c *ui.Context) {
 			})
 		})
 	})
+	// 设置里也有带令牌的请求（例如官方图床测试）：缺权限时弹在这里。
+	a.authDialogFor(c, toastSettings)
 }
 
 // settingsSection 画一块带标题的设置区域，各分类共用同一套版式。

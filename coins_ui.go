@@ -166,7 +166,7 @@ func (a *app) signInNow() {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录 2Libra 后才能签到。", a.signInNow)
+		a.requestLoginFor(toastCoins, "登录 2Libra 后才能签到。", a.signInNow)
 		return
 	}
 	if cs.sign.Known && cs.sign.Signed {
@@ -199,7 +199,7 @@ func (a *app) signInNow() {
 					a.reloadCoinBase()
 					return
 				}
-				if a.handleAuthError(err, a.signInNow) {
+				if a.handleAuthErrorFor(toastCoins, err, a.signInNow) {
 					return
 				}
 				a.toast(toastCoins, friendlyError(err))
@@ -857,7 +857,7 @@ func (a *app) loadCoinBase() {
 			cs.baseLoaded = true
 			authHandled := false
 			if balanceErr != nil {
-				if a.handleAuthError(balanceErr, func() { a.ensureCoinBase() }) {
+				if a.handleAuthErrorFor(toastCoins, balanceErr, func() { a.ensureCoinBase() }) {
 					authHandled, cs.baseWait = true, true
 				} else {
 					cs.balanceErr = friendlyError(balanceErr)
@@ -876,7 +876,7 @@ func (a *app) loadCoinBase() {
 				cs.balanceErr = friendlyError(balanceErr)
 			}
 			if signErr != nil {
-				if !authHandled && a.handleAuthError(signErr, func() { a.ensureCoinBase() }) {
+				if !authHandled && a.handleAuthErrorFor(toastCoins, signErr, func() { a.ensureCoinBase() }) {
 					cs.baseWait = true
 				} else if !authHandled {
 					cs.signErr = friendlyError(signErr)
@@ -929,7 +929,7 @@ func (a *app) loadCoinToday() {
 					}
 					cs.todayLoading = false
 					cs.todayLoaded = true
-					if a.handleAuthError(ferr, func() { a.ensureCoinToday() }) {
+					if a.handleAuthErrorFor(toastCoins, ferr, func() { a.ensureCoinToday() }) {
 						cs.todayWait = true
 						return
 					}
@@ -1004,7 +1004,7 @@ func (a *app) loadCoinHistory(page int) {
 			cs.historyLoading = false
 			cs.historyLoaded = true
 			if err != nil {
-				if a.handleAuthError(err, func() { a.ensureCoinHistory() }) {
+				if a.handleAuthErrorFor(toastCoins, err, func() { a.ensureCoinHistory() }) {
 					cs.historyWait = true
 					return
 				}

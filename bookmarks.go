@@ -205,7 +205,7 @@ func (a *app) removeProfileBookmark(it Item) {
 				ps.bookmarkBusy = ""
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() { a.removeProfileBookmark(it) }) {
+				if a.handleAuthErrorFor(toastProfile, err, func() { a.removeProfileBookmark(it) }) {
 					return
 				}
 				a.toast(toastProfile, friendlyError(err))

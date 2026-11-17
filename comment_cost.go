@@ -707,7 +707,7 @@ func (a *app) loadCommentCostData() {
 				st.failures++
 				// 缺 profile 权限（旧令牌）或登录失效时走全局授权链路，授权
 				// 成功后重跑这次加载；普通网络错误只在状态栏里说明并给重试。
-				if a.handleAuthError(err, a.reloadCommentCostData) {
+				if a.handleAuthErrorFor(a.replyAuthTarget(), err, a.reloadCommentCostData) {
 					return
 				}
 				if !st.loaded {
@@ -827,7 +827,7 @@ func (a *app) setCommentCostBadge(badge badgeWallEntry, equip bool, key string) 
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() { a.setCommentCostBadge(badge, equip, key) }) {
+				if a.handleAuthErrorFor(a.replyAuthTarget(), err, func() { a.setCommentCostBadge(badge, equip, key) }) {
 					return
 				}
 				verb := "切换"

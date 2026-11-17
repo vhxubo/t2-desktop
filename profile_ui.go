@@ -71,6 +71,7 @@ func (a *app) showProfileWindow() {
 	win.OnClosed(func() {
 		a.profileWin = nil
 		a.setProfileWindowShown(false)
+		a.authGateWindowClosed(toastProfile)
 	})
 	a.setProfileWindowShown(true)
 }
@@ -208,7 +209,7 @@ func (a *app) profileWindowView(c *ui.Context) {
 	a.ensureProfileLoaded()
 	// 缺权限时也摆出同一个全局授权弹窗：从本窗口发起的请求失败后，用户就
 	// 在这个窗口里看到原因与「前往授权」。
-	a.authDialog(c)
+	a.authDialogFor(c, toastProfile)
 	// 合集改名 / 删除的对话框：它们盖在整扇窗口上，所以画在最后。
 	a.profileCollectionDialogs(c)
 }
@@ -820,7 +821,7 @@ func (a *app) openProfileCollection(it Item) {
 	if name == "" {
 		name = "未命名合集"
 	}
-	ps.collBrowse = newCollectionBrowse(collectionItem{ID: it.Key, Name: name}, "")
+	ps.collBrowse = newCollectionBrowse(collectionItem{ID: it.Key, Name: name}, "", toastProfile)
 	a.loadCollectionTopics(ps.collBrowse, 1)
 }
 
@@ -851,7 +852,7 @@ func (a *app) submitRenameCollection() {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能修改合集。", a.submitRenameCollection)
+		a.requestLoginFor(toastProfile, "登录后才能修改合集。", a.submitRenameCollection)
 		return
 	}
 	id := ps.collEdit
@@ -871,7 +872,7 @@ func (a *app) submitRenameCollection() {
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, a.submitRenameCollection) {
+				if a.handleAuthErrorFor(toastProfile, err, a.submitRenameCollection) {
 					return
 				}
 				a.toast(toastProfile, friendlyError(err))
@@ -907,7 +908,7 @@ func (a *app) submitDeleteCollection() {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能删除合集。", a.submitDeleteCollection)
+		a.requestLoginFor(toastProfile, "登录后才能删除合集。", a.submitDeleteCollection)
 		return
 	}
 	id := ps.collDelete
@@ -933,7 +934,7 @@ func (a *app) submitDeleteCollection() {
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, a.submitDeleteCollection) {
+				if a.handleAuthErrorFor(toastProfile, err, a.submitDeleteCollection) {
 					return
 				}
 				a.toast(toastProfile, friendlyError(err))

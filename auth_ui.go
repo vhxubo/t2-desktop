@@ -6,11 +6,13 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// authDialog 是全局授权弹窗：列表页、详情页与登录回退页共用同一个弹窗，
-// 叠在最上层。点「前往授权」打开系统浏览器，回调送达后 onAuthChanged 会
-// 自动重跑被中断的调用。
-func (a *app) authDialog(c *ui.Context) {
-	if !a.authGate.open {
+// authDialogFor 是授权弹窗：列表页、详情页、登录回退页与各个附属窗口共用
+// 同一份状态，但只画在发起被中断调用的那个窗口里（owner 就是那个窗口）。点
+// 「前往授权」打开授权页，回调送达后 onAuthChanged 会自动重跑被中断的调用。
+// 发起窗口已经关掉的那一次在登记时就被丢掉了（见 demandAuthorizationFor），
+// 不会换一个窗口再弹出来。
+func (a *app) authDialogFor(c *ui.Context, owner toastTarget) {
+	if !a.authGate.open || !a.authGateShowsIn(owner) {
 		return
 	}
 	t := c.Theme()
@@ -27,7 +29,7 @@ func (a *app) authDialog(c *ui.Context) {
 				ui.Text(c, "缺少的权限范围："+strings.Join(need.Scopes, "、")).
 					FontSize(12).TextColor(t.Text).MaxLines(2)
 			}
-			ui.Text(c, "点「前往授权」会在系统浏览器里打开授权页；回调被接受后，刚才被中断的操作会自动继续。").
+			ui.Text(c, "点「前往授权」会在浏览器里打开授权页；回调被接受后，刚才被中断的操作会自动继续。").
 				FontSize(12).TextColor(t.TextMuted).MaxLines(3)
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Spacer(c).Grow(1)
@@ -45,4 +47,10 @@ func (a *app) authDialog(c *ui.Context) {
 	if dismissed.Dismissed() {
 		a.cancelAuthGate("已取消授权")
 	}
+}
+
+// authGateShowsIn 报告弹窗该不该画在 owner 窗口里：只画在发起过失败调用的
+// 窗口里，别的窗口一律不画。
+func (a *app) authGateShowsIn(owner toastTarget) bool {
+	return a.authGate.open && a.authGate.wants(owner)
 }

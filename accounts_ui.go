@@ -28,7 +28,7 @@ const (
 // 已经开着就只把它带到前台，不会开出第二个。建窗口排到下一轮主线程处理
 // （见 accountBook.postMain）。
 func (b *accountBook) showPanel() {
-	b.postMain(b.showPanelWindow)
+	b.postMain(b.openPanel)
 }
 
 // showPanelWindow 在主线程上真正打开账号面板。窗口是一份原生资源，只有应用
@@ -250,9 +250,19 @@ func (b *accountBook) panelPendingLogin(c *ui.Context, pending *accountLogin) {
 	t := c.Theme()
 	if pending.embedded {
 		ui.Text(c, "在内置浏览器里完成授权").FontSize(12).Bold().TextColor(t.Text)
-		ui.Text(c, "授权页开在独立的浏览器窗口里，它不会用到系统浏览器里的登录状态，"+
-			"所以可以直接登录要挂的另一个账号。同意授权后那个窗口会自动收起。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		if pending.accountID != "" {
+			name := "这个账号"
+			if acc := b.account(pending.accountID); acc != nil {
+				name = "「" + acc.name() + "」"
+			}
+			ui.Text(c, "授权页开在独立的浏览器窗口里，它不会用到系统浏览器里的登录状态，"+
+				"请在里面登录要重新授权的"+name+"账号。同意授权后那个窗口会自动收起。").
+				FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		} else {
+			ui.Text(c, "授权页开在独立的浏览器窗口里，它不会用到系统浏览器里的登录状态，"+
+				"所以可以直接登录要挂的另一个账号。同意授权后那个窗口会自动收起。").
+				FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		}
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			if ui.PrimaryButton(c, "打开授权窗口").Clicked() {
 				b.showLoginWindow()

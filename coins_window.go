@@ -85,6 +85,7 @@ func (a *app) showCoinWindow() {
 	win.OnClosed(func() {
 		a.coinWin = nil
 		a.setCoinWindowShown(false)
+		a.authGateWindowClosed(toastCoins)
 	})
 	a.setCoinWindowShown(true)
 }
@@ -318,5 +319,5 @@ func (a *app) coinWindowView(c *ui.Context) {
 	a.ensureCoinsLoaded()
 	// 缺权限时也摆出同一个全局授权弹窗：从本窗口发起的请求失败后，用户就
 	// 在这个窗口里看到原因与「前往授权」。
-	a.authDialog(c)
+	a.authDialogFor(c, toastCoins)
 }

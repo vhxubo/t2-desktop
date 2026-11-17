@@ -61,6 +61,7 @@ func (a *app) showSearchWindow() {
 	win.OnClosed(func() {
 		a.stopSearchTimer()
 		a.searchWin = nil
+		a.authGateWindowClosed(toastSearch)
 	})
 	if a.win != nil {
 		a.win.Invalidate() // 标题栏的放大镜高亮跟着窗口状态走
@@ -190,6 +191,8 @@ func (a *app) searchWindowView(c *ui.Context) {
 		})
 	})
 	a.ensureSearchHotTags(st)
+	// 缺权限时就在这个窗口里弹授权：搜索的请求是从这里发起的。
+	a.authDialogFor(c, toastSearch)
 }
 
 // searchBody 是结果区：各种说明与结果列表。
@@ -208,7 +211,7 @@ func (a *app) searchBody(c *ui.Context, st *searchState) {
 			ui.Text(c, "搜索自己的收藏需要登录").FontSize(15).Bold()
 			ui.Text(c, "收藏是私人内容，只有登录后才能搜索。").TextColor(t.TextMuted)
 			if ui.PrimaryButton(c, "去登录").Clicked() {
-				a.requestLogin("登录后才能搜索自己的收藏。", func() {
+				a.requestLoginFor(toastSearch, "登录后才能搜索自己的收藏。", func() {
 					a.runSearch(st, st.gen, 1)
 				})
 			}

@@ -19,61 +19,64 @@ const (
 	richMetaFontSize    float32 = 12 // 时间、楼层、节点、原帖、计数、表态
 )
 
-// foldRowView 画一行可见行：分组行交给 commentGroupRow，其余仍走 rowWith。
+// foldRowView 画一行可见行：组首条评论先照常画成一条评论，再在它下面挂
+// 「展开另外几条」的入口；其余行仍走 rowWith。
 func (a *app) foldRowView(c *ui.Context, row foldRow) {
 	if row.group == nil {
 		a.rowWith(c, row.item, a.openItem)
 		return
 	}
-	a.commentGroupRow(c, *row.group, row.total, row.open, func() {
-		a.tabs[a.tab].toggle(*row.group)
+	g := *row.group
+	ui.Column(c).FillWidth().Gap(4).Children(func() {
+		a.rowWith(c, row.item, a.openItem)
+		a.commentGroupToggle(c, g, row.total, row.open, func() {
+			a.tabs[a.tab].toggle(g)
+		})
 	})
 }
 
-// commentGroupRow 是「最新评论」里连续同一个人时的那道分组行：说明它聚了
-// 几条、是同一帖子下连着刷还是横跨几个帖子，右侧的箭头指出现在能展开 / 收起。
-// 它替下面那条折叠起来、没露出来的评论说话，所以底色比评论行浅一档，
-// 一眼看得出这不是一条评论本身。
-func (a *app) commentGroupRow(c *ui.Context, g commentGroup, total int, open bool, toggle func()) {
+// commentGroupToggle 是「最新评论」里一组连续同作者评论的展开 / 收起入口，
+// 挂在组首条评论的下方、左对齐。它不再单独占一张卡片：首条评论已经写明了
+// 是谁、在哪篇帖子下，这里只需要说清「下面还收着几条」和点一下会怎样。
+func (a *app) commentGroupToggle(c *ui.Context, g commentGroup, total int, open bool, toggle func()) {
 	t := c.Theme()
-	head := g.members[0]
-	author := commentItemAuthor(head)
-	title := commentGroupTitle(g.members, commentGroupPosts(g.members))
-	row := ui.ButtonBase(c).FillWidth().Padding(10, 16).Radius(10).
-		Background(t.Surface).Border(1, t.Border)
-	if row.Hovered() {
-		row.Background(t.SurfaceHover)
+	author := commentItemAuthor(g.members[0])
+	posts := commentGroupPosts(g.members)
+	b := ui.ButtonBase(c).AlignSelf(ui.Start).Padding(4, 6).Radius(6)
+	// 按钮不带外观，悬停底色自己给：点一下才展开，平时只是一行说明文字。
+	b.Background(ui.Transparent)
+	ink := t.TextMuted
+	if b.Hovered() {
+		b.Background(t.SurfaceHover)
+		ink = t.Accent
 	}
-	row.Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+	b.Children(func() {
+		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 			icon := chevronRightIcon
 			if open {
 				icon = chevronDownIcon
 			}
-			ui.Icon(c, icon).Size(12, 12).TextColor(t.TextMuted).Shrink(0)
-			a.userTag(c, userTagSpec{
-				Name:   author,
-				Avatar: head.Extra.AuthorAvatar,
-				Label:  "@" + author,
-				Size:   richAuthorFontSize,
-				Bold:   true,
-				Badges: head.Extra.AuthorBadges,
-			})
-			ui.Text(c, title).FontSize(richMetaFontSize).TextColor(t.TextMuted).
-				SingleLine().Ellipsis("…").Shrink(1).MinWidth(0)
-			ui.Spacer(c).Grow(1)
-			ui.Textf(c, "共 %d 条", total).FontSize(richMetaFontSize).
-				TextColor(t.TextMuted).Shrink(0)
+			ui.Icon(c, icon).Size(12, 12).TextColor(ink).Shrink(0)
+			if open {
+				ui.Text(c, "收起连续评论").FontSize(richMetaFontSize).TextColor(ink)
+				return
+			}
+			ui.Textf(c, "展开另外 %d 条", total-1).FontSize(richMetaFontSize).TextColor(ink)
+			// 同一帖子下连着刷时不必再说地点：首条评论的底行已经挂着原帖。
+			if posts > 1 {
+				ui.Textf(c, "· 横跨 %d 个帖子", posts).FontSize(richMetaFontSize).
+					TextColor(t.TextMuted)
+			}
 		})
 	})
 	if open {
-		row.Label("收起 @" + author + " 的连续评论")
-		row.Tooltip("收起，只留第一条")
+		b.Label("收起 @" + author + " 的连续评论")
+		b.Tooltip("收起另外 " + fmt.Sprint(total-1) + " 条，只留第一条")
 	} else {
-		row.Label("展开 @" + author + " 的连续评论")
-		row.Tooltip("展开这 " + fmt.Sprint(total) + " 条")
+		b.Label("展开 @" + author + " 的连续评论")
+		b.Tooltip(commentGroupTitle(g.members, posts) + "，点一下展开")
 	}
-	row.OnClick(toggle)
+	b.OnClick(toggle)
 }
 
 // richRow 是最新评论 / 动态专用的行：比通用标题+副标题+元信息多了作者、

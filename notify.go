@@ -395,7 +395,7 @@ func (a *app) reloadNotificationTab() {
 	if !st.loaded || st.loading {
 		return
 	}
-	a.load(idx, 1)
+	a.loadFor(toastNotifications, idx, 1)
 }
 
 // onBecameActive calibrates the badge when the window returns to the front.
@@ -417,27 +417,28 @@ func (a *app) onBecameActive() {
 }
 
 // markNotificationRead marks one message read: the row's 「已读」 button.
-func (a *app) markNotificationRead(id string) {
-	a.markNotificationsRead([]string{id})
+// owner 是发起这次已读的窗口：缺权限时的授权弹窗回到那里。
+func (a *app) markNotificationRead(owner toastTarget, id string) {
+	a.markNotificationsRead(owner, []string{id})
 }
 
 // markLoadedNotificationsRead marks every unread message that is already on
 // screen. 站内 Web 的「已读本页」就是这个语义；超过 100 条时由数据层分片。
-func (a *app) markLoadedNotificationsRead() {
+func (a *app) markLoadedNotificationsRead(owner toastTarget) {
 	idx := notificationTabIndex()
 	if idx < 0 {
 		return
 	}
-	a.markNotificationsRead(unreadNotificationIDs(a.tabs[idx].items))
+	a.markNotificationsRead(owner, unreadNotificationIDs(a.tabs[idx].items))
 }
 
 // markSelectedNotificationsRead marks the messages the user ticked.
-func (a *app) markSelectedNotificationsRead() {
+func (a *app) markSelectedNotificationsRead(owner toastTarget) {
 	idx := notificationTabIndex()
 	if idx < 0 {
 		return
 	}
-	a.markNotificationsRead(selectedNotificationIDs(a.tabs[idx]))
+	a.markNotificationsRead(owner, selectedNotificationIDs(a.tabs[idx]))
 }
 
 // publishWritesOK 报告此刻能不能发「写」请求（按条已读、全部已读）。它不看
@@ -468,19 +469,19 @@ func isLocalTestBase(base string) bool {
 // Repeated clicks on a message already in flight are coalesced, an empty list
 // never reaches the server (id: [] is a 400), and the local list is updated
 // only after the server accepted the batch.
-func (a *app) markNotificationsRead(ids []string) {
+func (a *app) markNotificationsRead(owner toastTarget, ids []string) {
 	if !a.publishWritesOK() {
 		return
 	}
 	ids = cleanNotificationIDs(ids)
-	a.markNotificationsReadConfirmed(ids)
+	a.markNotificationsReadConfirmed(owner, ids)
 }
 
 // markNotificationsReadConfirmed 是已经确认可以发写请求之后的提交路径：点行
 // 标已读、「已读本页」、「已读选中」，以及详情页里「看到了这条消息」都从这里
 // 走，共用同一张在途表：同一条消息在请求落地之前被两个入口先后提交时只发一次，
-// 本地也只扣一次未读数。
-func (a *app) markNotificationsReadConfirmed(ids []string) {
+// 本地也只扣一次未读数。owner 是发起这次已读的窗口。
+func (a *app) markNotificationsReadConfirmed(owner toastTarget, ids []string) {
 	if len(ids) == 0 {
 		return
 	}
@@ -517,7 +518,7 @@ func (a *app) markNotificationsReadConfirmed(ids []string) {
 				// 缺 read:me 或登录失效：走全局授权，回调成功后把这批 id 重发
 				// 一次，已读状态照样落账。
 				batch := append([]string(nil), pending...)
-				a.handleAuthError(err, func() { a.markNotificationsRead(batch) })
+				a.handleAuthErrorFor(owner, err, func() { a.markNotificationsRead(owner, batch) })
 				a.toast(toastNotifications, "标记已读失败："+friendlyError(err))
 				return
 			}
@@ -567,7 +568,7 @@ func (a *app) applyNotificationRead(st *tabState, ids []string) {
 	a.refreshUnread()
 }
 
-func (a *app) markAllNotificationsRead() {
+func (a *app) markAllNotificationsRead(owner toastTarget) {
 	if !a.publishWritesOK() {
 		return
 	}
@@ -587,7 +588,7 @@ func (a *app) markAllNotificationsRead() {
 		a.publish(func() {
 			st.markingAll = false
 			if err != nil {
-				a.handleAuthError(err, func() { a.markAllNotificationsRead() })
+				a.handleAuthErrorFor(owner, err, func() { a.markAllNotificationsRead(owner) })
 				a.toast(toastNotifications, "全部已读失败："+friendlyError(err))
 				return
 			}

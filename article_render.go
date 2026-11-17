@@ -20,7 +20,7 @@ import (
 // 解码结果与磁盘字节都由全局图片缓存（image_cache.go）管理：表情进长期
 // 缓存，帖子配图进临时缓存。
 
-// articlePicture 是从源文里认出的一张配图：地址与说明文字。多图预览弹窗
+// articlePicture 是从源文里认出的一张配图：地址与说明文字。多图预览窗口
 // （见 image_viewer.go）按这些翻页与另存为。
 type articlePicture struct {
 	URL string
@@ -293,7 +293,7 @@ const (
 
 // articlePicture 显示一张正文配图：仍在下载时转圈并说明，失败后给一句说明，
 // 加载完成后按原比例缩到栏宽。配图是帖子里的外部图片，进临时缓存，过期后
-// 自动清理。点一下打开多图预览弹窗（见 image_viewer.go）。
+// 自动清理。点一下打开多图预览窗口（见 image_viewer.go）。
 //
 // 占位按图片的真实宽高来：图片已经在磁盘缓存里时（读文件头，见
 // imageCache.cachedSize），先画一个同样大小的空框，图片解好后原地替换，
@@ -302,7 +302,7 @@ const (
 //
 // pictures 是这份正文的全部配图（见 articlePictures），点开预览时按它在整
 // 组里翻页。还在加载或加载失败的占位也能点：加载中点一下先记下，图片到位后
-// 直接弹窗；失败的只留说明，点了什么也不会发生。
+// 直接开预览窗口；失败的只留说明，点了什么也不会发生。
 func (a *app) articlePicture(c *ui.Context, dest, alt string, pictures []articlePicture) {
 	th := markdown.DefaultTheme(c.Theme())
 	if alt == "" {

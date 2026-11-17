@@ -26,6 +26,8 @@ func testBook(t *testing.T) *accountBook {
 	t.Helper()
 	b := newAccountBook(t.TempDir())
 	b.openURL = func(string) error { return nil }
+	// 无头环境建不了原生窗口：面板与内置浏览器都换成记录调用。
+	b.openPanel = func() {}
 	return b
 }
 
@@ -898,7 +900,7 @@ func TestPanelPendingLoginInEmbeddedBrowser(t *testing.T) {
 	}
 	b.mu.Lock()
 	b.pending = &accountLogin{auth: m, embedded: true, url: "https://2libra.com/oauth/authorize?x=1"}
-	b.loginMsg = loginWaitingMessage(true)
+	b.loginMsg = b.loginWaitingMessage(true, "")
 	b.mu.Unlock()
 	t.Cleanup(func() { b.cancelLogin() })
 
@@ -966,6 +968,33 @@ func TestLoginWindowViewStates(t *testing.T) {
 	for _, want := range []string{"内置浏览器打不开授权页", "没有 WebView2 运行时", "重试", "改用系统浏览器"} {
 		if !tt.HasText(want) {
 			t.Errorf("内置浏览器失败时缺少 %q：%q", want, tt.Texts())
+		}
+	}
+}
+
+// 补权限的内置浏览器窗口要写明给哪个账号重新授权：窗口是独立会话，用户得
+// 知道该在里面登录谁，才不会再登错账号。
+func TestLoginWindowNamesReauthTarget(t *testing.T) {
+	b := testBook(t)
+	acc := addTestAccount(t, b, "jimmy")
+	m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
+	m.store = &memoryTokenStore{}
+	if _, err := m.BeginScopes(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	b.pending = &accountLogin{
+		auth: m, accountID: acc.ID, embedded: true,
+		url: "https://2libra.com/oauth/authorize?x=1",
+	}
+	b.mu.Unlock()
+	t.Cleanup(func() { b.cancelLogin() })
+
+	tt := ui.NewTester(b.loginWindowView, loginWindowWidth, loginWindowHeight)
+	tt.Frame()
+	for _, want := range []string{"重新授权", "「jimmy」", "要重新授权的"} {
+		if !tt.HasText(want) {
+			t.Errorf("补权限的授权窗口缺少 %q：%q", want, tt.Texts())
 		}
 	}
 }
@@ -1119,6 +1148,74 @@ func TestWindowOriginsAreStaggered(t *testing.T) {
 	}
 	if x, y := b.windowOrigin(""); x != 0 || y != 0 {
 		t.Errorf("未登录窗口用系统默认位置，实际 %d,%d", x, y)
+	}
+}
+
+// 启动时只开最近用过的那个账号的窗口：登录了几个账号，屏幕上也只有这一个
+// 主页面；别的账号留在账号册里，从账号面板 / 托盘按需打开。
+func TestStartupOpensOnlyTheActiveWindow(t *testing.T) {
+	b := testBook(t)
+	first := addTestAccount(t, b, "jimmy")
+	addTestAccount(t, b, "amy")
+	b.setActive(first.ID)
+
+	var opened []string
+	guest := false
+	b.openStartupWindow(func(id string) { opened = append(opened, id) }, func() { guest = true })
+	if guest {
+		t.Fatal("有账号时不该开未登录窗口")
+	}
+	if len(opened) != 1 || opened[0] != first.ID {
+		t.Fatalf("启动打开的窗口 = %v，期望只有最近用过的 %q", opened, first.ID)
+	}
+}
+
+// 最近用过的账号已经不在账号册里（索引里留了个旧 id）：退回第一个账号，
+// 不能一个窗口都不开，并把它记成最近用过。
+func TestStartupFallsBackToFirstAccount(t *testing.T) {
+	b := testBook(t)
+	first := addTestAccount(t, b, "jimmy")
+	addTestAccount(t, b, "amy")
+	b.setActive("gone")
+
+	var opened []string
+	b.openStartupWindow(func(id string) { opened = append(opened, id) }, func() {})
+	if len(opened) != 1 || opened[0] != first.ID {
+		t.Fatalf("启动打开的窗口 = %v，期望第一个账号 %q", opened, first.ID)
+	}
+	if got := b.activeAccountID(); got != first.ID {
+		t.Errorf("兜底选中的账号没有记成最近用过：%q", got)
+	}
+}
+
+// 登录已失效的账号也要照常打开主页面：主列表能浏览公开内容，失效只影响需要
+// 登录的部分。启动窗口不能因为令牌没了就换成登录页或干脆不开。
+func TestStartupOpensExpiredAccount(t *testing.T) {
+	b := testBook(t)
+	acc := addTestAccount(t, b, "jimmy")
+	setTestNeedLogin(b, acc.ID)
+	if !b.accountsView()[0].NeedsLogin {
+		t.Fatal("前置条件：这个账号应标成登录已失效")
+	}
+
+	var opened []string
+	b.openStartupWindow(func(id string) { opened = append(opened, id) }, func() {})
+	if len(opened) != 1 || opened[0] != acc.ID {
+		t.Fatalf("启动打开的窗口 = %v，期望登录失效的账号 %q 仍照常打开", opened, acc.ID)
+	}
+}
+
+// 账号册为空时才开未登录窗口。
+func TestStartupOpensGuestWithoutAccounts(t *testing.T) {
+	b := testBook(t)
+	var opened []string
+	guest := false
+	b.openStartupWindow(func(id string) { opened = append(opened, id) }, func() { guest = true })
+	if len(opened) != 0 {
+		t.Fatalf("没有账号时不该开账号窗口：%v", opened)
+	}
+	if !guest {
+		t.Fatal("没有账号时应开未登录窗口")
 	}
 }
 

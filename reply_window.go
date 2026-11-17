@@ -62,6 +62,9 @@ func (a *app) openReplyWindow() {
 	// 的处理者，所以只把状态准备好，测试直接渲染 replyWindowView。
 	d.composerDetached = true
 	d.preview = 0 // 页面里的「编辑 / 预览」不带到窗口里：窗口一直两边都显示
+	// 身份气泡跟着评论框走：主窗口里点开的那一份先收起，到窗口里再点开。
+	d.identityOpen = false
+	d.identityHost = ""
 	a.replyWinFor = d
 	if a.win == nil {
 		return
@@ -90,9 +93,15 @@ func (a *app) openReplyWindow() {
 	a.replyWin = win
 	win.OnClosed(func() {
 		a.replyWin = nil
+		a.authGateWindowClosed(toastReply)
 		// 关窗口不丢草稿：清掉标记，页面里的评论框原样展开，文字还在。
 		if d.composerDetached {
 			d.composerDetached = false
+		}
+		// 窗口里点开的身份气泡随窗口一起消失，不能留给主窗口去画。
+		if d.identityHost == replySurfaceWindow {
+			d.identityOpen = false
+			d.identityHost = ""
 		}
 		a.replyWinFor = nil
 		if a.win != nil {
@@ -107,6 +116,10 @@ func (a *app) openReplyWindow() {
 func (a *app) closeReplyWindow() {
 	if d := a.replyWinFor; d != nil {
 		d.composerDetached = false
+		if d.identityHost == replySurfaceWindow {
+			d.identityOpen = false
+			d.identityHost = ""
+		}
 	}
 	if d := a.detail; d != nil {
 		d.composerDetached = false
@@ -189,7 +202,7 @@ func (a *app) replyWindowView(c *ui.Context) {
 
 		a.replyWindowBody(c, d)
 	})
-	a.authDialog(c)
+	a.authDialogFor(c, toastReply)
 }
 
 // replyWindowSubtitle 是标题栏里的一行：在回复哪一层楼，或者是一句新评论。
@@ -227,7 +240,10 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 		}
 		// 评论费用状态栏：字数、预计发评金币、可省金币的徽章与「走个面」
 		// 开关。占整窗宽度，左右两栏都看得到（见 comment_cost_ui.go）。
-		a.commentCostBar(c, d.draft)
+		// 临时换账号回复时这组数字属于窗口自己的账号，不适用，先收起。
+		if d.replyAsID == "" {
+			a.commentCostBar(c, d.draft)
+		}
 		// 两栏这一行给一个固定 key：状态栏在登录 / 退出时会多出或消失一个
 		// 兄弟节点，没有 key 的话输入框会被挤到另一个节点身份上，焦点与
 		// 选区随之丢失。
@@ -250,14 +266,17 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 					ui.Text(c, hint).FontSize(11).TextColor(t.TextMuted).SingleLine().
 						Grow(1).MinWidth(0)
 					// 登录后字数在评论费用状态栏里报（见 comment_cost_ui.go），
-					// 同一条链上不重复写两遍；未登录时仍留在这里。
-					if !a.commentCostBarVisible() {
+					// 同一条链上不重复写两遍；未登录时、以及临时换了回复账号
+					// 把状态栏收起时，仍留在这里。
+					if d.replyAsID != "" || !a.commentCostBarVisible() {
 						ui.Text(c, fmt.Sprintf("%d 字", utf8.RuneCountInString(d.draft))).
 							FontSize(11).TextColor(t.TextMuted).SingleLine()
 					}
-					if d.posting {
-						ui.Spinner(c).Size(16, 16)
-					}
+					// 窗口页脚同样写明以哪个账号发出，点开还能换一个账号回复
+					//（见 reply_identity.go）：标题栏虽然有窗口账号标识，但点
+					// 「发送」就在这一行里。发送中的转圈跟着动作本身走（见
+					// replyFieldActions）。
+					a.replyIdentityBadge(c, d, replySurfaceWindow)
 					a.replyFieldActions(c, d)
 				})
 			})
@@ -273,6 +292,7 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 			}
 		})
 	})
-	// 预览里的配图也能点开多图预览：和详情页共用同一个弹窗状态。
-	a.imageViewer(c)
+	// 预览里的配图也能点开多图预览；预览是一扇独立窗口，这里只在图片到位后
+	// 补开它（见 viewerTick）。
+	a.viewerTick()
 }

@@ -15,24 +15,32 @@ import (
 	"github.com/egoist/mygo/ui/markdown/parser"
 )
 
-// 多图预览弹窗
+// 多图预览窗口
 //
 // 详情页正文、每条评论（以及发帖预览、个人简介这类同样走 Markdown 的地方）
-// 各自成组：点组里任意一张配图，弹窗打开这一组并停在它上面，可以左右翻页、
-// 滚轮缩放、右键（或工具条按钮）另存为。两组互不影响——在某条评论的大图里
-// 翻页只在这条评论自己的图之间走，不会串到正文或别的评论。
+// 各自成组：点组里任意一张配图，独立窗口打开这一组并停在它上面，可以左右翻页、
+// 滚轮缩放、按住左键拖动看局部、右键（或工具条按钮）另存为。两组互不影响
+// ——在某条评论的大图里翻页只在这条评论自己的图之间走，不会串到正文或别的
+// 评论。
 //
 // 分组靠「从解析树认图」：article_render.go 的 articlePictures 按 Markdown
 // 视图解析好的文档认出这一份源文里的全部配图，与 articleBlock 的显示规则
 // 同源。正文、附言、个人简介各是独立的一份源文，评论一行一份，因此天然各自
-// 成组；弹窗里翻的正是这一组，张数与画面里显示的一致。
+// 成组；窗口里翻的正是这一组，张数与画面里显示的一致。
 //
-// 弹窗画在可能显示它的每个窗口的 view 末尾（见 imageViewer），与授权弹窗同一
-// 层：详情页、评论视图与各独立窗口都能弹出来。状态只在本文件维护；图还在加载
-// 时点一下先记下，图片到位后的下一次重建自动打开（见 wantImage / viewerTick）。
+// 预览是一扇独立窗口（见 showViewerWindow）：不内嵌到详情页或其它窗口里，
+// 点开图片后可以拖到一边、缩放或最小化，详情窗口照常能操作。状态只在本文件
+// 维护；图还在加载时点一下先记下，图片到位后由来源窗口的下一次重建补开
+// （见 wantImage / viewerTick）。
 
-// 预览弹窗的外观与交互参数。
+// 预览窗口的外观与交互参数。
 const (
+	// 窗口的默认尺寸与下限：默认比主窗口矮一点，小屏也放得下；缩放后按
+	// 窗口大小重新算「刚好放下」。
+	imageViewerWindowWidth  = 960
+	imageViewerWindowHeight = 720
+	imageViewerWindowMinW   = 560
+	imageViewerWindowMinH   = 360
 	// 缩放两端与步长：再小就只剩一个点，再大也只是糊成一片。滚轮、加减键与
 	// 工具条按钮都在这个范围里乘，按一次不会跳出范围。
 	imageViewerMinZoom  float32 = 0.1
@@ -45,33 +53,34 @@ const (
 	imageViewerPad      float32 = 24   // 图片与窗口边缘的留白
 )
 
-// 预览弹窗里给人看与给测试找的文案。
+// 预览窗口里给人看与给测试找的文案。
 const (
-	imageViewerHint    = "滚轮缩放 · 左右方向键翻页 · 右键另存为 · Esc 关闭"
-	imageViewerPrev    = "上一张"
-	imageViewerNext    = "下一张"
-	imageViewerZoomIn  = "放大"
-	imageViewerZoomOut = "缩小"
-	imageViewerActual  = "实际大小"
-	imageViewerSave    = "另存为"
-	imageViewerClose   = "关闭预览"
-	imageViewerLabel   = "图片预览"
-	imageViewerSaving  = "正在保存…"
-	imageViewerEmpty   = "图片还没加载好"
+	imageViewerHint     = "滚轮缩放 · 拖动平移 · 左右方向键翻页 · 右键另存为 · Esc 关闭"
+	imageViewerPrev     = "上一张"
+	imageViewerNext     = "下一张"
+	imageViewerZoomIn   = "放大"
+	imageViewerZoomOut  = "缩小"
+	imageViewerActual   = "实际大小"
+	imageViewerSave     = "另存为"
+	imageViewerMinimize = "最小化"
+	imageViewerClose    = "关闭预览"
+	imageViewerLabel    = "图片预览"
+	imageViewerSaving   = "正在保存…"
+	imageViewerEmpty    = "图片还没加载好"
 )
 
-// viewerNoticeSeconds 是另存为结果说明在弹窗底部的停留时长，测试可以调短。
+// viewerNoticeSeconds 是另存为结果说明在窗口底部的停留时长，测试可以调短。
 var viewerNoticeSeconds int64 = 6
 
 // viewerNoteInterval 是结果说明出现后重新构建界面的间隔：说明到点自己撤掉，
 // 不能等下一次输入才消失。测试把它调短。
 var viewerNoteInterval = 2 * time.Second
 
-// nowTime 是弹窗里计时用的时钟。测试可以把它换成假时钟，验证结果说明会自己
+// nowTime 是窗口里计时用的时钟。测试可以把它换成假时钟，验证结果说明会自己
 // 撤掉（见 image_viewer_test.go）。
 var nowTime = time.Now
 
-// imageViewerGroup 是弹窗正在看的那组图：按源文顺序排列的配图。正文的一段、
+// imageViewerGroup 是窗口正在看的那组图：按源文顺序排列的配图。正文的一段、
 // 附言、某条评论各是一组，组内翻页，组间互不影响。
 type imageViewerGroup struct {
 	Items []articlePicture
@@ -96,7 +105,7 @@ type imageViewerWant struct {
 	group imageViewerGroup
 }
 
-// imageViewer 是预览弹窗的状态。它挂在 app 上而不是某个页面：同一个详情页的
+// imageViewer 是预览窗口的状态。它挂在 app 上而不是某个页面：同一个详情页的
 // 正文、评论视图与独立窗口都可能打开同一组图。
 type imageViewer struct {
 	open  bool
@@ -105,6 +114,15 @@ type imageViewer struct {
 	// zoom 是当前这张图的缩放，0 表示还没算过：第一次绘制按「刚好放下」算
 	// （见 fitZoom）。1 是图片自身的像素尺寸。
 	zoom float32
+	// panX / panY 是图片相对居中的平移（窗口 DIP），只在图片放大到超出舞台
+	// 时生效；拖动与按住左键挪动都在这里改（见 viewerInput）。换图、重开或
+	// 关闭时归零。
+	panX, panY float32
+	// dragging 表示左键正按在图上拖动：松手前指针怎么挪都只平移，不翻页、
+	// 不关窗口。imagePress 记住这一次按下落在图上，松手时遮罩收到的点击是
+	// 它引起的，不能当成「点空白处关闭」。
+	dragging   bool
+	imagePress bool
 	// want 是点了但还在加载的那张图：图片到位后自动打开，失败则忘掉，不弹
 	// 一个空窗。
 	want *imageViewerWant
@@ -125,9 +143,81 @@ type imageViewer struct {
 	// savingDone 在这一次另存为彻底结束（成功、失败或取消，结果已经写回
 	// 界面）时关闭：测试靠它等到状态稳定，不必轮询只由 UI 线程写的字段。
 	savingDone chan struct{}
-	// keys 是快捷键层（见 viewerKeyLayer）的身份：弹窗每帧重建，靠它把键盘
-	// 焦点稳定地留在弹窗里，不落回页面的正文。
+	// keys 是快捷键层（见 viewerKeyLayer）的身份：窗口每帧重建，靠它把键盘
+	// 焦点稳定地留在窗口里，不落回页面的正文。
 	keys ui.Handle
+}
+
+/* ------------------------------------------------------------------
+   窗口
+--------------------------------------------------------------- */
+
+// showViewerWindow 打开（或提到前台）预览窗口：预览是一扇独立窗口，不占
+// 详情、发帖这些窗口的位置，可以拖到一边或最小化。只在 UI 线程调用；无头
+// 测试没有窗口，只准备状态，测试直接渲染 imageViewerWindowView。
+func (a *app) showViewerWindow() {
+	if a.win == nil {
+		return
+	}
+	v := a.viewer
+	if v == nil || !v.open {
+		return
+	}
+	if win := a.viewerWin; win != nil {
+		if win.IsMinimized() {
+			win.Restore()
+		}
+		win.Show()
+		win.Focus()
+		win.Invalidate()
+		return
+	}
+	win := mygo.NewWindow(mygo.WindowOptions{
+		Title:             a.subWindowTitle(imageViewerLabel),
+		Width:             imageViewerWindowWidth,
+		Height:            imageViewerWindowHeight,
+		MinWidth:          imageViewerWindowMinW,
+		MinHeight:         imageViewerWindowMinH,
+		StateKey:          "image-viewer",
+		BackgroundColor:   "#101012",
+		TitleBarStyle:     mygo.TitleBarHidden, // 工具条兼作标题栏，见 imageViewerToolbar
+		HideWindowButtons: true,
+		Content:           ui.View(a.imageViewerWindowView),
+	})
+	a.viewerWin = win
+	win.OnClosed(func() {
+		a.viewerWin = nil
+		if v := a.viewer; v != nil {
+			v.close()
+		}
+	})
+}
+
+// closeViewerWindow 关掉预览窗口：状态由调用方先收，用户从系统那里关掉窗口
+// （Alt+F4、任务栏）时由 OnClosed 收尾。
+func (a *app) closeViewerWindow() {
+	win := a.viewerWin
+	a.viewerWin = nil
+	if win != nil {
+		win.Close()
+	}
+}
+
+// redrawViewerWindow 让预览窗口按最新状态重建。窗口没开时什么都不做。
+func (a *app) redrawViewerWindow() {
+	if win := a.viewerWin; win != nil {
+		win.Invalidate()
+	}
+}
+
+// imageViewerWindowView 是预览窗口的 view：整扇窗口就是预览，顶部工具条兼作
+// 标题栏（可拖动窗口，右侧最小化与关闭），底部一行操作提示。
+func (a *app) imageViewerWindowView(c *ui.Context) {
+	a.applyTheme(c)
+	a.srv = c.Services()
+	c.Root().Background(ui.Hex("#101012"))
+	a.drainToasts(c, a.claimsToasts(toastViewer))
+	a.imageViewer(c)
 }
 
 /* ------------------------------------------------------------------
@@ -146,7 +236,8 @@ func (a *app) wantImageGroup(pictures []articlePicture, dest string) {
 }
 
 // openImage 打开 group 并停在 key 那张图上（匹配见 viewerKey）。点击发生在
-// 正文、评论还是窗口里都一样：组由调用方按源文认好，状态只在这里维护。
+// 正文、评论还是窗口里都一样：组由调用方按源文认好，状态只在这里维护；
+// 预览窗口没开就开一扇，已经开着就把它提到前台。
 func (a *app) openImage(group imageViewerGroup, key string) {
 	v := a.viewer
 	if v == nil || len(group.Items) == 0 {
@@ -156,6 +247,7 @@ func (a *app) openImage(group imageViewerGroup, key string) {
 	if v.open && v.group.same(group) {
 		if cur, ok := v.current(); ok && viewerKey(cur) == strings.TrimSpace(key) {
 			v.want = nil
+			a.publish(a.showViewerWindow)
 			return
 		}
 	}
@@ -163,13 +255,15 @@ func (a *app) openImage(group imageViewerGroup, key string) {
 	v.group = group
 	v.index = viewerIndexOf(group.Items, key)
 	v.zoom = 0
+	v.panX, v.panY = 0, 0
+	v.dragging, v.imagePress = false, false
 	v.clearNote()
 	v.want = nil
-	a.invalidateViewerWindows()
+	a.publish(a.showViewerWindow)
 }
 
 // wantImage 记下「点了这张图，但它还在加载」：图片到位后的下一次重建补开
-// 弹窗（见 viewerTick）。
+// 预览窗口（见 viewerTick）。
 func (a *app) wantImage(group imageViewerGroup, key string) {
 	v := a.viewer
 	if v == nil || len(group.Items) == 0 {
@@ -178,9 +272,9 @@ func (a *app) wantImage(group imageViewerGroup, key string) {
 	v.want = &imageViewerWant{url: strings.TrimSpace(key), group: group}
 }
 
-// viewerTick 在图片到位后补开弹窗：点了的那张已经解出来，就打开它所在的组
-// 并停在它上面；失败则忘掉这次点击，不弹一个加载不出来的空窗。每帧构建末尾
-// 调用（见 imageViewer）。
+// viewerTick 在图片到位后补开预览：点了的那张已经解出来，就打开它所在的组
+// 并停在它上面；失败则忘掉这次点击，不开一扇加载不出来的空窗。来源窗口
+// （详情、发帖、编辑、写评论）每帧构建时调用（见 dialogs 与各窗口 view）。
 func (a *app) viewerTick() {
 	v := a.viewer
 	if v == nil || v.want == nil {
@@ -197,13 +291,15 @@ func (a *app) viewerTick() {
 }
 
 // step 翻到上 / 下一张：到头就停住，不绕回另一头，连按方向键不会突然跳回
-// 第一张。换页后缩放回到「刚好放下」。
+// 第一张。换页后缩放回到「刚好放下」，平移也归零。
 func (v *imageViewer) step(delta int) {
 	if !v.canStep(delta) {
 		return
 	}
 	v.index += delta
 	v.zoom = 0
+	v.panX, v.panY = 0, 0
+	v.dragging, v.imagePress = false, false
 	v.clearNote()
 }
 
@@ -221,23 +317,26 @@ func (v *imageViewer) canStep(delta int) bool {
 	return next >= 0 && next < len(v.group.Items)
 }
 
-// close 关掉弹窗：缩放、结果说明、菜单与待打开的图都清掉。
+// close 关掉预览状态：缩放、平移、结果说明、菜单与待打开的图都清掉。
 func (v *imageViewer) close() {
 	v.open = false
 	v.zoom = 0
+	v.panX, v.panY = 0, 0
+	v.dragging, v.imagePress = false, false
 	v.clearNote()
 	v.want = nil
 	v.menuOpen = false
 }
 
-// startViewerClose 是「关闭」这个动作的统一入口：弹窗自己的按钮、右键菜单
-// 与 Esc 都走它，关掉之后重画一次，让遮罩立刻消失。
+// startViewerClose 是「关闭」这个动作的统一入口：窗口里的按钮、右键菜单与
+// Esc 都走它，收掉状态再把那扇独立窗口关掉。关窗口排到下一轮主线程更新里：
+// 这些操作有的发生在构建期（底层的点击 / Esc 查询），不能在自己的帧里销毁
+// 自己的窗口。
 func (a *app) startViewerClose() {
-	if a.viewer == nil {
-		return
+	if v := a.viewer; v != nil {
+		v.close()
 	}
-	a.viewer.close()
-	a.invalidateViewerWindows()
+	a.publish(a.closeViewerWindow)
 }
 
 /* ------------------------------------------------------------------
@@ -262,18 +361,44 @@ func zoomBy(zoom, fit, factor float32) float32 {
 	return min(max(zoom*factor, imageViewerMinZoom), imageViewerMaxZoom)
 }
 
-// imageBounds 返回图片在窗口里的位置，按窗口尺寸、布局与缩放算：舞台在工具条
-// 与说明之间居中，图片在舞台里居中。绘制按它摆图，右键菜单按它判断命中。
-func imageBounds(lay viewerLayout, iw, ih, zoom float32) ui.Rect {
+// viewerPanLimit 返回某个方向上能平移的最远距离：图片比舞台大多少，就最多
+// 挪多少，图片边缘正好贴住舞台边缘；图片没超出舞台时不许挪，免得拖出空边。
+func viewerPanLimit(size, stage float32) float32 {
+	return max((size-stage)/2, 0)
+}
+
+// clampPan 把平移夹在 ±limit 之间。
+func clampPan(v, limit float32) float32 {
+	return min(max(v, -limit), limit)
+}
+
+// viewerPan 把平移夹进当前图片与舞台允许的范围。
+func viewerPan(panX, panY, iw, ih, zoom float32, lay viewerLayout) (float32, float32) {
+	w, h := iw*zoom, ih*zoom
+	return clampPan(panX, viewerPanLimit(w, lay.stageW)),
+		clampPan(panY, viewerPanLimit(h, lay.stageH))
+}
+
+// imageBounds 返回图片在窗口里的位置，按窗口尺寸、布局、缩放与平移算：舞台
+// 在工具条与说明之间居中，图片在舞台里居中后按 panX / panY 挪动。绘制按它
+// 摆图，右键菜单与拖动命中都按它判断。
+func imageBounds(lay viewerLayout, iw, ih, zoom, panX, panY float32) ui.Rect {
+	panX, panY = viewerPan(panX, panY, iw, ih, zoom, lay)
 	w, h := iw*zoom, ih*zoom
 	stageY := lay.toolbarH
 	stageH := lay.h - lay.toolbarH - lay.footerH
-	return ui.Rect{X: (lay.w - w) / 2, Y: stageY + (stageH-h)/2, W: w, H: h}
+	return ui.Rect{X: (lay.w-w)/2 + panX, Y: stageY + (stageH-h)/2 + panY, W: w, H: h}
 }
 
 // overImage 报告窗口里的 (x, y) 是否落在当前图片上。
 func (v *imageViewer) overImage(lay viewerLayout, iw, ih, zoom float32) bool {
-	return imageBounds(lay, iw, ih, zoom).Contains(v.pointerX, v.pointerY)
+	return imageBounds(lay, iw, ih, zoom, v.panX, v.panY).Contains(v.pointerX, v.pointerY)
+}
+
+// dragBy 把这一次指针移动加到平移上，并立刻夹进允许的范围：拖到边就停住，
+// 继续拖也不会把图拖出舞台。
+func (v *imageViewer) dragBy(dx, dy float32, lay viewerLayout, iw, ih, zoom float32) {
+	v.panX, v.panY = viewerPan(v.panX+dx, v.panY+dy, iw, ih, zoom, lay)
 }
 
 /* ------------------------------------------------------------------
@@ -299,24 +424,24 @@ func viewerIndexOf(items []articlePicture, key string) int {
    界面
 --------------------------------------------------------------- */
 
-// imageViewer 画出多图预览弹窗。每个可能显示它的窗口在 view 末尾调用它，
-// 所以详情页、评论视图与各个独立窗口里都能弹出来；没有打开时什么都不画。
+// imageViewer 画出预览窗口的全部内容（见 imageViewerWindowView）；没有打开时
+// 什么都不画。
 //
-// 版式：铺满整扇窗口的半透明遮罩（点空白处关闭，和授权弹窗一样），顶部一条
-// 工具条（第几张 / 共几张、翻页、缩放、另存为、关闭），中间是舞台里居中的
-// 图片，底部一行说明。图片按 zoom 缩放后整体居中；放大到超出窗口时滚轮只
-// 缩放不滚动，看局部靠缩放。
+// 版式：铺满整扇窗口的半透明底（点空白处关闭），顶部一条工具条（第几张 /
+// 共几张、翻页、缩放、另存为、最小化、关闭），中间是舞台里居中的图片，底部
+// 一行说明。工具条同时是这扇窗口的自绘标题栏：空白处按住可以拖动窗口，右侧
+// 是最小化与关闭。图片按 zoom 缩放后整体居中；放大到超出舞台时按住左键可以
+// 拖动图片看局部，拖到边就停住，不会拖出空边。
 //
 // 输入：
-//   - 滚轮与右键由遮罩的 HandleInput 处理：滚轮只缩放，不再滚动背后的正文与
-//     评论列表；右键落在图上时弹系统菜单（里面有「另存为」），位置记下来
-//     （见 viewerInput）。
+//   - 滚轮、左键拖动与右键由底层的 HandleInput 处理：滚轮只缩放；左键落在图上
+//     按住就能平移，松手时不算「点了空白处」；右键落在图上时弹系统菜单（里面
+//     有「另存为」），位置记下来（见 viewerInput）。
 //   - 方向键 / PageUp / PageDown 翻页，加减号缩放，0 还原成原尺寸，
-//     Ctrl+S（macOS 上 ⌘S）另存为。这些键登记在一个铺满遮罩、透传指针的透明
-//     层上（见 viewerKeyLayer）：焦点落在页面里时也归弹窗，而工具条按钮照常
+//     Ctrl+S（macOS 上 ⌘S）另存为。这些键登记在一个铺满窗口、透传指针的透明
+//     层上（见 viewerKeyLayer）：焦点落在页面里时也归预览，而工具条按钮照常
 //     可点。
-//   - Esc 交给遮罩的 OverlayShortcut，只关弹窗；弹窗开着时另外给窗口的 Esc
-//     放一个空动作，免得它落到详情页的「Esc 关闭」上。
+//   - Esc 交给底层的 OverlayShortcut，关掉这扇预览窗口。
 func (a *app) imageViewer(c *ui.Context) {
 	a.viewerTick()
 	v := a.viewer
@@ -331,7 +456,7 @@ func (a *app) imageViewer(c *ui.Context) {
 	src, iw, ih := a.viewerImage(p.URL)
 	if iw <= 0 || ih <= 0 {
 		// 尺寸还不知道（原图还没到）：先按 1×1 占着，图片到位后的下一帧
-		// 弹窗会自己换成清楚的（见 viewerImage）。
+		// 窗口会自己换成清楚的（见 viewerImage）。
 		iw, ih = 1, 1
 	}
 	w, h := c.Size()
@@ -341,6 +466,8 @@ func (a *app) imageViewer(c *ui.Context) {
 	if zoom <= 0 {
 		zoom = fit
 	}
+	// 平移夹进当前缩放允许的范围：缩小之后原来的平移可能已经越界。
+	v.panX, v.panY = viewerPan(v.panX, v.panY, iw, ih, zoom, lay)
 
 	back := ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).
 		Background(ui.RGBA(0, 0, 0, 0.72)).Role(ui.RoleDialog).Label(imageViewerLabel)
@@ -359,36 +486,43 @@ func (a *app) imageViewer(c *ui.Context) {
 	if v.menuOpen {
 		a.imageViewerMenu(c, v, p)
 	}
-	// 键盘焦点留在弹窗里：点「下一张」这类按钮后，焦点不该掉回页面的正文，
-	// 方向键与加号减号才有地方使。每帧重新聚焦，弹窗重建也不会丢。
+	// 键盘焦点留在窗口里：点「下一张」这类按钮后，焦点不该掉回页面的正文，
+	// 方向键与加号减号才有地方使。每帧重新聚焦，窗口重建也不会丢。
 	v.keys.Focus(c)
-	// 指针到遮罩：滚轮在这里缩放，右键在这里记下位置（见 viewerInput）。
+	// 指针到底层：滚轮在这里缩放，右键在这里记下位置（见 viewerInput）。
 	back.HandleInput(func(ev ui.InputEvent) bool {
 		return a.viewerInput(v, p, lay, iw, ih, zoom, fit, ev)
 	})
-	// 弹窗开着时给窗口的 Esc 放一个空动作：有它，Esc 才归遮罩的 OverlayShortcut
-	// （见下），不会同时触发详情页的「Esc 关闭」。
-	c.OnShortcut(0, ui.KeyEscape, func() {})
-	// Esc 只关弹窗，点遮罩的空白处也一样。
-	if back.OverlayShortcut(0, ui.KeyEscape) || back.Clicked() {
-		v.close()
+	// 底层收到的点击若是按在图上那一下的收尾（拖动或单击），只结束手势，不
+	// 当成点空白处；真正点在舞台的空白处才关闭。工具条是窗口拖动区，底部
+	// 说明行点一下也不该误关整扇窗口。
+	clicked := back.Clicked()
+	if clicked && v.imagePress {
+		clicked, v.imagePress = false, false
+	}
+	if clicked && (v.pointerY < lay.toolbarH || v.pointerY > lay.h-lay.footerH) {
+		clicked = false
+	}
+	// Esc 与点舞台空白处都关掉这扇预览窗口。
+	if back.OverlayShortcut(0, ui.KeyEscape) || clicked {
+		a.startViewerClose()
 	}
 }
 
-// viewerKeyLayer 是弹窗里承载快捷键的一层：它先画、铺满整个弹窗，不画东西、
-// 指针透传（PassThrough），所以点击与悬停照常落到随后画的工具条与图片上。
+// viewerKeyLayer 是预览窗口里承载快捷键的一层：它先画、铺满整扇窗口，不画
+// 东西、指针透传（PassThrough），所以点击与悬停照常落到随后画的工具条与图片上。
 //
-// 为什么不用遮罩自己的 HandleInput：HandleInput 只把键交给有焦点的元素和它周围
-// 的元素；OnShortcut 则随「焦点与它周围的元素都没吃掉这个键」生效，弹窗开着时
-// 这些键自然归它。这一层还被 Bind 成弹窗的持久身份，每帧由弹窗把焦点放在它
-// 身上（见 imageViewer），焦点不会掉回页面的正文。
+// 为什么不用底层的 HandleInput：HandleInput 只把键交给有焦点的元素和它周围的
+// 元素；OnShortcut 则随「焦点与它周围的元素都没吃掉这个键」生效，预览开着时
+// 这些键自然归它。这一层还被 Bind 成预览的持久身份，每帧由预览把焦点放在它
+// 身上（见 imageViewer），焦点不会掉到其它控件上。
 func (a *app) viewerKeyLayer(c *ui.Context, v *imageViewer, fit float32) {
 	keys := ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).Center().
 		Background(ui.Transparent).PassThrough()
 	step := func(d int) func() {
 		return func() {
 			v.step(d)
-			a.invalidateViewerWindows()
+			a.redrawViewerWindow()
 		}
 	}
 	zoomStep := func(factor float32) func() {
@@ -398,7 +532,7 @@ func (a *app) viewerKeyLayer(c *ui.Context, v *imageViewer, fit float32) {
 				z = fit
 			}
 			v.zoom = zoomBy(z, fit, factor)
-			a.invalidateViewerWindows()
+			a.redrawViewerWindow()
 		}
 	}
 	keys.OnShortcut(0, ui.KeyLeft, step(-1))
@@ -411,7 +545,7 @@ func (a *app) viewerKeyLayer(c *ui.Context, v *imageViewer, fit float32) {
 	keys.OnShortcut(0, ui.KeyMinus, zoomStep(1/imageViewerKeyZoom))
 	keys.OnShortcut(0, ui.Key0, func() {
 		v.zoom = 1
-		a.invalidateViewerWindows()
+		a.redrawViewerWindow()
 	})
 	keys.OnShortcut(ui.Cmd, ui.KeyS, func() {
 		if p, ok := v.current(); ok {
@@ -439,15 +573,17 @@ func (a *app) imageViewerMenu(c *ui.Context, v *imageViewer, p articlePicture) {
 	})
 }
 
-// viewerInput 处理弹窗里的滚轮、触控板缩放与指针，返回是否吃掉了这个事件。
+// viewerInput 处理窗口里的滚轮、触控板缩放与指针，返回是否吃掉了这个事件。
 // 键盘见 viewerKeyLayer。
 //
-// 指针只记下位置：遮罩是最上层，落点本就到不了背后，但右键要按位置判断是不是
-// 落在图上（见 overImage），记下来的位置留着给下一帧判断。
+// 左键按在图上就开始拖动：吃掉这次按下，之后的移动只平移图片，松手时遮罩收到
+// 的那一下点击也由 imagePress 认领，不会把窗口关掉。按在图上但没拖动就是一次
+// 普通单击，同样不关窗口；点空白处才关（见 imageViewer）。右键按位置判断是不是
+// 落在图上，记下来的位置留给下一帧弹菜单。
 func (a *app) viewerInput(v *imageViewer, p articlePicture, lay viewerLayout, iw, ih, zoom, fit float32, ev ui.InputEvent) bool {
 	switch ev.Kind {
 	case ui.InputScroll:
-		// 滚轮：向上放大、向下缩小。弹窗开着时滚轮只缩放，不再滚动背后的正文
+		// 滚轮：向上放大、向下缩小。窗口开着时滚轮只缩放，不再滚动背后的正文
 		// 或评论列表。
 		switch {
 		case ev.DY < 0:
@@ -457,7 +593,7 @@ func (a *app) viewerInput(v *imageViewer, p articlePicture, lay viewerLayout, iw
 		default:
 			return false
 		}
-		a.invalidateViewerWindows()
+		a.redrawViewerWindow()
 		return true
 	case ui.InputZoom:
 		// 触控板的双指缩放：按它给的比例缩放。
@@ -465,12 +601,15 @@ func (a *app) viewerInput(v *imageViewer, p articlePicture, lay viewerLayout, iw
 			return false
 		}
 		v.zoom = zoomBy(zoom, fit, ev.Scale)
-		a.invalidateViewerWindows()
+		a.redrawViewerWindow()
 		return true
-	case ui.InputPointerMove, ui.InputPointerDown:
+	case ui.InputPointerDown:
 		v.pointerX, v.pointerY = ev.X, ev.Y
-		if ev.Kind != ui.InputPointerDown {
-			return false
+		// 每一次按下都重新认领点击：这一次落在图上，松手就不算点空白。
+		v.imagePress = false
+		if ev.Button == 0 && v.overImage(lay, iw, ih, zoom) {
+			v.dragging, v.imagePress = true, true
+			return true
 		}
 		// 右键（有的鼠标把副键报成中键）落在图上时弹菜单：位置先记下，菜单
 		// 在下一帧按它弹出。之前那次移动可能没落到遮罩上（比如点开图片那
@@ -481,12 +620,34 @@ func (a *app) viewerInput(v *imageViewer, p articlePicture, lay viewerLayout, iw
 		case !v.overImage(lay, iw, ih, zoom):
 			v.menuOpen = false
 		}
+	case ui.InputPointerMove:
+		prevX, prevY := v.pointerX, v.pointerY
+		v.pointerX, v.pointerY = ev.X, ev.Y
+		if !v.dragging {
+			return false
+		}
+		if ev.Button != 0 {
+			// 按着的那颗键已经换了：拖动结束，别再跟着指针跑。
+			v.dragging = false
+			return false
+		}
+		v.dragBy(ev.X-prevX, ev.Y-prevY, lay, iw, ih, zoom)
+		a.redrawViewerWindow()
+		return true
+	case ui.InputPointerUp:
+		v.pointerX, v.pointerY = ev.X, ev.Y
+		if !v.dragging {
+			return false
+		}
+		v.dragging = false
+		return true
 	}
 	return false
 }
 
-// imageViewerToolbar 是弹窗顶部的工具条：左边说明这是第几张、共几张与当前
-// 缩放，右边是翻页、缩放、另存为与关闭。按钮都是图标 + tooltip。
+// imageViewerToolbar 是预览窗口顶部的工具条：左边说明这是第几张、共几张与
+// 当前缩放，右边是翻页、缩放、另存为、最小化与关闭。按钮都是图标 + tooltip。
+// 工具条同时兼作自绘标题栏：空白处可以拖动窗口（双击最大化 / 还原）。
 func (a *app) imageViewerToolbar(c *ui.Context, v *imageViewer, lay viewerLayout, zoom, fit float32) {
 	t := c.Theme()
 	total := len(v.group.Items)
@@ -496,32 +657,40 @@ func (a *app) imageViewerToolbar(c *ui.Context, v *imageViewer, lay viewerLayout
 	ui.Row(c).FillWidth().Height(lay.toolbarH).Shrink(0).
 		Padding(0, 18).Gap(8).AlignItems(ui.Center).
 		Background(t.Surface.Alpha(0.96)).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).
-		Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-				// 显示与读屏用同一句话：「第 2 / 3 张 · 100%」。
-				ui.Text(c, fmt.Sprintf("第 %d / %d 张 · %s", v.index+1, total, viewerPercent(zoom))).
-					FontSize(11).TextColor(t.TextMuted).SingleLine()
-			})
-			a.viewerButton(c, prevImageIcon, imageViewerPrev, "看上一张（←）", !v.canStep(-1), func() { v.step(-1) })
-			a.viewerButton(c, nextImageIcon, imageViewerNext, "看下一张（→）", !v.canStep(1), func() { v.step(1) })
-			ui.Box(c).Width(1).Height(18).Background(t.Border).Shrink(0)
-			a.viewerButton(c, zoomOutIcon, imageViewerZoomOut, "缩小（− 键或滚轮向下）", zoom <= imageViewerMinZoom, func() {
-				v.zoom = zoomBy(zoom, fit, 1/imageViewerKeyZoom)
-			})
-			a.viewerButton(c, zoomInIcon, imageViewerZoomIn, "放大（+ 键或滚轮向上）", zoom >= imageViewerMaxZoom, func() {
-				v.zoom = zoomBy(zoom, fit, imageViewerKeyZoom)
-			})
-			a.viewerButton(c, actualSizeIcon, imageViewerActual, "还原成完整显示（0 键）", false, func() {
-				v.zoom = 0
-			})
-			a.viewerButton(c, saveImageIcon, imageViewerSave, "把这张图另存为文件", saving, func() {
-				if cur, ok := v.current(); ok {
-					a.saveImage(cur.URL)
-				}
-			})
-			ui.Box(c).Width(1).Height(18).Background(t.Border).Shrink(0)
-			a.viewerButton(c, closeIcon, imageViewerClose, "关闭预览（Esc）", false, a.startViewerClose)
+		DragWindow().Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+			// 显示与读屏用同一句话：「第 2 / 3 张 · 100%」。
+			ui.Text(c, fmt.Sprintf("第 %d / %d 张 · %s", v.index+1, total, viewerPercent(zoom))).
+				FontSize(11).TextColor(t.TextMuted).SingleLine()
 		})
+		a.viewerButton(c, prevImageIcon, imageViewerPrev, "看上一张（←）", !v.canStep(-1), func() { v.step(-1) })
+		a.viewerButton(c, nextImageIcon, imageViewerNext, "看下一张（→）", !v.canStep(1), func() { v.step(1) })
+		ui.Box(c).Width(1).Height(18).Background(t.Border).Shrink(0)
+		a.viewerButton(c, zoomOutIcon, imageViewerZoomOut, "缩小（− 键或滚轮向下）", zoom <= imageViewerMinZoom, func() {
+			v.zoom = zoomBy(zoom, fit, 1/imageViewerKeyZoom)
+		})
+		a.viewerButton(c, zoomInIcon, imageViewerZoomIn, "放大（+ 键或滚轮向上）", zoom >= imageViewerMaxZoom, func() {
+			v.zoom = zoomBy(zoom, fit, imageViewerKeyZoom)
+		})
+		a.viewerButton(c, actualSizeIcon, imageViewerActual, "还原成完整显示（0 键）", false, func() {
+			v.zoom = 0
+		})
+		a.viewerButton(c, saveImageIcon, imageViewerSave, "把这张图另存为文件", saving, func() {
+			if cur, ok := v.current(); ok {
+				a.saveImage(cur.URL)
+			}
+		})
+		ui.Box(c).Width(1).Height(18).Background(t.Border).Shrink(0)
+		a.viewerButton(c, minimizeIcon, imageViewerMinimize, "把预览窗口最小化", false, a.minimizeViewerWindow)
+		a.viewerButton(c, closeIcon, imageViewerClose, "关闭预览（Esc）", false, a.startViewerClose)
+	})
+}
+
+// minimizeViewerWindow 最小化预览窗口：从任务栏或 Alt+Tab 可以再还原回来。
+func (a *app) minimizeViewerWindow() {
+	if win := a.viewerWin; win != nil {
+		win.Minimize()
+	}
 }
 
 // viewerButton 是工具条上的一枚图标按钮：悬停给浅底，禁用时变淡。label 供
@@ -548,8 +717,9 @@ func (a *app) viewerButton(c *ui.Context, icon *ui.SVG, label, tip string, disab
 	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
 
-// imageViewerStage 是图片舞台：铺满工具条与底栏之间，图片按 zoom 缩放后居中。
-// 放大到超出舞台时仍居中显示，四周被裁掉（看局部靠缩放，不拖拽）。
+// imageViewerStage 是图片舞台：铺满工具条与底栏之间，图片按 zoom 缩放后居中，
+// 再按 panX / panY 平移。放大到超出舞台时四周被裁掉，按住左键拖动可以挪着看；
+// 指针停在图上时给出抓手光标，拖动中换成抓紧的样子。
 func (a *app) imageViewerStage(c *ui.Context, v *imageViewer, p articlePicture, src ui.ImageSource, iw, ih float32, lay viewerLayout, zoom float32) {
 	t := c.Theme()
 	stage := ui.Box(c).Grow(1).FillWidth().MinHeight(0).Center().Clip()
@@ -561,16 +731,25 @@ func (a *app) imageViewerStage(c *ui.Context, v *imageViewer, p articlePicture, 
 			})
 			return
 		}
-		b := imageBounds(lay, iw, ih, zoom)
+		px, py := viewerPan(v.panX, v.panY, iw, ih, zoom, lay)
+		b := imageBounds(lay, iw, ih, zoom, px, py)
 		w, h := b.W, b.H
 		if w <= 0 || h <= 0 {
 			return
 		}
-		ui.Image(c, src).Size(w, h).Fit(ui.FillBox).Label(p.Alt).Tooltip(p.Alt)
+		img := ui.Image(c, src).Size(w, h).Fit(ui.FillBox).Translate(px, py).
+			Label(p.Alt).Tooltip(p.Alt)
+		if viewerPanLimit(w, lay.stageW) > 0 || viewerPanLimit(h, lay.stageH) > 0 {
+			if v.dragging {
+				img.Cursor(ui.CursorGrabbing)
+			} else {
+				img.Cursor(ui.CursorGrab)
+			}
+		}
 	})
 }
 
-// imageViewerFooter 是弹窗底部的一行：上一次另存为的结果（成功给出文件名，
+// imageViewerFooter 是窗口底部的一行：上一次另存为的结果（成功给出文件名，
 // 失败给出原因；到点自己撤掉），以及常用的操作提示。
 //
 // 要显示的状态先一次读出来（经锁），再进 Children 建元素。
@@ -598,7 +777,7 @@ func viewerPercent(z float32) string {
 	return fmt.Sprintf("%d%%", int(float32(0.5)+z*100))
 }
 
-// viewerLayout 是弹窗里各块的位置与尺寸（窗口 DIP）。绘制与测试共用同一套
+// viewerLayout 是窗口里各块的位置与尺寸（窗口 DIP）。绘制与测试共用同一套
 // 数：工具条在上、说明在下，中间全部留给舞台。
 type viewerLayout struct {
 	w, h     float32
@@ -608,7 +787,7 @@ type viewerLayout struct {
 	footerH  float32
 }
 
-// viewerLayoutFor 按窗口尺寸算出弹窗布局。窗口很矮时工具条与底栏各让出四分
+// viewerLayoutFor 按窗口尺寸算出窗口布局。窗口很矮时工具条与底栏各让出四分
 // 之一，舞台至少留 1 DIP，不会算出负数。
 func viewerLayoutFor(w, h float32) viewerLayout {
 	toolbar := min(imageViewerToolbarH, h/4)
@@ -625,7 +804,7 @@ func viewerLayoutFor(w, h float32) viewerLayout {
 // viewerImage 取一张预览图的图片源与尺寸。预览要放大到好几倍，所以先从磁盘
 // 缓存的原图按「预览档」重新解码一次（见 imageCacheViewer），比正文里那张按
 // 1600 像素上限缩小过的图清楚；缓存里还没有它时退回正文那一份，同时把原图
-// 下载下来，到位后弹窗自己换成清楚的。
+// 下载下来，到位后窗口自己换成清楚的。
 func (a *app) viewerImage(raw string) (ui.ImageSource, float32, float32) {
 	raw = strings.TrimSpace(raw)
 	if src := a.images.source(viewerCacheKey(raw)); src != nil {
@@ -640,7 +819,7 @@ func (a *app) viewerImage(raw string) (ui.ImageSource, float32, float32) {
 		}
 	}
 	// 原图不在本地：先显示正文那份（可能还没有），同时把原图取下来，到位后
-	// 弹窗自己换成清楚的（见 loadViewerImage）。
+	// 窗口自己换成清楚的（见 loadViewerImage）。
 	a.loadViewerImage(raw)
 	src := a.articleImage(raw, imageCacheTemporary)
 	w, h := ui.ImageSize(src)
@@ -670,7 +849,7 @@ func (a *app) loadViewerImage(raw string) {
 			var err error
 			if data, err = a.fetchImage(raw); err != nil {
 				e.set(nil)
-				a.publish(func() { a.invalidateViewerWindows() })
+				a.publish(func() { a.redrawViewerWindow() })
 				return
 			}
 			if err := a.images.writeDisk(raw, imageCacheViewer, gen, data); err != nil {
@@ -680,11 +859,11 @@ func (a *app) loadViewerImage(raw string) {
 		src, err := decodeImageData(raw, imageCacheViewer, data)
 		if err != nil {
 			e.set(nil)
-			a.publish(func() { a.invalidateViewerWindows() })
+			a.publish(func() { a.redrawViewerWindow() })
 			return
 		}
 		e.set(src)
-		a.publish(func() { a.invalidateViewerWindows() })
+		a.publish(func() { a.redrawViewerWindow() })
 	}()
 }
 
@@ -700,7 +879,7 @@ func viewerCacheKey(raw string) string {
 
 // saveImage 把一张配图原样另存为文件：先弹系统「另存为」对话框问路径，再把
 // 图取下来写进去（图片缓存在磁盘上有就直接用，没有就下载一份，同样走配置的
-// 代理）。整个过程在后台，不挡界面；结果用 toast 报告，并在弹窗底部留一句
+// 代理）。整个过程在后台，不挡界面；结果用 toast 报告，并在窗口底部留一句
 // 说明。
 func (a *app) saveImage(raw string) {
 	v := a.viewer
@@ -709,7 +888,7 @@ func (a *app) saveImage(raw string) {
 		return
 	}
 	if _, err := parseImageURL(raw); err != nil {
-		a.toast(toastMain, "这张图的地址不能另存："+err.Error())
+		a.toast(toastViewer, "这张图的地址不能另存："+err.Error())
 		return
 	}
 	v.savingMu.Lock()
@@ -724,7 +903,7 @@ func (a *app) saveImage(raw string) {
 	}
 	done := make(chan struct{})
 	v.savingDone = done
-	a.invalidateViewerWindows()
+	a.redrawViewerWindow()
 	go func() {
 		path, err := a.saveImageTo(raw)
 		a.publish(func() {
@@ -752,7 +931,7 @@ func (a *app) saveImageTo(raw string) (string, error) {
 	return path, nil
 }
 
-// viewerSaved 报告一次另存为的结果：成功与失败都用 toast，并在弹窗底部留一句
+// viewerSaved 报告一次另存为的结果：成功与失败都用 toast，并在窗口底部留一句
 // 说明。路径为空表示用户取消，不提示。只在主线程调用。
 func (a *app) viewerSaved(path string, err error) {
 	v := a.viewer
@@ -768,7 +947,7 @@ func (a *app) viewerSaved(path string, err error) {
 			v.saving = ""
 			v.savingMu.Unlock()
 		}
-		a.invalidateViewerWindows()
+		a.redrawViewerWindow()
 		return
 	}
 	if v != nil {
@@ -778,9 +957,9 @@ func (a *app) viewerSaved(path string, err error) {
 		v.noteAt = nowTime()
 		v.savingMu.Unlock()
 	}
-	a.toast(toastMain, text)
+	a.toast(toastViewer, text)
 	a.scheduleViewerNoteExpiry()
-	a.invalidateViewerWindows()
+	a.redrawViewerWindow()
 }
 
 // viewerSaveState 在锁里取出另存为的显示状态：是否正在保存、要显示的结果说明
@@ -797,7 +976,7 @@ func (v *imageViewer) viewerSaveState() (saving bool, note string) {
 	return false, v.savedNote
 }
 
-// clearNote 收掉上一次的另存为说明：换页、重开或关闭弹窗时调用。
+// clearNote 收掉上一次的另存为说明：换页、重开或关闭窗口时调用。
 func (v *imageViewer) clearNote() {
 	v.savingMu.Lock()
 	v.savedNote = ""
@@ -813,7 +992,7 @@ func (v *imageViewer) viewerNoteShown() bool {
 }
 
 // scheduleViewerNoteExpiry 在结果说明出现后隔一会儿重画一次，让「已另存为
-// …」到点自己撤掉。只在主线程调用；弹窗已经关了就不再排。
+// …」到点自己撤掉。只在主线程调用；窗口已经关了就不再排。
 func (a *app) scheduleViewerNoteExpiry() {
 	if a.viewerNoteTimer != nil {
 		a.viewerNoteTimer.Stop()
@@ -822,7 +1001,7 @@ func (a *app) scheduleViewerNoteExpiry() {
 		a.publish(func() {
 			a.viewerNoteTimer = nil
 			if v := a.viewer; v != nil && v.open && v.viewerNoteShown() {
-				a.invalidateViewerWindows()
+				a.redrawViewerWindow()
 			}
 		})
 	})
@@ -923,18 +1102,8 @@ func writeImageFile(path string, data []byte) error {
 }
 
 /* ------------------------------------------------------------------
-   分发：把弹窗挂到可能显示它的窗口
+   认组
 --------------------------------------------------------------- */
-
-// invalidateViewerWindows 让可能画着预览弹窗的窗口重画一次：主窗口（详情页的
-// 正文与评论）、发帖、编辑与独立写评论窗口的预览区都会画它。
-func (a *app) invalidateViewerWindows() {
-	for _, win := range []*mygo.Window{a.win, a.composeWin, a.editWin, a.replyWin} {
-		if win != nil {
-			win.Invalidate()
-		}
-	}
-}
 
 // picturesForDoc 返回这份解析结果里的全部配图（见 articlePictures）。Markdown
 // 视图逐块调用 Block，同一份文档会连着问很多次，所以记住「上一次问的那份」：

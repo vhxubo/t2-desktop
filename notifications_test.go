@@ -467,7 +467,7 @@ func TestMarkOneNotificationRead(t *testing.T) {
 	srv, calls := readRecorder(t)
 	a, st := notificationApp(t, srv)
 
-	waitNotificationsRead(t, a, func() { a.markNotificationRead("n1") })
+	waitNotificationsRead(t, a, func() { a.markNotificationRead(toastMain, "n1") })
 
 	if !st.items[0].Notif.IsRead {
 		t.Error("单条已读没有落到本地行")
@@ -486,7 +486,7 @@ func TestMarkLoadedNotificationsRead(t *testing.T) {
 	srv, calls := readRecorder(t)
 	a, st := notificationApp(t, srv)
 
-	ids := waitNotificationsRead(t, a, func() { a.markLoadedNotificationsRead() })
+	ids := waitNotificationsRead(t, a, func() { a.markLoadedNotificationsRead(toastMain) })
 	if len(ids) != 2 {
 		t.Fatalf("已读本页应提交 2 条：%v", ids)
 	}
@@ -510,7 +510,7 @@ func TestMarkReadRemovesFromUnreadFilter(t *testing.T) {
 	st.filter = notificationFilterUnread
 	st.total = 2
 
-	waitNotificationsRead(t, a, func() { a.markNotificationRead("n1") })
+	waitNotificationsRead(t, a, func() { a.markNotificationRead(toastMain, "n1") })
 
 	if len(st.items) != 2 {
 		t.Fatalf("未读筛选下应只剩 2 条：%d", len(st.items))
@@ -534,7 +534,7 @@ func TestMarkSelectedNotificationsRead(t *testing.T) {
 	if n := notificationSelectionCount(st); n != 2 {
 		t.Fatalf("可提交的勾选数 = %d，期望 2", n)
 	}
-	ids := waitNotificationsRead(t, a, func() { a.markSelectedNotificationsRead() })
+	ids := waitNotificationsRead(t, a, func() { a.markSelectedNotificationsRead(toastMain) })
 	if len(ids) != 2 || ids[0] != "n1" || ids[1] != "n3" {
 		t.Fatalf("勾选批量提交 = %v，期望 [n1 n3]", ids)
 	}
@@ -553,8 +553,8 @@ func TestMarkNotificationReadCoalesces(t *testing.T) {
 
 	done := make(chan struct{}, 1)
 	a.onNotificationsRead = func([]string) { done <- struct{}{} }
-	a.markNotificationRead("n1")
-	a.markNotificationRead("n1")
+	a.markNotificationRead(toastMain, "n1")
+	a.markNotificationRead(toastMain, "n1")
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
