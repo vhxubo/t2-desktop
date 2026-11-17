@@ -477,6 +477,13 @@ func TestImageViewerRightClickOffImageHasNoMenu(t *testing.T) {
 // 另存为失败（写不进目标目录）时说清原因，不假装成功。
 func TestImageViewerSaveAsFailureReports(t *testing.T) {
 	a := viewerDetailApp(t, 0)
+	// 原图先落进磁盘缓存：失败只来自「目标目录写不进去」。不落盘的话
+	// saveImageTo 会真的去下载 example.com 那张图，网络一慢就撞上
+	// waitViewerIdle 的 5 秒上限，和这里要验的写文件失败无关。
+	raw := solidPNG(t, 40, 30, marker)
+	if err := a.images.writeDisk(viewerPicPrefix+"p1.png", imageCacheTemporary, a.images.generation(), raw); err != nil {
+		t.Fatalf("写图片缓存失败：%v", err)
+	}
 	a.saveImagePathHook = func(string) (string, error) {
 		return filepath.Join(t.TempDir(), "没有这个目录", "x.png"), nil
 	}

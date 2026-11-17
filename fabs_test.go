@@ -124,6 +124,12 @@ func TestListFabRefreshReloads(t *testing.T) {
 	a.tabs[0].items = []Item{{Key: "old", Title: "旧内容"}}
 	a.tabs[0].loaded = true
 	a.tabs[0].total = 1
+	// 分页状态要写成「只有这一页」：首页列表有无限滚动，第一帧列表还没排过
+	// 版时 AtEnd 为真，若 noMore 还是 false 就会在构建期自发续拉第 2 页，
+	// 把「旧内容」换成本测试服务器的返回值，断言随之偶发失败。
+	a.tabs[0].page = 1
+	a.tabs[0].totalPages = 1
+	a.tabs[0].noMore = true
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 	if !tt.HasText("旧内容") {
