@@ -65,8 +65,8 @@ func (a *app) fabButton(c *ui.Context, icon *ui.SVG, label, tip string, loading 
 }
 
 // listFabs 是主页内容区右下角的一列悬浮按钮：发帖（主操作，强调色胶囊）、
-// 发动态、刷新，以及列表滚离顶部之后才出现的「返回顶部」。发帖固定在最下面，
-// 离手最近，其余往上排。
+// 发动态、评分榜、刷新，以及列表滚离顶部之后才出现的「返回顶部」。发帖固定
+// 在最下面，离手最近，其余往上排。
 func (a *app) listFabs(c *ui.Context) {
 	st := a.tabs[a.tab]
 	var buttons []func(*ui.Context)
@@ -84,6 +84,9 @@ func (a *app) listFabs(c *ui.Context) {
 			tip = "正在刷新…"
 		}
 		a.fabButton(c, refreshIcon, "刷新", tip, loading, a.reloadCurrent)
+	})
+	buttons = append(buttons, func(c *ui.Context) {
+		a.fabButton(c, scoresIcon, "评分榜", "看看帖子评分榜", false, a.showScores)
 	})
 	buttons = append(buttons, func(c *ui.Context) {
 		a.fabButton(c, commentBubbleIcon, "发动态", "写一条短动态（最多 500 字）", false, a.showMomentCompose)

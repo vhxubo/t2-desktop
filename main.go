@@ -384,6 +384,10 @@ type app struct {
 	onCoinsChanged func(event coinEvent)
 	// onNodesLoaded 是节点表刷新完成（成功或失败）后的测试钩子，原因同上。
 	onNodesLoaded func(err error)
+
+	// scores / scoresWin 是评分榜窗口的状态与窗口（见 scores_window.go）。
+	scores    *scoresState
+	scoresWin *mygo.Window
 }
 
 // tabID / tabFromID 把 tab 序号与侧边栏条目的 id 互相映射。

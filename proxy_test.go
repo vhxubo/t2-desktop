@@ -1453,3 +1453,52 @@ func TestCreateMomentUsesConfiguredProxy(t *testing.T) {
 		t.Errorf("幂等键 = %q", keys[0])
 	}
 }
+
+// 评分榜的分类字典与列表也是新读出口：必须经配置的代理。
+func TestScoresEndpointsUseConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var paths []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path+"?"+r.URL.RawQuery)
+		mu.Unlock()
+		if r.URL.Path == "/api/v1/scores/categories" {
+			_, _ = fmt.Fprint(w, envelopeJSON(scoreCategoriesJSON))
+			return
+		}
+		_, _ = fmt.Fprint(w, envelopeJSON(scoresJSON))
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		Proxy:  p,
+		Base:   "http://upstream.invalid/api",
+		bearer: func() string { return "tok" },
+	}
+	ctx := context.Background()
+	if _, err := c.fetchScoreCategories(ctx); err != nil {
+		t.Fatalf("经代理读评分分类失败：%v", err)
+	}
+	if _, err := c.fetchScores(ctx, "high", "动漫", 1); err != nil {
+		t.Fatalf("经代理读评分榜失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != 2 {
+		t.Fatalf("代理收到 %v", paths)
+	}
+	if paths[0] != "/api/v1/scores/categories?" {
+		t.Errorf("分类请求 = %s", paths[0])
+	}
+	if !strings.Contains(paths[1], "/api/v1/scores?") ||
+		!strings.Contains(paths[1], "sort=high") ||
+		!strings.Contains(paths[1], "category=%E5%8A%A8%E6%BC%AB") {
+		t.Errorf("评分请求 = %s", paths[1])
+	}
+}
