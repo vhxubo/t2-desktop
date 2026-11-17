@@ -188,7 +188,7 @@ a pure white page.
 | oauth.md | `auth.go`、`auth_ui.go`、`auth_gate.go` |
 | api-read.md | `api.go`（列表与解码）、`detail.go`、`profile.go`、`attributes.go`（六维属性）、`badges.go`（我的徽章墙与佩戴状态）、`user_card.go`（资料卡、个人介绍、他人徽章墙）、`notifications.go`（含 `keyword` 搜索）、`follows.go`（关注 / 粉丝名单、关注流未读数）、`collections.go`（公开合集、合集内帖子，浏览界面见 `collection_browse.go`）、`redeem_history.go`（我兑换过的兑换码，界面在金币窗口「兑换」页） |
 | api-write.md | `compose.go`、`vote.go`（投票与结果分布）、`detail.go`（发评论）、`edit.go`（编辑帖子 / 编辑评论 / 追加附言，界面在 `edit_window.go`）、`comments_status.go`（关闭 / 开启评论）、`follow.go`、`interact.go`、`bookmarks.go`（评论书签）、`collections.go`（新建合集 / 改名 / 删除 / 归入与移出） |
-| api-economy.md | `coins.go`、`coins_window.go`、`badges.go`（佩戴切换，scope `write:economy`）、`redeem.go`（兑换码领取，界面在详情页正文末尾）、`reward_pool.go`（金币池状态与注资，含评论领到的金币）、`image_hosts.go`（上传；官方图床只对 Pro 开放）、`image_hosts_adapters.go`（第三方图床协议：Imgur / Tikolu / MJJ.Today / ImgBB / Skyimg / 111666.best / StarDots，来自「通用图片上传助手」脚本） |
+| api-economy.md | `coins.go`、`coins_window.go`、`badges.go`（佩戴切换，scope `write:economy`）、`redeem.go`（兑换码领取，界面在详情页正文末尾）、`reward_pool.go`（金币池状态与注资，含评论领到的金币）、`avatar.go`（换头像 / 重置，界面在「我的」资料头）、`image_hosts.go`（上传；官方图床只对 Pro 开放）、`image_hosts_adapters.go`（第三方图床协议：Imgur / Tikolu / MJJ.Today / ImgBB / Skyimg / 111666.best / StarDots，来自「通用图片上传助手」脚本） |
 | 搜索（`/v1/search`） | `search.go`、`search_ui.go` |
 | 标签（`/v1/tags/hot`） | `tags.go`、`search_ui.go`（搜索空状态的热门标签） |
 | 节点（`/v1/nodes`） | `nodes.go`（请求、父子关系、本地缓存）、`compose.go`（两列选项）、`cascader.go`（级联选择组件） |

@@ -484,6 +484,18 @@ func (m *AuthManager) avatarURL() string {
 	return m.token.Avatar
 }
 
+// setAvatar 记下刚换好的头像地址并落盘。空串表示重置成默认头像。只改展示
+// 资料，不动令牌与 epoch：这不是一次会话变化，不需要触发重新授权。
+func (m *AuthManager) setAvatar(url string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.token == nil || m.token.Avatar == url {
+		return
+	}
+	m.token.Avatar = url
+	_ = m.store.save(m.token)
+}
+
 // Cancel drops the in-flight authorization when the user gives up on it, so a
 // late browser redirect cannot sign the session back in.
 func (m *AuthManager) Cancel() { m.cancelPending("已取消登录") }

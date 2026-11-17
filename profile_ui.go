@@ -261,6 +261,7 @@ func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 			}
 			ui.Text(c, line).FontSize(11).TextColor(t.TextMuted).SingleLine()
 		})
+		a.profileAvatarEntry(c, ps)
 		a.smallAction(c, "刷新", ps.infoLoading, func() { a.reloadProfile() })
 	})
 }

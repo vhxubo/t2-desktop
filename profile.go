@@ -153,6 +153,11 @@ type profileState struct {
 	infoErr     string
 	user        accountProfile
 
+	// 头像：更换 / 重置入口在资料头的气泡里（见 avatar.go）。
+	avatarOpen bool
+	avatarBusy bool
+	avatarErr  string
+
 	// 我的内容：帖子 / 收藏 / 书签 / 合集各有一份列表状态，切换分段时保留
 	// 已经拉到的内容，不重新请求。加载走主窗口同一套通用加载（loadSpec）。
 	contentKind int

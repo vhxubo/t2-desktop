@@ -1322,3 +1322,50 @@ func TestRewardPoolFundingUsesConfiguredProxy(t *testing.T) {
 		t.Errorf("幂等键 = %q", keys[0])
 	}
 }
+
+// 换头像与重置头像也是新的写出口：multipart 不能自建 http.Client 绕过代理。
+func TestAvatarEndpointsUseConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var paths []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		if r.Method == http.MethodDelete {
+			_, _ = fmt.Fprint(w, envelopeJSON(`{"avatar_url":null}`))
+			return
+		}
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"avatar_url":"https://r2.2libra.com/avatars/new.png"}`))
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		Proxy:  p,
+		Base:   "http://upstream.invalid/api",
+		bearer: func() string { return "tok" },
+	}
+	if _, err := c.uploadAvatar(context.Background(),
+		uploadSource{Name: "me.png", Mime: "image/png"}, testUploadPNG()); err != nil {
+		t.Fatalf("经代理换头像失败：%v", err)
+	}
+	if _, err := c.deleteAvatar(context.Background()); err != nil {
+		t.Fatalf("经代理重置头像失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"POST /api/v1/me/avatar", "DELETE /api/v1/me/avatar"}
+	if len(paths) != len(want) {
+		t.Fatalf("代理收到 %v，期望 %v", paths, want)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Errorf("第 %d 次请求 = %s，期望 %s", i+1, paths[i], want[i])
+		}
+	}
+}
