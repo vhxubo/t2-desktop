@@ -93,8 +93,10 @@ func TestProbeDetailNodeAppliesAssignedNode(t *testing.T) {
 	a.detail = d
 	d.nodeWatchGen = 7
 
+	// 等提示落地，而不是只等节点字段：applyDetailNode 先写节点、再落本地
+	// 缓存，最后才排提示，只看字段会在提示入队之前就放行（磁盘慢时偶发）。
 	a.probeDetailNode(d, 7)
-	waitFor(t, func() bool { return !d.topic.pendingNode() }, "节点分配结果没有写回")
+	waitFor(t, func() bool { return queuedToast(a, "节点已分配：职场") }, "没有报告节点分配结果")
 
 	if hits != 1 {
 		t.Errorf("轮询请求次数 = %d，期望 1", hits)
@@ -107,9 +109,6 @@ func TestProbeDetailNodeAppliesAssignedNode(t *testing.T) {
 	}
 	if !strings.Contains(d.topic.URL, "/post/work/N1") {
 		t.Errorf("原文链接没有换成正式地址：%q", d.topic.URL)
-	}
-	if !queuedToast(a, "节点已分配：职场") {
-		t.Error("没有报告节点分配结果")
 	}
 }
 
