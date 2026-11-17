@@ -731,6 +731,10 @@ func TestNotificationReadActionDoesNotOpenCard(t *testing.T) {
 	a := notificationWindowApp(t)
 	a.autoLoad = true
 	a.client = readClient(srv)
+	// 已读落账之后 applyNotificationRead 会再校准一次未读数：那条 GET 是角标
+	// 的正常刷新，不属于这次点击的断言，但也别让它和已读请求一起进 calls()。
+	// 与 notificationApp 保持一致，把后台校准挡在测试请求记录之外。
+	a.unreadLoading = true
 	// 一页就到底：别让列表的无限滚动在测试里顺手再拉一页，把行换掉。
 	st := a.tabs[notificationTabIndex()]
 	st.page, st.totalPages, st.noMore = 1, 1, true
