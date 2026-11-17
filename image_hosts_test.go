@@ -780,6 +780,65 @@ func TestUploadToOfficialParsesEnvelope(t *testing.T) {
 	}
 }
 
+// 上传地址是不透明的随机标识：只用 image_url 原文写进正文，不解析路径，也
+// 不拿 image_key 拼地址。历史地址形态（带时间戳后缀等）同样原样使用。
+func TestUploadToOfficialUsesOpaqueImageURL(t *testing.T) {
+	cases := []struct {
+		name, imageKey, imageURL string
+	}{
+		{
+			name:     "新的随机标识",
+			imageKey: "8f3Kx2mQ7pR1tV5z.jpg",
+			imageURL: "https://r2.2libra.com/public/8f3Kx2mQ7pR1tV5z.jpg",
+		},
+		{
+			name:     "历史形态带时间戳后缀",
+			imageKey: "public/2026/11/abc_1699999999.png",
+			imageURL: "https://r2.2libra.com/public/2026/11/abc_1699999999.png",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reply := fmt.Sprintf(`{"c":0,"m":"请求成功","d":{"image_key":%q,"image_url":%q},"t":1}`,
+				tc.imageKey, tc.imageURL)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = fmt.Fprint(w, reply)
+			}))
+			defer srv.Close()
+
+			a := testApp(t)
+			a.client.Base = srv.URL
+			a.client.HTTP = srv.Client()
+			a.client.bearer = func() string { return "test-token" }
+			got, err := a.uploadToOfficial(context.Background(),
+				uploadSource{Name: "photo.png", Mime: "image/png"}, pngHeadForUpload)
+			if err != nil {
+				t.Fatalf("上传失败：%v", err)
+			}
+			if got != tc.imageURL {
+				t.Errorf("图片地址 = %q，期望原样返回 %q", got, tc.imageURL)
+			}
+		})
+	}
+}
+
+// 响应只有 image_key 时不能拼地址：宁可报错，也不发一个猜出来的链接。
+func TestUploadToOfficialWithoutImageURLFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{"image_key":"8f3Kx2mQ7pR1tV5z.jpg"},"t":1}`)
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	a.client.Base = srv.URL
+	a.client.HTTP = srv.Client()
+	a.client.bearer = func() string { return "test-token" }
+	if _, err := a.uploadToOfficial(context.Background(),
+		uploadSource{Name: "photo.png", Mime: "image/png"}, pngHeadForUpload); err == nil {
+		t.Fatal("只有 image_key 时应该报错，不能拿 key 拼地址")
+	}
+}
+
 func TestImageHostConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	a := newApp(dir)

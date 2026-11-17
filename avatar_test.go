@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,6 +58,24 @@ func TestUploadAvatarRequest(t *testing.T) {
 	}
 	if req.auth != "Bearer tok" {
 		t.Errorf("鉴权头 = %q", req.auth)
+	}
+}
+
+// avatar_url 是不透明地址：新的随机标识与历史形态都原样收下，不解析路径、
+// 不改写，也不会因为换了头像就把旧地址当成另一个人。
+func TestDecodeAvatarURLOpaqueAddress(t *testing.T) {
+	for _, want := range []string{
+		`https://r2.2libra.com/avatars/q7/8f3Kx2mQ7pR1tV5z.webp`,
+		`https://r2.2libra.com/avatars/12345_1699999999.png`,
+		`https://cdn.example.com/a/b.webp?v=2`,
+	} {
+		raw, err := json.Marshal(map[string]string{"avatar_url": want})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := decodeAvatarURL(raw); got != want {
+			t.Errorf("头像地址 = %q，期望原样返回 %q", got, want)
+		}
 	}
 }
 

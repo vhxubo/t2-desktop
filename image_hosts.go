@@ -61,6 +61,9 @@ import (
 //	JPEG / PNG / WebP，单张 ≤10 MB，每人每天 20 张
 //	201 → {c,m,d:{image_key,image_url},t}
 //	配额用尽 → 429 rate_limited
+//
+// image_key / image_url 的路径都是不透明的随机标识（v1.5 起不再含账号信息）：
+// 只用 image_url 原文写进正文，不解析路径，也绝不拿 image_key 拼地址。
 
 const (
 	imageHostKVKey = "imagehosts:v1"

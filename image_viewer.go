@@ -1020,7 +1020,8 @@ func (a *app) imageBytesForSave(raw string) ([]byte, error) {
 }
 
 // imageSaveFileName 从图片地址里取出另存为的默认文件名：去掉查询串后取最后
-// 一段；没有像样的文件名时叫「图片」，没有扩展名时按地址猜一个。
+// 一段；没有像样的文件名时叫「图片」，没有扩展名时按地址猜一个。图片地址是
+// 不透明标识，这里只借最后一段给用户一个好认的文件名，不推断图片归属。
 func imageSaveFileName(raw string) string {
 	name := ""
 	if u, err := url.Parse(strings.TrimSpace(raw)); err == nil {

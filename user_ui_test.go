@@ -345,6 +345,10 @@ func TestNormalizeAvatarURL(t *testing.T) {
 		"//r2.2libra.com/a.png":          "https://r2.2libra.com/a.png",
 		"/avatars/a.png":                 "https://r2.2libra.com/avatars/a.png",
 		"https://cdn.example/a.png":      "https://cdn.example/a.png",
+		// 新的随机标识与历史形态（带时间戳后缀）都不改写、不解析。
+		"https://r2.2libra.com/avatars/q7/8f3Kx2mQ7pR1tV5z.webp": "https://r2.2libra.com/avatars/q7/8f3Kx2mQ7pR1tV5z.webp",
+		"https://r2.2libra.com/avatars/12345_1699999999.png":     "https://r2.2libra.com/avatars/12345_1699999999.png",
+		"https://cdn.example.com/a/b.webp?v=2":                   "https://cdn.example.com/a/b.webp?v=2",
 	}
 	for in, want := range cases {
 		if got := normalizeAvatarURL(in); got != want {
