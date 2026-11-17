@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -171,11 +173,23 @@ func (a *app) searchWindowView(c *ui.Context) {
 			st.total = 0
 			a.scheduleSearch(st)
 		}
+		// 热门标签的周期换了：丢掉旧周期的标签，重新拉一份。标签是公开数据，
+		// 与登录态无关；autoLoad 关掉时只清状态，测试自己驱动 loadHotTags。
+		if st.hotTagsSpan != st.lastHotTagsSpan {
+			st.lastHotTagsSpan = st.hotTagsSpan
+			st.hotTags = nil
+			st.hotTagsLoaded = false
+			st.hotTagsErr = ""
+			if a.autoLoad {
+				a.loadHotTags(st, hotTagPeriod(st.hotTagsSpan))
+			}
+		}
 
 		ui.Column(c).Grow(1).MinHeight(0).Children(func() {
 			a.searchBody(c, st)
 		})
 	})
+	a.ensureSearchHotTags(st)
 }
 
 // searchBody 是结果区：各种说明与结果列表。
@@ -184,8 +198,7 @@ func (a *app) searchBody(c *ui.Context, st *searchState) {
 	query := strings.TrimSpace(st.q)
 	switch {
 	case query == "":
-		a.searchPlaceholder(c, "输入关键词开始搜索",
-			"帖子、用户、节点与标签都能搜。关键词至少 2 个字。")
+		a.searchHome(c, st)
 		return
 	case len([]rune(query)) < searchQueryMin:
 		a.searchPlaceholder(c, "关键词太短", "至少输入 2 个字符再搜索。")
@@ -267,6 +280,76 @@ func (a *app) searchPlaceholder(c *ui.Context, title, hint string) {
 		ui.Icon(c, searchIcon).Size(30, 30).TextColor(t.TextMuted)
 		ui.Text(c, title).FontSize(14).Bold()
 		ui.Text(c, hint).FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+	})
+}
+
+// searchHome 是空关键词时的首页：搜索说明 + 热门标签。标签来自
+// GET /v1/tags/hot，点一下就把名字填进搜索框并切到「标签」类型。
+func (a *app) searchHome(c *ui.Context, st *searchState) {
+	t := c.Theme()
+	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+		ui.Column(c).FillWidth().Padding(28, 24).Gap(18).Children(func() {
+			ui.Column(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
+				ui.Icon(c, searchIcon).Size(30, 30).TextColor(t.TextMuted)
+				ui.Text(c, "输入关键词开始搜索").FontSize(14).Bold()
+				ui.Text(c, "帖子、用户、节点与标签都能搜。关键词至少 2 个字。").
+					FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+			})
+			a.searchHotTagsBlock(c, st)
+		})
+	})
+}
+
+// searchHotTagsBlock 是空状态里的热门标签块：周期切换、加载 / 失败 / 空
+// 状态与一排标签芯片。最多画 24 枚，避免一次把整页塞满。
+func (a *app) searchHotTagsBlock(c *ui.Context, st *searchState) {
+	t := c.Theme()
+	ui.Column(c).FillWidth().Gap(8).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "热门标签").FontSize(13).Bold()
+			ui.Spacer(c).Grow(1)
+			ui.Segmented(c, &st.hotTagsSpan, hotTagPeriodLabels...)
+		})
+
+		switch {
+		case st.hotTagsErr != "":
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "热门标签暂时不可用："+st.hotTagsErr).FontSize(11).
+					TextColor(t.Danger).MaxLines(2).Grow(1)
+				a.smallAction(c, "重试", st.hotTagsLoading, func() {
+					a.loadHotTags(st, hotTagPeriod(st.hotTagsSpan))
+				})
+			})
+		case st.hotTagsLoading && len(st.hotTags) == 0:
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Spinner(c).Size(14, 14)
+				ui.Text(c, "正在读取热门标签…").FontSize(11).TextColor(t.TextMuted)
+			})
+		case len(st.hotTags) == 0 && st.hotTagsLoaded:
+			ui.Text(c, "这个周期还没有热门标签。").FontSize(11).TextColor(t.TextMuted)
+		case len(st.hotTags) == 0:
+			ui.Text(c, "正在读取热门标签…").FontSize(11).TextColor(t.TextMuted)
+		default:
+			tags := st.hotTags
+			if len(tags) > 24 {
+				tags = tags[:24]
+			}
+			ui.Row(c).FillWidth().Gap(6).Wrap().Children(func() {
+				for _, tag := range tags {
+					label := "#" + tag.Name
+					tip := "搜索标签「" + tag.Name + "」"
+					if tag.Count > 0 {
+						label += " " + strconv.Itoa(tag.Count)
+						tip += fmt.Sprintf("（%d 个帖子）", tag.Count)
+					}
+					chip := ui.Button(c, label).FontSize(11).Padding(3, 8).Radius(10)
+					chip.Label("标签 " + tag.Name).Tooltip(tip)
+					if chip.Clicked() {
+						a.searchHotTag(st, tag.Name)
+					}
+				}
+			})
+		}
 	})
 }
 

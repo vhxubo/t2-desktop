@@ -1220,3 +1220,63 @@ func TestRedeemCodeUsesConfiguredProxy(t *testing.T) {
 		}
 	}
 }
+
+// 他人徽章墙与热门标签是新加的读出口：它们和别的请求共用 Client，但“共用”
+// 这件事要用假代理证明一次，避免以后改成自建 http.Client 时悄悄绕过代理。
+func TestUserBadgesAndHotTagsUseConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var paths []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path+"?"+r.URL.RawQuery)
+		mu.Unlock()
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/badges/equipped"):
+			_, _ = fmt.Fprint(w, envelopeJSON(`[{"badge_id":"b1","badge":{"id":"b1"}}]`))
+		case strings.HasSuffix(r.URL.Path, "/badges"):
+			_, _ = fmt.Fprint(w, envelopeJSON(badgeWallJSON))
+		case strings.HasSuffix(r.URL.Path, "/tags/hot"):
+			_, _ = fmt.Fprint(w, envelopeJSON(hotTagsJSON))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		Proxy:  p,
+		Base:   "http://upstream.invalid/api",
+		bearer: func() string { return "tok" },
+	}
+	ctx := context.Background()
+	if _, err := c.fetchUserBadges(ctx, "alice"); err != nil {
+		t.Fatalf("经代理读取他人徽章墙失败：%v", err)
+	}
+	if _, err := c.fetchUserEquippedBadgeIDs(ctx, "alice"); err != nil {
+		t.Fatalf("经代理读取他人佩戴徽章失败：%v", err)
+	}
+	if _, err := c.fetchHotTags(ctx, "week"); err != nil {
+		t.Fatalf("经代理读取热门标签失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{
+		"/api/v1/users/alice/badges?",
+		"/api/v1/users/alice/badges/equipped?",
+		"/api/v1/tags/hot?period=week",
+	}
+	if len(paths) != len(want) {
+		t.Fatalf("代理收到 %d 次请求，期望 %d 次：%v", len(paths), len(want), paths)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Errorf("第 %d 次请求 = %s，期望 %s", i+1, paths[i], want[i])
+		}
+	}
+}

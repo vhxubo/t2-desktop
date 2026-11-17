@@ -17,12 +17,13 @@ import (
 // 「用户资料」窗口的数据层与界面状态。窗口本身在 user_card_ui.go：点任何
 // 一处的统一用户标识（头像 + 昵称）打开，入口见 user_ui.go 的 userTag。
 //
-// 四组只读端点拼出一张完整的资料卡：
+// 五组只读端点拼出一张完整的资料卡：
 //
 //	资料    GET /v1/users/:userName
 //	介绍    GET /v1/users/:userName/about   （匿名可读，正文是 Markdown）
 //	主题    GET /v1/users/:userName/topics
 //	回复    GET /v1/users/:userName/replies
+//	徽章    GET /v1/users/:userName/badges 与 /badges/equipped
 //
 // 关注是这里唯一的写操作，走 follow.go 的同一个提交路径（scope interact）。
 //
@@ -58,17 +59,19 @@ const (
 	userCardBioReserved float32 = 380
 )
 
-// 资料卡里的四个标签页。前两个是列表（各自对应一个端点），第三个是站点
+// 资料卡里的五个标签页。前两个是列表（各自对应一个端点），第三个是站点
 // 六项属性的雷达图（数据来自 about 响应里的 achievement_count），第四个是
-// 这个人的公开合集（点开一个就换成合集里的帖子，见 collection_browse.go）。
+// 这个人的徽章墙，第五个是他的公开合集（点开一个就换成合集里的帖子，见
+// collection_browse.go）。
 const (
 	userCardTabTopics = iota
 	userCardTabReplies
 	userCardTabAttrs
+	userCardTabBadges
 	userCardTabCollections
 )
 
-var userCardTabLabels = []string{"他发布的主题", "他的最新回复", "属性雷达", "他的合集"}
+var userCardTabLabels = []string{"他发布的主题", "他的最新回复", "属性雷达", "他的徽章", "他的合集"}
 
 // userCardListKind 区分资料卡里的三个列表：它们只有端点和行渲染不同。
 type userCardListKind int
@@ -116,6 +119,18 @@ func userCardSpec(name string, kind userCardListKind, page int) tabSpec {
 // userAboutPath 是个人介绍端点。昵称同样要转义，规则与 userPath 一致。
 func userAboutPath(username string) string {
 	return userPath(username) + "/about"
+}
+
+// userBadgesPath 是他人徽章墙端点。路径参数接受 username 或 uuid；资料卡里
+// 只有 username，照常转义，避免特殊字符改变请求路径。
+func userBadgesPath(username string) string {
+	return userPath(username) + "/badges"
+}
+
+// userBadgesEquippedPath 是他人当前佩戴的徽章；与徽章墙一起用，用来在墙上
+// 标出哪几枚正戴着。
+func userBadgesEquippedPath(username string) string {
+	return userBadgesPath(username) + "/equipped"
 }
 
 // userAbout 是 GET /v1/users/:userName/about 的解码结果。
@@ -228,6 +243,36 @@ func expandAboutStats(src string, stats map[string]string) string {
 	})
 }
 
+// fetchUserBadges 读某人的完整徽章墙。徽章墙匿名可读；本人访问（带令牌且
+// 是自己）会多返回 custom_fields 里的隐私条目，所以登录后照常带令牌。
+func (c *Client) fetchUserBadges(ctx context.Context, username string) ([]badgeWallEntry, error) {
+	if username == "" {
+		return nil, errors.New("还不知道要读谁的徽章")
+	}
+	d, err := withAuthRetry(c, ctx, func(token string) (json.RawMessage, error) {
+		return c.getJSON(ctx, c.apiURL(userBadgesPath(username)), token)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return decodeUserBadges(d), nil
+}
+
+// fetchUserEquippedBadgeIDs 读某人当前佩戴的徽章 id 集合。它与徽章墙是两条
+// 端点：墙给全部徽章，这里只给正戴着的，界面据此把卡片标成「佩戴中」。
+func (c *Client) fetchUserEquippedBadgeIDs(ctx context.Context, username string) (map[string]bool, error) {
+	if username == "" {
+		return nil, errors.New("还不知道要读谁的佩戴徽章")
+	}
+	d, err := withAuthRetry(c, ctx, func(token string) (json.RawMessage, error) {
+		return c.getJSON(ctx, c.apiURL(userBadgesEquippedPath(username)), token)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return decodeEquippedBadgeIDs(d), nil
+}
+
 // userCardList 是一份列表的加载状态：两个标签页各有一份，互不影响。
 type userCardList struct {
 	seq     uint64
@@ -240,6 +285,16 @@ type userCardList struct {
 	total   int
 	noMore  bool
 	list    ui.ListState
+}
+
+// userCardBadges 是他人徽章墙的加载状态。徽章墙与佩戴状态是两条端点，但
+// 界面只展示一份结果，所以合在一个状态里，用同一个 seq 丢弃过期结果。
+type userCardBadges struct {
+	seq     uint64
+	loading bool
+	loaded  bool
+	err     string
+	entries []badgeWallEntry
 }
 
 // userCardState 是「用户资料」窗口的全部界面状态。只有 UI 线程读写；后台
@@ -266,6 +321,8 @@ type userCardState struct {
 	replies userCardList
 	// collections 是这个人的公开合集；只有切到「他的合集」才拉一次。
 	collections userCardList
+	// badges 是这个人的完整徽章墙；只有切到「他的徽章」才拉。
+	badges userCardBadges
 	// collBrowse 非空表示点开了其中一个合集，正在看它里面的帖子。
 	collBrowse *collectionBrowse
 
@@ -334,6 +391,9 @@ func (a *app) ensureUserCardLoaded() {
 			a.loadUserCardList(userCardCollections, 1)
 		}
 	}
+	if cs.tab == userCardTabBadges && !cs.badges.loaded && !cs.badges.loading {
+		a.loadUserCardBadges()
+	}
 }
 
 func (a *app) loadUserCardProfile() {
@@ -401,6 +461,59 @@ func (a *app) loadUserCardAbout() {
 			cs.aboutErr = ""
 		})
 	}()
+}
+
+// loadUserCardBadges 读他人的徽章墙，并把佩戴状态标回墙上的条目。两个请求
+// 顺序发出：徽章墙是主体，佩戴状态只决定卡片上要不要标「佩戴中」。佩戴状态
+// 读失败时仍展示徽章墙，不因为一条辅助请求把整块变成错误。
+func (a *app) loadUserCardBadges() {
+	cs := a.userCard
+	if cs == nil || cs.username == "" || cs.badges.loading {
+		return
+	}
+	cs.badges.seq++
+	seq := cs.badges.seq
+	cs.badges.loading = true
+	cs.badges.err = ""
+	name := cs.username
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	go func() {
+		defer cancel()
+		badges, err := a.client.fetchUserBadges(ctx, name)
+		if err == nil {
+			if equipped, eqErr := a.client.fetchUserEquippedBadgeIDs(ctx, name); eqErr == nil {
+				for i := range badges {
+					badges[i].Equipped = equipped[badges[i].BadgeID]
+				}
+			}
+		}
+		a.publish(func() {
+			if a.userCard != cs || cs.username != name || cs.badges.seq != seq {
+				return
+			}
+			cs.badges.loading = false
+			cs.badges.loaded = true
+			if err != nil {
+				cs.badges.err = friendlyError(err)
+				return
+			}
+			cs.badges.entries = badges
+			cs.badges.err = ""
+			a.prefetchBadgeIcons(badges)
+		})
+	}()
+}
+
+// reloadUserCardBadges 丢掉已经拉到的徽章墙，重新读（徽章页的「刷新」）。
+func (a *app) reloadUserCardBadges() {
+	cs := a.userCard
+	if cs == nil || cs.badges.loading {
+		return
+	}
+	cs.badges.loaded = false
+	cs.badges.err = ""
+	cs.badges.entries = nil
+	a.loadUserCardBadges()
 }
 
 // seedUserCardFollow 用资料里的 is_following 初始化关注按钮：资料响应本身
@@ -559,6 +672,11 @@ func (a *app) refreshUserCardForAuth() {
 	cs.aboutLoading = false // 在途请求的 seq 已过期，结果会被丢弃
 	cs.aboutErr = ""
 	cs.about = userAbout{}
+	cs.badges.seq++
+	cs.badges.loaded = false
+	cs.badges.loading = false // 在途请求的 seq 已过期，结果会被丢弃
+	cs.badges.err = ""
+	cs.badges.entries = nil
 	a.ensureUserCardLoaded()
 	a.redrawUserCardWindow()
 }

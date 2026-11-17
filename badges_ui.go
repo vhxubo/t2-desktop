@@ -232,3 +232,103 @@ func (a *app) profileBadgeIcon(c *ui.Context, b badgeWallEntry, size float32) {
 			FontSize(size * 0.38).Bold().TextColor(t.TextMuted).SingleLine()
 	})
 }
+
+/* ------------------------------------------------------------------
+   资料卡·他的徽章
+--------------------------------------------------------------- */
+
+// userCardBadgesBody 是资料卡的「他的徽章」标签页：顶部是数量与刷新，下面是
+// 两列只读徽章卡片。这里不能佩戴别人的徽章，所以卡片上没有按钮；佩戴状态由
+// /badges/equipped 标出来，加载失败时仍展示徽章墙本身。
+func (a *app) userCardBadgesBody(c *ui.Context, cs *userCardState) {
+	t := c.Theme()
+	st := &cs.badges
+	total, equipped := profileBadgeCounts(st.entries)
+
+	ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "他的徽章").FontSize(13).Bold()
+		if st.loaded {
+			ui.Textf(c, "共 %d 枚 · 佩戴中 %d 枚", total, equipped).
+				FontSize(11).TextColor(t.TextMuted)
+		}
+		ui.Spacer(c).Grow(1)
+		a.smallAction(c, "刷新", st.loading, a.reloadUserCardBadges)
+	})
+
+	switch {
+	case st.loading && len(st.entries) == 0:
+		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
+			ui.Spinner(c).Size(24, 24)
+			ui.Text(c, "正在读取他的徽章…").FontSize(12).TextColor(t.TextMuted)
+		})
+		return
+	case st.err != "":
+		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(10).Children(func() {
+			ui.Text(c, "加载失败").FontSize(14).Bold()
+			ui.Text(c, st.err).FontSize(12).TextColor(t.Danger).MaxLines(3)
+			if ui.Button(c, "重试").Clicked() {
+				a.loadUserCardBadges()
+			}
+		})
+		return
+	case !st.loaded:
+		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
+			ui.Spinner(c).Size(24, 24)
+			ui.Text(c, "正在读取他的徽章…").FontSize(12).TextColor(t.TextMuted)
+		})
+		return
+	case len(st.entries) == 0:
+		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(6).Children(func() {
+			ui.Text(c, "这位用户还没有获得任何徽章。").FontSize(13).TextColor(t.TextMuted)
+		})
+		return
+	}
+
+	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+		ui.Grid(c).FillWidth().Columns(2).Gap(10).Children(func() {
+			for i := range st.entries {
+				a.userCardBadgeCard(c, st.entries[i])
+			}
+		})
+	})
+}
+
+// userCardBadgeCard 是一枚他人徽章的卡片：图标、名字、等级 / 持有比例、说明
+// 与获得日期。佩戴中的徽章用强调色描边并标「佩戴中」，与「我的」徽章页一致，
+// 但没有佩戴按钮。
+func (a *app) userCardBadgeCard(c *ui.Context, b badgeWallEntry) {
+	t := c.Theme()
+	name := profileBadgeDisplayName(b)
+	border := t.Border
+	if b.Equipped {
+		border = t.Accent
+	}
+
+	ui.Column(c).FillWidth().Padding(10, 12).Gap(6).Radius(10).
+		Background(t.Surface).Border(1, border).Children(func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			a.profileBadgeIcon(c, b, badgeWallIconSize)
+			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+				ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, name).FontSize(12).Bold().SingleLine().
+						Grow(1).MinWidth(0).Tooltip(name)
+					if b.Equipped {
+						ui.Text(c, "佩戴中").FontSize(9).TextColor(t.Accent).Shrink(0)
+					}
+				})
+				if meta := profileBadgeMeta(b); meta != "" {
+					ui.Text(c, meta).FontSize(9).TextColor(t.TextMuted).SingleLine()
+				}
+			})
+		})
+		if desc := strings.TrimSpace(b.Description); desc != "" {
+			ui.Text(c, desc).FontSize(10).TextColor(t.TextMuted).MaxLines(2).Tooltip(desc)
+		}
+		if achieved := profileBadgeAchievedText(b.AchievedAt); achieved != "" {
+			ui.Row(c).FillWidth().Children(func() {
+				ui.Spacer(c).Grow(1)
+				ui.Text(c, achieved).FontSize(9).TextColor(t.TextMuted).SingleLine()
+			})
+		}
+	})
+}

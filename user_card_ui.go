@@ -174,6 +174,8 @@ func (a *app) userCardWindowView(c *ui.Context) {
 				a.userCardListBody(c, cs, userCardReplies)
 			case userCardTabAttrs:
 				a.userCardAttrsBody(c, cs)
+			case userCardTabBadges:
+				a.userCardBadgesBody(c, cs)
 			case userCardTabCollections:
 				a.userCardCollectionsBody(c, cs)
 			default:

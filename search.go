@@ -107,6 +107,16 @@ type searchState struct {
 	list       ui.ListState
 	input      ui.Handle
 
+	// 热门标签：空关键词时展示。hotTagsSpan 是分段控件的下标，lastHotTagsSpan
+	// 用来判断它是不是刚被改过（改了才重新拉对应周期）。
+	hotTags         []hotTag
+	hotTagsSpan     int
+	lastHotTagsSpan int
+	hotTagsSeq      uint64
+	hotTagsLoading  bool
+	hotTagsLoaded   bool
+	hotTagsErr      string
+
 	timer *time.Timer
 }
 
@@ -272,6 +282,57 @@ func (a *app) scheduleSearch(st *searchState) {
 			a.runSearch(st, gen, 1)
 		})
 	})
+}
+
+// ensureSearchHotTags 是守卫式任务：搜索窗口打开时把空状态要用的热门标签
+// 补上。已经有结果或正在请求时什么都不做，因此可以在每帧里调用。
+func (a *app) ensureSearchHotTags(st *searchState) {
+	if st == nil || !a.autoLoad || st.hotTagsLoaded || st.hotTagsLoading {
+		return
+	}
+	a.loadHotTags(st, hotTagPeriod(st.hotTagsSpan))
+}
+
+// loadHotTags 拉某个周期的热门标签。允许并发：切换周期时旧请求的 seq 会
+// 过期，结果被丢弃，不会把日榜数据写进周榜。
+func (a *app) loadHotTags(st *searchState, period string) {
+	if st == nil {
+		return
+	}
+	st.hotTagsSeq++
+	seq := st.hotTagsSeq
+	st.hotTagsLoading = true
+	st.hotTagsErr = ""
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	go func() {
+		defer cancel()
+		tags, err := a.client.fetchHotTags(ctx, period)
+		a.publish(func() {
+			if a.search != st || st.hotTagsSeq != seq {
+				return
+			}
+			st.hotTagsLoading = false
+			st.hotTagsLoaded = true
+			if err != nil {
+				st.hotTagsErr = friendlyError(err)
+				return
+			}
+			st.hotTags = tags
+			st.hotTagsErr = ""
+		})
+	}()
+}
+
+// searchHotTag 把一条热门标签填进搜索框并切到「标签」类型：下一次防抖到期
+// 就会按标签名搜索，不需要跳浏览器。
+func (a *app) searchHotTag(st *searchState, name string) {
+	if st == nil || name == "" {
+		return
+	}
+	st.q = name
+	st.kind = int(searchTags)
+	st.list.ScrollTo(0, ui.Start)
+	a.redrawSearchWindow()
 }
 
 // runSearch 发出一次搜索请求。page 为 1 时替换结果，否则追加。
