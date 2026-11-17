@@ -548,9 +548,18 @@ func (a *app) bindAuth() {
 	if a.auth == nil {
 		return
 	}
-	a.auth.onChange = func(err error) {
-		a.publish(func() { a.onAuthChanged(err) })
-	}
+	// 回调记下它属于哪一次会话：重新授权换掉 a.auth 之后，旧会话迟到的
+	// 刷新失败 / 401 不能把新会话的窗口切回登录页（那看起来就是刚授权完又
+	// 掉登录）。
+	auth := a.auth
+	auth.setOnChange(func(err error) {
+		a.publish(func() {
+			if a.auth != auth {
+				return
+			}
+			a.onAuthChanged(err)
+		})
+	})
 }
 
 // replaceAuth 换掉本窗口的会话（同一账号重新授权后令牌换了）：客户端、长
@@ -558,6 +567,11 @@ func (a *app) bindAuth() {
 func (a *app) replaceAuth(auth *AuthManager) {
 	if auth == nil || auth == a.auth {
 		return
+	}
+	old := a.auth
+	if old != nil {
+		// 旧会话上可能还挂着在途请求：断开回调，迟到的失败不许再影响界面。
+		old.detach()
 	}
 	a.auth = auth
 	if a.client != nil {

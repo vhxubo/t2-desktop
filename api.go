@@ -288,28 +288,32 @@ func (c *Client) httpClient() *http.Client {
 // refresh drops the session. Every read endpoint goes through here, so the
 // detail / replies / emojis paths behave exactly like the list tabs.
 func withAuthRetry[T any](c *Client, ctx context.Context, fn func(string) (T, error)) (T, error) {
+	// 固定这次请求所属的会话：请求在路上时用户可能已经重新授权，后续的刷新
+	// 与失效处理都必须落回同一个 AuthManager，不能拿旧令牌的 401 去清掉刚
+	// 换上的新会话。
+	auth := c.Auth
 	token := c.accessToken()
 	res, err := fn(token)
 	if err == nil {
 		return res, nil
 	}
 	var ae *apiError
-	if !errors.As(err, &ae) || ae.Status != http.StatusUnauthorized || token == "" || c.Auth == nil {
+	if !errors.As(err, &ae) || ae.Status != http.StatusUnauthorized || token == "" || auth == nil {
 		return res, err
 	}
-	fresh, rerr := c.Auth.refresh(ctx, token)
+	fresh, rerr := auth.refresh(ctx, token)
 	if rerr != nil {
 		// 只有授权真的失效（4xx）才清登录态；网络抖动或服务端 5xx 时保留
 		// 令牌，避免一次断网就把用户踢下线。
 		if authFailure(rerr) {
-			c.Auth.invalidate(rerr)
+			auth.invalidateFor(token, rerr)
 		}
 		return res, rerr
 	}
 	res, err = fn(fresh)
 	// 新令牌也被 401 拒绝：会话确实没了，别再让每个请求反复刷新。
 	if err != nil && errors.As(err, &ae) && ae.Status == http.StatusUnauthorized {
-		c.Auth.invalidate(errors.New("登录已失效，请重新登录"))
+		auth.invalidateFor(fresh, errors.New("登录已失效，请重新登录"))
 	}
 	return res, err
 }

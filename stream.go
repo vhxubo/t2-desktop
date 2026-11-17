@@ -209,10 +209,14 @@ func (c *Client) requestNotificationStream(ctx context.Context, token string) (*
 }
 
 func (c *Client) connectNotificationStream(ctx context.Context, h notificationStreamHandlers) (streamResult, error) {
+	// 固定这次长连接所属的会话：重新授权换掉 c.Auth 之后，旧连接迟到的
+	// 401 不能把新会话清掉。
+	auth := c.Auth
 	token := c.accessToken()
 	if token == "" {
 		return streamEnded, streamAuthError("未登录，无法建立通知长连接", 0)
 	}
+	current := token
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -225,7 +229,7 @@ func (c *Client) connectNotificationStream(ctx context.Context, h notificationSt
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		// 与普通请求一致：先刷新一次，成功就用新令牌重试；失败才清掉登录态。
-		fresh, rerr := c.refreshStreamToken(reqCtx, token)
+		fresh, rerr := c.refreshStreamToken(reqCtx, auth, token)
 		_ = resp.Body.Close()
 		if rerr != nil {
 			return streamEnded, streamAuthError("登录已过期，请重新授权", http.StatusUnauthorized)
@@ -236,13 +240,14 @@ func (c *Client) connectNotificationStream(ctx context.Context, h notificationSt
 				kind: streamErrNetwork, message: "通知长连接建立失败：" + err.Error(),
 			}
 		}
+		current = fresh
 	}
 	defer resp.Body.Close()
 
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:
-		if c.Auth != nil {
-			c.Auth.invalidate(errors.New("登录已过期，请重新授权"))
+		if auth != nil {
+			auth.invalidateFor(current, errors.New("登录已过期，请重新授权"))
 		}
 		return streamEnded, streamAuthError("登录已过期，请重新授权", resp.StatusCode)
 	case resp.StatusCode == http.StatusForbidden:
@@ -263,15 +268,15 @@ func (c *Client) connectNotificationStream(ctx context.Context, h notificationSt
 	return readNotificationFrames(reqCtx, cancel, resp.Body, h, c.streamIdleDuration())
 }
 
-func (c *Client) refreshStreamToken(ctx context.Context, stale string) (string, error) {
-	if c.Auth == nil {
+func (c *Client) refreshStreamToken(ctx context.Context, auth *AuthManager, stale string) (string, error) {
+	if auth == nil {
 		return "", errors.New("无法刷新令牌")
 	}
-	fresh, err := c.Auth.refresh(ctx, stale)
+	fresh, err := auth.refresh(ctx, stale)
 	if err != nil {
 		// 与普通请求一致：只有授权真的失效才清登录态，网络问题保留令牌。
 		if authFailure(err) {
-			c.Auth.invalidate(err)
+			auth.invalidateFor(stale, err)
 		}
 		return "", err
 	}

@@ -233,6 +233,9 @@ func (a *app) authorizeGate() {
 	// 匿名窗口，一并丢弃；但这次操作已知需要的 scope 要带过去，否则新账号
 	// 登录回来仍缺权限，还得再授权一次。
 	if a.book != nil && a.accountID == "" {
+		if a.auth != nil {
+			scopes = mergeScopeList(a.auth.knownScopesList(), scopes)
+		}
 		a.cancelAuthGate("")
 		a.book.startAddAccountScopes(scopes)
 		return

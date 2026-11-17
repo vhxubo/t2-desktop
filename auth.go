@@ -173,6 +173,10 @@ type AuthManager struct {
 	// 授权页按它列出要申请的权限；申没申请到才是下次缺权限时该补什么。重新
 	// 登录时用账号已有的令牌 scope 初始化，窗口里就能核对这次补到了哪些。
 	requestedScopes string
+	// knownScopes 是最近一次令牌携带的 scope。令牌被服务端拒绝清掉之后仍然
+	// 留着（账号索引也会存一份）：2Libra 的重新授权是替换而不是累加，重新
+	// 登录时必须把以前按需开通的 scope 一起申请，否则就等于撤掉它们。
+	knownScopes []string
 }
 
 func newAuthManager(dir string) *AuthManager {
@@ -210,8 +214,34 @@ func newAuthManagerFor(dir string, proxy *proxyManager, key string) *AuthManager
 		// 重新授权时以账号已有的令牌权限为起点：授权地址要在这个基础上补缺的
 		// scope，登录窗口随后用它核对这次补到了哪些。
 		m.requestedScopes = loaded.Scope
+		m.knownScopes = strings.Fields(loaded.Scope)
 	}
 	return m
+}
+
+// setKnownScopes 记下这个账号上一份授权范围（账号索引里存的），与当前已知
+// 的合并：索引可能落后于刚拿到的令牌，也可能记着令牌里已经丢掉、但重新
+// 授权时要恢复的按需权限。
+func (m *AuthManager) setKnownScopes(scopes []string) {
+	if len(scopes) == 0 {
+		return
+	}
+	m.mu.Lock()
+	m.knownScopes = mergeScopeList(m.knownScopes, scopes)
+	m.mu.Unlock()
+}
+
+// knownScopesList 返回这个账号知道的授权范围：当前令牌的 scope 加上记住的
+// 上一份。重新授权用它把以前开通的按需 scope 一起带上。
+func (m *AuthManager) knownScopesList() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	if m.token != nil {
+		out = strings.Fields(m.token.Scope)
+	}
+	out = append(out, m.knownScopes...)
+	return cleanScopeList(out)
 }
 
 // errNoToken is what tokenStore.load returns when no session is saved yet.
@@ -590,6 +620,9 @@ func (m *AuthManager) storeTokenForEpoch(t tokenData, epoch uint64) error {
 	if m.token != nil && !t.ProKnown {
 		t.IsPro, t.ProKnown = m.token.IsPro, m.token.ProKnown
 	}
+	if scopes := strings.Fields(t.Scope); len(scopes) > 0 {
+		m.knownScopes = mergeScopeList(m.knownScopes, scopes)
+	}
 	m.epoch++
 	m.token = &t
 	return m.store.save(&t)
@@ -677,6 +710,20 @@ func (m *AuthManager) refreshIfExpiring(ctx context.Context, within time.Duratio
 		return err
 	}
 	return nil
+}
+
+// detach 断开会话变化的回调。重新授权会换掉窗口的 AuthManager；旧会话迟到的
+// 刷新失败 / 401 不能再把新会话的界面切回登录页。
+func (m *AuthManager) detach() {
+	m.setOnChange(nil)
+}
+
+// setOnChange 在锁内换会话变化回调：notify 也在同一把锁下取值，避免重新
+// 绑定与后台刷新并发时读到写了一半的状态。
+func (m *AuthManager) setOnChange(fn func(error)) {
+	m.mu.Lock()
+	m.onChange = fn
+	m.mu.Unlock()
 }
 
 func (m *AuthManager) notify(err error) {
@@ -798,9 +845,13 @@ func (m *AuthManager) BeginScopes(ctx context.Context, extraScopes []string) (st
 		result:    make(chan loginResult, 1),
 	}
 
+	// 以这个会话已经拿到的 scope 为起点：2Libra 的重新授权是替换而不是
+	// 累加，重新登录时只申请默认范围就等于把以前按需开通的 write:topic /
+	// write:economy / upload 全撤掉。extraScopes 里再叠这次缺的。
+	previous := m.knownScopesList()
 	m.mu.Lock()
 	m.pending = p
-	m.requestedScopes = mergeScopes(extraScopes)
+	m.requestedScopes = mergeScopes(mergeScopeList(previous, extraScopes))
 	m.mu.Unlock()
 	go m.awaitLogin(ctx, p)
 	return m.authorizeURL(p, m.requestedScopes), nil
@@ -893,13 +944,20 @@ func (m *AuthManager) finishLogin(ctx context.Context, p *pendingLogin, r loginR
 	if err != nil {
 		return err
 	}
+	// 令牌端点理论上会回 scope；个别情况下没回时按这次实际申请的清单记，
+	// 免得刚补到的权限被当成没授予。
+	if t.Scope == "" {
+		t.Scope = strings.Join(m.requestedScopesList(), " ")
+	}
 	if err := m.storeToken(t); err != nil {
 		return fmt.Errorf("令牌已获取但保存失败：%w", err)
 	}
 	requested := m.requestedScopesList()
 	granted := strings.Fields(t.Scope)
-	_, missing := grantedAndMissing(requested, granted)
-	if len(missing) > 0 {
+	if len(granted) == 0 {
+		// 令牌端点没回 scope 时无法判断授予了什么：不要凭空报「全部未授予」。
+		log.Printf("授权完成，令牌响应没有 scope 信息（申请：%s）", strings.Join(requested, " "))
+	} else if _, missing := grantedAndMissing(requested, granted); len(missing) > 0 {
 		// 申请了但没授予：授权页可能没列出它（应用未开通 / 审核范围不含），
 		// 也可能用户在站内「授权应用」页逐项关掉了。把差别写进日志，用户不用
 		// 猜是请求没带上，还是服务端没给。
@@ -1022,6 +1080,12 @@ func (m *AuthManager) Logout() {
 		m.notify(err)
 		return
 	}
+	// 主动退出是清空账号：下次登录从默认范围重新开始，不把上一个账号按需
+	// 开通的 scope 带进来。服务端拒绝（invalidate）则相反，要留着 scope 以便
+	// 重新授权时恢复。
+	m.mu.Lock()
+	m.knownScopes = nil
+	m.mu.Unlock()
 	m.notify(nil)
 }
 
@@ -1061,6 +1125,10 @@ func (m *AuthManager) refresh(ctx context.Context, stale string) (string, error)
 	if t.RefreshToken == "" {
 		t.RefreshToken = cur.RefreshToken
 	}
+	// 刷新令牌的响应偶尔不带 scope：沿用当前令牌的，别把权限清单洗成空。
+	if t.Scope == "" {
+		t.Scope = cur.Scope
+	}
 	// 刷新期间用户可能已经退出或重新登录：那就丢弃这次结果，绝不把旧
 	// 会话写回 token.json。
 	if err := m.storeTokenForEpoch(t, epoch); err != nil {
@@ -1086,6 +1154,22 @@ func (m *AuthManager) invalidate(err error) {
 		err = fmt.Errorf("%w；清理令牌失败：%v", err, clearErr)
 	}
 	m.notify(err)
+}
+
+// invalidateFor 是「这次请求用的旧令牌被拒」的失效处理：只有当前会话仍是
+// 那个旧令牌时才清掉。重新授权已经换上新令牌时，迟到的 401 / 刷新失败不能
+// 把刚拿到的授权再清掉。
+func (m *AuthManager) invalidateFor(stale string, err error) {
+	m.mu.Lock()
+	cur := ""
+	if m.token != nil {
+		cur = m.token.AccessToken
+	}
+	m.mu.Unlock()
+	if cur == "" || (stale != "" && cur != stale) {
+		return
+	}
+	m.invalidate(err)
 }
 
 // fetchIdentity reads GET /api/oauth/me (profile scope) for the display name

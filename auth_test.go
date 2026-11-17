@@ -382,6 +382,104 @@ func TestRequestedScopesIncludeExtraScopes(t *testing.T) {
 	}
 }
 
+// 重新授权是替换而不是累加：重新登录时要把上一次拿到的 scope 一起申请，
+// 否则只申请默认范围就等于把按需开通的 write:topic / write:economy 撤掉。
+func TestBeginScopesKeepsPreviouslyGrantedScopes(t *testing.T) {
+	m := newAuthManager(t.TempDir())
+	if err := m.storeToken(tokenData{
+		AccessToken: "tok",
+		TokenType:   "Bearer",
+		Scope:       defaultScopes + " write:topic write:economy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	authorize, err := m.BeginScopes(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(authorize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := " " + u.Query().Get("scope") + " "
+	for _, want := range []string{"write:topic", "write:economy"} {
+		if !strings.Contains(scope, " "+want+" ") {
+			t.Errorf("重新授权没有保留 %s：%q", want, scope)
+		}
+	}
+	m.Cancel()
+
+	// 令牌被服务端拒绝清掉后，记住的 scope 仍要在下一次授权里带上。
+	m.invalidateFor("tok", errors.New("登录失效"))
+	if m.accessToken() != "" {
+		t.Fatal("前置条件：令牌应已被清掉")
+	}
+	authorize, err = m.BeginScopes(context.Background(), []string{"interact"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err = url.Parse(authorize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope = " " + u.Query().Get("scope") + " "
+	for _, want := range []string{"write:topic", "write:economy", "interact"} {
+		if !strings.Contains(scope, " "+want+" ") {
+			t.Errorf("令牌清掉后重新授权没有保留 %s：%q", want, scope)
+		}
+	}
+}
+
+// 旧会话迟到的 401 不能清掉刚重新授权拿到的令牌：invalidateFor 只认它还
+// 持有的那个 access token。
+func TestInvalidateForIgnoresReplacedToken(t *testing.T) {
+	m := newAuthManager(t.TempDir())
+	if err := m.storeToken(tokenData{AccessToken: "NEW", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	notice := 0
+	m.setOnChange(func(error) { notice++ })
+
+	m.invalidateFor("OLD", errors.New("旧请求的 401"))
+	if m.accessToken() != "NEW" || notice != 0 {
+		t.Errorf("旧令牌的失效处理清掉了新会话：token=%q notice=%d", m.accessToken(), notice)
+	}
+
+	m.invalidateFor("NEW", errors.New("新令牌也被拒"))
+	if m.accessToken() != "" || notice != 1 {
+		t.Errorf("当前令牌被拒时应清理并通知一次：token=%q notice=%d", m.accessToken(), notice)
+	}
+}
+
+// 重新授权换掉窗口的会话后，旧会话的回调必须断掉：否则旧请求迟到的失败会
+// 把界面切回登录页，看起来就是刚授权完又掉登录。
+func TestStaleSessionCallbackDoesNotLogOutNewSession(t *testing.T) {
+	a := testApp(t)
+	if err := a.auth.storeToken(tokenData{AccessToken: "OLD", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	a.bindAuth()
+	old := a.auth
+
+	next := newAuthManager(t.TempDir())
+	if err := next.storeToken(tokenData{AccessToken: "NEW", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	a.replaceAuth(next)
+	if a.auth != next || !a.auth.loggedIn() {
+		t.Fatalf("重新授权后窗口没有换到新会话：%+v", a.auth)
+	}
+	a.pageName = "list"
+
+	old.notify(errors.New("旧请求的 401"))
+	if a.auth != next || !a.auth.loggedIn() {
+		t.Errorf("旧会话的回调清掉了新会话：%+v", a.auth)
+	}
+	if a.pageName == "login" {
+		t.Errorf("旧会话的迟到失败把界面切回了登录页")
+	}
+}
+
 // 令牌响应体读到一半才超时（"Client Timeout ... while reading body"），
 // 是打包后登录报错的真实现场。确认 postForm 在这个阶段也套上了诊断提示，
 // 而不是把裸的 context deadline exceeded 直接抛给界面。

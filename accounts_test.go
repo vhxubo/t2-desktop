@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -948,6 +949,91 @@ func TestUseSystemBrowserKeepsTheSameAuthorization(t *testing.T) {
 	}
 }
 
+// 一次普通登录（只申请默认范围）不能把账号索引里记着的按需权限抹掉：
+// 否则下次重新授权就没有清单可恢复。
+func TestApplySessionKeepsPreviouslyGrantedScopes(t *testing.T) {
+	b := testBook(t)
+	acc := addTestAccount(t, b, "jimmy")
+	acc.Scopes = []string{"read", "profile", "write:topic", "write:economy"}
+
+	next := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
+	next.store = &memoryTokenStore{}
+	if err := next.storeToken(tokenData{
+		AccessToken: "next",
+		TokenType:   "Bearer",
+		Username:    "jimmy",
+		Scope:       defaultScopes,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.applySession(acc, next); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(acc.Scopes, "write:topic") || !slices.Contains(acc.Scopes, "write:economy") {
+		t.Errorf("普通登录抹掉了按需权限：%v", acc.Scopes)
+	}
+	if !slices.Contains(next.knownScopesList(), "write:topic") {
+		t.Errorf("新会话没有记住按需权限：%v", next.knownScopesList())
+	}
+}
+
+// 从账号面板「重新登录」也要保留这个账号上次拿到的 scope：重新授权是替换
+// 而不是累加，只申请默认范围会把 write:topic 等按需权限撤掉。
+func TestReloginPreservesGrantedScopes(t *testing.T) {
+	b := testBook(t)
+	acc := addTestAccount(t, b, "jimmy")
+	if err := acc.auth.storeToken(tokenData{
+		AccessToken:  "tok-jimmy",
+		RefreshToken: "r-jimmy",
+		TokenType:    "Bearer",
+		Username:     "jimmy",
+		Scope:        defaultScopes + " write:topic",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	acc.Scopes = acc.auth.scopes()
+
+	b.webview = true
+	b.afterReady = true
+	var authorizeURL string
+	b.openLogin = func(u string) error { authorizeURL = u; return nil }
+	b.reloginAccount(acc.ID)
+	t.Cleanup(b.cancelLogin)
+	if authorizeURL == "" {
+		t.Fatal("没有打开内置浏览器授权页")
+	}
+	u, err := url.Parse(authorizeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope := " " + u.Query().Get("scope") + " "; !strings.Contains(scope, " write:topic ") {
+		t.Errorf("重新登录地址没有保留 write:topic：%q", scope)
+	}
+}
+
+// 账号索引要记住上次拿到的 scope：令牌被清掉 / 进程重启后，重新授权仍能
+// 把以前开通的按需权限申请回来。
+func TestAccountRecordKeepsScopes(t *testing.T) {
+	b := testBook(t)
+	acc := addTestAccount(t, b, "jimmy")
+	acc.Scopes = []string{"read", "profile", "write:topic"}
+	if err := b.save(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := newAccountBook(b.dir)
+	got := reloaded.account(acc.ID)
+	if got == nil {
+		t.Fatal("重新装载后找不到账号")
+	}
+	if !slices.Equal(got.Scopes, acc.Scopes) {
+		t.Errorf("重新装载后的 scope = %v，期望 %v", got.Scopes, acc.Scopes)
+	}
+	if !slices.Contains(got.auth.knownScopesList(), "write:topic") {
+		t.Errorf("会话没有从索引恢复 known scope：%v", got.auth.knownScopesList())
+	}
+}
+
 // 授权成功后面板要当场说明服务端实际给了哪些权限：申请了 write:topic 却没
 // 授予时，不能只显示「已重新登录」，否则用户下次发动态才发现还是缺权限。
 func TestNoteGrantedScopesWarnsMissing(t *testing.T) {
@@ -1034,7 +1120,7 @@ func TestLoginWindowOffersReauthorizeAfterSiteLogin(t *testing.T) {
 	b := testBook(t)
 	m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
 	m.store = &memoryTokenStore{}
-	authorize, err := m.BeginScopes(context.Background(), nil)
+	authorize, err := m.BeginScopes(context.Background(), []string{"write:topic"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1070,6 +1156,13 @@ func TestLoginWindowOffersReauthorizeAfterSiteLogin(t *testing.T) {
 	}
 	if p.url == authorize {
 		t.Error("重新授权应换一份新的授权地址")
+	}
+	u, err := url.Parse(p.url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope := " " + u.Query().Get("scope") + " "; !strings.Contains(scope, " write:topic ") {
+		t.Errorf("窗口里点「重新授权」丢掉了已经申请的 write:topic：%q", scope)
 	}
 	if !strings.Contains(p.url, "/oauth/authorize?") ||
 		!strings.Contains(p.url, "code_challenge=") {

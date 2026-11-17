@@ -242,7 +242,9 @@ func (b *accountBook) reauthorizeLoginWindow() {
 	if p == nil {
 		return
 	}
-	authorize, err := p.auth.BeginScopes(context.Background(), nil)
+	// 重新发起时把这次授权已经申请过的 scope 原样带上：只申请默认范围会
+	// 把刚补的 write:topic 等按需权限又丢掉。
+	authorize, err := p.auth.BeginScopes(context.Background(), p.auth.requestedScopesList())
 	if err != nil {
 		b.loginErr = "无法重新发起授权：" + friendlyError(err)
 		b.redrawLoginWindow()

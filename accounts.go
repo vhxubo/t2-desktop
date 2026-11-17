@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -55,10 +56,11 @@ const (
 // 凭据里（见 auth.go）。索引里没有它时不认识这个账号，索引里多一条而凭据
 // 没了就显示「登录已失效」，等用户重新登录。
 type accountRecord struct {
-	ID       string `json:"id"`
-	Username string `json:"username,omitempty"`
-	Avatar   string `json:"avatar,omitempty"`
-	AddedAt  int64  `json:"added_at,omitempty"`
+	ID       string   `json:"id"`
+	Username string   `json:"username,omitempty"`
+	Avatar   string   `json:"avatar,omitempty"`
+	AddedAt  int64    `json:"added_at,omitempty"`
+	Scopes   []string `json:"scopes,omitempty"`
 }
 
 // accountsFile 是 accounts.json 的内容。Active 是「上次用的那个」，启动时只
@@ -75,6 +77,10 @@ type account struct {
 	Username string
 	Avatar   string
 	AddedAt  int64
+	// Scopes 是这个账号上一次拿到的授权范围。它不是令牌，只用来在重新授权
+	// 时把之前按需开通的 scope 一起申请回来（2Libra 的重新授权是替换而不是
+	// 累加，少申请一项就等于把它撤掉）。
+	Scopes []string
 
 	auth *AuthManager
 	// app 是这个账号的主窗口与界面状态。窗口是懒建的：没打开时为 nil，
@@ -100,6 +106,7 @@ func (acc *account) record() *accountRecord {
 		Username: acc.Username,
 		Avatar:   acc.Avatar,
 		AddedAt:  acc.AddedAt,
+		Scopes:   append([]string(nil), acc.Scopes...),
 	}
 }
 
@@ -301,12 +308,17 @@ func accountsBackupPath(path string) string { return path + ".bak" }
 
 // accountFromRecordLocked 按一条索引建账号及其会话。调用方持有 mu。
 func (b *accountBook) accountFromRecordLocked(rec *accountRecord) *account {
+	auth := newAuthManagerFor(b.dir, b.proxy, rec.ID)
+	// 令牌里没有 scope（旧会话 / 凭据被清掉）时用账号索引里记的上一份授予
+	// 范围，重新授权才能把以前开通的按需权限一起申请回来。
+	auth.setKnownScopes(rec.Scopes)
 	return &account{
 		ID:       rec.ID,
 		Username: rec.Username,
 		Avatar:   rec.Avatar,
 		AddedAt:  rec.AddedAt,
-		auth:     newAuthManagerFor(b.dir, b.proxy, rec.ID),
+		Scopes:   append([]string(nil), rec.Scopes...),
+		auth:     auth,
 	}
 }
 
@@ -518,7 +530,7 @@ func (b *accountBook) bindSession(acc *account) {
 		acc.app.bindAuth()
 		return
 	}
-	acc.auth.onChange = func(error) { b.sessionChanged(acc) }
+	acc.auth.setOnChange(func(error) { b.sessionChanged(acc) })
 }
 
 // sessionChanged 是窗口没开的账号的会话变化：令牌被拒后把它标成「登录已
@@ -538,6 +550,7 @@ func (b *accountBook) noteAuthChange(acc *account) {
 	}
 	name := acc.auth.username()
 	avatar := acc.auth.avatarURL()
+	scopes := acc.auth.scopes()
 	changed := false
 	b.mu.Lock()
 	if name != "" && acc.Username != name {
@@ -545,6 +558,13 @@ func (b *accountBook) noteAuthChange(acc *account) {
 	}
 	if avatar != "" && acc.Avatar != avatar {
 		acc.Avatar, changed = avatar, true
+	}
+	if len(scopes) > 0 {
+		// 与旧记录取并集：这次令牌可能只申请了默认范围，旧记录里的按需权限
+		// 要留着，下次重新授权才能恢复；只覆盖会把它们永久抹掉。
+		if merged := mergeScopeList(acc.Scopes, scopes); !slices.Equal(acc.Scopes, merged) {
+			acc.Scopes, changed = merged, true
+		}
 	}
 	if acc.auth.loggedIn() {
 		// 重新登录成功后未读数重新从服务端读，旧的先清掉。
@@ -625,7 +645,15 @@ func (b *accountBook) reauthorizeAccount(id string, extraScopes []string) {
 // 授权地址，然后决定在系统浏览器还是内置浏览器里打开。extraScopes 是补权限
 // 时要追加的 scope。
 func (b *accountBook) beginAccountLogin(auth *AuthManager, targetID string, extraScopes []string) {
-	auth.onChange = func(err error) { b.finishAccountLogin(auth, err) }
+	auth.setOnChange(func(err error) { b.finishAccountLogin(auth, err) })
+	// 2Libra 的重新授权是替换而不是累加：给已有账号重新登录时必须把上一次
+	// 拿到的 scope 一起申请，否则只申请默认范围就等于把按需开通的
+	// write:topic / write:economy / upload 全撤掉。
+	if targetID != "" {
+		if acc := b.account(targetID); acc != nil && acc.auth != nil {
+			extraScopes = mergeScopeList(acc.auth.knownScopesList(), extraScopes)
+		}
+	}
 	// 一次只允许一次授权在等回调：别的账号窗口正在补授权的话先让位。
 	b.claimLogin(auth)
 	authorize, err := auth.BeginScopes(context.Background(), extraScopes)
@@ -783,6 +811,9 @@ func (b *accountBook) noteGrantedScopes(auth *AuthManager) {
 		return
 	}
 	granted := auth.scopes()
+	if len(granted) == 0 {
+		return // 令牌里没有 scope 信息：没法核对，不编一个「未授予」
+	}
 	_, missing := grantedAndMissing(requested, granted)
 	msg := b.loginStatus()
 	if len(missing) > 0 {
@@ -829,15 +860,30 @@ func (b *accountBook) applySession(acc *account, auth *AuthManager) error {
 	if err := auth.rekey(tokenStoreFactory(b.dir, acc.ID), acc.ID); err != nil {
 		return fmt.Errorf("保存令牌失败：%w", err)
 	}
-	auth.onChange = nil
+	auth.detach()
 	// 先写账号索引、再换会话：acc.auth 一旦变成新会话，面板与测试就认为
 	// 「重新登录完成」，此时 accounts.json 必须已经落盘，不能出现「界面
 	// 说好了、磁盘还在写」的中间态。
 	b.mu.Lock()
+	old := acc.auth
 	acc.Username = orString(auth.username(), acc.Username)
 	acc.Avatar = orString(auth.avatarURL(), acc.Avatar)
+	// 新授权可能只申请了默认范围（例如从账号面板「添加账号」登进一个已经
+	// 在册的账号）。授予清单取并集：这次没申请到的按需权限留在索引里，下次
+	// 重新授权时还能一起恢复，不会被一次普通登录抹掉。
+	if scopes := auth.scopes(); len(scopes) > 0 {
+		acc.Scopes = mergeScopeList(acc.Scopes, scopes)
+	}
+	known := append([]string(nil), acc.Scopes...)
 	acc.unread = 0
 	b.mu.Unlock()
+	// 新会话也记住这份清单：服务端拒绝后重新授权据此恢复。
+	auth.setKnownScopes(known)
+	// 旧会话上可能还挂着在途刷新：断开回调，迟到的失败不许再把新会话的窗口
+	// 切回登录页。
+	if old != nil && old != auth {
+		old.detach()
+	}
 	if err := b.save(); err != nil {
 		return fmt.Errorf("账号索引写入失败：%w", err)
 	}
@@ -877,12 +923,13 @@ func (b *accountBook) adoptLogin(auth *AuthManager) (*account, error) {
 	if err := auth.rekey(tokenStoreFactory(b.dir, id), id); err != nil {
 		return nil, fmt.Errorf("保存令牌失败：%w", err)
 	}
-	auth.onChange = nil
+	auth.detach()
 	acc := &account{
 		ID:       id,
 		Username: name,
 		Avatar:   auth.avatarURL(),
 		AddedAt:  time.Now().Unix(),
+		Scopes:   append([]string(nil), auth.scopes()...),
 		auth:     auth,
 	}
 	b.mu.Lock()
@@ -1057,7 +1104,7 @@ func (b *accountBook) logoutAccount(id string) {
 	// 这个账号可能还有一次授权在等回调（窗口里的补权限登录）：一并作废，
 	// 否则迟到的回调会把刚退出的账号又签回来。
 	acc.auth.Cancel()
-	acc.auth.onChange = nil
+	acc.auth.detach()
 	// 清内存并删掉这份凭据；删不掉只记日志 —— 索引照样摘掉，别让一份删不掉
 	// 的凭据把账号留在列表里。
 	if err := acc.auth.clearToken(); err != nil && !errors.Is(err, os.ErrNotExist) {
