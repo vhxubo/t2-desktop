@@ -83,15 +83,17 @@ func decodeTopicRewardPool(o object) *rewardPoolInfo {
 	return &p
 }
 
-// topicRewardPoolPath 是给已有金币池补币的端点。路径里的 short_id 优先于
-// 请求体里的 post_id，所以 body 只带 coins。
+// topicRewardPoolPath 是给已有金币池补币的端点。路径带 short_id；但线上服务端
+// 仍然会校验请求体里的 post_id（只靠路径会得到「帖子 ID 不能为空」），所以两处
+// 都带上，文档说的「路径优先」不受影响。
 func topicRewardPoolPath(shortID string) string {
 	return topicPath(shortID) + "/reward-pool"
 }
 
 // rewardPoolBody 是 POST /v1/topics/:short_id/reward-pool 的请求体。
 type rewardPoolBody struct {
-	Coins int `json:"coins"`
+	PostID string `json:"post_id,omitempty"`
+	Coins  int    `json:"coins"`
 }
 
 // fundRewardPool 给金币池注资。这个端点标了 🔑：同一笔注资的超时重试与授权后
@@ -99,7 +101,7 @@ type rewardPoolBody struct {
 func (c *Client) fundRewardPool(ctx context.Context, shortID, key string, coins int) error {
 	_, err := withAuthRetry(c, ctx, func(token string) (struct{}, error) {
 		_, err := c.postJSON(ctx, c.apiURL(topicRewardPoolPath(shortID)), token, key,
-			rewardPoolBody{Coins: coins})
+			rewardPoolBody{PostID: shortID, Coins: coins})
 		return struct{}{}, err
 	})
 	return err

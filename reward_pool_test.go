@@ -187,7 +187,7 @@ func TestRewardPoolSectionHiddenWithoutPool(t *testing.T) {
    注资：路径 / 请求体 / 幂等键，以及气泡与提交链路
 --------------------------------------------------------------- */
 
-// 注资端点必须打到文档路径，body 只有 coins；路径里的 short_id 要转义。
+// 注资端点必须打到文档路径，body 带 post_id 与 coins；路径里的 short_id 要转义。
 func TestFundRewardPoolRequest(t *testing.T) {
 	if got, want := topicRewardPoolPath("POOL01"), "/v1/topics/POOL01/reward-pool"; got != want {
 		t.Errorf("注资路径 = %q，期望 %q", got, want)
@@ -226,8 +226,8 @@ func TestFundRewardPoolRequest(t *testing.T) {
 	if req.key != "key-1" || req.auth != "Bearer tok" {
 		t.Errorf("幂等键 / 鉴权不对：%q / %q", req.key, req.auth)
 	}
-	if req.body != `{"coins":300}` {
-		t.Errorf("请求体 = %s，期望仅 coins", req.body)
+	if req.body != `{"coins":300,"post_id":"POOL01"}` {
+		t.Errorf("请求体 = %s，期望带 post_id 与 coins", req.body)
 	}
 }
 
@@ -286,10 +286,10 @@ func TestRewardPoolFundingSubmits(t *testing.T) {
 	}
 
 	req := <-reqCh
-	if !strings.HasPrefix(req, `{"coins":300}|`) {
+	if !strings.HasPrefix(req, `{"post_id":"POOL01","coins":300}|`) {
 		t.Errorf("请求体 / 键 = %q", req)
 	}
-	key := strings.TrimPrefix(req, `{"coins":300}|`)
+	key := strings.TrimPrefix(req, `{"post_id":"POOL01","coins":300}|`)
 	if !keyPattern.MatchString(key) {
 		t.Errorf("幂等键格式不对：%q", key)
 	}

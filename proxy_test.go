@@ -1291,7 +1291,7 @@ func TestUserBadgesAndHotTagsUseConfiguredProxy(t *testing.T) {
 	}
 }
 
-// 金币池注资是新的经济写出口：同样必须经配置的代理，且带幂等键与 coins。
+// 金币池注资是新的经济写出口：同样必须经配置的代理，且带幂等键与 post_id / coins。
 func TestRewardPoolFundingUsesConfiguredProxy(t *testing.T) {
 	clearProxyEnv(t)
 	var mu sync.Mutex
@@ -1325,7 +1325,7 @@ func TestRewardPoolFundingUsesConfiguredProxy(t *testing.T) {
 	if len(paths) != 1 || paths[0] != "POST /api/v1/topics/POOL01/reward-pool" {
 		t.Fatalf("代理收到的请求 = %v，期望注资 POST", paths)
 	}
-	if bodies[0] != `{"coins":300}` {
+	if bodies[0] != `{"post_id":"POOL01","coins":300}` {
 		t.Errorf("请求体 = %q", bodies[0])
 	}
 	if keys[0] != "key-1" {
