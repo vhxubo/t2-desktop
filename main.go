@@ -1092,10 +1092,10 @@ func (a *app) dialogs(c *ui.Context) {
 	a.closePromptDialog(c)
 }
 
-// navSidebarWidth 是左侧导航栏的宽度。窄栏只放文字，不放图标：168 DIP
-// 给 16 DIP 的左内边距和四字的分组项留出余地，又不和 760 DIP 的正文栏抢
-// 视线。与正文栏之间只有一条 1 DIP 的分隔线。
-const navSidebarWidth = 168
+// navSidebarWidth 是左侧导航栏的宽度。窄栏只放文字，不放图标：184 DIP
+// 给 16 DIP 的左内边距和 13px 的导航文字留出余量，又不和 760 DIP 的正文栏
+// 抢视线。与正文栏之间只有一条 1 DIP 的分隔线。
+const navSidebarWidth = 184
 
 // feedMaxWidth 是正文栏的最大宽度：窗口再宽，一行文字也不超过 760 DIP，
 // 剩下的空间平均留白，阅读视线不必横向来回扫。
@@ -1120,10 +1120,10 @@ func (a *app) sidebar(c *ui.Context) {
 			// 标题栏铃铛打开的弹窗。
 			//
 			// 分组标题不用 SidebarSection：它自带粗体与分组行高，整栏只有
-			// 一组时显得多余。改成一行 9px 的疏排小字，只负责把标题栏和
+			// 一组时显得多余。改成一行 10px 的疏排小字，只负责把标题栏和
 			// 导航项分开，不参与点击。
-			ui.Row(c).FillWidth().Shrink(0).Padding(16, 16, 6, 16).Children(func() {
-				ui.Text(c, "浏览").FontSize(9).LetterSpacing(1.6).
+			ui.Row(c).FillWidth().Shrink(0).Padding(16, 16, 8, 16).Children(func() {
+				ui.Text(c, "浏览").FontSize(10).LetterSpacing(1.6).
 					TextColor(t.TextMuted).SingleLine()
 			})
 			for i, s := range tabSpecs {
@@ -1135,7 +1135,7 @@ func (a *app) sidebar(c *ui.Context) {
 				// 选中值没变时 Sidebar 不报 Changed，所以刷新挂在这一行
 				// 自己的点击上。
 				item := ui.SidebarItem(c, tabID(i), nil, a.followsTabLabel(i, s.Label)).
-					Padding(10, 16).Radius(0).FontSize(12).TextColor(t.TextMuted).
+					Padding(12, 16).Radius(0).FontSize(14).TextColor(t.TextMuted).
 					OnClick(func() { a.reclickTab(idx) })
 				// 选中项铺一层极浅的底，左侧再压一道旧金色竖线，文字提亮到
 				// 近白；其余项保持中性灰，悬停时由 Sidebar 自己抬一档底色。
@@ -1182,7 +1182,7 @@ func (a *app) sidebar(c *ui.Context) {
 // 说明写在提示里，侧边栏底部因此只有两行字和一行小图标。左右内边距与导航
 // 区同为 16 DIP，底部入口和上面的导航项对齐在同一条竖线上。
 func (a *app) sidebarFooter(c *ui.Context) {
-	ui.Column(c).FillWidth().Shrink(0).Padding(18, 16, 16, 16).Gap(14).Children(func() {
+	ui.Column(c).FillWidth().Shrink(0).Padding(20, 16, 18, 16).Gap(16).Children(func() {
 		a.themeButtons(c)
 		// 账号面板是多账号的总入口：切换、添加、退出哪个账号都在那一个窗口里。
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
@@ -1199,14 +1199,14 @@ func (a *app) sidebarFooter(c *ui.Context) {
 // 会发生什么。
 func (a *app) sidebarIconButton(c *ui.Context, icon *ui.SVG, label, tip string, onClick func()) {
 	t := c.Theme()
-	b := ui.Row(c).Size(24, 26).Radius(0).AlignItems(ui.Center).Background(ui.Transparent)
+	b := ui.Row(c).Size(26, 28).Radius(0).AlignItems(ui.Center).Background(ui.Transparent)
 	ink := t.TextMuted
 	if b.Hovered() {
 		b.Background(t.SurfaceHover)
 		ink = t.Text
 	}
 	b.Children(func() {
-		ui.Icon(c, icon).Size(15, 15).TextColor(ink)
+		ui.Icon(c, icon).Size(16, 16).TextColor(ink)
 	})
 	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
@@ -1233,13 +1233,13 @@ func (a *app) sidebarAccount(c *ui.Context) {
 			// 系统没注册回调协议时不会有自动跳回，别让人干等。
 			waiting = "等待授权：系统未注册回调协议，请点「粘贴回调」"
 		}
-		ui.Text(c, waiting).FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		ui.Text(c, waiting).FontSize(12).TextColor(t.TextMuted).MaxLines(3)
 		a.sidebarButton(c, "粘贴回调", nil, "在登录页粘贴回调链接", func() { a.pageName = "login" })
 		a.sidebarButton(c, "取消", nil, "取消这次登录", a.cancelLogin)
 	case a.book != nil && a.book.pendingLogin() != nil:
 		// 添加账号的授权挂在账号册上：等多久都不会有跳回，兜底动作都在账号
 		// 面板里（粘贴回调链接、取消）。
-		ui.Text(c, "等待浏览器授权…").FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		ui.Text(c, "等待浏览器授权…").FontSize(12).TextColor(t.TextMuted).MaxLines(3)
 		a.sidebarButton(c, "账号面板", nil, "打开账号面板查看授权进度", a.showAccounts)
 	case a.auth.loggedIn():
 		a.sidebarButton(c, "退出登录", logoutIcon, "退出这个账号（它的窗口会一起关闭）", a.logoutAccount)
@@ -1262,9 +1262,9 @@ func (a *app) sidebarButton(c *ui.Context, label string, icon *ui.SVG, tip strin
 	}
 	b.Children(func() {
 		if icon != nil {
-			ui.Icon(c, icon).Size(15, 15).TextColor(t.TextMuted)
+			ui.Icon(c, icon).Size(16, 16).TextColor(t.TextMuted)
 		}
-		ui.Text(c, label).FontSize(12).TextColor(t.Text).SingleLine().Grow(1)
+		ui.Text(c, label).FontSize(13).TextColor(t.Text).SingleLine().Grow(1)
 	})
 	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
@@ -1298,7 +1298,7 @@ func (a *app) titleBar(c *ui.Context) {
 		// 外观、设置与登录 / 退出登录都在主页侧边栏底部（见 sidebarFooter）。
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 16).Gap(10).
 			AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "T2 Desktop").FontSize(10).Font(sidebarFont).
+			ui.Text(c, "T2 Desktop").FontSize(11).Font(sidebarFont).
 				LetterSpacing(1.2).SingleLine().TextColor(t.TextMuted)
 			ui.Spacer(c).Grow(1)
 			// 搜索：任何页面都能用，不依赖登录，也不占侧边栏。窗口开着时

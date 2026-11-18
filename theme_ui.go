@@ -7,10 +7,9 @@ import (
 // themeButtons 把三档外观压成一行等宽小字：悬浮提示写明「外观：跟随系统」
 // 这样的完整选项名，读屏与点击测试认的也是这个名字。三档都是纯文字芯片，
 // 选中档用强调色，其余档只在中性灰里悬停变亮——侧边栏因此不再被图标占满。
+// 行首不再写「外观」两个字：三个词并排已经说明是在挑外观，标签留给读屏。
 func (a *app) themeButtons(c *ui.Context) {
-	t := c.Theme()
-	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "外观").FontSize(9).LetterSpacing(0.8).TextColor(t.TextMuted).SingleLine()
+	ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
 		a.themeChip(c, themeFollowSystem, "跟随", "跟随系统")
 		a.themeChip(c, themeLight, "浅", "浅色")
 		a.themeChip(c, themeDark, "深", "深色")
@@ -22,7 +21,7 @@ func (a *app) themeButtons(c *ui.Context) {
 func (a *app) themeChip(c *ui.Context, mode int, text, name string) {
 	t := c.Theme()
 	selected := a.theme.mode == mode
-	b := ui.ButtonBase(c).Padding(3, 5).Radius(0).Background(ui.Transparent)
+	b := ui.ButtonBase(c).Padding(4, 6).Radius(0).Background(ui.Transparent)
 	ink := t.TextMuted
 	switch {
 	case selected:
@@ -31,7 +30,7 @@ func (a *app) themeChip(c *ui.Context, mode int, text, name string) {
 		ink = t.Text
 	}
 	b.Children(func() {
-		ui.Text(c, text).FontSize(10).Font(sidebarFont).TextColor(ink).SingleLine()
+		ui.Text(c, text).FontSize(11).Font(sidebarFont).TextColor(ink).SingleLine()
 	})
 	tip := "外观：" + name
 	if selected {
