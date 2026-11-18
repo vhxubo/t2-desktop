@@ -580,7 +580,7 @@ func decodeCoinRanking(d json.RawMessage) []coinRankEntry {
 			Rank:      o.num("rank", "ranking", "position"),
 			Username:  o.str("username", "name"),
 			IsPro:     o.flag("is_pro", "isPro"),
-			AvatarURL: o.str("avatar_url", "avatarUrl"),
+			AvatarURL: authorAvatar(o),
 			Badges:    decodeBadges(o),
 		}
 		if e.Rank <= 0 {

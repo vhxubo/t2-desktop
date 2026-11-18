@@ -67,6 +67,15 @@ const (
 // imageCacheTTL 是帖子图片的保留时长。头像与表情不看这个时间。
 const imageCacheTTL = 7 * 24 * time.Hour
 
+// 失败头像的有限重试：网络抖动或刚切换代理时，头像可能下载失败一次。以前
+// 失败项永久不再下载，同一会话里这张头像一直是昵称首字母，直到换地址或清
+// 缓存。现在允许在数据再次到达（重新打开窗口、刷新列表）时重试，但设上限
+// 与冷却，避免每批数据都重发请求，或对永久坏链无限重试。
+const (
+	imageRetryLimit    = 2               // 首次失败后最多再试的次数
+	imageRetryCooldown = 3 * time.Second // 两次尝试之间的最短间隔
+)
+
 // imageCacheCleanupInterval 是运行中自动清理过期帖子图片的间隔。启动时
 // 会先清一次，之后按这个间隔再清，长期开着的窗口也不会一直堆别人的图。
 const imageCacheCleanupInterval = 6 * time.Hour
@@ -141,6 +150,10 @@ type imageEntry struct {
 	// 界面每帧都会读 lastUsed，不值得为它加锁。
 	size     atomic.Int64
 	lastUsed atomic.Int64
+	// failures 是连续失败次数、failedAt 是最近一次失败时间，都由 e.mu 保护。
+	// 有限重试据此判断失败项能否在下一批数据到达时再下载一次。
+	failures int
+	failedAt time.Time
 	// cache 是登记这张图的那份缓存，set 时把占用变化报回去；key 是它在
 	// entries 里的键，用来确认自己还没被淘汰。测试里手工造出来的条目可以为空。
 	cache *imageCache
@@ -158,8 +171,12 @@ func (e *imageEntry) set(src ui.ImageSource) {
 	e.src = src
 	if src == nil {
 		e.state = imageFailed
+		e.failures++
+		e.failedAt = time.Now()
 	} else {
 		e.state = imageLoaded
+		e.failures = 0
+		e.failedAt = time.Time{}
 		e.lastUsed.Store(time.Now().UnixNano())
 	}
 	e.mu.Unlock()
@@ -259,15 +276,36 @@ func (c *imageCache) get(raw string) *imageEntry {
 }
 
 // begin 返回地址对应的缓存项；created 为 true 表示需要调用方启动下载。
+// 失败项默认不再下载，但冷却期过后、未超重试上限时会被重新拉起一次，让
+// 网络抖动 / 切代理造成的偶发失败有机会在下一批数据到达时恢复。
 func (c *imageCache) begin(raw string) (*imageEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e, ok := c.entries[raw]; ok {
-		return e, false
+		return e, e.maybeRetry()
 	}
 	e := &imageEntry{state: imageLoading, cache: c, key: raw}
 	c.entries[raw] = e
 	return e, true
+}
+
+// maybeRetry 判断一个失败项是否该再下载一次：仅在失败态、未超上限、且距
+// 上次失败已过冷却期时返回 true，并把状态改回加载中。加载中与已成功的项
+// 一律返回 false，保持"同一地址只下一次"。调用方持有 c.mu。
+func (e *imageEntry) maybeRetry() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.state != imageFailed {
+		return false
+	}
+	if e.failures > imageRetryLimit {
+		return false
+	}
+	if time.Since(e.failedAt) < imageRetryCooldown {
+		return false
+	}
+	e.state = imageLoading
+	return true
 }
 
 // adjustMemory 把一张图解码后的占用变化记进总量，超出预算时顺手淘汰。

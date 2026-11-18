@@ -95,14 +95,20 @@ func TestDecodeCoinSignAndRanking(t *testing.T) {
 	}
 
 	ranking := decodeCoinRanking(json.RawMessage(`[
-		{"username":"bopomofo","balance":1139778,"rank":1,"is_pro":true},
-		{"username":"jimmy","balance":88,"rank":2}
+		{"username":"bopomofo","balance":1139778,"rank":1,"is_pro":true,
+		 "avatar_url":"https://x/a.png"},
+		{"username":"jimmy","balance":88,"rank":2,"avatar":"https://x/b.png"}
 	]`))
 	if len(ranking) != 2 || ranking[0].Rank != 1 || ranking[0].Balance != 1139778 || !ranking[0].IsPro {
 		t.Errorf("排行榜解析不对：%+v", ranking)
 	}
 	if ranking[1].Username != "jimmy" || ranking[1].Balance != 88 {
 		t.Errorf("排行榜第二项不对：%+v", ranking[1])
+	}
+	// 头像字段名与其他头像入口统一：avatar_url / avatar 都要认，
+	// 不能因为排行榜少读一种拼写就显示成空白。
+	if ranking[0].AvatarURL != "https://x/a.png" || ranking[1].AvatarURL != "https://x/b.png" {
+		t.Errorf("排行榜头像字段没认全：%q / %q", ranking[0].AvatarURL, ranking[1].AvatarURL)
 	}
 }
 

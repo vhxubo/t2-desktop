@@ -239,6 +239,35 @@ func TestNotificationViewReplyTarget(t *testing.T) {
 	}
 }
 
+// 马甲头像在 payload 里，专属拼写与通用拼写都要认；只认一种会让头像变空。
+func TestNotificationAliasAvatarFieldNames(t *testing.T) {
+	for _, tc := range []struct {
+		name, field, want string
+	}{
+		{"专属字段", "alias_avatar_url", "https://x/alias.png"},
+		{"通用字段", "avatar_url", "https://x/generic.png"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := fmt.Sprintf(`{
+				"id":"n1","type":"reply","is_read":false,"created_at":"2026-11-11T01:00:00Z",
+				"from_user":{"username":"alice"},
+				"payload":{"alias_name":"小号","postShortId":"abc","%s":%q}
+			}`, tc.field, tc.want)
+			n := decodeNotificationObject(mustObject(t, raw))
+			if n == nil {
+				t.Fatal("消息解码失败")
+			}
+			v := notificationViewOf(n)
+			if !v.ActorIsAlias {
+				t.Fatal("应当识别为马甲操作者")
+			}
+			if v.ActorAvatar != tc.want {
+				t.Errorf("马甲头像 = %q，期望 %q", v.ActorAvatar, tc.want)
+			}
+		})
+	}
+}
+
 func TestNotificationViewReactionAggregates(t *testing.T) {
 	n := decodeNotificationObject(mustObject(t, `{
 		"id":"n2","type":"reaction","payload":{"reactionType":"comment","related_id":"c9",

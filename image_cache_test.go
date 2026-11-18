@@ -95,6 +95,65 @@ func TestImageCacheTracksLoadState(t *testing.T) {
 	}
 }
 
+// 失败项不是永久空白：冷却过后允许有限次重试，成功后清零，超过上限才停。
+// 测试直接把 failedAt 往前调，免去等待真实冷却时间。
+func TestImageCacheRetriesFailedItemWithLimit(t *testing.T) {
+	c := newImageCache(t.TempDir())
+	u := "https://example.com/avatar.png"
+	backdate := func() {
+		e := c.get(u)
+		if e == nil {
+			t.Fatal("缓存项不存在")
+		}
+		e.mu.Lock()
+		e.failedAt = time.Now().Add(-imageRetryCooldown - time.Second)
+		e.mu.Unlock()
+	}
+
+	e, created := c.begin(u)
+	if !created {
+		t.Fatal("第一次登记没有返回 created")
+	}
+
+	// 首次失败后，冷却期内不重试。
+	e.set(nil)
+	if got := c.state(u); got != imageFailed {
+		t.Fatalf("失败后状态 = %v，期望 imageFailed", got)
+	}
+	if _, retry := c.begin(u); retry {
+		t.Error("冷却期内不该重试")
+	}
+
+	// 冷却过后允许重试，每次失败后再等冷却又能重试，直到用满 imageRetryLimit 次。
+	for i := 0; i < imageRetryLimit; i++ {
+		backdate()
+		if _, retry := c.begin(u); !retry {
+			t.Fatalf("第 %d 次重试机会没有给出（已失败 %d 次）", i+1, i+1)
+		}
+		e = c.get(u)
+		e.set(nil)
+	}
+	backdate()
+	if _, retry := c.begin(u); retry {
+		t.Errorf("已重试 %d 次后再不该重试", imageRetryLimit)
+	}
+
+	// 成功会把失败计数清零，之后的新失败重新开始计重试额度。
+	e = c.get(u)
+	e.set(solidBitmap(8, 8, marker))
+	if e.failures != 0 {
+		t.Errorf("成功后失败次数没有清零：%d", e.failures)
+	}
+	e.set(nil)
+	if e.failures != 1 {
+		t.Errorf("重新失败后次数应为 1，实际 %d", e.failures)
+	}
+	backdate()
+	if _, retry := c.begin(u); !retry {
+		t.Error("清零后的新失败应当重新获得重试机会")
+	}
+}
+
 // 头像、表情和帖子配图共用一份全局缓存：同一个地址不管从哪条路径来，
 // 都只下载一次。
 func TestGlobalImageCacheDownloadsEachURLOnce(t *testing.T) {

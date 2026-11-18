@@ -384,7 +384,10 @@ func notificationViewOf(n *notification) notificationView {
 	v.ActorIsAlias = kind != "reaction" && alias != ""
 	switch {
 	case v.ActorIsAlias:
-		v.ActorAvatar = payload.str("alias_avatar_url")
+		// 马甲头像在 payload 里，字段名有专属拼写与通用拼写两种，都认：
+		// 只认 alias_avatar_url 时，服务端换成通用名就会让头像变空。
+		v.ActorAvatar = payload.str("alias_avatar_url", "aliasAvatarUrl",
+			"avatar_url", "avatarUrl", "avatar")
 	case kind != "reaction":
 		v.ActorAvatar = authorAvatar(n.FromUser)
 		// 徽章只能用消息里已经带的 equipped_badges；没有就不显示，
