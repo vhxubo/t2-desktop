@@ -1064,16 +1064,17 @@ func (a *app) view(c *ui.Context) {
 		return
 	}
 
-	// 顶部自绘标题栏（可拖拽、避让系统窗口按钮）+ 下方 侧边栏/内容 布局。
-	ui.Column(c).Fill().Children(func() {
-		a.titleBar(c)
+	// 整页分两栏：左侧是从窗口顶端贯到底的导航栏，右侧是标题栏 + 内容。
+	// 标题栏只盖住内容区，左栏因此没有一条横切过去的深色带。
+	ui.Row(c).Fill().Children(func() {
+		a.sidebar(c)
 		ui.Divider(c)
-		ui.Row(c).Fill().MinHeight(0).Children(func() {
-			a.sidebar(c)
+		ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
+			a.titleBar(c)
 			ui.Divider(c)
 			// 右侧内容区：正文列表（无限滚动，无底部状态栏）。右下角浮着
 			// 一列 FAB（返回顶部 / 刷新 / 发帖），绝对定位，不占列表的高度。
-			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
+			ui.Column(c).Fill().MinHeight(0).Children(func() {
 				a.body(c)
 				a.listFabs(c)
 			})
@@ -1108,12 +1109,19 @@ const sidebarFont = "monospace"
 // sidebar 是左侧固定导航：只有文字，没有图标；字号小、行距松，整块用等宽
 // 字体。分组语义、键盘导航与读屏标签沿用 ui.Sidebar，只把每行改成方正的
 // 文本行——没有圆角胶囊，选中是一条通栏的浅底加左侧 2 DIP 的旧金色竖线。
-// 整栏底色比正文再深一档，靠这一层色差和分隔线立住前后关系；应用名在标题栏
-// 里只出现一次，这里不再重复一块品牌区。
+// 整栏从窗口顶端贯到底，比正文再深一档；应用名放在顶端与标题栏等高的那一行，
+// 右栏的标题栏因此只盖住内容区。
 func (a *app) sidebar(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Width(navSidebarWidth).Shrink(0).FillHeight().
 		Background(sidebarSurface(t)).Font(sidebarFont).Children(func() {
+		// 顶端这一行放应用名，同时兼作窗口拖拽区：高度与右侧标题栏一致，
+		// 左右内边距与导航文字同为 16 DIP。
+		ui.Row(c).FillWidth().Height(titleBarHeightFor(c)).Shrink(0).
+			Padding(0, 16).AlignItems(ui.Center).DragWindow().Children(func() {
+			ui.Text(c, "T2 Desktop").FontSize(13).FontWeight(600).
+				LetterSpacing(0.2).TextColor(t.Text).SingleLine()
+		})
 		sb := ui.Sidebar(c, &a.navSel, func() {
 			// 侧边栏只有「浏览」一组：动态虽然要登录，但它也是浏览内容，
 			// 不再单独占一个「我的」分组。通知不在这里：它已经从页面改成
@@ -1276,30 +1284,34 @@ const (
 	titleButtonWidth = 46
 )
 
-// titleBar 是完全自绘的顶部标题栏：可拖拽移动窗口（双击最大化），左侧是
-// 品牌与账号状态，右侧是最小化 / 最大化·还原 / 关闭按钮；系统标题栏与
-// 系统按钮已由 TitleBarHidden + HideWindowButtons 隐藏。
+// titleBarHeightFor 是本帧标题栏的实际高度：系统按钮占位更高时跟着它走，
+// 至少 32 DIP。左侧导航栏顶端那一行要与它等高，左右两栏的分隔线才对得上。
+func titleBarHeightFor(c *ui.Context) float32 {
+	h := float32(titleBarHeight)
+	if bar := c.TitleBar(); bar.Height > h {
+		h = bar.Height
+	}
+	return h
+}
+
+// titleBar 是完全自绘的顶部标题栏：可拖拽移动窗口（双击最大化），右端是
+// 搜索、通知与最小化 / 最大化·还原 / 关闭按钮；系统标题栏与系统按钮已由
+// TitleBarHidden + HideWindowButtons 隐藏。
 //
-// 配色全部取自当前主题：标题栏与左侧导航栏同一底色，左上角接成整圈外框，
-// 不出现一条突兀的灰带；跟随系统切到深色时，标题栏也随之变深，不会出现
-// 浅色条压着深色页面。
+// 标题栏只盖住内容区，底色与页面一致；应用名在左侧导航栏顶端（见 sidebar），
+// 左栏因此从窗口顶端贯到底，顶边不再压着一条深色横带。
 func (a *app) titleBar(c *ui.Context) {
 	t := c.Theme()
 	// bar 是系统窗口按钮占用的区域，HideWindowButtons 下为零。保留这段
 	// 计算，将来若改回系统按钮，标题栏仍然给它们让出位置。
 	bar := c.TitleBar()
-	h := float32(titleBarHeight)
-	if bar.Height > h {
-		h = bar.Height
-	}
+	h := titleBarHeightFor(c)
 	ui.Row(c).Height(h).FillWidth().AlignItems(ui.Stretch).
-		Padding(0, 0, 0, bar.Left).Background(sidebarSurface(t)).DragWindow().Children(func() {
-		// 左段：品牌、通知铃铛，登录后再加上头像与昵称，整体可随标题栏拖动。
-		// 外观、设置与登录 / 退出登录都在主页侧边栏底部（见 sidebarFooter）。
+		Padding(0, 0, 0, bar.Left).Background(t.Background).DragWindow().Children(func() {
+		// 左段：搜索、通知铃铛，登录后再加上金币、盲盒与头像昵称，整体可随
+		// 标题栏拖动。外观、设置与登录 / 退出登录都在主页侧边栏底部。
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 16).Gap(10).
 			AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "T2 Desktop").FontSize(11).Font(sidebarFont).
-				LetterSpacing(1.2).SingleLine().TextColor(t.TextMuted)
 			ui.Spacer(c).Grow(1)
 			// 搜索：任何页面都能用，不依赖登录，也不占侧边栏。窗口开着时
 			// 放大镜用强调色标出来。
