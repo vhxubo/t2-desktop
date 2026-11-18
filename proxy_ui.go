@@ -134,6 +134,12 @@ func (a *app) proxySettingsSection(c *ui.Context) {
 				Clicked() {
 				a.testProxyConnectivity()
 			}
+			// 网络调试：打开进程级的请求记录窗口，排查「发了什么、回了什么」。
+			if ui.Button(c, "网络调试").
+				Tooltip("打开网络调试窗口，查看应用发出的每个请求的参数与响应").
+				Clicked() {
+				a.showNetLog()
+			}
 			ui.Spacer(c).Grow(1)
 			if ui.PrimaryButton(c, "保存代理设置").Clicked() {
 				a.saveProxySettings()

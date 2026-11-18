@@ -107,6 +107,9 @@ type proxyManager struct {
 	fn        func(*url.URL) (*url.URL, error)
 	status    string
 	transport *http.Transport
+	// net 是进程级的网络请求记录器（见 netlog.go）：Client() 返回的客户端
+	// 都包了记录层，网络调试窗口展示的就是它记下的请求。
+	net *netRecorder
 	// global 是 mygo 内部（更新插件等）共用的 transport。它的 Proxy 由
 	// installGlobalProxy 换成本管理器的 proxyFor，改配置时也要断开它上面
 	// 的空闲连接，否则检查更新可能继续复用连着旧代理的连接。
@@ -117,7 +120,7 @@ func newProxyManager(dir string) *proxyManager {
 	if dir == "" {
 		dir = configDir()
 	}
-	p := &proxyManager{dir: dir, cfg: proxyConfig{Mode: proxyFollowSystem}}
+	p := &proxyManager{dir: dir, cfg: proxyConfig{Mode: proxyFollowSystem}, net: newNetRecorder()}
 	var cfg proxyConfig
 	if err := readJSONFile(filepath.Join(dir, "proxy.json"), &cfg); err == nil {
 		p.cfg = cfg.normalized()
@@ -152,11 +155,24 @@ func (p *proxyManager) Transport() *http.Transport {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.transport == nil {
-		tr := http.DefaultTransport.(*http.Transport).Clone()
-		tr.Proxy = p.proxyFor
-		p.transport = tr
+		// 默认模板从 http.DefaultTransport 复制。它正常是 *http.Transport；
+		// 记录层接管后（installGlobalProxy 换成了 netLogTransport）退回一份
+		// 空白默认值，保证任何时候都能建出可用的共享 transport。
+		if base, ok := http.DefaultTransport.(*http.Transport); ok {
+			p.transport = base.Clone()
+		} else {
+			p.transport = (&http.Transport{}).Clone()
+		}
+		p.transport.Proxy = p.proxyFor
 	}
 	return p.transport
+}
+
+// netTransport 是包了请求记录层的共享 transport：Client() 与
+// installGlobalProxy 都从这拿，普通 API、SSE、图床上传、图片下载与兜底的
+// 默认客户端因此都会被网络调试窗口记录。
+func (p *proxyManager) netTransport() http.RoundTripper {
+	return &netLogTransport{inner: p.Transport(), rec: p.net}
 }
 
 // closeIdleConnections 断开所有共享 transport 上的空闲连接。换代理地址后
@@ -193,9 +209,15 @@ func (p *proxyManager) closeIdleConnections() {
 // 注意这里依赖 mygo v0.8.3 的 updater.go 用 netproxy.Transport() 这个共享
 // 单例；升级 mygo 时要重新核对那一行，并跑 TestUpdateCheckUsesConfiguredProxy。
 func installGlobalProxy(p *proxyManager) {
-	http.DefaultTransport = p.Transport()
-
+	// 必须先初始化 netproxy 的共享单例，再换掉 http.DefaultTransport：
+	// netproxy.Transport() 首次调用会把 DefaultTransport 断言成
+	// *http.Transport 并克隆（netproxy.go 的 lazy.get），断言失败会 panic。
+	// 顺序反了只在真实启动时炸——测试进程里这个 sync.Once 单例早已被
+	// 其他用例初始化，掩盖了顺序问题。
 	nt := netproxy.Transport()
+
+	http.DefaultTransport = p.netTransport()
+
 	nt.Proxy = p.proxyFor
 	p.mu.Lock()
 	p.global = nt
@@ -203,6 +225,9 @@ func installGlobalProxy(p *proxyManager) {
 }
 
 func (p *proxyManager) proxyFor(req *http.Request) (*url.URL, error) {
+	// 更新插件走 netproxy 的共享单例，绕不进记录层：这里按 context 标记
+	// 认出还没记过的请求，补一条仅请求侧的记录（见 netlog.go）。
+	p.net.noteUnwrapped(req)
 	p.mu.Lock()
 	fn := p.fn
 	p.mu.Unlock()
@@ -212,10 +237,10 @@ func (p *proxyManager) proxyFor(req *http.Request) (*url.URL, error) {
 	return fn(req.URL)
 }
 
-// Client 返回一个使用共享 transport 的客户端。timeout 为 0 时不设整体
-// 超时，供 SSE 长连接使用。
+// Client 返回一个使用共享 transport（含请求记录层）的客户端。timeout 为 0
+// 时不设整体超时，供 SSE 长连接使用。
 func (p *proxyManager) Client(timeout time.Duration) *http.Client {
-	return &http.Client{Transport: p.Transport(), Timeout: timeout}
+	return &http.Client{Transport: p.netTransport(), Timeout: timeout}
 }
 
 // Snapshot 返回已保存的配置和当前生效状态的说明。

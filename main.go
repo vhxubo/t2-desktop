@@ -116,6 +116,18 @@ type app struct {
 	// aboutWin 是「关于」窗口：开发者、邮箱、项目地址与 2Libra 主页都列在
 	// 这一个窗口里。入口见 sidebarFooter 与 showAbout；只在主线程读写。
 	aboutWin *mygo.Window
+	// 网络调试窗口（见 netlog_ui.go）：查看进程级记录的所有 HTTP 请求。
+	// netLogUnwatch 是记录器回调的反注册函数，窗口开着才非 nil；
+	// netLogSel / netLogKind / netLogFilter 是列表的选中与筛选状态；
+	// netLogLastRedraw 配合 netLogRedrawMu 给「新请求到达就刷新窗口」节流。
+	// 都只在主线程读写（netLogChanged 在网络协程里只碰节流用的互斥量）。
+	netLogWin        *mygo.Window
+	netLogSel        int
+	netLogKind       int
+	netLogFilter     string
+	netLogUnwatch    func()
+	netLogRedrawMu   sync.Mutex
+	netLogLastRedraw time.Time
 	// cacheStatus 是设置窗口「图片缓存」一块的显示状态；统计在后台跑，
 	// 结果回到主线程。
 	cacheStatus cacheStatus

@@ -225,6 +225,16 @@ func TestProxyReloadPicksUpNewEnvironment(t *testing.T) {
 	}
 }
 
+// unwrapNetLogTransport 剥掉请求记录层：Client() 返回的客户端现在包了一层
+// netLogTransport（见 netlog.go），断言「共用同一个共享 transport」时先剥掉
+// 它再比较。
+func unwrapNetLogTransport(rt http.RoundTripper) http.RoundTripper {
+	if nt, ok := rt.(*netLogTransport); ok {
+		return nt.inner
+	}
+	return rt
+}
+
 // 所有网络路径必须共用同一个 transport：漏掉 SSE 或 OAuth 就会出现
 // 「列表走了代理，通知长连接/登录却直连」的半吊子状态。
 func TestProxySharedByAPIStreamAndOAuth(t *testing.T) {
@@ -232,19 +242,19 @@ func TestProxySharedByAPIStreamAndOAuth(t *testing.T) {
 	shared := p.Transport()
 
 	c := &Client{Proxy: p}
-	if got := c.httpClient().Transport; got != shared {
+	if got := unwrapNetLogTransport(c.httpClient().Transport); got != shared {
 		t.Errorf("普通 API 请求没有使用共享 transport：%T", got)
 	}
-	if got := c.streamHTTPClient().Transport; got != shared {
+	if got := unwrapNetLogTransport(c.streamHTTPClient().Transport); got != shared {
 		t.Errorf("SSE 长连接没有使用共享 transport：%T", got)
 	}
 	m := newAuthManagerAt(t.TempDir(), p)
-	if got := m.http.Transport; got != shared {
+	if got := unwrapNetLogTransport(m.http.Transport); got != shared {
 		t.Errorf("OAuth 请求没有使用共享 transport：%T", got)
 	}
 	// Skyimg 这类要先取 CSRF 令牌再上传的适配器会复制一份客户端加 cookie
 	// jar，复制品必须继续共用同一个 transport（也就是同一个代理）。
-	if got := c.clientWithJar(nil).Transport; got != shared {
+	if got := unwrapNetLogTransport(c.clientWithJar(nil).Transport); got != shared {
 		t.Errorf("带 cookie jar 的图床客户端没有使用共享 transport：%T", got)
 	}
 }
