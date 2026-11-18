@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -256,6 +257,29 @@ type Client struct {
 	streamBackoffSeq     []time.Duration
 	streamReconnectDelay time.Duration
 	streamIdleTimeout    time.Duration
+
+	// 没有共享 proxyManager 时（无头测试、裸客户端）用自己私有的限流闸门。
+	// 这里存指针而不是锁值：replyClientFor 会复制 Client 换会话，复制后仍
+	// 共用同一个闸门，go vet 的 copylocks 也不会报错。
+	rateLocal *rateLimitGate
+}
+
+// 只在没有共享闸门时用来惰性建私有闸门。Client 本身会被复制，不能把锁
+// 放进 Client；这份全局锁只保护首次赋值，不挡真正的请求。
+var clientRateMu sync.Mutex
+
+// rateGate 返回这个客户端用的限流闸门：生产里所有账号窗口共用代理管理
+// 器上的那一份，因此一个窗口被限流，其它窗口与后台轮询都跟着退避。
+func (c *Client) rateGate() *rateLimitGate {
+	if g := c.Proxy.rateLimitGate(); g != nil {
+		return g
+	}
+	clientRateMu.Lock()
+	defer clientRateMu.Unlock()
+	if c.rateLocal == nil {
+		c.rateLocal = newRateLimitGate()
+	}
+	return c.rateLocal
 }
 
 func (c *Client) base() string {
@@ -356,29 +380,7 @@ func (c *Client) getJSON(ctx context.Context, u, token string) (json.RawMessage,
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := c.httpClient().Do(req)
-	if err != nil {
-		return empty, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-	if err != nil {
-		return empty, err
-	}
-	var env envelope
-	if err := json.Unmarshal(body, &env); err != nil {
-		return empty, fmt.Errorf("响应不是 {c,m,d,t} 信封（HTTP %d）：%w", resp.StatusCode, err)
-	}
-	if resp.StatusCode >= 400 || env.C != 0 {
-		return empty, &apiError{
-			Status:        resp.StatusCode,
-			Code:          env.Code,
-			Message:       env.M,
-			RequiredScope: env.RequiredScope,
-			RetryAfter:    env.RetryAfter,
-		}
-	}
-	return env.D, nil
+	return c.sendJSON(req)
 }
 
 // postJSON sends one POST with a JSON body and unwraps the {c,m,d,t} envelope,
@@ -441,6 +443,19 @@ func (c *Client) writeJSON(ctx context.Context, method, u, token, idempotencyKey
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
 	}
+	return c.sendJSON(req)
+}
+
+// sendJSON 是 getJSON / writeJSON 共用的出口：退避期内直接返回错误，不把
+// 请求发出去；收到 429 rate_limited 时按错误体里的 retry_after 记下退避。
+// 这里只管 API 信封请求——第三方图床与 multipart 上传各有自己的限流规则，
+// 不要被 2Libra 的一次限流连带挡住。
+func (c *Client) sendJSON(req *http.Request) (json.RawMessage, error) {
+	var empty json.RawMessage
+	gate := c.rateGate()
+	if left := gate.remaining(); left > 0 {
+		return empty, rateLimitWaitError(left)
+	}
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return empty, err
@@ -455,14 +470,23 @@ func (c *Client) writeJSON(ctx context.Context, method, u, token, idempotencyKey
 		return empty, fmt.Errorf("响应不是 {c,m,d,t} 信封（HTTP %d）：%w", resp.StatusCode, err)
 	}
 	if resp.StatusCode >= 400 || env.C != 0 {
-		return empty, &apiError{
+		ae := &apiError{
 			Status:        resp.StatusCode,
 			Code:          env.Code,
 			Message:       env.M,
 			RequiredScope: env.RequiredScope,
 			RetryAfter:    env.RetryAfter,
 		}
+		if resp.StatusCode == http.StatusTooManyRequests || env.Code == "rate_limited" {
+			gate.hold(retryAfterSeconds(resp.Header.Get("Retry-After"), env.RetryAfter))
+			// 按闸门实际退避时间回写，界面上显示的秒数才和真正拦截的时长一致。
+			if secs := ceilSeconds(gate.remaining()); secs > ae.RetryAfter {
+				ae.RetryAfter = secs
+			}
+		}
+		return empty, ae
 	}
+	gate.success()
 	return env.D, nil
 }
 
@@ -761,8 +785,8 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 	// 回复」做跳转用；字段未知时留空，那行就不当链接画。
 	lastComment := o.sub("extra").sub("latest_comment")
 	stats := &replyStats{
-		Replier:       authorName(o.sub("last_commented_by", "last_replier", "latest_commenter")),
-		Updated:       relativeTime(o.str("latest_commented_at", "last_commented_at")),
+		Replier: authorName(o.sub("last_commented_by", "last_replier", "latest_commenter")),
+		Updated: relativeTime(o.str("latest_commented_at", "last_commented_at")),
 		// extra 可能为 null；latest_comment_floor 是顶层楼层号，楼中楼不占楼层，
 		// 所以它就是最高楼层。
 		MaxFloor:      o.sub("extra").num("latest_comment_floor", "max_floor"),

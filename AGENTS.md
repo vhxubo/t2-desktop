@@ -145,6 +145,22 @@ a pure white page.
 - 新增网络出口要补一条 `httptest` 假代理用例，断言请求确实经过代理
   （写法见 `proxy_test.go`）。
 
+### 限流退避：被 429 之后不要再发请求
+
+- 2Libra API 的限流是 HTTP 429 + `code: "rate_limited"`，错误体根上的
+  `retry_after` 是秒数（见开放 API 文档 4.6）。`Client.getJSON` / `writeJSON`
+  统一走 `sendJSON`：它先查 `rateLimitGate`，退避期内直接返回 `rate_limited`
+  错误而不发网络请求；收到限流后按 `retry_after` 退避，没给时按 5/10/20/
+  40/60 秒逐级退避，封顶 60 秒。
+- 闸门挂在共享的 `proxyManager` 上，多个账号窗口与后台轮询共用；一个窗口
+  被限流，其它窗口在退避期内也跳过。无头测试里没有共享闸门时客户端各自
+  用私有的一份。
+- 视图每帧调用的 `ensure*` 加载器必须在失败后退避：`ensureLoaded` 已经会
+  先看闸门；新加载器不要每帧重发注定被拒的请求。普通失败也沿用各状态里
+  已有的 `triedAt` / `failures` 冷却写法（见 `comment_cost.go`、`nodes.go`）。
+- SSE 通知流有自己的 5s→10s→20s→40s→60s 重连退避（`stream.go`）；第三方
+  图床与 multipart 上传各有自己的配额规则，不受 2Libra API 闸门影响。
+
 ## 2Libra 开放 API 文档
 
 应用里的数据全部来自 2Libra 开放 API v1。文档入口：

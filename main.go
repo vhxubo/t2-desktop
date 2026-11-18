@@ -840,6 +840,11 @@ func (a *app) ensureLoaded() {
 	if st.loading || st.loaded || st.authWait {
 		return
 	}
+	// 被限流后不要每帧重发：闸门在退避期内会拒绝所有 API 请求，这里连
+	// 失败的本地回调也不必再排一遍，页面上的提示保留第一次的秒数。
+	if a.client != nil && a.client.rateGate().remaining() > 0 {
+		return
+	}
 	if spec.NeedsAuth && !a.auth.loggedIn() {
 		return
 	}

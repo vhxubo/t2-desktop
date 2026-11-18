@@ -114,13 +114,26 @@ type proxyManager struct {
 	// installGlobalProxy 换成本管理器的 proxyFor，改配置时也要断开它上面
 	// 的空闲连接，否则检查更新可能继续复用连着旧代理的连接。
 	global *http.Transport
+	// rateLimit 是全应用共享的限流退避闸门（见 rate_limit.go）：所有走这份
+	// 代理配置的窗口和后台轮询共用，一处被限流，其余请求在退避期内跳过。
+	rateLimit *rateLimitGate
+}
+
+// rateLimitGate 返回这份代理配置下的共享闸门；零值代理管理器没有闸门，
+// 调用方应退回自己私有的一份。
+func (p *proxyManager) rateLimitGate() *rateLimitGate {
+	if p == nil {
+		return nil
+	}
+	return p.rateLimit
 }
 
 func newProxyManager(dir string) *proxyManager {
 	if dir == "" {
 		dir = configDir()
 	}
-	p := &proxyManager{dir: dir, cfg: proxyConfig{Mode: proxyFollowSystem}, net: newNetRecorder()}
+	p := &proxyManager{dir: dir, cfg: proxyConfig{Mode: proxyFollowSystem},
+		net: newNetRecorder(), rateLimit: newRateLimitGate()}
 	var cfg proxyConfig
 	if err := readJSONFile(filepath.Join(dir, "proxy.json"), &cfg); err == nil {
 		p.cfg = cfg.normalized()
