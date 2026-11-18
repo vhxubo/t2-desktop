@@ -431,10 +431,20 @@ func (a *app) coinBreakdownCard(c *ui.Context, cs *coinState) {
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, title).FontSize(14).Bold()
-			ui.Text(c, "本月").FontSize(11).TextColor(t.TextMuted)
 			ui.Spacer(c).Grow(1)
-			a.coinToggleChip(c, "收入", cs.breakdownType != "expense", func() { a.setCoinBreakdownType("income") })
-			a.coinToggleChip(c, "支出", cs.breakdownType == "expense", func() { a.setCoinBreakdownType("expense") })
+			a.coinToggleChip(c, "收入", "按收入分类看构成", cs.breakdownType != "expense", func() { a.setCoinBreakdownType("income") })
+			a.coinToggleChip(c, "支出", "按支出分类看构成", cs.breakdownType == "expense", func() { a.setCoinBreakdownType("expense") })
+		})
+		// 时间范围快捷行：选「注册至今」时会去取账号注册日当作起点。
+		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			for i, label := range coinBreakdownRangeLabels {
+				r := i
+				a.coinToggleChip(c, label, coinBreakdownRangeTip(r), cs.breakdownRange == r, func() { a.setCoinBreakdownRange(r) })
+			}
+			ui.Spacer(c).Grow(1)
+			if start, end := coinBreakdownDates(cs.breakdownRange, cs.registeredDate); start != "" {
+				ui.Text(c, start+" ~ "+end).FontSize(10).TextColor(t.TextMuted).SingleLine()
+			}
 		})
 		switch {
 		case cs.breakdownErr != "":
@@ -445,7 +455,7 @@ func (a *app) coinBreakdownCard(c *ui.Context, cs *coinState) {
 				ui.Text(c, "正在加载分类数据…").FontSize(11).TextColor(t.TextMuted)
 			})
 		case len(cs.breakdownItems) == 0:
-			ui.Text(c, "本月暂无"+title+"数据。").FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, coinBreakdownRangeLabels[cs.breakdownRange]+"暂无"+title+"数据。").FontSize(11).TextColor(t.TextMuted)
 		default:
 			total := 0.0
 			for _, b := range cs.breakdownItems {
@@ -456,6 +466,17 @@ func (a *app) coinBreakdownCard(c *ui.Context, cs *coinState) {
 			}
 		}
 	})
+}
+
+func coinBreakdownRangeTip(r int) string {
+	switch r {
+	case coinBreakdownYear:
+		return "统计最近一年的分类构成"
+	case coinBreakdownAll:
+		return "从注册当天起统计全部分类构成"
+	default:
+		return "只统计本月 1 日至今的分类构成"
+	}
 }
 
 func (a *app) coinBreakdownRow(c *ui.Context, b coinBreakdown, total float64) {
@@ -788,9 +809,9 @@ func coinRankColor(t *ui.Theme, rank int) ui.Color {
 	}
 }
 
-func (a *app) coinToggleChip(c *ui.Context, label string, active bool, onClick func()) {
+func (a *app) coinToggleChip(c *ui.Context, label, tip string, active bool, onClick func()) {
 	t := c.Theme()
-	chip := ui.Button(c, label).FontSize(11).Padding(2, 9).Radius(999)
+	chip := ui.Button(c, label).FontSize(11).Padding(2, 9).Radius(999).Label(label).Tooltip(tip)
 	if active {
 		chip.Background(t.Accent).TextColor(t.AccentText)
 	} else {
@@ -1149,17 +1170,28 @@ func (a *app) loadCoinBreakdown() {
 	if cs == nil {
 		return
 	}
+	// 「注册至今」要先知道注册日。先清掉上一次的范围数据，避免切换后
+	// 短暂显示旧区间的分类；取日期期间保持 loading，取到后再真正拉分类。
 	cs.breakdownSeq++
 	seq := cs.breakdownSeq
 	cs.breakdownLoading = true
 	cs.breakdownLoaded = false
+	cs.breakdownItems = nil
 	cs.breakdownErr = ""
+	if cs.breakdownRange == coinBreakdownAll && cs.registeredDate == "" {
+		// 注册日可能在 ensure 里同步复用成功；无论哪种，分类都由它接着拉。
+		a.ensureCoinRegisteredDate(seq)
+		return
+	}
+	start, end := coinBreakdownDates(cs.breakdownRange, cs.registeredDate)
+	a.fetchCoinBreakdown(cs, seq, start, end)
+}
+
+func (a *app) fetchCoinBreakdown(cs *coinState, seq uint64, start, end string) {
 	flowType := cs.breakdownType
 	if flowType == "" {
 		flowType = "income"
 	}
-	start := coinMonthStart()
-	end := coinTodayDate()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	go func() {
 		defer cancel()
@@ -1179,6 +1211,78 @@ func (a *app) loadCoinBreakdown() {
 			cs.breakdownErr = ""
 		})
 	}()
+}
+
+// ensureCoinRegisteredDate 取账号注册日，供「注册至今」当起点。优先复用「我的」
+// 窗口已经拉到的本人资料，没加载过才单独请求一次 /v1/me；失败只提示不反复重试，
+// 用户点「刷新」时由 reloadCoins 清掉状态再试。
+func (a *app) ensureCoinRegisteredDate(seq uint64) {
+	cs := a.coins
+	if cs == nil || cs.registeredDate != "" || cs.registeredLoading {
+		return
+	}
+	// 「我的」窗口看过一次就能直接复用，省一个请求。
+	if a.profile != nil && a.profile.infoLoaded {
+		if d := coinRegisteredDate(a.profile.user.CreatedAt); d != "" {
+			cs.registeredDate = d
+			cs.registeredTried = true
+			start, end := coinBreakdownDates(coinBreakdownAll, d)
+			a.fetchCoinBreakdown(cs, seq, start, end)
+			return
+		}
+	}
+	if cs.registeredTried {
+		cs.breakdownLoading = false
+		cs.breakdownLoaded = true
+		cs.breakdownErr = "未能获取注册日期，点击右上角「刷新」重试"
+		return
+	}
+	cs.registeredLoading = true
+	cs.registeredTried = true
+	cs.registeredSeq++
+	rs := cs.registeredSeq
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	go func() {
+		defer cancel()
+		d, err := a.client.fetchCoinRegisteredDate(ctx)
+		a.publish(func() {
+			if a.coins != cs || cs.registeredSeq != rs {
+				return
+			}
+			cs.registeredLoading = false
+			if err == nil {
+				cs.registeredDate = d
+			}
+			// 注册日期是账号级信息，拿到就留着给以后用。期间用户切过范围、
+			// 又切回「注册至今」时 breakdownSeq 已经变了，这里用当前的 seq
+			// 重新拉一次，别让那一次切换永远停在 loading。
+			if cs.breakdownRange != coinBreakdownAll || !cs.breakdownLoading {
+				return
+			}
+			if cs.registeredDate == "" {
+				cs.breakdownLoading = false
+				cs.breakdownLoaded = true
+				cs.breakdownErr = "未能获取注册日期，点击右上角「刷新」重试"
+				return
+			}
+			start, end := coinBreakdownDates(coinBreakdownAll, cs.registeredDate)
+			a.fetchCoinBreakdown(cs, cs.breakdownSeq, start, end)
+		})
+	}()
+}
+
+func (a *app) setCoinBreakdownRange(r int) {
+	cs := a.coins
+	if cs == nil || r < 0 || r >= len(coinBreakdownRangeLabels) || r == cs.breakdownRange {
+		return
+	}
+	cs.breakdownRange = r
+	cs.breakdownSeq++
+	cs.breakdownLoading = false
+	cs.breakdownLoaded = false
+	cs.breakdownItems = nil
+	cs.breakdownErr = ""
+	a.loadCoinBreakdown()
 }
 
 func (a *app) setCoinBreakdownType(flowType string) {
@@ -1320,12 +1424,13 @@ func (a *app) reloadCoins() {
 	if cs == nil {
 		return
 	}
-	view, historyRange, breakdownType := cs.view, cs.historyRange, cs.breakdownType
+	view, historyRange, breakdownType, breakdownRange := cs.view, cs.historyRange, cs.breakdownType, cs.breakdownRange
 	historyReason := cs.historyReason
 	*cs = *newCoinState()
 	cs.view = view
 	cs.historyRange = historyRange
 	cs.historyReason = historyReason
 	cs.breakdownType = breakdownType
+	cs.breakdownRange = breakdownRange
 	a.ensureCoinsLoaded()
 }

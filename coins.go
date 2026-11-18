@@ -68,6 +68,16 @@ const (
 
 var coinRangeLabels = []string{"全部", "今天", "近 7 天", "近 30 天"}
 
+// 收支分类卡片的时间范围快捷选项。「注册至今」用账号注册日作为 start_date，
+// 拿不到注册日时降级提示，不静默退回近 30 天。
+const (
+	coinBreakdownMonth = iota
+	coinBreakdownYear
+	coinBreakdownAll
+)
+
+var coinBreakdownRangeLabels = []string{"本月", "近一年", "注册至今"}
+
 // coinNow 单独拿出来给测试替换；接口日期按东八区自然日解释。
 var coinNow = func() time.Time {
 	return time.Now().In(time.FixedZone("UTC+8", 8*3600))
@@ -90,10 +100,41 @@ func coinRangeDates(r int) (start, end string) {
 	}
 }
 
-// coinMonthStart 是收支分类的默认区间起点：本月 1 日。
+// coinMonthStart 是收支分类「本月」的区间起点：本月 1 日。
 func coinMonthStart() string {
 	now := coinNow()
 	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+}
+
+// coinYearStart 是收支分类「近一年」的区间起点：东八区今天往前推一年，
+// AddDate 自己处理闰年与月末。
+func coinYearStart() string {
+	return coinNow().AddDate(-1, 0, 0).Format("2006-01-02")
+}
+
+// coinBreakdownDates 按选中的快捷范围算出传给 expense-breakdown 的日期。
+// 「注册至今」的起点由调用方传入（已按东八区格式化），空串表示还没拿到。
+func coinBreakdownDates(r int, registered string) (start, end string) {
+	end = coinTodayDate()
+	switch r {
+	case coinBreakdownYear:
+		return coinYearStart(), end
+	case coinBreakdownAll:
+		return registered, end
+	default:
+		return coinMonthStart(), end
+	}
+}
+
+// coinRegisteredDate 把账号资料里的 created_at 转成东八区自然日，作为
+// expense-breakdown 的 start_date。解析不了返回空串，界面据此给出提示而不是
+// 静默把范围缩成默认 30 天。
+func coinRegisteredDate(raw string) string {
+	t, ok := profileTime(raw)
+	if !ok {
+		return ""
+	}
+	return t.In(time.FixedZone("UTC+8", 8*3600)).Format("2006-01-02")
 }
 
 // coinTransaction 是流水中的一条。字段名来自开放 API 与站点同一份数据：
@@ -228,12 +269,19 @@ type coinState struct {
 	dailyItems   []coinDailyFlow
 	dailyErr     string
 
-	breakdownSeq     uint64
-	breakdownLoading bool
-	breakdownLoaded  bool
-	breakdownType    string
-	breakdownItems   []coinBreakdown
-	breakdownErr     string
+	breakdownSeq       uint64
+	breakdownLoading   bool
+	breakdownLoaded    bool
+	breakdownType      string
+	breakdownRange     int
+	breakdownItems     []coinBreakdown
+	breakdownErr       string
+	// 注册日期（东八区 YYYY-MM-DD），「注册至今」的区间起点。优先复用「我的」
+	// 窗口的资料，没加载过才单独取一次 /v1/me；取不到时保留空串并给出提示。
+	registeredDate    string
+	registeredSeq     uint64
+	registeredLoading bool
+	registeredTried   bool
 
 	rankingSeq     uint64
 	rankingLoading bool
@@ -265,7 +313,7 @@ type coinState struct {
 }
 
 func newCoinState() *coinState {
-	return &coinState{breakdownType: "income", historyReason: coinReasonAll}
+	return &coinState{breakdownType: "income", breakdownRange: coinBreakdownMonth, historyReason: coinReasonAll}
 }
 
 // ---- 响应解析 ----
@@ -744,6 +792,17 @@ func (c *Client) fetchCoinBreakdown(ctx context.Context, start, end, flowType st
 		return nil, err
 	}
 	return decodeCoinBreakdown(d), nil
+}
+
+// fetchCoinRegisteredDate 读账号注册日期，供「注册至今」当作查询起点。
+// 复用本人资料的 /v1/me（默认 scope profile 已含在申请范围里），不新增端点；
+// 注册时间缺失或解析不了时返回空串，不猜一个日期。
+func (c *Client) fetchCoinRegisteredDate(ctx context.Context) (string, error) {
+	p, err := c.fetchMyProfile(ctx)
+	if err != nil {
+		return "", err
+	}
+	return coinRegisteredDate(p.CreatedAt), nil
 }
 
 func (c *Client) fetchCoinRanking(ctx context.Context) ([]coinRankEntry, error) {

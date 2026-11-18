@@ -131,6 +131,63 @@ func TestCoinRangeDatesUseShanghaiDays(t *testing.T) {
 	if coinMonthStart() != "2026-11-01" {
 		t.Errorf("本月起点不对：%s", coinMonthStart())
 	}
+	if coinYearStart() != "2025-11-12" {
+		t.Errorf("近一年起点不对：%s", coinYearStart())
+	}
+}
+
+func TestCoinBreakdownDatesUseChosenRange(t *testing.T) {
+	old := coinNow
+	coinNow = func() time.Time {
+		return time.Date(2026, 11, 12, 23, 30, 0, 0, time.FixedZone("UTC+8", 8*3600))
+	}
+	defer func() { coinNow = old }()
+
+	cases := []struct {
+		name       string
+		r          int
+		registered string
+		wantStart  string
+	}{
+		{"本月", coinBreakdownMonth, "2023-04-05", "2026-11-01"},
+		{"近一年", coinBreakdownYear, "2023-04-05", "2025-11-12"},
+		{"注册至今", coinBreakdownAll, "2023-04-05", "2023-04-05"},
+	}
+	for _, tc := range cases {
+		start, end := coinBreakdownDates(tc.r, tc.registered)
+		if start != tc.wantStart || end != "2026-11-12" {
+			t.Errorf("%s 区间 = %s ~ %s，期望 %s ~ 2026-11-12", tc.name, start, end, tc.wantStart)
+		}
+	}
+}
+
+func TestCoinRegisteredDateConvertsToShanghaiDay(t *testing.T) {
+	// 注册时间是 UTC 的傍晚：按东八区已经是第二天，start_date 要用第二天。
+	if got := coinRegisteredDate("2024-02-29T18:30:00Z"); got != "2024-03-01" {
+		t.Errorf("注册日期 = %s，期望 2024-03-01", got)
+	}
+	if got := coinRegisteredDate("2024-02-01 08:00:00"); got != "2024-02-01" {
+		t.Errorf("空格分隔的注册日期 = %s，期望 2024-02-01", got)
+	}
+	if got := coinRegisteredDate("不是时间"); got != "" {
+		t.Errorf("无法解析时该给空串，实际 %q", got)
+	}
+}
+
+func TestCoinClientFetchesRegisteredDate(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/me" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, envelopeJSON(`{"username":"jimmy","created_at":"2024-02-29T18:30:00Z"}`))
+	}))
+	defer srv.Close()
+	a := coinTestClient(t, srv)
+	d, err := a.client.fetchCoinRegisteredDate(t.Context())
+	if err != nil || d != "2024-03-01" {
+		t.Errorf("注册日期 = %q, %v，期望 2024-03-01", d, err)
+	}
 }
 
 func TestCoinClientReadsAllEndpoints(t *testing.T) {
@@ -614,6 +671,109 @@ func TestCoinBreakdownToggleReadsExpenseOnly(t *testing.T) {
 	}
 	if len(a.coins.breakdownItems) != 1 {
 		t.Errorf("支出分类没有解析：%+v", a.coins.breakdownItems)
+	}
+}
+
+func TestCoinBreakdownRangeAllUsesRegisteredDate(t *testing.T) {
+	old := coinNow
+	coinNow = func() time.Time {
+		return time.Date(2026, 11, 12, 12, 0, 0, 0, time.FixedZone("UTC+8", 8*3600))
+	}
+	defer func() { coinNow = old }()
+
+	var mu sync.Mutex
+	var starts []string
+	var meCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/me":
+			mu.Lock()
+			meCalls++
+			mu.Unlock()
+			_, _ = io.WriteString(w, envelopeJSON(`{"username":"jimmy","created_at":"2024-02-29T18:30:00Z"}`))
+		case "/api/v1/me/coins/expense-breakdown":
+			mu.Lock()
+			starts = append(starts, r.URL.Query().Get("start_date"))
+			mu.Unlock()
+			_, _ = io.WriteString(w, envelopeJSON(`[{"reason":"checkin","amount":5,"ratio":1}]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	a := coinTestClient(t, srv)
+
+	a.setCoinBreakdownRange(coinBreakdownAll)
+	waitCoin(t, "注册至今分类加载", func() bool { return a.coins.breakdownLoaded && len(a.coins.breakdownItems) == 1 })
+
+	if a.coins.registeredDate != "2024-03-01" {
+		t.Errorf("注册日期 = %q，期望 2024-03-01", a.coins.registeredDate)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if meCalls != 1 {
+		t.Errorf("/v1/me 请求次数 = %d，期望 1", meCalls)
+	}
+	if len(starts) != 1 || starts[0] != "2024-03-01" {
+		t.Errorf("分类请求 start_date = %v，期望 [2024-03-01]", starts)
+	}
+}
+
+func TestCoinBreakdownReusesProfileRegisteredDate(t *testing.T) {
+	var mu sync.Mutex
+	meCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/me":
+			mu.Lock()
+			meCalls++
+			mu.Unlock()
+			_, _ = io.WriteString(w, envelopeJSON(`{"username":"jimmy","created_at":"2024-02-01T08:00:00Z"}`))
+		case "/api/v1/me/coins/expense-breakdown":
+			_, _ = io.WriteString(w, envelopeJSON(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	a := coinTestClient(t, srv)
+	// 「我的」窗口已经看过资料：直接复用，不必再打一次 /v1/me。
+	a.profile.infoLoaded = true
+	a.profile.user.CreatedAt = "2023-01-02T10:00:00Z"
+
+	a.setCoinBreakdownRange(coinBreakdownAll)
+	waitCoin(t, "注册至今分类加载", func() bool { return a.coins.breakdownLoaded })
+
+	if a.coins.registeredDate != "2023-01-02" {
+		t.Errorf("注册日期 = %q，期望 2023-01-02", a.coins.registeredDate)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if meCalls != 0 {
+		t.Errorf("已有本人资料时不该再请求 /v1/me，实际 %d 次", meCalls)
+	}
+}
+
+func TestCoinBreakdownRangeChipsInUI(t *testing.T) {
+	old := coinNow
+	coinNow = func() time.Time {
+		return time.Date(2026, 11, 18, 12, 0, 0, 0, time.FixedZone("UTC+8", 8*3600))
+	}
+	defer func() { coinNow = old }()
+	a := testApp(t)
+	a.coins.baseLoaded, a.coins.todayLoaded = true, true
+	a.coins.dailyLoaded, a.coins.breakdownLoaded = true, true
+	a.coins.breakdownItems = []coinBreakdown{{Reason: "checkin", Amount: 5, Ratio: 1}}
+	a.coins.view = coinViewStats
+	tt := ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
+	tt.Frame()
+	for _, label := range coinBreakdownRangeLabels {
+		if _, ok := tt.Find(label); !ok {
+			t.Errorf("统计页缺少时间范围按钮 %q：%q", label, tt.Texts())
+		}
+	}
+	if !tt.HasText("2026-11-01") || !tt.HasText("2026-11-18") {
+		t.Errorf("统计页缺少当前区间的日期说明：%q", tt.Texts())
 	}
 }
 
