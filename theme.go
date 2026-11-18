@@ -141,6 +141,7 @@ func (a *app) syncNativeAppearance() {
 // 用在选中项、未读与 focus 上；其余层级全是灰阶。
 const (
 	darkInkBackground = "#121417" // 底色：深哑光炭黑
+	darkInkSidebar    = "#0f1114" // 侧边栏：比正文再深一档，压出前后关系
 	darkInkText       = "#e6e8eb" // 正文：近白，不用纯白以免刺眼
 	darkInkMuted      = "#8b929c" // 元信息：压低一档的中性灰
 	darkInkHover      = "#171a1e" // 悬停时只抬一点亮度
@@ -148,11 +149,21 @@ const (
 	darkInkAccent     = "#b0885a" // 唯一强调色：旧金色
 )
 
-// homeTheme 返回全应用共用的主题：浅色是纯白背景（页面、侧边栏与自绘
-// 标题栏均白）+ 指定边框色 oklab(0.21 0.00164224 -0.00577088 / 0.1)
+// sidebarSurface 是窗口外框（标题栏与左侧导航栏）的底色：深色下比正文再深
+// 一档，浅色下比纯白略灰。两块用同一个颜色，左上角因此接成一整圈「框」，
+// 内容区再靠这一层色差和 1 DIP 分隔线立住前后关系。
+func sidebarSurface(t *ui.Theme) ui.Color {
+	if t.Dark {
+		return ui.Hex(darkInkSidebar)
+	}
+	return ui.Hex("#fafafa")
+}
+
+// homeTheme 返回全应用共用的主题：浅色是纯白内容区 + #fafafa 的标题栏与
+// 侧边栏 + 指定边框色 oklab(0.21 0.00164224 -0.00577088 / 0.1)
 // （即 oklch(0.21 0.006 285.885) 的 10% 不透明版本）；深色是一整片哑光
-// 炭黑，颜色见上面的炭黑色板常量。两种外观都让标题栏和侧边栏与页面同色，
-// 不出现一条更亮的横带。
+// 炭黑，标题栏与侧边栏再深一档，颜色见上面的炭黑色板常量。两种外观都把
+// 标题栏和侧边栏做成同一圈外框，不出现一条更亮的横带。
 func homeTheme(dark bool) *ui.Theme {
 	if dark {
 		th := ui.DarkTheme()

@@ -9,8 +9,8 @@ import (
 // 选中档用强调色，其余档只在中性灰里悬停变亮——侧边栏因此不再被图标占满。
 func (a *app) themeButtons(c *ui.Context) {
 	t := c.Theme()
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "外观").FontSize(9).TextColor(t.TextMuted).SingleLine()
+	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "外观").FontSize(9).LetterSpacing(0.8).TextColor(t.TextMuted).SingleLine()
 		a.themeChip(c, themeFollowSystem, "跟随", "跟随系统")
 		a.themeChip(c, themeLight, "浅", "浅色")
 		a.themeChip(c, themeDark, "深", "深色")
@@ -22,7 +22,7 @@ func (a *app) themeButtons(c *ui.Context) {
 func (a *app) themeChip(c *ui.Context, mode int, text, name string) {
 	t := c.Theme()
 	selected := a.theme.mode == mode
-	b := ui.ButtonBase(c).Padding(3, 6).Radius(3).Background(ui.Transparent)
+	b := ui.ButtonBase(c).Padding(3, 5).Radius(0).Background(ui.Transparent)
 	ink := t.TextMuted
 	switch {
 	case selected:

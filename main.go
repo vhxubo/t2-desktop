@@ -1092,9 +1092,10 @@ func (a *app) dialogs(c *ui.Context) {
 	a.closePromptDialog(c)
 }
 
-// navSidebarWidth 是左侧导航栏的宽度。窄栏只放文字，不放图标：150 DIP
-// 足够放下四字的分组项，又不和 760 DIP 的正文栏抢视线。
-const navSidebarWidth = 150
+// navSidebarWidth 是左侧导航栏的宽度。窄栏只放文字，不放图标：168 DIP
+// 给 16 DIP 的左内边距和四字的分组项留出余地，又不和 760 DIP 的正文栏抢
+// 视线。与正文栏之间只有一条 1 DIP 的分隔线。
+const navSidebarWidth = 168
 
 // feedMaxWidth 是正文栏的最大宽度：窗口再宽，一行文字也不超过 760 DIP，
 // 剩下的空间平均留白，阅读视线不必横向来回扫。
@@ -1106,39 +1107,47 @@ const sidebarFont = "monospace"
 
 // sidebar 是左侧固定导航：只有文字，没有图标；字号小、行距松，整块用等宽
 // 字体。分组语义、键盘导航与读屏标签沿用 ui.Sidebar，只把每行改成方正的
-// 文本行——没有圆角胶囊，选中也只是一档更亮的灰。
+// 文本行——没有圆角胶囊，选中是一条通栏的浅底加左侧 2 DIP 的旧金色竖线。
+// 整栏底色比正文再深一档，靠这一层色差和分隔线立住前后关系；应用名在标题栏
+// 里只出现一次，这里不再重复一块品牌区。
 func (a *app) sidebar(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Width(navSidebarWidth).Shrink(0).FillHeight().
-		Background(t.Background).Font(sidebarFont).Children(func() {
-		a.sidebarBrand(c)
+		Background(sidebarSurface(t)).Font(sidebarFont).Children(func() {
 		sb := ui.Sidebar(c, &a.navSel, func() {
 			// 侧边栏只有「浏览」一组：动态虽然要登录，但它也是浏览内容，
 			// 不再单独占一个「我的」分组。通知不在这里：它已经从页面改成
 			// 标题栏铃铛打开的弹窗。
-			ui.SidebarSection(c, "浏览", nil, func() {
-				for i, s := range tabSpecs {
-					if s.Kind == kindNotification {
-						continue
-					}
-					idx := i
-					// 再点一次已经在看的这一页就刷新：回到第一页重新拉一遍。
-					// 选中值没变时 Sidebar 不报 Changed，所以刷新挂在这一行
-					// 自己的点击上。
-					item := ui.SidebarItem(c, tabID(i), nil, a.followsTabLabel(i, s.Label)).
-						Padding(10, 8).Radius(0).
-						OnClick(func() { a.reclickTab(idx) })
-					// 选中项不铺色块：左边一道 2 DIP 的旧金色竖线，文字提亮到
-					// 近白，其余项保持中性灰。键盘焦点环仍由 Sidebar 画。
-					if a.navSel == tabID(i) {
-						item.Background(ui.Transparent).TextColor(t.Text)
-						item.Draw(func(p *ui.Painter, r ui.Rect) {
-							p.Fill(ui.Rect{X: r.X, Y: r.Y + 7, W: 2, H: r.H - 14}, t.Accent, 0)
-						})
-					}
-				}
+			//
+			// 分组标题不用 SidebarSection：它自带粗体与分组行高，整栏只有
+			// 一组时显得多余。改成一行 9px 的疏排小字，只负责把标题栏和
+			// 导航项分开，不参与点击。
+			ui.Row(c).FillWidth().Shrink(0).Padding(16, 16, 6, 16).Children(func() {
+				ui.Text(c, "浏览").FontSize(9).LetterSpacing(1.6).
+					TextColor(t.TextMuted).SingleLine()
 			})
-		}).Grow(1).Padding(6, 10)
+			for i, s := range tabSpecs {
+				if s.Kind == kindNotification {
+					continue
+				}
+				idx := i
+				// 再点一次已经在看的这一页就刷新：回到第一页重新拉一遍。
+				// 选中值没变时 Sidebar 不报 Changed，所以刷新挂在这一行
+				// 自己的点击上。
+				item := ui.SidebarItem(c, tabID(i), nil, a.followsTabLabel(i, s.Label)).
+					Padding(10, 16).Radius(0).FontSize(12).TextColor(t.TextMuted).
+					OnClick(func() { a.reclickTab(idx) })
+				// 选中项铺一层极浅的底，左侧再压一道旧金色竖线，文字提亮到
+				// 近白；其余项保持中性灰，悬停时由 Sidebar 自己抬一档底色。
+				// 键盘焦点环仍由 Sidebar 画。
+				if a.navSel == tabID(i) {
+					item.Background(t.SurfaceHover).TextColor(t.Text)
+					item.Draw(func(p *ui.Painter, r ui.Rect) {
+						p.Fill(ui.Rect{X: r.X, Y: r.Y, W: 2, H: r.H}, t.Accent, 0)
+					})
+				}
+			}
+		}).Grow(1).Padding(0, 0).Gap(1).Background(ui.Transparent)
 		// 侧边栏选中变化 → 同步到 a.tab（用于 body 加载逻辑）
 		if sb.Changed() {
 			if i, ok := tabFromID(a.navSel); ok && i != a.tab {
@@ -1160,30 +1169,20 @@ func (a *app) sidebar(c *ui.Context) {
 			a.lastTab = a.tab
 			a.status = ""
 		}
-		// 底部固定区：三档外观、设置入口，以及账号入口。
+		// 底部固定区：三档外观、设置入口，以及账号入口。它与导航之间只隔
+		// 一条极淡的分隔线，不加底色。
 		ui.Divider(c)
 		a.sidebarFooter(c)
-	})
-}
-
-// sidebarBrand 是导航栏顶端的两行小字：应用名 + 一句极小的说明。它只做
-// 品牌落款，不参与导航，也不放图标。
-func (a *app) sidebarBrand(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).FillWidth().Shrink(0).Padding(26, 8, 18, 18).Gap(5).Children(func() {
-		ui.Text(c, "t2libra").FontSize(14).FontWeight(600).LetterSpacing(0.2).
-			TextColor(t.Text).SingleLine()
-		ui.Text(c, "desktop").FontSize(9).TextColor(t.TextMuted).
-			LetterSpacing(1.2).SingleLine()
 	})
 }
 
 // sidebarFooter 是主页侧边栏底部的固定区：从上到下是外观的三档小字、账号
 // 管理 · 设置 · 关于三个纯图标入口，以及账号入口（登录 / 退出登录）。放在
 // 滚动区之外，导航项再多也不会把这些常驻入口挤走；三个次级入口只留图标，
-// 说明写在提示里，侧边栏底部因此只有两行字和一行小图标。
+// 说明写在提示里，侧边栏底部因此只有两行字和一行小图标。左右内边距与导航
+// 区同为 16 DIP，底部入口和上面的导航项对齐在同一条竖线上。
 func (a *app) sidebarFooter(c *ui.Context) {
-	ui.Column(c).FillWidth().Shrink(0).Padding(18, 10, 14, 10).Gap(12).Children(func() {
+	ui.Column(c).FillWidth().Shrink(0).Padding(18, 16, 16, 16).Gap(14).Children(func() {
 		a.themeButtons(c)
 		// 账号面板是多账号的总入口：切换、添加、退出哪个账号都在那一个窗口里。
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
@@ -1200,7 +1199,7 @@ func (a *app) sidebarFooter(c *ui.Context) {
 // 会发生什么。
 func (a *app) sidebarIconButton(c *ui.Context, icon *ui.SVG, label, tip string, onClick func()) {
 	t := c.Theme()
-	b := ui.Box(c).Size(28, 28).Radius(3).Center().Background(ui.Transparent)
+	b := ui.Row(c).Size(24, 26).Radius(0).AlignItems(ui.Center).Background(ui.Transparent)
 	ink := t.TextMuted
 	if b.Hovered() {
 		b.Background(t.SurfaceHover)
@@ -1252,17 +1251,18 @@ func (a *app) sidebarAccount(c *ui.Context) {
 
 // sidebarButton 是侧边栏底部的整行入口（设置、登录 / 退出登录）：图形与文案
 // 并排，悬停浅灰底，画法贴近 SidebarItem，但它是动作而不是页面，不参与导航
-// 选中。icon 为 nil 时只排文字（授权等待中的「粘贴回调」「取消」）。
+// 选中。icon 为 nil 时只排文字（授权等待中的「粘贴回调」「取消」）。左边缘
+// 与导航文字对齐，悬停底色因此只从 16 DIP 这条线往右铺开。
 func (a *app) sidebarButton(c *ui.Context, label string, icon *ui.SVG, tip string, onClick func()) {
 	t := c.Theme()
-	b := ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(6, 8).
-		Radius(t.Radius).Background(ui.Transparent)
+	b := ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(6, 0).
+		Radius(0).Background(ui.Transparent)
 	if b.Hovered() {
 		b.Background(t.SurfaceHover)
 	}
 	b.Children(func() {
 		if icon != nil {
-			ui.Icon(c, icon).Size(16, 16).TextColor(t.TextMuted)
+			ui.Icon(c, icon).Size(15, 15).TextColor(t.TextMuted)
 		}
 		ui.Text(c, label).FontSize(12).TextColor(t.Text).SingleLine().Grow(1)
 	})
@@ -1280,8 +1280,9 @@ const (
 // 品牌与账号状态，右侧是最小化 / 最大化·还原 / 关闭按钮；系统标题栏与
 // 系统按钮已由 TitleBarHidden + HideWindowButtons 隐藏。
 //
-// 配色全部取自当前主题：标题栏与页面同色，不出现一条突兀的灰带；跟随
-// 系统切到深色时，标题栏也随之变深，不会出现浅色条压着深色页面。
+// 配色全部取自当前主题：标题栏与左侧导航栏同一底色，左上角接成整圈外框，
+// 不出现一条突兀的灰带；跟随系统切到深色时，标题栏也随之变深，不会出现
+// 浅色条压着深色页面。
 func (a *app) titleBar(c *ui.Context) {
 	t := c.Theme()
 	// bar 是系统窗口按钮占用的区域，HideWindowButtons 下为零。保留这段
@@ -1292,13 +1293,13 @@ func (a *app) titleBar(c *ui.Context) {
 		h = bar.Height
 	}
 	ui.Row(c).Height(h).FillWidth().AlignItems(ui.Stretch).
-		Padding(0, 0, 0, bar.Left).Background(t.Surface).DragWindow().Children(func() {
+		Padding(0, 0, 0, bar.Left).Background(sidebarSurface(t)).DragWindow().Children(func() {
 		// 左段：品牌、通知铃铛，登录后再加上头像与昵称，整体可随标题栏拖动。
 		// 外观、设置与登录 / 退出登录都在主页侧边栏底部（见 sidebarFooter）。
-		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 12).Gap(10).
+		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 16).Gap(10).
 			AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "T2 Desktop").FontSize(12).FontWeight(500).
-				LetterSpacing(0.4).SingleLine().TextColor(t.TextMuted)
+			ui.Text(c, "T2 Desktop").FontSize(10).Font(sidebarFont).
+				LetterSpacing(1.2).SingleLine().TextColor(t.TextMuted)
 			ui.Spacer(c).Grow(1)
 			// 搜索：任何页面都能用，不依赖登录，也不占侧边栏。窗口开着时
 			// 放大镜用强调色标出来。
