@@ -390,9 +390,19 @@ func imageBounds(lay viewerLayout, iw, ih, zoom, panX, panY float32) ui.Rect {
 	return ui.Rect{X: (lay.w-w)/2 + panX, Y: stageY + (stageH-h)/2 + panY, W: w, H: h}
 }
 
-// overImage 报告窗口里的 (x, y) 是否落在当前图片上。
+// viewerStageRect 返回舞台在窗口里的矩形。图片放大平移后会溢出舞台，绘制时
+// 由舞台的 Clip 裁掉（见 imageViewerStage）；命中判断必须裁在同一范围，否则
+// 盖到工具条上的那部分图片会抢走关闭、翻页这些按钮的点击（见 overImage）。
+func viewerStageRect(lay viewerLayout) ui.Rect {
+	return ui.Rect{X: 0, Y: lay.toolbarH, W: lay.w, H: lay.h - lay.toolbarH - lay.footerH}
+}
+
+// overImage 报告窗口里的 (x, y) 是否落在当前图片上。先要求点落在舞台内，再
+// 看是否落在图片上：图片放大后可以比舞台大得多，不先裁进舞台的话，工具条和
+// 底栏上的点也会被当成按在图上，按钮就点不动了。
 func (v *imageViewer) overImage(lay viewerLayout, iw, ih, zoom float32) bool {
-	return imageBounds(lay, iw, ih, zoom, v.panX, v.panY).Contains(v.pointerX, v.pointerY)
+	return viewerStageRect(lay).Contains(v.pointerX, v.pointerY) &&
+		imageBounds(lay, iw, ih, zoom, v.panX, v.panY).Contains(v.pointerX, v.pointerY)
 }
 
 // dragBy 把这一次指针移动加到平移上，并立刻夹进允许的范围：拖到边就停住，
@@ -500,7 +510,7 @@ func (a *app) imageViewer(c *ui.Context) {
 	if clicked && v.imagePress {
 		clicked, v.imagePress = false, false
 	}
-	if clicked && (v.pointerY < lay.toolbarH || v.pointerY > lay.h-lay.footerH) {
+	if clicked && !viewerStageRect(lay).Contains(v.pointerX, v.pointerY) {
 		clicked = false
 	}
 	// Esc 与点舞台空白处都关掉这扇预览窗口。

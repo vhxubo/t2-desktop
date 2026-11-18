@@ -682,6 +682,30 @@ func waitViewerSave(t *testing.T, a *app, path string) []byte {
 	return data
 }
 
+// 放大到图片远超舞台、盖住工具条区域后，工具条上的「关闭预览」仍要能点。
+// 图片放大平移后一旦溢出到工具条，就会抢走关闭按钮的点击（见 imageViewer）。
+func TestImageViewerCloseWorksAfterZoom(t *testing.T) {
+	a := viewerDetailApp(t, 0)
+	tt := ui.NewTester(a.view, 1100, 760)
+	vt := openViewer(t, a, tt, "一")
+	// 连滚到最大：800×400 的图放到 8 倍后是 6400×3200，居中时上下左右都
+	// 溢出舞台，把工具条连同关闭按钮一并盖住。
+	for i := 0; i < 40; i++ {
+		vt.Wheel(550, 380, 0, -1)
+	}
+	vt.Frame()
+	if got := viewerZoom(a); got != imageViewerMaxZoom {
+		t.Fatalf("没放到最大：zoom = %v", got)
+	}
+	if err := vt.Click(imageViewerClose); err != nil {
+		t.Fatalf("放大后点「关闭预览」失败：%v（%q）", err, vt.Texts())
+	}
+	vt.Frame()
+	if a.viewer.open || vt.HasText(imageViewerHint) {
+		t.Fatalf("放大后点关闭，预览还开着：%q", vt.Texts())
+	}
+}
+
 // waitViewerIdle 等到这一次另存为结束（成功、失败或取消）：状态都写回界面之后，
 // 后台那段才关掉 savingDone，所以等它就等于等结果落定，不会和 UI 线程抢着读写。
 func waitViewerIdle(t *testing.T, a *app) {
