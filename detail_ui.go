@@ -2086,6 +2086,11 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 		// （下面用 Absolute 摆位），输入栏整行都归输入。
 		ui.Row(c).FillWidth().Children(func() {
 			area := a.replyTextArea(c, d, replyFieldInline, expanded)
+			// Ctrl+Enter 发送评论：绑在输入框自己的 handle 上，只有焦点在
+			// 评论框里才生效，免得在正文或评论列表里按组合键也误发一条。
+			// 草稿搬到独立窗口时这里不构建输入框，快捷键也随之消失，
+			// 那边有自己的窗口级 Ctrl+Enter（见 reply_window.go）。
+			d.composerField.OnShortcut(c, ui.Ctrl, ui.KeyEnter, a.submitReply)
 			// 给浮在右下角的按钮留出正文位置：输入框本身仍吃满整行（点哪儿
 			// 都能接着写），只是文字最右一段不落到按钮底下。左右内边距沿用
 			// 输入框自己的默认值，只把右侧加宽。
@@ -2218,7 +2223,7 @@ func (a *app) replyFieldActions(c *ui.Context, d *detailState) ui.Element {
 		send.Children(func() {
 			ui.Icon(c, sendIcon).Size(16, 16).TextColor(ink)
 		})
-		send.Label("发送").Tooltip("发送评论")
+		send.Label("发送").Tooltip("发送评论（Ctrl+Enter）")
 		if send.Clicked() {
 			a.submitReply()
 		}

@@ -1349,6 +1349,36 @@ func TestReplyComposerFloatingSendIsClickable(t *testing.T) {
 	}
 }
 
+// 详情页里 Ctrl+Enter 是「写评论」的发送手势：焦点在评论框里时才触发，
+// 走的是和点发送按钮同一条 submitReply 校验链（空草稿只弹守卫提示）。
+// 绑在输入框 handle 上而不是整扇窗口，正文/评论列表里按组合键不应误发。
+func TestReplyComposerCtrlEnterSubmits(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	// 焦点不在评论框时按 Ctrl+Enter：不应触发提交校验。
+	tt.Key(ui.Ctrl, ui.KeyEnter)
+	tt.Frame()
+	if tt.HasText("评论内容不能为空") {
+		t.Fatalf("焦点不在评论框时不应提交：%q", tt.Texts())
+	}
+
+	// 点评论框让它聚焦，再按组合键：应走到 submitReply。
+	if err := tt.Click("写评论"); err != nil {
+		t.Fatalf("点评论框失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if !tt.Focused("写评论") {
+		t.Fatalf("评论框未聚焦，快捷键测试前提不成立")
+	}
+	tt.Key(ui.Ctrl, ui.KeyEnter)
+	tt.Frame()
+	if !tt.HasText("评论内容不能为空") {
+		t.Errorf("Ctrl+Enter 应触发送评论校验：%q", tt.Texts())
+	}
+}
+
 // 楼主的回复在昵称后面挂一枚 OP 标签：青绿底配深青字，别人的回复没有。
 func TestReplyRowMarksTopicAuthorWithOP(t *testing.T) {
 	a := detailAppWithReplies(t)
