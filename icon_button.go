@@ -30,6 +30,11 @@ func iconActionButton(c *ui.Context, icon *ui.SVG, label, tip string) ui.Element
 		Size(iconActionBox, iconActionBox).
 		Border(0, t.Border).
 		Radius(6).
+		// ui.Button 默认带 Padding(6,14)，而这里把按钮框死了 28×28：默认
+		// 左右各 14 的中度内边距会把内容盒压成 0 宽，图标贴着内容盒左沿画，
+		// 结果整枚图标偏右 8px，hover 底色却铺满整框，看着就是底色错位。
+		// 显式清成 0，让图标在方形热区里真正居中，hover 底色也与图标对齐。
+		Padding(0).
 		KeepFocus()
 	// 悬停底色要自己给：按钮自带的 hover 样式只在背景没被改过时才生效，
 	// 而这里要的是「没有边框、只有一圈浅底」的图标按钮。

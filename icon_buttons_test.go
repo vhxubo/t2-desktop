@@ -7,6 +7,95 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// iconGlyphCenter 返回 name 按钮里图标墨迹的中心（设备像素）。图标按钮是纯
+// 图标，悬停底色铺满整框；图标若偏在一侧，看着就是高亮和按钮错位。
+func iconGlyphCenter(t *testing.T, tt *ui.Tester, name string) (float32, float32) {
+	t.Helper()
+	r, ok := tt.Find(name)
+	if !ok {
+		t.Fatalf("找不到图标按钮 %q：%q", name, tt.Texts())
+	}
+	im := tt.Image()
+	minX, minY, maxX, maxY := int(r.X+r.W), int(r.Y+r.H), -1, -1
+	for y := int(r.Y); y < int(r.Y+r.H) && y < im.Bounds().Dy(); y++ {
+		for x := int(r.X); x < int(r.X+r.W) && x < im.Bounds().Dx(); x++ {
+			if x < 0 || y < 0 {
+				continue
+			}
+			c := im.RGBAAt(x, y)
+			if c.R < 0x60 && c.G < 0x60 && c.B < 0x60 { // 深色图标墨迹
+				if x < minX {
+					minX = x
+				}
+				if y < minY {
+					minY = y
+				}
+				if x > maxX {
+					maxX = x
+				}
+				if y > maxY {
+					maxY = y
+				}
+			}
+		}
+	}
+	if maxX < 0 {
+		t.Fatalf("%q 的框里找不到图标墨迹：%q", name, tt.Texts())
+	}
+	return float32(minX+maxX) / 2, float32(minY+maxY) / 2
+}
+
+// 图标按钮的悬停底色铺满整框，图标必须与底色同心，偏在一侧看着就是悬浮高亮
+// 错位。这里把四种图标按钮都锁住：iconActionButton 曾因漏清 ui.Button 默认的
+// Padding(6,14)，固定 28×28 的框把图标挤到内容盒左沿、整枚偏右 8px。
+func TestIconButtonsGlyphCenteredOnHover(t *testing.T) {
+	a := &app{}
+	cases := []struct {
+		name  string
+		label string
+		draw  func(*ui.Context)
+	}{
+		{"iconActionButton", "居中甲", func(c *ui.Context) {
+			iconActionButton(c, closeIcon, "居中甲", "提示")
+		}},
+		{"editorIconButton", "居中乙", func(c *ui.Context) {
+			a.editorIconButton(c, closeIcon, "居中乙", "提示")
+		}},
+		{"titleIconButton", "居中丙", func(c *ui.Context) {
+			a.titleIconButton(c, closeIcon, false, "居中丙", "提示", func() {})
+		}},
+		{"detailToolButton", "居中丁", func(c *ui.Context) {
+			a.detailToolButton(c, closeIcon, "居中丁", "提示", func() {})
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			view := func(c *ui.Context) {
+				ui.Row(c).FillWidth().Background(ui.Hex("#ffffff")).Children(func() {
+					ui.Spacer(c).Grow(1)
+					tc.draw(c)
+					ui.Spacer(c).Grow(1)
+				})
+			}
+			tt := ui.NewTester(view, 300, 80)
+			tt.Frame()
+			r, ok := tt.Find(tc.label)
+			if !ok {
+				t.Fatalf("找不到图标按钮：%q", tt.Texts())
+			}
+			tt.Move(r.X+r.W/2, r.Y+r.H/2)
+			tt.Frame()
+			cx, cy := iconGlyphCenter(t, tt, tc.label)
+			if dx := cx - (r.X + r.W/2); dx < -1.5 || dx > 1.5 {
+				t.Errorf("图标横向偏离按钮中心 %.1fpx（框 %+v）", dx, r)
+			}
+			if dy := cy - (r.Y + r.H/2); dy < -1.5 || dy > 1.5 {
+				t.Errorf("图标纵向偏离按钮中心 %.1fpx（框 %+v）", dy, r)
+			}
+		})
+	}
+}
+
 // 操作按钮的规范：能用一个通行图标说清的动作就只画图标，名字给读屏，说明放
 // Tooltip 里（见 AGENTS.md「操作按钮：图标 + tooltip」）。这几个用例盯住本次
 // 从文字按钮改成图标按钮的位置，避免以后又退回一行字。
