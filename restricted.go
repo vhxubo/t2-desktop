@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -219,8 +220,16 @@ func decodeRestricted(d json.RawMessage) restrictedInfo {
 	return decodeRestrictedObject(restrictedObject(d))
 }
 
-// decodeTopicRestricted 取详情里的门槛：线上写在 d.extra.restricted
-// （api-read.md 的 extra 互动块），顶层 d.restricted 也认。
+// decodeTopicRestricted 取详情里的门槛。这里要兼容两代响应：
+//
+//   - 当前 api-read.md：门槛字段扁平地写在 extra 下（restricted_access_type /
+//     has_restricted_hidden_body / restricted_d20_* / restricted_auction_*），
+//     extra 里没有一个叫 restricted 的对象；
+//   - 旧响应与早期测试：门槛包在 extra.restricted（或顶层 restricted）对象里。
+//
+// 两代都可能同时出现，嵌套对象优先；都没有时把扁平字段拼成一个对象，再交给
+// decodeRestrictedObject 统一解。只要认出门槛信号就返回非 nil —— restrictedSection
+// 用这个值决定要不要画整块，画出来之后竞拍状态 / 出价记录才有按钮可点。
 func decodeTopicRestricted(o object) *restrictedInfo {
 	var gate object
 	if extra := o.sub("extra"); extra != nil {
@@ -230,10 +239,41 @@ func decodeTopicRestricted(o object) *restrictedInfo {
 		gate = o.sub("restricted")
 	}
 	if gate == nil {
+		gate = flatRestrictedGate(o)
+	}
+	if gate == nil {
 		return nil
 	}
 	r := decodeRestrictedObject(gate)
 	return &r
+}
+
+// flatRestrictedGate 把 extra 下扁平的 restricted_* 字段拼成一个门槛对象。
+// 没有门槛信号（access_type 为空 / null，且没有 has_hidden_body）时返回 nil，
+// 让普通帖子不会多出一块空的受限内容。字段能读多少读多少：文档没给出的
+// auction 子字段不猜，留给 /restricted/auction 端点。
+func flatRestrictedGate(o object) object {
+	extra := o
+	if e := o.sub("extra"); e != nil {
+		extra = e
+	}
+	access := cleanText(extra.str("restricted_access_type", "access_type"))
+	hasHidden := extra.flag("has_restricted_hidden_body")
+	if access == "" && !hasHidden {
+		return nil
+	}
+	gate := object{}
+	if access != "" {
+		gate["restricted_access_type"] = json.RawMessage(strconv.Quote(access))
+	}
+	// D20 检定门槛 → decodeRestrictedObject 认的属性名 / 阈值。
+	if raw, ok := extra["restricted_d20_attr"]; ok && strings.TrimSpace(string(raw)) != "null" {
+		gate["attribute_name"] = raw
+	}
+	if raw, ok := extra["restricted_d20_threshold"]; ok && strings.TrimSpace(string(raw)) != "null" {
+		gate["attribute_value"] = raw
+	}
+	return gate
 }
 
 // decodeAuctionRows 认一个出价 / 榜单数组。行里的昵称可能被包在
@@ -361,23 +401,51 @@ func (c *Client) unlockRestricted(ctx context.Context, key, shortID string) (res
 
 // ---- 界面状态与动作 ----
 
-// restrictedUIState 只在 UI 线程读写。info / auction / bids 是三次用户主动
-// 发起的只读查询各自的结果，可以同时留在页面上；loadGen 丢弃切帖子之前的
-// 迟到结果。confirm 是「已展开金额确认面板」，submit 会再查一次它。
+// restrictedLoad 是一次只读查询的状态。三块（info / auction / bids）各自一份，
+// 详情打开时会并发自动拉取，互不覆盖；gen 丢弃切帖子之前的迟到结果。
+type restrictedLoad struct {
+	loading bool
+	err     string
+	gen     uint64
+}
+
+// restrictedUIState 只在 UI 线程读写。info / auction / bids 是三次只读查询各自
+// 的结果，可以同时留在页面上：详情打开时自动并发拉取，读失败的原因留在块里
+// 可重试。confirm 是「已展开金额确认面板」，submit 会再查一次它。
 type restrictedUIState struct {
 	info    *restrictedInfo
 	auction *auctionInfo
 	bids    *auctionBids
-	loading string // info / auction / bids
-	err     string
-	errKind string
-	loadGen uint64
+	loads   map[string]*restrictedLoad // info / auction / bids
+	auto    bool                       // 当前详情是否已发起过自动拉取
 
 	confirm bool
 	busy    bool
 	key     string
 	sig     string
 	gen     uint64
+}
+
+func (s *restrictedUIState) load(kind string) *restrictedLoad {
+	if s.loads == nil {
+		s.loads = make(map[string]*restrictedLoad)
+	}
+	l := s.loads[kind]
+	if l == nil {
+		l = &restrictedLoad{}
+		s.loads[kind] = l
+	}
+	return l
+}
+
+// anyLoading 供界面判断「是否还有请求在跑」，用来禁用三个只读按钮。
+func (s *restrictedUIState) anyLoading() bool {
+	for _, l := range s.loads {
+		if l.loading {
+			return true
+		}
+	}
+	return false
 }
 
 // restrictedUnlocked 以最近一次读取 / 解锁的结果为准；详情里的门槛是旧副本，
@@ -393,29 +461,53 @@ func restrictedUnlocked(d *detailState) bool {
 	return gate.UnlockKnown && gate.Unlocked
 }
 
-// loadRestricted 读一次受限内容 / 竞拍状态 / 出价记录。三块都不是默认加载：
-// 这些端点需开通，默认无权限，自动请求只会给大多数用户一次无谓的 403。
-// 读取失败的原因留在区块里并可重试，不弹 toast。
-func (a *app) loadRestricted(d *detailState, kind string) {
+// autoLoadRestricted 在详情正文拿到、且确实有门槛时调一次，把三块只读内容
+// 并发拉回来直接展示。三块共用一次触发：切到别的帖子 / 刷新详情会换新的
+// detailState 或复用同一状态，auto 标志保证不会重复发起。
+//
+// 这些端点需开通、默认不授予，所以自动模式刻意「安静」：未登录不发请求，
+// 403 insufficient_scope 不弹授权弹窗（手动点按钮时才走完整授权链路）。
+// 失败原因留在对应块里，可单独重试。
+func (a *app) autoLoadRestricted(d *detailState) {
 	if d == nil || a.detail != d || d.topic == nil || d.topic.Restricted == nil || !a.autoLoad {
 		return
 	}
-	if d.restricted.loading != "" || d.restricted.busy {
+	if d.restricted.auto {
+		return
+	}
+	d.restricted.auto = true
+	for _, kind := range []string{"info", "auction", "bids"} {
+		a.loadRestricted(d, kind, true)
+	}
+}
+
+// loadRestricted 读一次受限内容 / 竞拍状态 / 出价记录。auto 为真时是详情打开
+// 后的静默自动拉取：未登录跳过、缺 scope 不弹授权；手动点击时为 false，沿用
+// 登录 / 授权链路。读取失败的原因留在对应块里并可重试，不弹 toast。
+func (a *app) loadRestricted(d *detailState, kind string, auto bool) {
+	if d == nil || a.detail != d || d.topic == nil || d.topic.Restricted == nil || !a.autoLoad {
+		return
+	}
+	st := d.restricted.load(kind)
+	if st.loading || d.restricted.busy {
 		return
 	}
 	if !a.auth.loggedIn() {
+		// 自动拉取不该把登录框弹到正在读帖的人面前；手动点击才要求登录。
+		if auto {
+			return
+		}
 		a.requestLogin("登录后才能查看受限内容。", func() {
 			if a.detail == d {
-				a.loadRestricted(d, kind)
+				a.loadRestricted(d, kind, false)
 			}
 		})
 		return
 	}
-	d.restricted.loading = kind
-	d.restricted.err = ""
-	d.restricted.errKind = ""
-	d.restricted.loadGen++
-	gen := d.restricted.loadGen
+	st.loading = true
+	st.err = ""
+	st.gen++
+	gen := st.gen
 	shortID := d.shortID
 	actor := a.auth.username()
 	ctx, cancel := context.WithTimeout(context.Background(), restrictedTimeout)
@@ -434,24 +526,25 @@ func (a *app) loadRestricted(d *detailState, kind string) {
 			bids, err = a.client.fetchRestrictedBids(ctx, shortID)
 		}
 		a.publish(func() {
-			if a.detail != d || d.restricted.loadGen != gen {
+			if a.detail != d || st.gen != gen {
 				return
 			}
-			d.restricted.loading = ""
+			st.loading = false
 			// 请求期间换了账号 / 退出登录，结果不属于当前会话。
 			if !a.auth.loggedIn() || a.auth.username() != actor {
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() {
+				// 自动拉取遇到缺 scope 只是「未开通」，不弹授权打断阅读；
+				// 手动点按钮时才交给授权链路补权限并重试。
+				if !auto && a.handleAuthError(err, func() {
 					if a.detail == d {
-						a.loadRestricted(d, kind)
+						a.loadRestricted(d, kind, false)
 					}
 				}) {
 					return
 				}
-				d.restricted.err = friendlyError(err)
-				d.restricted.errKind = kind
+				st.err = friendlyError(err)
 				return
 			}
 			switch kind {

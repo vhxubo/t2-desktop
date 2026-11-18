@@ -30,7 +30,7 @@ func TestRestrictedPaths(t *testing.T) {
 	}
 }
 
-// api-read.md 把门槛写在 extra.restricted；子字段文档没给，多种拼写都要认。
+// 旧响应把门槛包在 extra.restricted 对象里，顶层 d.restricted 也认。
 func TestDecodeTopicRestricted(t *testing.T) {
 	raw := `{"short_id":"R1","title":"受限","extra":{"restricted":{
         "access_type":"paid","required_coins":100,"required_level":5,
@@ -54,6 +54,45 @@ func TestDecodeTopicRestricted(t *testing.T) {
 	for _, want := range []string{"需要 100 金币解锁", "需要等级 5", "需要魅力达到 7"} {
 		if !strings.Contains(lines, want) {
 			t.Errorf("门槛说明 %q 里没有 %q", lines, want)
+		}
+	}
+}
+
+// 当前 api-read.md：门槛字段扁平地写在 extra 下，没有 extra.restricted 对象。
+// 这是线上真实帖子的形态：认不出来整块受限内容（含竞拍按钮）都会消失。
+func TestDecodeTopicRestrictedFlat(t *testing.T) {
+	raw := `{"short_id":"R2","title":"受限","extra":{
+        "restricted_access_type":"auction","has_restricted_hidden_body":true,
+        "restricted_d20_attr":"魅力","restricted_d20_threshold":7
+    }}`
+	topic, err := decodeTopic([]byte(raw), "R2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := topic.Restricted
+	if r == nil || !r.Known || r.AccessType != "auction" {
+		t.Fatalf("扁平门槛没认出来，整块 UI 会消失：%+v", r)
+	}
+	if !r.AttrKnown || r.AttrName != "魅力" || r.AttrValue != 7 {
+		t.Errorf("D20 属性解码不对：%+v", r)
+	}
+	if lines := strings.Join(r.gateLines(), " / "); !strings.Contains(lines, "需要魅力达到 7") {
+		t.Errorf("门槛说明 %q 里没有 D20 属性", lines)
+	}
+}
+
+// 普通帖子没有门槛信号时不能凭空多出一块受限内容。
+func TestDecodeTopicRestrictedAbsent(t *testing.T) {
+	for _, raw := range []string{
+		`{"short_id":"N","extra":{"restricted_access_type":null,"has_restricted_hidden_body":false}}`,
+		`{"short_id":"N","extra":{"lottery":{"finished_at":"x"}}}`,
+	} {
+		topic, err := decodeTopic([]byte(raw), "N")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if topic.Restricted != nil {
+			t.Errorf("普通帖子被当成受限内容：%+v（%s）", topic.Restricted, raw)
 		}
 	}
 }
@@ -339,4 +378,127 @@ func testRestrictedUIApp(t *testing.T) (*app, chan restrictedCall, func()) {
 	a, got, closeSrv := recordRestrictedCalls(t, 0, "")
 	restrictedTestDetail(t, a, 100)
 	return a, got, closeSrv
+}
+
+// 详情打开后自动拉取三块只读内容：info / auction / bids 各发一次 GET，
+// 结果直接填进状态，不必再点按钮。
+func TestAutoLoadRestrictedFetchesAllThree(t *testing.T) {
+	got := make(chan restrictedCall, 8)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- restrictedCall{method: r.Method, path: r.URL.Path, auth: r.Header.Get("Authorization")}
+		switch r.URL.Path {
+		case "/v1/topics/AR1/restricted":
+			io.WriteString(w, envelopeJSON(`{"unlocked":false}`))
+		case "/v1/topics/AR1/restricted/auction":
+			io.WriteString(w, envelopeJSON(`{"current_price":120,"remaining_seconds":3600}`))
+		case "/v1/topics/AR1/restricted/auction/bids":
+			io.WriteString(w, envelopeJSON(`{"bids":[{"bidder":"甲","price":120}]}`))
+		default:
+			t.Errorf("意外的路径 %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	a := loginApp(t, srv)
+	a.autoLoad = true
+	topic := topicDetail{ShortID: "AR1", Restricted: &restrictedInfo{Known: true}}
+	d := &detailState{shortID: "AR1", topic: &topic}
+	a.pageName = "detail"
+	a.detail = d
+
+	a.autoLoadRestricted(d)
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		c := readRestrictedCall(t, got)
+		if c.method != http.MethodGet || c.auth != "Bearer test-token" {
+			t.Errorf("自动请求 = %+v", c)
+		}
+		seen[c.path] = true
+	}
+	for _, path := range []string{
+		"/v1/topics/AR1/restricted",
+		"/v1/topics/AR1/restricted/auction",
+		"/v1/topics/AR1/restricted/auction/bids",
+	} {
+		if !seen[path] {
+			t.Errorf("没有自动请求 %s：%v", path, seen)
+		}
+	}
+	waitFor(t, func() bool {
+		return d.restricted.info != nil && d.restricted.auction != nil && d.restricted.bids != nil
+	}, "三块自动加载结果没有回到状态")
+	if !d.restricted.auction.PriceKnown || d.restricted.auction.Price != 120 {
+		t.Errorf("竞拍状态没解出来：%+v", d.restricted.auction)
+	}
+	if !d.restricted.bids.Known || len(d.restricted.bids.Rows) != 1 || d.restricted.bids.Rows[0].Name != "甲" {
+		t.Errorf("出价记录没解出来：%+v", d.restricted.bids)
+	}
+	// 同一篇帖子再触发一次不该重复发请求。
+	a.autoLoadRestricted(d)
+	select {
+	case c := <-got:
+		t.Errorf("重复触发发了请求：%+v", c)
+	case <-time.After(60 * time.Millisecond):
+	}
+}
+
+// 自动拉取刻意安静：未登录不发请求、不弹登录；缺 scope 不弹授权，只留重试。
+func TestAutoLoadRestrictedIsQuiet(t *testing.T) {
+	got := make(chan restrictedCall, 8)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- restrictedCall{path: r.URL.Path}
+		w.WriteHeader(http.StatusForbidden)
+		io.WriteString(w, `{"c":403,"code":"insufficient_scope","m":"需要开通","d":null,"t":0,"required_scope":["read"]}`)
+	}))
+	defer srv.Close()
+	a := loginApp(t, srv)
+	a.autoLoad = true
+	// newApp 注册的会话变化回调会因 Logout / scope 收窄自己弹授权，那是测试
+	// 脚手架副作用；整个测试断开它，只检验自动拉取本身不弹窗。
+	a.auth.setOnChange(nil)
+	topic := topicDetail{ShortID: "Q1", Restricted: &restrictedInfo{Known: true}}
+	d := &detailState{shortID: "Q1", topic: &topic}
+	a.pageName = "detail"
+	a.detail = d
+
+	// 退出登录后自动拉取应整体跳过，且不弹登录框。
+	a.auth.Logout()
+	a.authGate = authGate{}
+	a.autoLoadRestricted(d)
+	select {
+	case c := <-got:
+		t.Errorf("未登录还发了请求：%+v", c)
+	default:
+	}
+	if a.authGate.open {
+		t.Error("自动拉取不该弹登录框")
+	}
+
+	// 重新登录，403 insufficient_scope 应留错误可重试，但不弹授权弹窗。
+	if err := a.auth.storeToken(tokenData{AccessToken: "test-token", TokenType: "Bearer",
+		Username: "reader", Scope: "read"}); err != nil {
+		t.Fatal(err)
+	}
+	a.authGate = authGate{}
+	d2 := &detailState{shortID: "Q1", topic: &topic}
+	a.detail = d2
+	a.autoLoadRestricted(d2)
+	for i := 0; i < 3; i++ {
+		readRestrictedCall(t, got)
+	}
+	waitFor(t, func() bool {
+		for _, kind := range []string{"info", "auction", "bids"} {
+			if d2.restricted.load(kind).loading {
+				return false
+			}
+		}
+		return true
+	}, "三块自动拉取没有结束")
+	if a.authGate.open {
+		t.Error("自动拉取遇 insufficient_scope 不该弹授权弹窗")
+	}
+	for _, kind := range []string{"info", "auction", "bids"} {
+		if d2.restricted.load(kind).err == "" {
+			t.Errorf("%s 的读取失败原因没留下", kind)
+		}
+	}
 }

@@ -458,6 +458,11 @@ func (a *app) loadTopic() {
 					a.loadVoteResult(d)
 				}
 			}
+			// 受限内容 / 竞拍：正文拿到且确实有门槛就自动把三块只读内容拉回来
+			// 直接展示，不必再点「查看内容 / 竞拍状态 / 出价记录」。自动模式未
+			// 登录不发请求、缺 scope 不弹授权，失败原因留在块里可重试（见
+			// restricted.go 的 autoLoadRestricted）。
+			a.autoLoadRestricted(d)
 			// 正文拿到后写一份本机缓存，并补全阅读记录里打开时还缺的字段。
 			a.updateReadingTopic(d.shortID, &topic)
 			a.saveCachedDetail(d)

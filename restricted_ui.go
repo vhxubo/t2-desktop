@@ -39,41 +39,48 @@ func (a *app) restrictedSection(c *ui.Context, d *detailState) {
 				FontSize(metaSmallFontSize).TextColor(t.TextMuted)
 		}
 
-		// 三个只读入口。调试中的那一个显示转圈，其余仍可点。
-		loading := d.restricted.loading
+		// 三个只读入口。详情打开时已经自动拉取过，这里是手动重试 / 重新读取：
+		// 每块显示自己的转圈，其余仍可点。手动点击才走登录 / 授权链路。
 		busy := d.restricted.busy
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "查看内容").FontSize(11).Disabled(loading != "" || busy).Clicked() {
-				a.loadRestricted(d, "info")
+			if ui.Button(c, "查看内容").FontSize(11).
+				Disabled(d.restricted.load("info").loading || busy).Clicked() {
+				a.loadRestricted(d, "info", false)
 			}
-			if ui.Button(c, "竞拍状态").FontSize(11).Disabled(loading != "" || busy).Clicked() {
-				a.loadRestricted(d, "auction")
+			if ui.Button(c, "竞拍状态").FontSize(11).
+				Disabled(d.restricted.load("auction").loading || busy).Clicked() {
+				a.loadRestricted(d, "auction", false)
 			}
-			if ui.Button(c, "出价记录").FontSize(11).Disabled(loading != "" || busy).Clicked() {
-				a.loadRestricted(d, "bids")
+			if ui.Button(c, "出价记录").FontSize(11).
+				Disabled(d.restricted.load("bids").loading || busy).Clicked() {
+				a.loadRestricted(d, "bids", false)
 			}
 			if a.auth.loggedIn() && !unlocked && gate.CoinsKnown && gate.Coins > 0 {
 				if ui.Button(c, fmt.Sprintf("花 %d 金币解锁", gate.Coins)).FontSize(11).
-					Disabled(loading != "" || busy).Clicked() {
+					Disabled(d.restricted.anyLoading() || busy).Clicked() {
 					d.restricted.confirm = true
-					d.restricted.err = ""
-					d.restricted.errKind = ""
 				}
 			}
 		})
-		if loading != "" {
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Spinner(c).Size(13, 13)
-				ui.Text(c, map[string]string{
-					"info": "正在读取受限内容…", "auction": "正在读取竞拍状态…", "bids": "正在读取出价记录…",
-				}[loading]).FontSize(11).TextColor(t.TextMuted)
-			})
+		for _, kind := range []string{"info", "auction", "bids"} {
+			if l := d.restricted.load(kind); l.loading {
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.Spinner(c).Size(13, 13)
+					ui.Text(c, map[string]string{
+						"info": "正在读取受限内容…", "auction": "正在读取竞拍状态…", "bids": "正在读取出价记录…",
+					}[kind]).FontSize(11).TextColor(t.TextMuted)
+				})
+			}
 		}
-		// 整块读取失败属于页面级状态：要说明为什么空着，并给重试入口。
-		if d.restricted.err != "" {
-			ui.Text(c, "读取失败："+d.restricted.err).FontSize(11).TextColor(t.Danger).MaxLines(2)
-			if ui.Button(c, "重试").FontSize(11).Clicked() {
-				a.loadRestricted(d, d.restricted.errKind)
+		// 整块读取失败属于页面级状态：每块单独说明为什么空着，并给重试入口。
+		for _, kind := range []string{"info", "auction", "bids"} {
+			if msg := d.restricted.load(kind).err; msg != "" {
+				ui.Text(c, map[string]string{
+					"info": "内容", "auction": "竞拍状态", "bids": "出价记录",
+				}[kind]+"读取失败："+msg).FontSize(11).TextColor(t.Danger).MaxLines(2)
+				if ui.Button(c, "重试").FontSize(11).Clicked() {
+					a.loadRestricted(d, kind, false)
+				}
 			}
 		}
 
