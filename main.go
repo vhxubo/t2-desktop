@@ -1496,7 +1496,7 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 			// 帖子行多一行时效信息：最后回复人、更新时间与最高楼层。没人
 			// 回复时没有这一行，右侧的回复数仍显示 0。
 			if it.Stats != nil && it.Stats.Replier != "" {
-				a.latestReplyRow(c, it.Stats)
+				a.latestReplyRow(c, it, open)
 			}
 		})
 		if it.Stats != nil {
@@ -1516,12 +1516,26 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 // latestReplyRow 是帖子行标题下方的时效行：谁最后回复、多久以前、以及
 // 最新（也是最高）楼层。没人回复过的帖子没有这一行；评论与合集行也不会走
 // 到这里（它们的 Stats 为 nil）。
-func (a *app) latestReplyRow(c *ui.Context, st *replyStats) {
+//
+// 接口给了最后一条回复的评论 id 时，这一行整行是个链接：点它带着 CommentID
+// 打开正文，直接定位到那层楼（openDetail 的 focusID）。它是最内层可点元素，
+// 点这行不会连带触发外层整行的点击。id 未知时退回纯文本，不可点。
+func (a *app) latestReplyRow(c *ui.Context, it Item, open func(Item)) {
+	st := it.Stats
 	t := c.Theme()
-	ui.Row(c).MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "最后回复").FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(0)
-		ui.Text(c, st.Replier).FontSize(11).Bold().TextColor(t.TextMuted).
+	link := ui.Row(c).MinWidth(0).Gap(6).AlignItems(ui.Center)
+	ink := t.TextMuted
+	if st.LastCommentID != "" && link.Hovered() {
+		ink = t.Accent
+	}
+	link.Children(func() {
+		label := ui.Text(c, "最后回复").FontSize(11).TextColor(ink).SingleLine().Shrink(0)
+		name := ui.Text(c, st.Replier).FontSize(11).Bold().TextColor(ink).
 			SingleLine().Shrink(1).Ellipsis("…")
+		if st.LastCommentID != "" && link.Hovered() {
+			label.Underline()
+			name.Underline()
+		}
 		if st.Updated != "" {
 			ui.Text(c, "·").FontSize(11).TextColor(t.TextMuted).Shrink(0)
 			ui.Text(c, st.Updated).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(0)
@@ -1532,6 +1546,12 @@ func (a *app) latestReplyRow(c *ui.Context, st *replyStats) {
 				TextColor(t.TextMuted).SingleLine().Shrink(0)
 		}
 	})
+	if st.LastCommentID != "" {
+		jump := it
+		jump.CommentID = st.LastCommentID
+		link.Cursor(ui.CursorPointer).OnClick(func() { open(jump) })
+		link.Tooltip("跳到最后回复")
+	}
 }
 
 // postStatsBadge 是帖子行右端的状态块：置顶角标，以及一个回复气泡加回复数。

@@ -39,6 +39,10 @@ func TestTopicItemCarriesReplyStats(t *testing.T) {
 	if it.Stats.Replies != 83 {
 		t.Errorf("回复数 = %d，期望 83", it.Stats.Replies)
 	}
+	// 最后一条回复的 uuid 供列表行的「最后回复」链接定位楼层用。
+	if it.Stats.LastCommentID != "c1" {
+		t.Errorf("最后一条回复 id = %q，期望 c1", it.Stats.LastCommentID)
+	}
 	if it.Pinned {
 		t.Error("这篇帖子没有置顶")
 	}
@@ -98,6 +102,68 @@ func TestTopicRowShowsLatestReplyAndBareReplyCount(t *testing.T) {
 	}
 	if count.X <= floor.X {
 		t.Errorf("回复数应靠右显示：回复数 %+v / 楼层 %+v", count, floor)
+	}
+}
+
+// 帖子行的「最后回复」是独立入口：点它进正文并直接定位到最后一条回复。
+// 它是最内层可点元素，点它不会连带触发外层整行的点击（返回栈不该变深）。
+func TestTopicRowLastReplyJumpsToComment(t *testing.T) {
+	a := testApp(t)
+	it := itemFrom([]byte(topicWithReplyStatsJSON), kindTopic)
+	a.tabs[0].items = []Item{it}
+	a.tabs[0].loaded = true
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	if err := tt.Click("最后回复"); err != nil {
+		t.Fatalf("点最后回复失败：%v", err)
+	}
+	tt.Frame()
+	if a.pageName != "detail" || a.detail == nil {
+		t.Fatalf("点最后回复没有打开详情：%q", a.pageName)
+	}
+	if a.detail.shortID != "VAnfxaR" {
+		t.Errorf("打开的帖子不对：%q", a.detail.shortID)
+	}
+	if a.detail.focusID != "c1" || !a.detail.focusPending {
+		t.Errorf("没有定位到最后一条回复：focusID=%q pending=%v", a.detail.focusID, a.detail.focusPending)
+	}
+	if len(a.detailStack) != 0 {
+		t.Errorf("点最后回复连带触发了整行点击：返回栈 %d 层", len(a.detailStack))
+	}
+}
+
+// 接口没给最后一条回复的 uuid 时，「最后回复」退回纯文本：点它仍按普通行
+// 打开帖子本身，不带着定位目标。
+func TestTopicRowLastReplyWithoutIDIsPlainText(t *testing.T) {
+	a := testApp(t)
+	it := itemFrom([]byte(`{
+		"id":"45e41a09","short_id":"YYa7u49",
+		"node":{"id":"n2","name":"作品分享","slug":"personal-works"},
+		"title":"fable5.2 做的清明上河图",
+		"author":{"username":"maqingxiongs"},
+		"created_at":"2026-11-12T11:12:40.245Z",
+		"comment_count":7,"latest_commented_at":"2026-11-12T13:12:40.245Z",
+		"last_commented_by":{"username":"Kyun"},
+		"extra":{"latest_comment_floor":9}
+	}`), kindTopic)
+	if it.Stats.LastCommentID != "" {
+		t.Fatalf("不该解析出最后回复 id：%q", it.Stats.LastCommentID)
+	}
+	a.tabs[0].items = []Item{it}
+	a.tabs[0].loaded = true
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	if err := tt.Click("最后回复"); err != nil {
+		t.Fatalf("点最后回复失败：%v", err)
+	}
+	tt.Frame()
+	if a.detail == nil {
+		t.Fatal("点最后回复没有打开详情")
+	}
+	if a.detail.focusID != "" || a.detail.focusPending {
+		t.Errorf("没有 id 时点了不该定位：focusID=%q pending=%v", a.detail.focusID, a.detail.focusPending)
 	}
 }
 

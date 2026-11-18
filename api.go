@@ -141,6 +141,7 @@ type Item struct {
 //	latest_commented_at       最后回复时间（无人回复时等于发帖时间）
 //	last_commented_by.username 最后回复人
 //	extra.latest_comment_floor 最新（也是最高）楼层
+//	extra.latest_comment.id    最后一条回复的评论 uuid
 //	comment_count             回复数
 //
 // 时间在解码时已经转成「3 分钟前」这种展示文本，界面直接读。
@@ -149,6 +150,10 @@ type replyStats struct {
 	Updated  string
 	MaxFloor int
 	Replies  int
+	// LastCommentID 是最后一条回复的 uuid。点列表行的「最后回复」时把它当
+	// Item.CommentID 交给 openDetail，直接定位到那层楼。接口偶尔不给时留空，
+	// 那行就退回不可点的纯文本。
+	LastCommentID string
 }
 
 type pageResult struct {
@@ -752,13 +757,17 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 
 	// 列表接口在帖子对象上直接给出最后回复人、最后回复时间、最高楼层与
 	// 回复数（实测字段见 replyStats）。这几项只属于帖子行，评论与合集不走。
+	// 最后一条回复的 uuid 藏在 extra.latest_comment.id，给列表行的「最后
+	// 回复」做跳转用；字段未知时留空，那行就不当链接画。
+	lastComment := o.sub("extra").sub("latest_comment")
 	stats := &replyStats{
-		Replier: authorName(o.sub("last_commented_by", "last_replier", "latest_commenter")),
-		Updated: relativeTime(o.str("latest_commented_at", "last_commented_at")),
+		Replier:       authorName(o.sub("last_commented_by", "last_replier", "latest_commenter")),
+		Updated:       relativeTime(o.str("latest_commented_at", "last_commented_at")),
 		// extra 可能为 null；latest_comment_floor 是顶层楼层号，楼中楼不占楼层，
 		// 所以它就是最高楼层。
-		MaxFloor: o.sub("extra").num("latest_comment_floor", "max_floor"),
-		Replies:  o.num("comment_count", "reply_count", "comments"),
+		MaxFloor:      o.sub("extra").num("latest_comment_floor", "max_floor"),
+		Replies:       o.num("comment_count", "reply_count", "comments"),
+		LastCommentID: firstNonEmpty(lastComment.str("id", "comment_id"), o.str("latest_comment_id", "last_comment_id")),
 	}
 
 	shortID := o.str("short_id", "shortId")
