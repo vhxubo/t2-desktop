@@ -136,17 +136,39 @@ func (a *app) syncNativeAppearance() {
 	mygo.Theme.SetSource(themeSource(a.theme.Mode()))
 }
 
+// 深色外观的炭黑色板：整页只有一层底色，标题栏、侧边栏与正文同色，靠
+// 字号、字重与留白分层，不用卡片和描边。强调色只留一种低饱和的旧金色，
+// 用在选中项、未读与 focus 上；其余层级全是灰阶。
+const (
+	darkInkBackground = "#121417" // 底色：深哑光炭黑
+	darkInkText       = "#e6e8eb" // 正文：近白，不用纯白以免刺眼
+	darkInkMuted      = "#8b929c" // 元信息：压低一档的中性灰
+	darkInkHover      = "#171a1e" // 悬停时只抬一点亮度
+	darkInkPressed    = "#1d2126" // 选中行：仍是低对比的灰
+	darkInkAccent     = "#b0885a" // 唯一强调色：旧金色
+)
+
 // homeTheme 返回全应用共用的主题：浅色是纯白背景（页面、侧边栏与自绘
 // 标题栏均白）+ 指定边框色 oklab(0.21 0.00164224 -0.00577088 / 0.1)
-// （即 oklch(0.21 0.006 285.885) 的 10% 不透明版本）；深色沿用 mygo 的
-// 深色主题，只把背景、表面与描边调成同一套灰阶，让标题栏和侧边栏与页面
-// 同色，不出现一条更亮的横带。其余文字/强调色沿用浅色或深色主题。
+// （即 oklch(0.21 0.006 285.885) 的 10% 不透明版本）；深色是一整片哑光
+// 炭黑，颜色见上面的炭黑色板常量。两种外观都让标题栏和侧边栏与页面同色，
+// 不出现一条更亮的横带。
 func homeTheme(dark bool) *ui.Theme {
 	if dark {
 		th := ui.DarkTheme()
-		th.Background = ui.Hex("#18181b")
-		th.Surface = ui.Hex("#18181b")
-		th.Border = ui.Oklch(0.92, 0.006, 285.885).Alpha(0.14)
+		th.Background = ui.Hex(darkInkBackground)
+		th.Surface = ui.Hex(darkInkBackground)
+		th.SurfaceHover = ui.Hex(darkInkHover)
+		th.SurfacePressed = ui.Hex(darkInkPressed)
+		th.Border = ui.Hex("#ffffff").Alpha(0.06)
+		th.Text = ui.Hex(darkInkText)
+		th.TextMuted = ui.Hex(darkInkMuted)
+		th.Accent = ui.Hex(darkInkAccent)
+		th.AccentHover = ui.Hex("#c39a6c")
+		th.AccentPressed = ui.Hex("#9c774d")
+		th.AccentText = ui.Hex(darkInkBackground)
+		th.Selection = ui.Hex(darkInkAccent).Alpha(0.28)
+		th.Scrollbar = ui.Hex("#ffffff").Alpha(0.12)
 		return th
 	}
 	th := ui.LightTheme()

@@ -1069,51 +1069,7 @@ func (a *app) view(c *ui.Context) {
 		a.titleBar(c)
 		ui.Divider(c)
 		ui.Row(c).Fill().MinHeight(0).Children(func() {
-			// 左侧导航栏：带图标的侧边栏
-			ui.Column(c).Width(150).Shrink(0).FillHeight().Background(t.Surface).Children(func() {
-				sb := ui.Sidebar(c, &a.navSel, func() {
-					// 侧边栏只有「浏览」一组：动态虽然要登录，但它也是浏览
-					// 内容，不再单独占一个「我的」分组。通知不在这里：它已经
-					// 从页面改成标题栏铃铛打开的弹窗。
-					ui.SidebarSection(c, "浏览", nil, func() {
-						for i, s := range tabSpecs {
-							if s.Kind == kindNotification {
-								continue
-							}
-							idx := i
-							// 再点一次已经在看的这一页就刷新：回到第一页重新
-							// 拉一遍。选中值没变时 Sidebar 不报 Changed，所以
-							// 刷新挂在这一行自己的点击上。
-							ui.SidebarItem(c, tabID(i), tabIcons[i], a.followsTabLabel(i, s.Label)).
-								OnClick(func() { a.reclickTab(idx) })
-						}
-					})
-				}).Grow(1)
-				// 侧边栏选中变化 → 同步到 a.tab（用于 body 加载逻辑）
-				if sb.Changed() {
-					if i, ok := tabFromID(a.navSel); ok && i != a.tab {
-						a.tab = i
-						// 点到需要登录的页面（动态）而没登录：统一弹授权窗，
-						// 登录成功后自动把这一页拉出来，不用再点一次。
-						if spec := tabSpecs[i]; spec.NeedsAuth && !a.auth.loggedIn() {
-							idx := i
-							a.requestLogin("「"+spec.Label+"」需要登录 2Libra 后才能查看。",
-								func() { a.load(idx, 1) })
-						} else {
-							// 进入这一页就刷新一次：显示过的页换成最新内容，
-							// 没显示过的页也由这一次请求当首屏加载。
-							a.refreshTab(i)
-						}
-					}
-				}
-				if a.tab != a.lastTab {
-					a.lastTab = a.tab
-					a.status = ""
-				}
-				// 底部固定区：三档外观、设置入口，以及账号入口。
-				ui.Divider(c)
-				a.sidebarFooter(c)
-			})
+			a.sidebar(c)
 			ui.Divider(c)
 			// 右侧内容区：正文列表（无限滚动，无底部状态栏）。右下角浮着
 			// 一列 FAB（返回顶部 / 刷新 / 发帖），绝对定位，不占列表的高度。
@@ -1136,18 +1092,124 @@ func (a *app) dialogs(c *ui.Context) {
 	a.closePromptDialog(c)
 }
 
-// sidebarFooter 是主页侧边栏底部的固定区：从上到下是外观的三档图标、账号
-// 管理、设置、关于，以及账号入口（登录 / 退出登录）。放在滚动区之外，导航
-// 项再多也不会把这些常驻入口挤走。
+// navSidebarWidth 是左侧导航栏的宽度。窄栏只放文字，不放图标：150 DIP
+// 足够放下四字的分组项，又不和 760 DIP 的正文栏抢视线。
+const navSidebarWidth = 150
+
+// feedMaxWidth 是正文栏的最大宽度：窗口再宽，一行文字也不超过 760 DIP，
+// 剩下的空间平均留白，阅读视线不必横向来回扫。
+const feedMaxWidth float32 = 760
+
+// sidebarFont 是侧边栏与元信息用的等宽字体：小字号下数字与时序排得整齐，
+// 和正文的无衬线字体形成两层质感，不需要再加图标或色块来分组。
+const sidebarFont = "monospace"
+
+// sidebar 是左侧固定导航：只有文字，没有图标；字号小、行距松，整块用等宽
+// 字体。分组语义、键盘导航与读屏标签沿用 ui.Sidebar，只把每行改成方正的
+// 文本行——没有圆角胶囊，选中也只是一档更亮的灰。
+func (a *app) sidebar(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).Width(navSidebarWidth).Shrink(0).FillHeight().
+		Background(t.Background).Font(sidebarFont).Children(func() {
+		a.sidebarBrand(c)
+		sb := ui.Sidebar(c, &a.navSel, func() {
+			// 侧边栏只有「浏览」一组：动态虽然要登录，但它也是浏览内容，
+			// 不再单独占一个「我的」分组。通知不在这里：它已经从页面改成
+			// 标题栏铃铛打开的弹窗。
+			ui.SidebarSection(c, "浏览", nil, func() {
+				for i, s := range tabSpecs {
+					if s.Kind == kindNotification {
+						continue
+					}
+					idx := i
+					// 再点一次已经在看的这一页就刷新：回到第一页重新拉一遍。
+					// 选中值没变时 Sidebar 不报 Changed，所以刷新挂在这一行
+					// 自己的点击上。
+					item := ui.SidebarItem(c, tabID(i), nil, a.followsTabLabel(i, s.Label)).
+						Padding(10, 8).Radius(0).
+						OnClick(func() { a.reclickTab(idx) })
+					// 选中项不铺色块：左边一道 2 DIP 的旧金色竖线，文字提亮到
+					// 近白，其余项保持中性灰。键盘焦点环仍由 Sidebar 画。
+					if a.navSel == tabID(i) {
+						item.Background(ui.Transparent).TextColor(t.Text)
+						item.Draw(func(p *ui.Painter, r ui.Rect) {
+							p.Fill(ui.Rect{X: r.X, Y: r.Y + 7, W: 2, H: r.H - 14}, t.Accent, 0)
+						})
+					}
+				}
+			})
+		}).Grow(1).Padding(6, 10)
+		// 侧边栏选中变化 → 同步到 a.tab（用于 body 加载逻辑）
+		if sb.Changed() {
+			if i, ok := tabFromID(a.navSel); ok && i != a.tab {
+				a.tab = i
+				// 点到需要登录的页面（动态）而没登录：统一弹授权窗，
+				// 登录成功后自动把这一页拉出来，不用再点一次。
+				if spec := tabSpecs[i]; spec.NeedsAuth && !a.auth.loggedIn() {
+					idx := i
+					a.requestLogin("「"+spec.Label+"」需要登录 2Libra 后才能查看。",
+						func() { a.load(idx, 1) })
+				} else {
+					// 进入这一页就刷新一次：显示过的页换成最新内容，
+					// 没显示过的页也由这一次请求当首屏加载。
+					a.refreshTab(i)
+				}
+			}
+		}
+		if a.tab != a.lastTab {
+			a.lastTab = a.tab
+			a.status = ""
+		}
+		// 底部固定区：三档外观、设置入口，以及账号入口。
+		ui.Divider(c)
+		a.sidebarFooter(c)
+	})
+}
+
+// sidebarBrand 是导航栏顶端的两行小字：应用名 + 一句极小的说明。它只做
+// 品牌落款，不参与导航，也不放图标。
+func (a *app) sidebarBrand(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).FillWidth().Shrink(0).Padding(26, 8, 18, 18).Gap(5).Children(func() {
+		ui.Text(c, "t2libra").FontSize(14).FontWeight(600).LetterSpacing(0.2).
+			TextColor(t.Text).SingleLine()
+		ui.Text(c, "desktop").FontSize(9).TextColor(t.TextMuted).
+			LetterSpacing(1.2).SingleLine()
+	})
+}
+
+// sidebarFooter 是主页侧边栏底部的固定区：从上到下是外观的三档小字、账号
+// 管理 · 设置 · 关于三个纯图标入口，以及账号入口（登录 / 退出登录）。放在
+// 滚动区之外，导航项再多也不会把这些常驻入口挤走；三个次级入口只留图标，
+// 说明写在提示里，侧边栏底部因此只有两行字和一行小图标。
 func (a *app) sidebarFooter(c *ui.Context) {
-	ui.Column(c).FillWidth().Shrink(0).Padding(6, 8).Gap(2).Children(func() {
+	ui.Column(c).FillWidth().Shrink(0).Padding(18, 10, 14, 10).Gap(12).Children(func() {
 		a.themeButtons(c)
 		// 账号面板是多账号的总入口：切换、添加、退出哪个账号都在那一个窗口里。
-		a.sidebarButton(c, "账号", accountsIcon, "账号管理：切换、添加或退出账号", a.showAccounts)
-		a.sidebarButton(c, "设置", settingsIcon, "打开设置窗口", a.showSettings)
-		a.sidebarButton(c, "关于", aboutIcon, "关于本应用", a.showAbout)
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			a.sidebarIconButton(c, accountsIcon, "账号", "账号管理：切换、添加或退出账号", a.showAccounts)
+			a.sidebarIconButton(c, settingsIcon, "设置", "打开设置窗口", a.showSettings)
+			a.sidebarIconButton(c, aboutIcon, "关于", "关于本应用", a.showAbout)
+		})
 		a.sidebarAccount(c)
 	})
+}
+
+// sidebarIconButton 是侧边栏底部的一格纯图标入口：无边框、无文字，悬停才
+// 浮出一层浅底。可访问名（label）供读屏与点击测试命中，提示说明点了之后
+// 会发生什么。
+func (a *app) sidebarIconButton(c *ui.Context, icon *ui.SVG, label, tip string, onClick func()) {
+	t := c.Theme()
+	b := ui.Box(c).Size(28, 28).Radius(3).Center().Background(ui.Transparent)
+	ink := t.TextMuted
+	if b.Hovered() {
+		b.Background(t.SurfaceHover)
+		ink = t.Text
+	}
+	b.Children(func() {
+		ui.Icon(c, icon).Size(15, 15).TextColor(ink)
+	})
+	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
 
 // showAccounts 打开账号面板。没有账号册（无头测试、旧的单窗口路径）时它
@@ -1235,7 +1297,8 @@ func (a *app) titleBar(c *ui.Context) {
 		// 外观、设置与登录 / 退出登录都在主页侧边栏底部（见 sidebarFooter）。
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 12).Gap(10).
 			AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "T2 Desktop").FontSize(13).Bold().SingleLine().TextColor(t.Text)
+			ui.Text(c, "T2 Desktop").FontSize(12).FontWeight(500).
+				LetterSpacing(0.4).SingleLine().TextColor(t.TextMuted)
 			ui.Spacer(c).Grow(1)
 			// 搜索：任何页面都能用，不依赖登录，也不占侧边栏。窗口开着时
 			// 放大镜用强调色标出来。
@@ -1350,6 +1413,81 @@ func (a *app) titleIconButton(c *ui.Context, icon *ui.SVG, selected bool, label,
 	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
 
+// feedInset 是正文栏两侧的留白：内容区宽于 feedMaxWidth 时把多余空间等分
+// 到两边，让文字栏居中；窗口本身更窄时退回 24 DIP 的最小边距。
+func feedInset(c *ui.Context) float32 {
+	inset := float32(24)
+	if w, _ := c.Size(); w > 0 {
+		if avail := w - navSidebarWidth - 1; avail > feedMaxWidth {
+			inset = (avail - feedMaxWidth) / 2
+		}
+	}
+	return inset
+}
+
+// feedHeader 是正文栏顶部的页头：上面一行是日期小字，下面是页面名的
+// 大标题，右端是条目数。整块靠 40 DIP 的上留白、字号差与字距分层，不画
+// 底纹和方框；它给一屏文字一个明确的起点，首页因此不至于一上来就是密排的行。
+func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
+	t := c.Theme()
+	now := c.Now()
+	ui.Column(c).FillWidth().Shrink(0).
+		Padding(40, feedInset(c)+16, 22, feedInset(c)+16).Children(func() {
+		ui.Row(c).FillWidth().AlignItems(ui.End).Gap(16).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Gap(10).Children(func() {
+				ui.Text(c, now.Format("2006.01.02")+" · "+weekdayCN(now.Weekday())).
+					FontSize(10).Font(sidebarFont).LetterSpacing(1.6).
+					TextColor(t.TextMuted).SingleLine()
+				ui.Text(c, spec.Label).FontSize(30).FontWeight(600).
+					LetterSpacing(-0.4).TextColor(t.Text).SingleLine()
+			})
+			if count := feedCountLabel(st); count != "" {
+				ui.Text(c, count).FontSize(11).Font(sidebarFont).
+					TextColor(t.TextMuted).SingleLine().Shrink(0)
+			}
+		})
+	})
+}
+
+// weekdayCN 把 Go 的星期翻成界面上的「周三」。页头只读本机时钟，不联网。
+func weekdayCN(d time.Weekday) string {
+	switch d {
+	case time.Monday:
+		return "周一"
+	case time.Tuesday:
+		return "周二"
+	case time.Wednesday:
+		return "周三"
+	case time.Thursday:
+		return "周四"
+	case time.Friday:
+		return "周五"
+	case time.Saturday:
+		return "周六"
+	default:
+		return "周日"
+	}
+}
+
+// feedCountLabel 是页头右端的小字：有总数时写「共 N 条」，翻页时再带上
+// 「第 2 / 5 页」；服务端没给总数的页（最新评论）只写已拿到的条数。
+func feedCountLabel(st *tabState) string {
+	n := st.total
+	paged := st.totalPages > 1
+	if n <= 0 {
+		n = len(st.items)
+		paged = false
+	}
+	if n <= 0 {
+		return ""
+	}
+	out := "共 " + strconv.Itoa(n) + " 条"
+	if paged {
+		out += " · 第 " + strconv.Itoa(st.page) + " / " + strconv.Itoa(st.totalPages) + " 页"
+	}
+	return out
+}
+
 func (a *app) body(c *ui.Context) {
 	t := c.Theme()
 	st := a.tabs[a.tab]
@@ -1407,9 +1545,12 @@ func (a *app) body(c *ui.Context) {
 		}
 		return i
 	}
+	// 正文栏居中：内容区再宽也只排 760 DIP，两侧留白等分。窗口本身比这窄时
+	// 退回 24 DIP 的最小边距，不横向挤压文字。
+	a.feedHeader(c, spec, st)
 	ui.List(c, &st.list, len(rows), func(i int) {
 		a.foldRowView(c, rows[i])
-	}).Grow(1).Padding(8, 16).Gap(14)
+	}).Grow(1).Padding(0, feedInset(c), 10, feedInset(c)).Gap(0)
 	a.loadMoreFooter(c, st.moreErr, st.loading, func() {
 		a.load(a.tab, st.page)
 	})
@@ -1435,7 +1576,7 @@ func (a *app) loadMoreFooter(c *ui.Context, errText string, loading bool, retry 
 		return
 	}
 	t := c.Theme()
-	ui.Row(c).FillWidth().Padding(8, composeFabInset, 8, 16).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Padding(8, composeFabInset, 8, feedInset(c)).Gap(8).AlignItems(ui.Center).Children(func() {
 		if errText != "" {
 			ui.Text(c, "加载更多失败："+errText).FontSize(metaSmallFontSize).
 				TextColor(t.Danger).MaxLines(2).Grow(1)
@@ -1462,41 +1603,49 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 	}
 	t := c.Theme()
 	titleColor := postTitleColor(t, a.isPostRead(it.ShortID))
-	row := ui.ButtonBase(c).FillWidth().Padding(14, 16).Radius(10).
-		Background(t.Background).Border(1, t.Border)
+	// 行不是卡片：没有底色、描边和圆角，只用上下留白把条目分开。悬停时
+	// 只把底色抬一档，给出「这一行可点」的反馈，不画盒子。
+	row := ui.ButtonBase(c).FillWidth().Padding(24, 16).Radius(0).
+		Background(ui.Transparent)
+	if row.Hovered() {
+		row.Background(t.SurfaceHover)
+	}
 	row.Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(5).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(8).Children(func() {
 			// 标题是这一行里唯一的重心：字号明显大于副标题和时效信息，
 			// 并保持 700 粗体，扫一眼就能把标题与下方文案分开。
-			ui.Text(c, it.Title).FontSize(16).Bold().MaxLines(2).TextColor(titleColor)
+			ui.Text(c, it.Title).FontSize(19).Bold().MaxLines(2).TextColor(titleColor)
 			// 副标题里的作者用统一用户标识渲染：头像跟着 11px 的昵称走，
 			// 同时保留「节点 · 昵称 · 发帖时间」的原有顺序；节点名或时间太长时
 			// 允许折行，不把右侧的元信息挤出去。Author 为空说明接口没给发帖人
 			// （「我的」窗口的 /v1/me/topics、/v1/me/bookmarks 就是这样），
-			// 这时整段作者不画，也不退回副标题里的空作者段。
+			// 这时整段作者不画，也不退回副标题里的空作者段。元信息整行用
+			// 等宽字体，和标题的无衬线体形成两层。
 			switch {
 			case it.Author != "":
-				ui.Row(c).MinWidth(0).AlignItems(ui.Center).Wrap().Children(func() {
-					if it.SubtitlePrefix != "" {
-						ui.Text(c, it.SubtitlePrefix).FontSize(11).
-							TextColor(t.TextMuted).SingleLine()
-					}
-					a.userTag(c, userTagSpec{
-						Name:   it.Author,
-						Avatar: it.AuthorAvatar,
-						Size:   11,
-						Color:  t.TextMuted,
-						Badges: it.AuthorBadges,
+				ui.Row(c).MinWidth(0).AlignItems(ui.Center).Wrap().Font(sidebarFont).
+					Children(func() {
+						if it.SubtitlePrefix != "" {
+							ui.Text(c, it.SubtitlePrefix).FontSize(11).
+								TextColor(t.TextMuted).SingleLine()
+						}
+						a.userTag(c, userTagSpec{
+							Name:   it.Author,
+							Avatar: it.AuthorAvatar,
+							Size:   11,
+							Color:  t.TextMuted,
+							Badges: it.AuthorBadges,
+						})
+						// 有节点前缀时后缀自带「 · 」；没有前缀时昵称就是这一段的
+						// 开头，得自己补上分隔符，别让「·」落在最前面。
+						if suffix := strings.TrimPrefix(it.SubtitleSuffix, " · "); suffix != "" {
+							ui.Text(c, " · "+suffix).FontSize(11).
+								TextColor(t.TextMuted).SingleLine()
+						}
 					})
-					// 有节点前缀时后缀自带「 · 」；没有前缀时昵称就是这一段的
-					// 开头，得自己补上分隔符，别让「·」落在最前面。
-					if suffix := strings.TrimPrefix(it.SubtitleSuffix, " · "); suffix != "" {
-						ui.Text(c, " · "+suffix).FontSize(11).
-							TextColor(t.TextMuted).SingleLine()
-					}
-				})
 			case it.Subtitle != "":
-				ui.Text(c, it.Subtitle).FontSize(11).TextColor(t.TextMuted).SingleLine()
+				ui.Text(c, it.Subtitle).FontSize(11).Font(sidebarFont).
+					TextColor(t.TextMuted).SingleLine()
 			}
 			// 帖子行多一行时效信息：最后回复人、更新时间与最高楼层。没人
 			// 回复时没有这一行，右侧的回复数仍显示 0。
@@ -1507,7 +1656,7 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 		if it.Stats != nil {
 			a.postStatsBadge(c, it)
 		} else if it.Meta != "" {
-			ui.Text(c, it.Meta).FontSize(11).TextColor(t.TextMuted).
+			ui.Text(c, it.Meta).FontSize(11).Font(sidebarFont).TextColor(t.TextMuted).
 				SingleLine().Width(190).TextAlign(ui.End)
 		}
 	})
@@ -1528,7 +1677,7 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 func (a *app) latestReplyRow(c *ui.Context, it Item, open func(Item)) {
 	st := it.Stats
 	t := c.Theme()
-	link := ui.Row(c).MinWidth(0).Gap(6).AlignItems(ui.Center)
+	link := ui.Row(c).MinWidth(0).Gap(6).AlignItems(ui.Center).Font(sidebarFont)
 	ink := t.TextMuted
 	if st.LastCommentID != "" && link.Hovered() {
 		ink = t.Accent
@@ -1559,19 +1708,19 @@ func (a *app) latestReplyRow(c *ui.Context, it Item, open func(Item)) {
 	}
 }
 
-// postStatsBadge 是帖子行右端的状态块：置顶角标，以及一个回复气泡加回复数。
-// 回复数只显示数字、不写「N 回复」，气泡图标负责说明这个数字是什么；完整
-// 说法留在提示里。
+// postStatsBadge 是帖子行右端的状态块：置顶角标，以及一个等宽数字表示的
+// 回复数。数字只写值、不写「N 回复」，悬停提示负责说明它是什么；没有气泡
+// 图标，右端只剩一个安静的计数。
 func (a *app) postStatsBadge(c *ui.Context, it Item) {
 	t := c.Theme()
-	badge := ui.Row(c).Gap(6).Shrink(0).AlignItems(ui.Center)
+	badge := ui.Row(c).Gap(10).Shrink(0).AlignSelf(ui.Start).AlignItems(ui.Center).
+		Padding(4, 0, 0, 0).Font(sidebarFont)
 	badge.Children(func() {
 		if it.Pinned {
 			ui.Text(c, "置顶").FontSize(10).Bold().TextColor(t.Accent).
 				SingleLine().Shrink(0)
 		}
-		ui.Icon(c, commentBubbleIcon).Size(12, 12).TextColor(t.TextMuted)
-		ui.Textf(c, "%d", it.Stats.Replies).FontSize(12).
+		ui.Textf(c, "%d", it.Stats.Replies).FontSize(14).
 			TextColor(t.TextMuted).SingleLine().Shrink(0)
 	})
 	badge.Tooltip(strconv.Itoa(it.Stats.Replies) + " 条回复")

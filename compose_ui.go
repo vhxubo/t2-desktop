@@ -179,15 +179,16 @@ func (a *app) composeFab(c *ui.Context) {
 	// 边框始终占 1 DIP：只在悬停时加边框会让按钮在鼠标移入时变大一点，
 	// 位置来回跳。悬停只换边框颜色。
 	ring := t.Accent
-	b := ui.Box(c).Padding(10, 16).Radius(999).
+	b := ui.Box(c).Padding(9, 16).Radius(4).
 		Background(t.Accent).Border(1, ring).AlignItems(ui.Center)
 	if b.Hovered() {
 		b.Border(1, t.Text)
 	}
 	b.Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			ui.Icon(c, composeIcon).Size(16, 16).TextColor(t.AccentText)
-			ui.Text(c, "发帖").FontSize(13).Bold().SingleLine().TextColor(t.AccentText)
+			ui.Icon(c, composeIcon).Size(15, 15).TextColor(t.AccentText)
+			ui.Text(c, "发帖").FontSize(12).Font(sidebarFont).Bold().SingleLine().
+				TextColor(t.AccentText)
 		})
 	})
 	b.Label("发帖").Tooltip("写一篇新帖子").OnClick(a.showCompose)

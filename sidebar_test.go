@@ -11,9 +11,10 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// sidebarWidth 是左侧导航栏的宽度，与 view 里的布局一致。底部的设置、外观
-// 与账号入口都得待在这条带子里，不能溢到右侧内容区。
-const sidebarWidth = 150
+// sidebarWidth 是左侧导航栏的宽度，与 view 里的布局一致（见 main.go 的
+// navSidebarWidth）。底部的设置、外观与账号入口都得待在这条带子里，不能
+// 溢到右侧内容区。
+const sidebarWidth = navSidebarWidth
 
 // 设置入口在主页左侧的导航栏里，三档外观在它上面，登录 / 退出登录再往下：
 // 这三样都不在标题栏里了，标题栏只留品牌、铃铛和登录后的头像昵称。
@@ -326,8 +327,9 @@ func TestSidebarSwitchRefreshesEnteredPage(t *testing.T) {
 	}
 }
 
-// 侧边栏多了「关于」入口：点一下打开「关于」窗口。它排在设置下方、账号入口
-// 上方，并且整行仍待在侧边栏宽度之内，不溢到右侧内容区。
+// 侧边栏多了「关于」入口：点一下打开「关于」窗口。账号 / 设置 / 关于三格
+// 图标并排在同一行，从左到右排列，且整行仍待在侧边栏宽度之内，不溢到右侧
+// 内容区。
 func TestSidebarAboutOpensWindow(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -341,8 +343,11 @@ func TestSidebarAboutOpensWindow(t *testing.T) {
 		t.Errorf("「关于」的 x=%.0f 宽 %.0f，超出 %d 宽的侧边栏", about.X, about.W, sidebarWidth)
 	}
 	set, _ := tt.Find("设置")
-	if about.Y <= set.Y {
-		t.Errorf("「关于」的 y=%.0f，应在设置入口（y=%.0f）下方", about.Y, set.Y)
+	if about.Y != set.Y {
+		t.Errorf("「关于」的 y=%.0f，应与设置入口（y=%.0f）并排", about.Y, set.Y)
+	}
+	if about.X <= set.X {
+		t.Errorf("「关于」的 x=%.0f，应排在设置入口（x=%.0f）右侧", about.X, set.X)
 	}
 	opened := false
 	a.onAboutOpen = func() { opened = true }

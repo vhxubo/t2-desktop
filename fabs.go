@@ -12,8 +12,8 @@ import "github.com/egoist/mygo/ui"
 const (
 	fabRight  float32 = 24 // 距内容区右边
 	fabBottom float32 = 24 // 距内容区下边
-	fabGap    float32 = 10 // 竖排按钮之间的间距
-	fabCircle float32 = 40 // 次级按钮（刷新 / 返回顶部）的直径
+	fabGap    float32 = 12 // 竖排按钮之间的间距
+	fabCircle float32 = 38 // 次级按钮（刷新 / 返回顶部）的方块尺寸
 )
 
 // fabStack 画右下角竖排的一列悬浮按钮。buttons 按从上到下的顺序给出，
@@ -30,31 +30,27 @@ func (a *app) fabStack(c *ui.Context, buttons ...func(*ui.Context)) {
 	})
 }
 
-// fabButton 画一个次级 FAB：圆形的纯图标按钮，悬停给提示。label 是它的
-// 可访问名（读屏与测试认的名字），tip 是悬停说明。loading 时换成转圈并
-// 禁用：请求还在路上，连点不该重复发。
+// fabButton 画一个次级 FAB：无边框、无底色的图标按钮，悬停才浮出一层浅灰。
+// label 是它的可访问名（读屏与测试认的名字），tip 是悬停说明。loading 时
+// 换成转圈并禁用：请求还在路上，连点不该重复发。
 func (a *app) fabButton(c *ui.Context, icon *ui.SVG, label, tip string, loading bool, onClick func()) {
 	t := c.Theme()
-	b := ui.Box(c).Size(fabCircle, fabCircle).Radius(999).
-		Background(t.SurfaceHover).Border(1, t.Border).Center()
+	b := ui.Box(c).Size(fabCircle, fabCircle).Radius(4).Center().
+		Background(ui.Transparent)
 	hovered := b.Hovered()
-	switch {
-	case loading:
-		b.Background(t.Surface)
-	case hovered:
-		b.Background(t.SurfacePressed)
-		b.Border(1, t.Accent)
+	if hovered {
+		b.Background(t.SurfaceHover)
 	}
-	ink := t.Text
+	ink := t.TextMuted
 	if hovered && !loading {
-		ink = t.Accent
+		ink = t.Text
 	}
 	b.Children(func() {
 		if loading {
 			ui.Spinner(c).Size(16, 16)
 			return
 		}
-		ui.Icon(c, icon).Size(18, 18).TextColor(ink)
+		ui.Icon(c, icon).Size(17, 17).TextColor(ink)
 	})
 	b.Label(label).Tooltip(tip)
 	if loading {

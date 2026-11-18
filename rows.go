@@ -7,16 +7,16 @@ import (
 )
 
 // 评论行 / 动态行的字号阶梯。评论没有标题，正文就是这一行的阅读主体：
-// 它要比作者名大一档、比帖子标题（16）小一档，才能一眼分出「谁说的」和
-// 「说了什么」；元信息再降一档，不再出现 11 这种要凑近看的字号。
+// 它要比作者名大一档、比帖子标题（17）小一档，才能一眼分出「谁说的」和
+// 「说了什么」；元信息再降一档，并整行改用等宽字体，和正文的无衬线体分层。
 // 数值与详情页的字号阶梯（detail_ui.go）同一节奏，列表与详情之间切换时
-// 正文不会忽大忽小。动态里的帖子行另有 16 粗体标题占住重心，正文只是
+// 正文不会忽大忽小。动态里的帖子行另有 17 粗体标题占住重心，正文只是
 // 摘要，因此再小一档，免得标题与摘要糊成一片。
 const (
 	richCommentFontSize float32 = 15 // 评论正文：这一行的阅读主体
 	richPreviewFontSize float32 = 14 // 帖子摘要：标题之下、辅助信息之上
 	richAuthorFontSize  float32 = 13 // 作者、被回复人、行内动作
-	richMetaFontSize    float32 = 12 // 时间、楼层、节点、原帖、计数、表态
+	richMetaFontSize    float32 = 11 // 时间、楼层、节点、原帖、计数、表态（等宽）
 )
 
 // foldRowView 画一行可见行：组首条评论先照常画成一条评论，再在它下面挂
@@ -94,15 +94,17 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 	// 读过这一条新评论，把评论标题也压灰会把新内容藏起来。
 	titleColor := postTitleColor(t, !comment && a.isPostRead(it.ShortID))
 
-	row := ui.ButtonBase(c).FillWidth().Padding(14, 16).Radius(10).
-		Background(t.Background).Border(1, t.Border)
+	// 和普通帖子行一样是纯文本行：没有卡片底色、描边与圆角，行距靠上下
+	// 留白撑开；悬停只抬一档底色，说明整行可点。
+	row := ui.ButtonBase(c).FillWidth().Padding(22, 16).Radius(0).
+		Background(ui.Transparent)
 	if row.Hovered() {
 		row.Background(t.SurfaceHover)
 	}
 	row.Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
-			// 第一行：谁做了什么 · 时间 · 楼层。
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(8).Children(func() {
+			// 第一行：谁做了什么 · 时间 · 楼层。整行等宽，和标题分层。
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Font(sidebarFont).Children(func() {
 				author := x.Author
 				// 作者与被回复人都是用户名：统一走 userTag，头像跟着 13px
 				// 的昵称走，和详情页评论头部一致。接口没给作者（例如
@@ -145,7 +147,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 			// 帖子行保留标题；评论行的正文在下面作为摘要展示。标题字号比
 			// 作者、节点等辅助信息大一档，和主列表行保持一致。
 			if !comment && it.Title != "" {
-				ui.Text(c, it.Title).FontSize(16).Bold().MaxLines(2).TextColor(titleColor)
+				ui.Text(c, it.Title).FontSize(17).Bold().MaxLines(2).TextColor(titleColor)
 			}
 			body := x.Excerpt
 			if body == "" && comment {
@@ -166,7 +168,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 				ui.Text(c, "↳ "+x.Quote).FontSize(richMetaFontSize).TextColor(t.TextMuted).MaxLines(2)
 			}
 
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Font(sidebarFont).Children(func() {
 				// 节点名与评论数固定宽度、不折行：这一行要让「原帖」在剩余
 				// 空间里省略，而不是把旁边的短标签挤成两行。
 				if comment && x.NodeLabel != "" {

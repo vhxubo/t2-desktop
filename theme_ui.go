@@ -4,35 +4,40 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 三种外观模式的图标：显示器表示跟随系统，太阳表示浅色，月亮表示深色。
-// 都是 24×24、stroke=currentColor 的线性图标，和左侧导航栏同一套画法。
-var (
-	systemThemeIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>`))
-	lightThemeIcon  = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`))
-	darkThemeIcon   = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></svg>`))
-)
-
-// themeButtons 在主页侧边栏底部、设置入口上方直接摆出三档外观：跟随系统、
-// 浅色、深色。外观只有三种，点一下就切换，没必要再开一层弹窗；当前档用强调
-// 色标出，其余档悬停变亮，一眼能看出现在用的是哪种。
+// themeButtons 把三档外观压成一行等宽小字：悬浮提示写明「外观：跟随系统」
+// 这样的完整选项名，读屏与点击测试认的也是这个名字。三档都是纯文字芯片，
+// 选中档用强调色，其余档只在中性灰里悬停变亮——侧边栏因此不再被图标占满。
 func (a *app) themeButtons(c *ui.Context) {
-	ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
-		a.themeButton(c, themeFollowSystem, systemThemeIcon, "跟随系统")
-		a.themeButton(c, themeLight, lightThemeIcon, "浅色")
-		a.themeButton(c, themeDark, darkThemeIcon, "深色")
+	t := c.Theme()
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "外观").FontSize(9).TextColor(t.TextMuted).SingleLine()
+		a.themeChip(c, themeFollowSystem, "跟随", "跟随系统")
+		a.themeChip(c, themeLight, "浅", "浅色")
+		a.themeChip(c, themeDark, "深", "深色")
 	})
 }
 
-// themeButton 画一个外观图标按钮。图标本身是装饰，可访问名由 Label 提供，
-// 读屏软件读到的是「外观：深色」这样的完整选项名。
-func (a *app) themeButton(c *ui.Context, mode int, icon *ui.SVG, label string) {
+// themeChip 画一档外观选项。可见文字只求短（跟随 / 浅 / 深），完整含义放在
+// 可访问名与提示里，既省侧边栏的宽度，也不靠图标让人猜。
+func (a *app) themeChip(c *ui.Context, mode int, text, name string) {
+	t := c.Theme()
 	selected := a.theme.mode == mode
-	tip := "外观：" + label
+	b := ui.ButtonBase(c).Padding(3, 6).Radius(3).Background(ui.Transparent)
+	ink := t.TextMuted
+	switch {
+	case selected:
+		ink = t.Accent
+	case b.Hovered():
+		ink = t.Text
+	}
+	b.Children(func() {
+		ui.Text(c, text).FontSize(10).Font(sidebarFont).TextColor(ink).SingleLine()
+	})
+	tip := "外观：" + name
 	if selected {
 		tip += "（当前）"
 	}
-	a.titleIconButton(c, icon, selected, "外观："+label, tip,
-		func() { a.setThemeMode(c, mode) })
+	b.Label("外观：" + name).Tooltip(tip).OnClick(func() { a.setThemeMode(c, mode) })
 }
 
 // setThemeMode 切换外观并落盘。写失败只影响下次启动的默认外观，本次运行
