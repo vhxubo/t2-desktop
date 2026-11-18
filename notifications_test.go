@@ -965,6 +965,38 @@ func TestNotificationTargetOpensInMainWindow(t *testing.T) {
 	}
 }
 
+// 从通知跳到具体评论：默认把左侧正文收起，评论区占满整行，进来即见目标楼层。
+// 同时确认不影响待已读记账，也不改变"目标没有评论定位"与"非通知跳转"的行为。
+func TestNotificationCommentClickCollapsesBody(t *testing.T) {
+	srv, _ := readRecorder(t)
+	a, _ := notificationApp(t, srv)
+	a.autoLoad = false
+
+	// 通知 + 评论定位：收起正文，且待已读照常记账。
+	a.openNotificationTarget(siteBaseURL+"/post/social/wEOIDnn?commentId=c1", "n1")
+	if a.detail == nil || !a.detail.bodyCollapsed {
+		t.Fatalf("从通知跳到评论应默认收起正文：%+v", a.detail)
+	}
+	if a.detail.notifID != "n1" || a.detail.notifCommentID != "c1" {
+		t.Fatalf("收起正文破坏了待已读记账：%+v", a.detail)
+	}
+
+	// 通知 + 无评论定位（表态 / 收藏了帖子）：正文保持展开。
+	a.openNotificationTarget(siteBaseURL+"/post/social/wEOIDnn", "n1")
+	if a.detail == nil || a.detail.bodyCollapsed {
+		t.Fatalf("通知跳到帖子正文不该收起：%+v", a.detail)
+	}
+	if a.detail.notifID != "" || a.detail.notifCommentID != "" {
+		t.Fatalf("无评论定位不该记待已读：%+v", a.detail)
+	}
+
+	// 非通知路径（从列表按 CommentID 点进来）：正文仍展开。
+	a.openDetail(Item{ShortID: "wEOIDnn", CommentID: "c1", URL: siteBaseURL + "/post/social/wEOIDnn"})
+	if a.detail == nil || a.detail.bodyCollapsed {
+		t.Fatalf("非通知跳转不该收起正文：%+v", a.detail)
+	}
+}
+
 // 点开一条带评论定位的消息：评论还没出现在屏幕上时不标已读；那层楼真正
 // 露出来之后自动提交一次按条已读。
 func TestNotificationCommentClickMarksReadWhenVisible(t *testing.T) {

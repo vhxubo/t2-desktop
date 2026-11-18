@@ -340,7 +340,8 @@ func (a *app) rememberNoticeTarget(id, target string) {
 // notifID 是点开的这条消息：目标带评论定位时先只记账，等那层楼出现在评论区
 // 可视区再标为已读（见 markNotificationSeen）。目标没有评论定位（表态了你的
 // 帖子、收藏了你的帖子…）时不动已读状态；交给系统浏览器的目标同样不动，
-// 用户还没在应用里看到内容。
+// 用户还没在应用里看到内容。目标带评论定位时默认收起左侧正文，让评论区占满
+// 整行直接露出目标那层楼，用户仍可手动展开。
 func (a *app) openNotificationTarget(target, notifID string) {
 	if target == "" {
 		return
@@ -351,9 +352,13 @@ func (a *app) openNotificationTarget(target, notifID string) {
 		return
 	}
 	a.openDetail(it)
-	if notifID != "" && it.CommentID != "" && a.detail != nil {
-		a.detail.notifID = notifID
-		a.detail.notifCommentID = it.CommentID
+	if it.CommentID != "" && a.detail != nil {
+		// 从通知跳到具体评论：默认收起正文，评论区占满整行，进来即见目标楼层。
+		a.detail.bodyCollapsed = true
+		if notifID != "" {
+			a.detail.notifID = notifID
+			a.detail.notifCommentID = it.CommentID
+		}
 	}
 	a.showMainWindow()
 }

@@ -68,7 +68,8 @@ type detailState struct {
 	bodyScroll ui.ScrollState
 	// bodyCollapsed 表示左栏正文已向左收起，评论区占满整行。它只是界面
 	// 状态，不落盘：每次进入详情都重置成展开（见 openDetail 与 closeDetail
-	// 的弹栈分支），下次打开不会继承上一次的收起。
+	// 的弹栈分支），下次打开不会继承上一次的收起。唯一例外是从通知跳到
+	// 具体评论时默认收起（见 openNotificationTarget），便于直接看到那层楼。
 	bodyCollapsed bool
 
 	// 从评论列表点进来时要定位到具体某条评论。目标常常不落在第 1 页
