@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -181,6 +182,30 @@ func TestTopicEmojiMapMerge(t *testing.T) {
 	}
 	if got := mergeEmojiMaps(global, nil); len(got) != len(global) {
 		t.Errorf("空映射不应改变全局表：%d", len(got))
+	}
+}
+
+// 没有社区表情时合并应直接复用全局表，而不是每帧复制一份再丢掉：正文与
+// 每条可见评论每帧都会走到这里，返回同一个 map 才能免掉这笔分配。
+func TestMergeEmojiMapsReusesBaseWithoutOverlay(t *testing.T) {
+	global := decodeEmojis([]byte(detailEmojisJSON))
+	for _, extra := range []map[string]string{nil, {}, {":": ""}} {
+		if got := mergeEmojiMaps(global, extra); len(got) != len(global) {
+			t.Errorf("无有效覆盖时表大小应不变：%d", len(got))
+		}
+	}
+	// 传入空覆盖时返回的就是 base 本身；调用方可以据此判断无需重算。
+	if got := mergeEmojiMaps(global, nil); reflect.ValueOf(got).Pointer() != reflect.ValueOf(global).Pointer() {
+		t.Error("无覆盖时应直接返回全局表，而不是复制品")
+	}
+	// 有有效覆盖时才产出副本，且不污染全局表。
+	extra := map[string]string{":only-local:": "/e/x.png"}
+	merged := mergeEmojiMaps(global, extra)
+	if merged[":only-local:"].ImgURL == "" {
+		t.Error("有效覆盖应合并进新表")
+	}
+	if _, ok := global[":only-local:"]; ok {
+		t.Error("合并不应修改全局表")
 	}
 }
 

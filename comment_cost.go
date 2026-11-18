@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // 评论框上方的「发评金币与徽章」状态栏。
@@ -875,8 +876,10 @@ func (a *app) commentCostShortfall(content string) (short, minLength int) {
 }
 
 // commentLength 是评论字数的口径：按 rune 计，与状态栏里显示的「N 字」一致。
+// 状态栏每帧、每次击键都会算它，用 RuneCountInString 避免为长草稿反复
+// 分配一个等长的 []rune（一帧里字数、模型、门槛检查会各算一次）。
 func commentLength(s string) int {
-	return len([]rune(s))
+	return utf8.RuneCountInString(s)
 }
 
 /* ------------------------------------------------------------------

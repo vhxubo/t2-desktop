@@ -1010,15 +1010,21 @@ func resolveEmojiURL(u string) string {
 // one. Codes the global table lacks (community icons) get their own entry;
 // known codes keep their human name but use the local image address.
 func mergeEmojiMaps(base map[string]emojiInfo, extra ...map[string]string) map[string]emojiInfo {
-	out := make(map[string]emojiInfo, len(base)+8)
-	for code, e := range base {
-		out[code] = e
-	}
-	changed := false
+	// 惰性复制：绝大多数帖子/评论没有自带表情，extra 为空。若在这里先
+	// make + 拷贝整张全局表，再因为没有任何覆盖而丢掉，正文与每条可见
+	// 评论每帧都要白做一遍分配（大表情表下尤其明显，是输入时偶发卡顿
+	// 的来源）。只有真的遇到第一条有效覆盖时才建表。
+	var out map[string]emojiInfo
 	for _, m := range extra {
 		for code, u := range m {
 			if code == "" || u == "" {
 				continue
+			}
+			if out == nil {
+				out = make(map[string]emojiInfo, len(base)+8)
+				for code, e := range base {
+					out[code] = e
+				}
 			}
 			e, ok := out[code]
 			if !ok {
@@ -1026,10 +1032,9 @@ func mergeEmojiMaps(base map[string]emojiInfo, extra ...map[string]string) map[s
 			}
 			e.ImgURL = resolveEmojiURL(u)
 			out[code] = e
-			changed = true
 		}
 	}
-	if !changed {
+	if out == nil {
 		return base
 	}
 	return out
