@@ -230,7 +230,7 @@ func TestDetailWindowTitleButtonsAreClickable(t *testing.T) {
 
 	tt := ui.NewTester(func(c *ui.Context) { a.detailWindowView(h, c) }, detailWindowWidth, detailWindowHeight)
 	tt.Frame()
-	for _, name := range []string{"最小化", "关闭"} {
+	for _, name := range []string{"最小化", "最大化", "关闭"} {
 		info, ok := tt.Access(name)
 		if !ok {
 			t.Fatalf("标题栏缺少 %q 按钮：%q", name, tt.Texts())

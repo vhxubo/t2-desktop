@@ -494,6 +494,7 @@ func (a *app) detailWindowTitleBar(h *detailWindow, c *ui.Context) {
 					win.Minimize()
 				}
 			})
+			titleMaximizeButton(c, h.win)
 			titleBarButton(c, titleClose, "关闭", func() { a.closeDetailTab(h, h.active) })
 		})
 	})

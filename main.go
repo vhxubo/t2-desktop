@@ -1372,17 +1372,7 @@ func (a *app) titleBar(c *ui.Context) {
 				a.win.Minimize()
 			}
 		})
-		if a.win != nil && a.win.IsMaximized() {
-			titleBarButton(c, titleRestore, "还原", func() {
-				a.win.ToggleMaximize()
-			})
-		} else {
-			titleBarButton(c, titleMaximize, "最大化", func() {
-				if a.win != nil {
-					a.win.ToggleMaximize()
-				}
-			})
-		}
+		titleMaximizeButton(c, a.win)
 		titleBarButton(c, titleClose, "关闭", func() {
 			if a.win != nil {
 				a.win.Close()
@@ -1440,6 +1430,21 @@ func titleBarButton(c *ui.Context, g titleGlyph, label string, onClick func()) {
 		}
 	})
 	b.Label(label).Tooltip(label).OnClick(onClick)
+}
+
+// titleMaximizeButton 画标题栏的「最大化 / 还原」按钮：按窗口此刻的状态切
+// 图形、无障碍名与提示，点一下翻转。主窗口与详情窗口共用这一份，状态变化时
+// 窗口尺寸跟着变，mygo 会重画标题栏，图标也随之切换。
+func titleMaximizeButton(c *ui.Context, win *mygo.Window) {
+	if win != nil && win.IsMaximized() {
+		titleBarButton(c, titleRestore, "还原", func() { win.ToggleMaximize() })
+		return
+	}
+	titleBarButton(c, titleMaximize, "最大化", func() {
+		if win != nil {
+			win.ToggleMaximize()
+		}
+	})
 }
 
 // titleIconButton 是标题栏里的纯图标按钮（外观）：图形本身是装饰，可访问名
