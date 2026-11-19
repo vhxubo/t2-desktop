@@ -1883,30 +1883,35 @@ func TestDetailBodyCollapsesLeft(t *testing.T) {
 	if !ok {
 		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
 	}
-	// 入口是正文卡片右上角的一个图标：在标题上方、靠右半边。
+	// 收起入口由 Lobe 的 DraggablePanel 提供，落在两栏接缝正中，而不是
+	// 正文右上角：水平方向位于正文右半边、紧贴评论区左缘，垂直方向居中，
+	// 明显低于标题。
 	toggle, ok := tt.Find("收起正文")
 	if !ok {
 		t.Fatalf("找不到收起正文的开关：%q", tt.Texts())
 	}
 	if toggle.X <= title.X+title.W/2 {
-		t.Errorf("收起图标应贴在正文右上角：图标 %+v / 标题 %+v", toggle, title)
+		t.Errorf("收起入口应落在正文右半边的接缝上：入口 %+v / 标题 %+v", toggle, title)
 	}
-	if toggle.Y >= title.Y {
-		t.Errorf("收起图标应在标题上方：图标 %+v / 标题 %+v", toggle, title)
+	if toggle.X+toggle.W > comment.X+24 {
+		t.Errorf("收起入口应紧贴评论区左缘的接缝：入口 %+v / 评论 %+v", toggle, comment)
 	}
-	if toggle.X >= comment.X {
-		t.Errorf("收起图标应在左栏正文里：图标 %+v / 评论 %+v", toggle, comment)
+	if toggle.Y <= title.Y+title.H {
+		t.Errorf("收起入口应在两栏垂直居中，而不是贴着标题：入口 %+v / 标题 %+v", toggle, title)
 	}
 
 	if err := tt.Click("收起正文"); err != nil {
 		t.Fatalf("点收起正文失败：%v", err)
 	}
-	tt.Frame()
+	// DraggablePanel 用动画把正文向左滑出，等动画走完再断言最终几何。
+	tt.Advance(500 * time.Millisecond)
 	if !a.detail.bodyCollapsed {
 		t.Fatalf("点了一下正文没有收起")
 	}
-	if _, ok := tt.Find("正文与评论的测试帖"); ok {
-		t.Errorf("正文收起后标题还在：%q", tt.Texts())
+	// 收起后正文仍留在元素树里，但被裁剪成 0 宽——标题还在文本列表里，
+	// 只是不再占据可见宽度。
+	if visible, ok := tt.Find("正文与评论的测试帖"); ok && visible.W > 1 {
+		t.Errorf("正文收起后标题仍占据可见宽度：%+v", visible)
 	}
 	editor, ok := tt.Find("写评论")
 	if !ok {
@@ -1926,7 +1931,7 @@ func TestDetailBodyCollapsesLeft(t *testing.T) {
 	if editor.W < 900 {
 		t.Errorf("正文收起后输入框没有占满整行：%+v", editor)
 	}
-	// 展开图标跟着正文左移，停在左边缘那条窄栏上，高度不变。
+	// 展开按钮留在左边缘那条窄栏上（接缝随正文收起一起左移），垂直高度不变。
 	expand, ok := tt.Find("展开正文")
 	if !ok {
 		t.Fatalf("正文收起后找不到展开图标：%q", tt.Texts())
@@ -1941,13 +1946,13 @@ func TestDetailBodyCollapsesLeft(t *testing.T) {
 	if err := tt.Click("展开正文"); err != nil {
 		t.Fatalf("点展开正文失败：%v", err)
 	}
-	tt.Frame()
+	tt.Advance(500 * time.Millisecond)
 	if a.detail.bodyCollapsed {
 		t.Fatalf("点了一下正文没有展开")
 	}
 	back, ok := tt.Find("正文与评论的测试帖")
-	if !ok {
-		t.Fatalf("展开后正文标题没有回来：%q", tt.Texts())
+	if !ok || back.W <= 1 {
+		t.Fatalf("展开后正文标题没有恢复可见宽度：%+v / %q", back, tt.Texts())
 	}
 	restored, ok := tt.Find("评论")
 	if !ok {
@@ -1958,6 +1963,66 @@ func TestDetailBodyCollapsesLeft(t *testing.T) {
 	}
 	if d := back.X - title.X; d > 1 || d < -1 {
 		t.Errorf("展开后正文没有回到原位：%+v / 原来 %+v", back, title)
+	}
+}
+
+// 两栏宽度通过拖动接缝调整：Lobe 的 DraggablePanel 负责接缝命中与尺寸，
+// 这里验证正文宽度、接缝与评论区一起移动，且不会误触正中的收起按钮。
+func TestDetailBodyResizesByDrag(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+
+	seam, ok := tt.Find("调整宽度")
+	if !ok {
+		t.Fatalf("找不到调整宽度的接缝：%q", tt.Texts())
+	}
+	comment, ok := tt.Find("评论")
+	if !ok {
+		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
+	}
+	before := a.detail.bodyWidth
+
+	// 接缝正中停着收起按钮，按在接缝上但远离它，才是纯拖动。
+	dragSeam := func(dx float32) {
+		handle, ok := tt.Find("调整宽度")
+		if !ok {
+			t.Fatalf("拖动后找不到接缝：%q", tt.Texts())
+		}
+		x, y := handle.X+handle.W/2, handle.Y+80
+		tt.Press(x, y)
+		tt.Move(x+dx, y)
+		tt.Release(x+dx, y)
+		tt.Advance(500 * time.Millisecond)
+	}
+
+	dragSeam(120)
+	if got := a.detail.bodyWidth; got <= before+100 {
+		t.Errorf("向右拖动接缝后正文没有变宽：拖动前 %.0f / 拖动后 %.0f", before, got)
+	}
+	wide, _ := tt.Find("调整宽度")
+	if wide.X <= seam.X+100 {
+		t.Errorf("拖动后接缝没有跟着右移：%+v / 原来 %+v", wide, seam)
+	}
+	wideComment, _ := tt.Find("评论")
+	if wideComment.X <= comment.X+100 {
+		t.Errorf("拖动后评论区没有跟着右移：%+v / 原来 %+v", wideComment, comment)
+	}
+	if a.detail.bodyCollapsed {
+		t.Errorf("纯拖动不应误把正文收起")
+	}
+
+	// 反向拖回：正文变窄，评论区左移回来，仍不收起。
+	wideWidth := a.detail.bodyWidth
+	dragSeam(-60)
+	if got := a.detail.bodyWidth; got >= wideWidth-40 {
+		t.Errorf("向左拖动接缝后正文没有变窄：拖动前 %.0f / 拖动后 %.0f", wideWidth, got)
+	}
+	backComment, ok := tt.Find("评论")
+	if !ok {
+		t.Fatalf("拖回后找不到评论卡片标题：%q", tt.Texts())
+	}
+	if backComment.X >= wideComment.X-40 {
+		t.Errorf("向左拖动后评论区没有左移回来：%+v / 拖动前 %+v", backComment, wideComment)
 	}
 }
 

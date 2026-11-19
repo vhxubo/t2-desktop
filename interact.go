@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 收藏与表态
@@ -673,7 +675,7 @@ func (a *app) favoriteButton(c *ui.Context, d *detailState) {
 	if d.topic == nil {
 		return
 	}
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// 换了登录账号：上一个账号的收藏状态不能继续用，按未知展示。
 	viewer := a.auth.username()
 	if a.auth.loggedIn() && d.fav.known && d.fav.viewer != viewer {
@@ -695,23 +697,23 @@ func (a *app) favoriteButton(c *ui.Context, d *detailState) {
 	}
 	b := ui.Button(c, "").
 		Background(ui.Transparent).
-		Border(1, t.Border).
-		FontSize(metaFontSize).
+		Border(1, tk.BorderSecondary).
+		FontSize(tk.FontSizeSM).
 		Padding(4, 10).
 		Radius(999).
 		Shrink(0)
 	hovered := b.Hovered()
-	ink := t.TextMuted
+	ink := tk.TextSecondary
 	switch {
 	case favorited:
-		ink = t.Warning
+		ink = tk.Gold
 	case hovered && !d.fav.busy:
-		ink = t.Text
+		ink = tk.TextHeading
 	}
 	if hovered && !d.fav.busy {
-		b.Background(t.SurfaceHover)
+		b.Background(tk.FillSecondary)
 		if !favorited {
-			b.Border(1, t.Accent)
+			b.Border(1, tk.Primary)
 		}
 	}
 	if d.fav.busy {
@@ -724,12 +726,12 @@ func (a *app) favoriteButton(c *ui.Context, d *detailState) {
 			icon = favoriteOnIcon
 		}
 		ui.Icon(c, icon).Size(15, 15).TextColor(ink)
-		ui.Text(c, text).FontSize(metaFontSize).TextColor(ink).SingleLine()
+		ui.Text(c, text).FontSize(tk.FontSizeSM).TextColor(ink).SingleLine()
 		if d.topic.FavoriteCountKnown {
-			// 数字比状态文案再小一号、用弱化色：它是数量，不是按钮的第二个
-			// 状态词，长起来也不会让「已收藏」看起来像动作。
-			ui.Textf(c, "%d", d.topic.FavoritedCount).FontSize(metaSmallFontSize).
-				TextColor(t.TextMuted).SingleLine()
+			// 数字比状态文案再小一号、用等宽弱化色：它是数量，不是按钮的
+			// 第二个状态词，长起来也不会让「已收藏」看起来像动作。
+			ui.Textf(c, "%d", d.topic.FavoritedCount).FontSize(tk.FontSizeSM).
+				Font(sidebarFont).TextColor(tk.TextDescription).SingleLine()
 		}
 	})
 	b.Label(label).Tooltip(tip)
@@ -771,8 +773,8 @@ func (a *app) topicInteractionBar(c *ui.Context, d *detailState) {
 	if !a.topicInteractionVisible(d) {
 		return
 	}
-	ui.Divider(c)
-	ui.Column(c).FillWidth().Padding(10, 18).Children(func() {
+	layout.Divider(c, layout.DividerProps{})
+	ui.Column(c).FillWidth().Padding(12, 20).Children(func() {
 		a.topicInteractionRow(c, d)
 	})
 }

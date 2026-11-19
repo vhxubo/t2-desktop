@@ -13,6 +13,12 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/motion"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // detailState is per-post UI state. Background work only publishes results
@@ -71,6 +77,10 @@ type detailState struct {
 	// 的弹栈分支），下次打开不会继承上一次的收起。唯一例外是从通知跳到
 	// 具体评论时默认收起（见 openNotificationTarget），便于直接看到那层楼。
 	bodyCollapsed bool
+	// bodyWidth 是正文栏在展开时的宽度（DIP），由 Lobe 的 DraggablePanel
+	// 在拖动接缝时改写。和 bodyCollapsed 一样只在这一次浏览里有效，不落盘：
+	// 每次进入详情都用默认值（见 openDetail）。
+	bodyWidth float32
 
 	// 从评论列表点进来时要定位到具体某条评论。目标常常不落在第 1 页
 	// （扁平序按 flat_floor 排），所以首屏没找到时自动续拉后面的页，
@@ -328,7 +338,8 @@ func (a *app) openDetail(it Item) {
 		fallbackURL:  it.URL,
 		replyPage:    1,
 		flat:         it.CommentID != "", // 从评论列表进来用扁平序，更容易找到那层楼
-		// bodyCollapsed 不继承：每次进来都是双栏、正文展开（零值即展开）。
+		// bodyCollapsed 与 bodyWidth 都不继承：每次进来都是双栏、正文展开。
+		// 默认正文宽度在 view 里按窗口宽度取 55%，这样不同窗口下初始比例一致。
 	}
 	// 先摆上缓存里的正文和第一页评论：网络慢或断开时第一帧就有内容。
 	a.preloadDetailCache(a.detail)
@@ -632,6 +643,7 @@ func (a *app) ensureEmojis() {
 func (a *app) detailView(c *ui.Context) {
 	// 主题已由 view 按外观模式设好，这里直接取用，避免重复解析。
 	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// Esc 与右上角关闭同义：内联浏览时先退一层，再回到列表。
 	c.OnShortcut(0, ui.KeyEscape, func() { a.closeDetail() })
 	a.titleBar(c)
@@ -647,48 +659,56 @@ func (a *app) detailView(c *ui.Context) {
 		return
 	}
 	ui.Column(c).Grow(1).FillWidth().Children(func() {
-		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Padding(12, 14).Gap(12).Children(func() {
-			// 双栏各自成卡片：正文占约 55%，评论占约 45%；MinWidth(0) 防止
-			// 长代码、长链接或嵌套评论把某一栏撑宽，中间用 12px 的空隙 +
-			// 圆角描边形成清楚的边界。
-			//
-			// 正文可以向左收起（见 bodyPaneToggle）：收起后整张卡片不画，
-			// 只在左边留一条窄栏放展开图标，评论区接管剩下的宽度。
-			if !d.bodyCollapsed {
-				ui.Column(c).Grow(55).MinWidth(0).FillHeight().MinHeight(0).
-					Radius(12).Background(t.Background).Border(1, t.Border).Children(func() {
-					// 收起图标悬浮在卡片右上角，不占一行：标题照旧贴着卡片
-					// 顶部开始，正文高度一点没少（标题右侧留了它的位置，见
-					// topicBody）。
-					a.bodyPaneToggle(c, d).Absolute().Top(8).Right(8)
-					// 正文可滚动（Grow(1) 吃满左栏剩余高度，MinHeight(0) 允许
-					// 它收缩到比正文内容更矮，正文在框内滚动）；作者信息收在
-					// 标题下方，底部固定的是表态 / 打赏互动栏。
+		// 正文栏是 Lobe 的可拖拽面板：贴左，接缝正好落在两栏中间。拖接缝左右
+		// 调整宽度，接缝正中的按钮收起 / 展开正文（见 layout.DraggablePanel）。
+		// 评论区占满面板以外的宽度，正文收起时它接管整行。
+		//
+		// bodyCollapsed 是页面其它地方（工具条回顶、通知定位）共用的状态；面板
+		// 要的是 *expanded，这里用局部变量转接，构建后同步回去，外部对
+		// bodyCollapsed 的写入（如通知定位默认收起）仍然生效。
+		expanded := !d.bodyCollapsed
+		if d.bodyWidth <= 0 {
+			// 首次进入按窗口宽度给一个 55% 的初始宽度；小于这个阈值只可能是
+			// 拖动到最小，DraggablePanel 会保留最小值，不会误判成未初始化。
+			if w, _ := c.Size(); w > 0 {
+				d.bodyWidth = (w - 40) * 0.55
+			} else {
+				d.bodyWidth = 580
+			}
+		}
+		if w, _ := c.Size(); w > 0 {
+			// 正文最多占 80% 宽度，给评论区至少留一条能读的列。
+			if d.bodyWidth > w*0.8 {
+				d.bodyWidth = w * 0.8
+			}
+		}
+		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Padding(12, 14).Children(func() {
+			// 正文可滚动（Grow(1) 吃满面板剩余高度，MinHeight(0) 让它收缩到比
+			// 内容更矮，正文在框内滚动）；作者信息收在标题下方，底部固定的是
+			// 表态 / 打赏互动栏。面板内部铺一层 Lobe 表面，靠背景色与评论区
+			// 区分，不再画一圈描边。
+			layout.DraggablePanel(c, &d.bodyWidth, &expanded, layout.DraggablePanelProps{
+				Placement:         layout.Left,
+				MinSize:           200,
+				CollapseThreshold: 120,
+			}, func() {
+				ui.Column(c).FillWidth().FillHeight().MinHeight(0).
+					Radius(tk.BorderRadiusLG).Background(tk.BgContainer).Children(func() {
 					ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Padding(20, 28).Gap(14).
 						TrackScroll(&d.bodyScroll).Children(func() {
 						a.topicBody(c, d)
 					})
 					a.topicInteractionBar(c, d)
 				})
-			} else {
-				// 收起后正文只剩左边缘这条窄栏：展开图标停在原来的高度，
-				// 只是跟着正文一起左移，看起来像被推到左边的那一栏。
-				ui.Column(c).Width(30).FillHeight().Padding(8, 0).Children(func() {
-					a.bodyPaneToggle(c, d)
-				})
-			}
-			// 评论卡片用比页面底色略深一点的中性色：浅色下是极浅的灰、
-			// 深色下比页面稍亮，两种外观都能把评论区从正文里分出来，又
-			// 不抢正文的注意力。正文收起时它是唯一的一栏，吃掉全部宽度。
-			replyGrow := float32(45)
-			if d.bodyCollapsed {
-				replyGrow = 1
-			}
-			ui.Column(c).Grow(replyGrow).MinWidth(0).FillHeight().MinHeight(0).
-				Radius(12).Background(detailReplySurface(t)).Border(1, t.Border).Children(func() {
+			})
+			// 评论区卡片的底色比页面底色略深一点（浅灰 / 深灰），和正文面板
+			// 分出层次；收起正文时它吃掉整行。
+			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).
+				Radius(tk.BorderRadiusLG).Background(detailReplySurface(t)).Children(func() {
 				a.replyPane(c, d)
 			})
 		})
+		d.bodyCollapsed = !expanded
 		// 数据来源声明 + 可点击的原文链接占满整个窗口底部，放在最底部。
 		// 进入详情就画出来：正文加载完成后高度不变，卡片区域不会跳。
 		a.topicSourceFooter(c, d)
@@ -719,16 +739,16 @@ func detailReplySurface(t *ui.Theme) ui.Color {
 // 头部右侧的留白上也能看清。评论卡片的头部行不往右挤占这块空间
 // （见 replyHeader）。
 func (a *app) detailToolBar(c *ui.Context, d *detailState) {
-	t := c.Theme()
-	ui.Row(c).Absolute().Top(15).Right(22).Gap(2).Padding(3).Radius(10).
-		Background(t.Surface).Border(1, t.Border).
-		Shadow(0, 3, 12, 0, ui.RGBA(0, 0, 0, 0.16)).
+	tk := lobetheme.TokensOf(c)
+	ui.Row(c).Absolute().Top(15).Right(22).Gap(2).Padding(3).Radius(tk.BorderRadius).
+		Background(tk.BgElevated).
+		Shadow(0, 3, 12, 0, tk.Shadow).
 		Children(func() {
 			// 复制链接排在工具条最左边，作者动作 / 刷新 / 关闭在它右边，中间
 			// 隔一道短竖线：分享帖子与页面操作不是一类事。
 			if href := d.originURL(); href != "" {
 				a.detailCopyButton(c, href, "复制帖子链接", "把这篇帖子的链接复制到剪贴板")
-				ui.Box(c).Width(1).Height(18).Background(t.Border).Shrink(0)
+				ui.Box(c).Width(1).Height(18).Background(tk.BorderSecondary).Shrink(0)
 			}
 			// 只有正文或评论滚离顶部时才出现：工具条始终可达，不会像旧版
 			// 页头那样为了放它固定占掉一行。正文收起时不看它的偏移：那栏
@@ -763,10 +783,11 @@ func (a *app) detailToolBar(c *ui.Context, d *detailState) {
 // 浅底，与列表页的 FAB 区分开。label 供读屏与测试识别，tip 是悬停说明。
 func (a *app) detailToolButton(c *ui.Context, icon *ui.SVG, label, tip string, onClick func()) {
 	t := c.Theme()
-	b := ui.Box(c).Size(30, 30).Radius(8).Center().Background(ui.Transparent)
+	tk := lobetheme.TokensOf(c)
+	b := ui.Box(c).Size(30, 30).Radius(tk.BorderRadiusSM).Center().Background(ui.Transparent)
 	hovered := b.Hovered()
 	if hovered {
-		b.Background(t.SurfaceHover)
+		b.Background(tk.FillSecondary)
 	}
 	ink := t.TextMuted
 	if hovered {
@@ -783,14 +804,15 @@ func (a *app) detailToolButton(c *ui.Context, icon *ui.SVG, label, tip string, o
 // 换强调色，和旁边的页面操作区分开。
 func (a *app) detailCopyButton(c *ui.Context, href, label, tip string) {
 	t := c.Theme()
-	b := ui.Box(c).Size(30, 30).Radius(8).Center().Background(ui.Transparent)
+	tk := lobetheme.TokensOf(c)
+	b := ui.Box(c).Size(30, 30).Radius(tk.BorderRadiusSM).Center().Background(ui.Transparent)
 	hovered := b.Hovered()
 	if hovered {
-		b.Background(t.SurfaceHover)
+		b.Background(tk.FillSecondary)
 	}
 	ink := t.TextMuted
 	if hovered {
-		ink = t.Accent
+		ink = tk.Primary
 	}
 	b.Children(func() {
 		ui.Icon(c, copyLinkIcon).Size(17, 17).TextColor(ink)
@@ -824,18 +846,19 @@ func (a *app) copyToClipboard(c *ui.Context, text string, target toastTarget, ok
 // 避免连点重复发请求。它刷新的是整页（正文 + 第一页评论）。
 func (a *app) detailRefreshButton(c *ui.Context, d *detailState) {
 	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	loading := d.topicLoading || d.replyLoading
-	b := ui.Box(c).Size(30, 30).Radius(8).Center().Background(ui.Transparent)
+	b := ui.Box(c).Size(30, 30).Radius(tk.BorderRadiusSM).Center().Background(ui.Transparent)
 	hovered := b.Hovered()
 	if hovered && !loading {
-		b.Background(t.SurfaceHover)
+		b.Background(tk.FillSecondary)
 	}
 	if loading {
 		b.Disabled(true)
 	}
 	b.Children(func() {
 		if loading {
-			ui.Spinner(c).Size(14, 14)
+			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
 			return
 		}
 		ink := t.TextMuted
@@ -857,12 +880,12 @@ func (a *app) detailRefreshButton(c *ui.Context, d *detailState) {
 
 func (a *app) topicBody(c *ui.Context, d *detailState) {
 	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// 评论定位、离线缓存与内联浏览层级原来占着页头的一整行；现在收进
 	// 正文顶部，只在有话说时才占一点点高度。
 	a.topicNotice(c, d)
 	if d.topicLoading && d.topic == nil {
-		ui.Spinner(c).Size(24, 24)
-		ui.Text(c, "正在加载正文…").TextColor(t.TextMuted)
+		feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small, Tip: "正在加载正文…"}, nil)
 		return
 	}
 	if d.topicErr != "" {
@@ -882,12 +905,12 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 	}
 	// 标题、作者行与副标题合成一块「文首」：组内只留 8px，组外靠 Scroll
 	// 的 14px 与正文分开，读者一眼就能分出标题区与正文。标题是整页唯一的
-	// 大字，右侧留出悬浮的收起图标那 30px，长标题换行时不会钻到图标底下
-	// （图标见 detailView 的 bodyPaneToggle）。
-	ui.Column(c).FillWidth().Gap(8).Children(func() {
+	// 大字；收起 / 展开入口已经移到两栏中间的接缝上，标题右侧不必再留位。
+	ui.Column(c).FillWidth().Gap(12).Children(func() {
 		if title := strings.TrimSpace(p.Title); title != "" {
-			ui.Text(c, title).FontSize(postTitleFontSize).Bold().MaxLines(3).
-				Padding(0, 30, 0, 0)
+			// 标题用 Lobe 的 H3 字阶配负字距，是整页唯一的重心。
+			ui.Text(c, title).FontSize(tk.FontSizeHeading3).Bold().
+				LetterSpacing(-0.4).TextColor(tk.TextHeading).MaxLines(3)
 		}
 		// 作者行：头像、昵称、等级与徽章，收藏按钮贴在这一行的最右侧。
 		// 它随正文一起滚动，不再单独占一条页头。
@@ -905,7 +928,7 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 		a.markdownView(c, replaceEmoji(p.Content, emojis, true), a.md)
 	}
 	for i, ps := range p.Postscripts {
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 		label := fmt.Sprintf("附言 %d", i+1)
 		if ps.CreatedAt != "" {
 			label += " · " + relativeTime(ps.CreatedAt)
@@ -915,10 +938,12 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 		a.markdownView(c, replaceEmoji(ps.Content, postEmojis, true), a.md)
 	}
 	if v := p.Vote; v != nil {
-		ui.Divider(c)
-		ui.Column(c).FillWidth().Padding(12, 14).Gap(6).Radius(10).
-			Background(t.Surface).Border(1, t.Border).Children(func() {
-			ui.Text(c, "投票 · "+v.Title).FontSize(commentFontSize).Bold()
+		layout.Divider(c, layout.DividerProps{})
+		ui.Column(c).FillWidth().Padding(14, 16).Gap(8).Radius(tk.BorderRadius).
+			Background(tk.FillQuaternary).Transition(ui.ElementTransition{
+			Duration: 150 * time.Millisecond, Ease: motion.EaseOut, Colors: true,
+		}).Children(func() {
+			ui.Text(c, "投票 · "+v.Title).FontSize(tk.FontSizeLG).Bold().TextColor(tk.TextHeading)
 			a.voteSection(c, d, v)
 		})
 	}
@@ -942,7 +967,7 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 // 再点「投票」。提交中页面里只留一行进度，成功与失败都由主窗口 toast 报告
 // （见 submitVote）。已结束 / 已投过时整块禁用，避免重复提交。
 func (a *app) voteSection(c *ui.Context, d *detailState, v *voteBlock) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	multi := voteIsMulti(v)
 	locked := v.Finished || d.vote.voted || d.vote.busy
 	// 详情刷新可能换掉选项列表：勾选框按当前行数绑定，syncVote 在下一份
@@ -957,24 +982,27 @@ func (a *app) voteSection(c *ui.Context, d *detailState, v *voteBlock) {
 		c.Key("vote-option-" + o.ID)
 		if multi {
 			ui.Checkbox(c, &d.vote.checks[i], label).
-				FontSize(metaFontSize).Disabled(locked)
+				FontSize(tk.FontSizeSM).Disabled(locked)
 			continue
 		}
-		btn := ui.Button(c, label).FontSize(metaFontSize).
-			FillWidth().Disabled(locked)
+		// 单选选项用 Lobe 的 Filled 按钮，标签文案原样保留供点击测试命中。
+		btn := action.Button(c, label, action.ButtonProps{
+			Variant: action.Filled, Size: lobetheme.Middle,
+		}).FillWidth().Disabled(locked)
 		if btn.Clicked() {
 			a.submitVote(d, []string{o.ID}, false)
 		}
 	}
 	switch {
 	case d.vote.busy:
-		ui.Text(c, "正在提交投票…").FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+		ui.Text(c, "正在提交投票…").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 	case v.Finished:
-		ui.Text(c, "投票已结束").FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+		ui.Text(c, "投票已结束").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 	case d.vote.voted:
-		ui.Text(c, "已投票，感谢参与").FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+		ui.Text(c, "已投票，感谢参与").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 	case multi:
-		btn := ui.Button(c, "投票").Disabled(!anyVoteChecked(d.vote.checks))
+		btn := action.Button(c, "投票", action.ButtonProps{Variant: action.Primary}).
+			Disabled(!anyVoteChecked(d.vote.checks))
 		if btn.Clicked() {
 			a.submitVoteMulti(d, v)
 		}
@@ -986,7 +1014,7 @@ func (a *app) voteSection(c *ui.Context, d *detailState, v *voteBlock) {
 // 一条进度条。分布来自 GET /vote/result（见 vote.go）；失败只在这里说明，
 // 不弹 toast —— 这是一次用户主动发起的只读查询。
 func (a *app) voteResultSection(c *ui.Context, d *detailState, v *voteBlock) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	if v.ID == "" {
 		return
 	}
@@ -997,16 +1025,17 @@ func (a *app) voteResultSection(c *ui.Context, d *detailState, v *voteBlock) {
 		}
 		a.smallAction(c, label, d.vote.resultLoading, func() { a.toggleVoteResult(d) })
 		if d.vote.resultLoading {
-			ui.Spinner(c).Size(12, 12)
-			ui.Text(c, "正在读取结果…").FontSize(11).TextColor(t.TextMuted)
+			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+			ui.Text(c, "正在读取结果…").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 		} else if d.vote.result != nil && d.vote.result.Total > 0 {
-			ui.Textf(c, "共 %d 票", d.vote.result.Total).FontSize(11).TextColor(t.TextMuted)
+			ui.Textf(c, "共 %d 票", d.vote.result.Total).FontSize(tk.FontSizeSM).
+				Font(sidebarFont).TextColor(tk.TextDescription)
 		}
 	})
 	if d.vote.resultErr != "" {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "读取投票结果失败："+d.vote.resultErr).FontSize(11).
-				TextColor(t.Danger).MaxLines(2).Grow(1)
+			ui.Text(c, "读取投票结果失败："+d.vote.resultErr).FontSize(tk.FontSizeSM).
+				TextColor(tk.Error).MaxLines(2).Grow(1)
 			a.smallAction(c, "重试", false, func() { a.loadVoteResult(d) })
 		})
 	}
@@ -1020,18 +1049,18 @@ func (a *app) voteResultSection(c *ui.Context, d *detailState, v *voteBlock) {
 			share = float64(row.Votes) / float64(total)
 		}
 		percent := int(share*100 + 0.5)
-		ui.Column(c).FillWidth().Gap(3).Children(func() {
+		ui.Column(c).FillWidth().Gap(4).Children(func() {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, row.Text).FontSize(metaSmallFontSize).TextColor(t.Text).
+				ui.Text(c, row.Text).FontSize(tk.FontSizeSM).TextColor(tk.Text).
 					SingleLine().Grow(1)
-				ui.Textf(c, "%d 票 · %d%%", row.Votes, percent).FontSize(11).
-					TextColor(t.TextMuted).Shrink(0)
+				ui.Textf(c, "%d 票 · %d%%", row.Votes, percent).FontSize(tk.FontSizeSM).
+					Font(sidebarFont).TextColor(tk.TextDescription).Shrink(0)
 			})
 			ui.Progress(c, share)
 		})
 	}
 	if total == 0 {
-		ui.Text(c, "还没有人投票。").FontSize(11).TextColor(t.TextMuted)
+		ui.Text(c, "还没有人投票。").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 	}
 }
 
@@ -1110,7 +1139,7 @@ func (a *app) submitVoteMulti(d *detailState, v *voteBlock) {
 // 这些提示原先各占页头的一部分，压得页头很高；收到正文顶部后，没有提示时
 // 连一行都不占。多条同时出现时在同一行内换行。
 func (a *app) topicNotice(c *ui.Context, d *detailState) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	type notice struct {
 		text  string
 		color ui.Color
@@ -1118,29 +1147,29 @@ func (a *app) topicNotice(c *ui.Context, d *detailState) {
 	var notes []notice
 	// 节点还在由 AI 分配时说明一句：这不是加载失败，帖子也还没出现在列表里。
 	if d.topic != nil && d.topic.pendingNode() {
-		notes = append(notes, notice{"节点由 AI 自动分配，通常几秒后完成。", t.TextMuted})
+		notes = append(notes, notice{"节点由 AI 自动分配，通常几秒后完成。", tk.TextDescription})
 	}
 	if d.focusID != "" {
-		text, color := "来自评论定位", t.TextMuted
+		text, color := "来自评论定位", tk.TextDescription
 		if d.focusMiss {
-			text, color = "未找到该评论", t.Danger
+			text, color = "未找到该评论", tk.Error
 		}
 		notes = append(notes, notice{text, color})
 	}
 	// 离线说明：正文来自本地缓存时，明确告诉用户这是哪个时间的内容，
 	// 而不是让旧内容看起来像刚刷新过。
 	if d.cacheNote != "" {
-		notes = append(notes, notice{d.cacheNote, t.TextMuted})
+		notes = append(notes, notice{d.cacheNote, tk.TextDescription})
 	}
 	if n := len(a.detailStack); n > 0 {
-		notes = append(notes, notice{fmt.Sprintf("内联浏览 %d 层", n), t.TextMuted})
+		notes = append(notes, notice{fmt.Sprintf("内联浏览 %d 层", n), tk.TextDescription})
 	}
 	if len(notes) == 0 {
 		return
 	}
-	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Wrap().Font(sidebarFont).Children(func() {
 		for _, nt := range notes {
-			ui.Text(c, nt.text).FontSize(noticeFontSize).TextColor(nt.color).SingleLine()
+			ui.Text(c, nt.text).FontSize(tk.FontSizeSM).TextColor(nt.color).SingleLine()
 		}
 	})
 }
@@ -1154,19 +1183,20 @@ func (a *app) topicAuthorLine(c *ui.Context, d *detailState) {
 	if p == nil {
 		return
 	}
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 		// 作者身份在左侧自己的区域里换行，窄窗口也不会把收藏挤出这一行。
-		ui.Row(c).Grow(1).MinWidth(0).Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
+		ui.Row(c).Grow(1).MinWidth(0).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 			if strings.TrimSpace(p.Author) != "" {
 				a.userTag(c, userTagSpec{
 					Name: p.Author, Avatar: p.Avatar, Size: postAuthorFontSize, Bold: true,
 					Badges: p.Badges,
 				})
 			}
+			// 等级用等宽小字弱化，和昵称的强调拉开层次。
 			if p.AuthorLevel > 0 {
-				ui.Textf(c, "Lv.%d", p.AuthorLevel).FontSize(metaSmallFontSize).
-					TextColor(t.TextMuted)
+				ui.Textf(c, "Lv.%d", p.AuthorLevel).FontSize(tk.FontSizeSM).
+					Font(sidebarFont).TextColor(tk.TextDescription)
 			}
 		})
 		// 收藏是帖子级的动作，贴在这条元信息行的最右侧；合集在它左边：
@@ -1180,36 +1210,39 @@ func (a *app) topicAuthorLine(c *ui.Context, d *detailState) {
 // （置顶 / 评论已关闭），第二行是标签。分类和标签原来贴在页头作者旁边，收回
 // 到标题下方后，标题区一眼能读出「这帖发在哪、有多少人看过、打了什么标签」。
 func (a *app) topicSubtitle(c *ui.Context, p *topicDetail) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	path := p.categoryPath()
 	if path == "" && p.Views <= 0 && !p.IsPinned && !p.CommentsClosed &&
 		len(p.Tags) == 0 {
 		return
 	}
-	// 两行紧挨着成为一块副标题：行与行之间只留 4px，和标题、正文之间才是
-	// 组外的 8px / 14px 间距。
-	ui.Column(c).FillWidth().Gap(4).Children(func() {
+	// 元信息用等宽小字、弱化色，和标题的衬线体形成两层；行距收紧成一块
+	// 副标题，再靠组外间距与标题、正文分开。
+	ui.Column(c).FillWidth().Gap(6).Font(sidebarFont).Children(func() {
 		if path != "" || p.Views > 0 || p.IsPinned || p.CommentsClosed {
 			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Wrap().Children(func() {
+				// 置顶用 Lobe 的金色 Tag，和列表页的置顶角标同一套视觉。
 				if p.IsPinned {
-					ui.Text(c, "置顶").FontSize(metaSmallFontSize).Bold().TextColor(t.Accent)
+					display.Tag(c, "置顶", display.TagProps{
+						Color: display.TagGold, Size: lobetheme.Small,
+					})
 				}
 				if path != "" {
-					ui.Text(c, path).FontSize(metaFontSize).TextColor(t.TextMuted)
+					ui.Text(c, path).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 				}
 				if p.Views > 0 {
-					ui.Textf(c, "%d 次浏览", p.Views).FontSize(metaSmallFontSize).
-						TextColor(t.TextMuted)
+					ui.Textf(c, "%d 次浏览", p.Views).FontSize(tk.FontSizeSM).
+						TextColor(tk.TextDescription)
 				}
 				if p.CommentsClosed {
-					ui.Text(c, "评论已关闭").FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+					ui.Text(c, "评论已关闭").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 				}
 			})
 		}
 		if len(p.Tags) > 0 {
-			// 标签是副标题的第二行：小一号、弱化色，不和正文抢注意力。
-			ui.Text(c, "#"+strings.Join(p.Tags, "  #")).FontSize(metaSmallFontSize).
-				TextColor(t.TextMuted).SingleLine()
+			// 标签是副标题的第二行：等宽、弱化的小字，不和正文抢注意力。
+			ui.Text(c, "#"+strings.Join(p.Tags, "  #")).FontSize(tk.FontSizeSM).
+				TextColor(tk.TextDescription).SingleLine()
 		}
 	})
 }
@@ -1224,19 +1257,19 @@ func (a *app) topicSubtitle(c *ui.Context, p *topicDetail) {
 // 点发送之前抬眼看得到，又不会分掉输入框的宽度（见 reply_identity.go）。
 // 版权声明与原文链接自己占一个会折行的左栏，窄窗口下也不会和标签叠在一起。
 func (a *app) topicSourceFooter(c *ui.Context, d *detailState) {
-	t := c.Theme()
-	ui.Divider(c)
-	ui.Row(c).Padding(8, 16).Gap(10).AlignItems(ui.Center).Children(func() {
+	tk := lobetheme.TokensOf(c)
+	layout.Divider(c, layout.DividerProps{})
+	ui.Row(c).Padding(10, 20).Gap(10).AlignItems(ui.Center).Font(sidebarFont).Children(func() {
 		ui.Row(c).Grow(1).MinWidth(0).Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
-			ui.Text(c, "内容来自 2Libra 用户，版权归原作者所有。").FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, "内容来自 2Libra 用户，版权归原作者所有。").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 			origin := d.originURL()
 			if origin == "" {
 				return
 			}
-			ui.Text(c, "原文链接：").FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, "原文链接：").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 			link := ui.Button(c, truncate(origin, 60)).
-				Background(ui.Transparent).Border(0, t.Border).
-				TextColor(t.Accent).FontSize(11).Padding(0, 2)
+				Background(ui.Transparent).Border(0, tk.BorderSecondary).
+				TextColor(tk.Primary).FontSize(tk.FontSizeSM).Padding(0, 2)
 			if link.Clicked() {
 				a.openExternal(origin)
 			}
@@ -1246,28 +1279,27 @@ func (a *app) topicSourceFooter(c *ui.Context, d *detailState) {
 }
 
 func (a *app) replyPane(c *ui.Context, d *detailState) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// 评论区自己有一行标题与计数 / 视图切换，输入框只负责编写与发送：
 	// 原来挤在输入框右侧的评论数、视图切换移到这里，输入栏因此干净得多。
 	a.replyHeader(c, d)
-	ui.Divider(c)
+	layout.Divider(c, layout.DividerProps{})
 	switch {
 	case d.replyLoading && len(d.replyList) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(24, 24)
-			ui.Text(c, "正在加载评论…").TextColor(t.TextMuted)
+			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small, Tip: "正在加载评论…"}, nil)
 		})
 	case d.replyErr != "" && len(d.replyList) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Padding(16).Children(func() {
-			ui.Text(c, "评论加载失败").FontSize(sectionTitleFontSize).Bold()
-			ui.Text(c, d.replyErr).TextColor(t.Danger).MaxLines(4)
-			if ui.Button(c, "重试").Clicked() {
+			ui.Text(c, "评论加载失败").FontSize(tk.FontSizeLG).Bold().TextColor(tk.TextHeading)
+			ui.Text(c, d.replyErr).TextColor(tk.Error).MaxLines(4)
+			if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
 				a.loadReplies(d.replyPage)
 			}
 		})
 	case len(d.replyList) == 0:
 		ui.Column(c).Grow(1).Center().Children(func() {
-			ui.Text(c, "暂无评论").FontSize(commentFontSize).TextColor(t.TextMuted)
+			ui.Text(c, "暂无评论").FontSize(tk.FontSize).TextColor(tk.TextDescription)
 		})
 	default:
 		// display 是剔除折叠隐藏行后的显示列表；rebuildDisplay 在折叠为空时
@@ -1343,19 +1375,21 @@ func (a *app) flushSeenNotifications() {
 // replyHeader 是评论卡片顶部固定的一行：「评论」标题、评论数（点一下回到
 // 列表顶部）与楼层 / 扁平视图切换。它不参与滚动，也不和输入框抢位置。
 func (a *app) replyHeader(c *ui.Context, d *detailState) {
-	t := c.Theme()
-	ui.Row(c).FillWidth().Padding(12, 16, 8, 16).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "评论").FontSize(sectionTitleFontSize).Bold()
+	tk := lobetheme.TokensOf(c)
+	ui.Row(c).FillWidth().Padding(14, 18, 10, 18).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "评论").FontSize(tk.FontSizeLG).Bold().
+			LetterSpacing(-0.3).TextColor(tk.TextHeading)
 		cnt := ui.Button(c, "").
 			Background(ui.Transparent).
-			Border(0, t.Border).
-			TextColor(t.TextMuted).
-			FontSize(metaSmallFontSize).
+			Border(0, tk.BorderSecondary).
+			TextColor(tk.TextDescription).
+			FontSize(tk.FontSizeSM).
 			Padding(3, 6).
-			Radius(6)
+			Radius(tk.BorderRadiusSM)
 		cnt.Children(func() {
-			ui.Icon(c, commentBubbleIcon).Size(15, 15).TextColor(t.TextMuted)
-			ui.Textf(c, "%d", d.replyTotal).FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+			ui.Icon(c, commentBubbleIcon).Size(15, 15).TextColor(tk.TextDescription)
+			ui.Textf(c, "%d", d.replyTotal).FontSize(tk.FontSizeSM).Font(sidebarFont).
+				TextColor(tk.TextDescription)
 		})
 		cnt.Label("评论数")
 		cnt.Tooltip("回到评论顶部")
@@ -1373,14 +1407,14 @@ func (a *app) replyHeader(c *ui.Context, d *detailState) {
 		}
 		tg := ui.Button(c, "").
 			Background(ui.Transparent).
-			Border(0, t.Border).
-			TextColor(t.Accent).
-			FontSize(metaSmallFontSize).
+			Border(0, tk.BorderSecondary).
+			TextColor(tk.Primary).
+			FontSize(tk.FontSizeSM).
 			Padding(3, 6).
-			Radius(6).
+			Radius(tk.BorderRadiusSM).
 			Disabled(d.replyLoading)
 		tg.Children(func() {
-			ui.Icon(c, target).Size(17, 17).TextColor(t.Accent)
+			ui.Icon(c, target).Size(17, 17).TextColor(tk.Primary)
 		})
 		tg.Label(viewLabel)
 		tg.Tooltip(viewLabel)
@@ -1399,39 +1433,6 @@ func (a *app) replyHeader(c *ui.Context, d *detailState) {
 			a.saveReplyViewMode(d.flat)
 		}
 	})
-}
-
-// bodyPaneToggle 是正文的收起 / 展开图标：展开时悬浮在正文卡片右上角（由
-// 调用方摆位置），收起后画在左边缘那条窄栏上——同一个按钮，跟着正文一起
-// 左移，不会消失在一个摸不着的地方。它只负责这一次浏览，不落盘（见
-// openDetail 与 closeDetail 的弹栈分支）。
-func (a *app) bodyPaneToggle(c *ui.Context, d *detailState) ui.Element {
-	t := c.Theme()
-	icon := chevronLeftIcon
-	label := "收起正文"
-	tip := "把正文收到左边，评论占满整行"
-	if d.bodyCollapsed {
-		icon = chevronRightIcon
-		label = "展开正文"
-		tip = "重新显示左边的正文"
-	}
-	// 图标带一层浅底与描边就够了：不加阴影，压在正文里不会像浮起来的一块
-	// 卡片，收起后落在左边缘时也不会凭空多一层灰。
-	b := ui.Box(c).Size(30, 30).Radius(9).Center().
-		Background(t.Surface).Border(1, t.Border)
-	hovered := b.Hovered()
-	if hovered {
-		b.Background(t.SurfaceHover)
-	}
-	ink := t.TextMuted
-	if hovered {
-		ink = t.Text
-	}
-	b.Children(func() {
-		ui.Icon(c, icon).Size(17, 17).TextColor(ink)
-	})
-	b.Label(label).Tooltip(tip).OnClick(func() { d.bodyCollapsed = !d.bodyCollapsed })
-	return b
 }
 
 // replyCanLoadMore 汇报是否还能（且应）续拉下一页评论：已加载、未在读、未到底、
@@ -1472,6 +1473,7 @@ func (a *app) opTag(c *ui.Context) {
 
 func (a *app) replyRow(c *ui.Context, r replyItem, focusID string, isNew bool) {
 	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	bg := t.Surface
 	border := t.Border
 	borderWidth := float32(1)
@@ -1495,7 +1497,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string, isNew bool) {
 	}
 	left := float32(12)
 	left += float32(r.Depth) * 14
-	row := ui.Column(c).FillWidth().Padding(10, 12, 10, left).Radius(10).
+	row := ui.Column(c).FillWidth().Padding(10, 12, 10, left).Radius(tk.BorderRadius).
 		Background(bg).Border(borderWidth, border).Gap(6)
 	if dashed {
 		row.BorderStyle(ui.BorderDashed)
@@ -1559,8 +1561,8 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string, isNew bool) {
 				a.opTag(c)
 			}
 			if r.CreatedAt != "" {
-				ui.Text(c, relativeTime(r.CreatedAt)).FontSize(metaSmallFontSize).
-					TextColor(t.TextMuted)
+				ui.Text(c, relativeTime(r.CreatedAt)).FontSize(tk.FontSizeSM).
+					Font(sidebarFont).TextColor(tk.TextDescription)
 			}
 			// 从帖子金币池里领到过金币的评论，在时间后面标出合计：这是这条
 			// 评论拿到的额外收入，只有它自己有，不必再去翻金币流水。
@@ -1586,17 +1588,18 @@ func (a *app) replyRow(c *ui.Context, r replyItem, focusID string, isNew bool) {
 				}
 				if href != "" {
 					link := ui.Button(c, floor).Background(ui.Transparent).
-						Border(0, t.Border).TextColor(t.TextMuted).
-						FontSize(metaSmallFontSize).Padding(0, 0).Radius(4)
+						Border(0, tk.BorderSecondary).TextColor(tk.TextDescription).
+						FontSize(tk.FontSizeSM).Font(sidebarFont).Padding(0, 0).Radius(tk.BorderRadiusXS)
 					if link.Hovered() {
-						link.TextColor(t.Accent)
+						link.TextColor(tk.Primary)
 					}
 					link.Tooltip("在浏览器打开这条评论")
 					if link.Clicked() {
 						a.openExternal(href)
 					}
 				} else {
-					ui.Text(c, floor).FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+					ui.Text(c, floor).FontSize(tk.FontSizeSM).Font(sidebarFont).
+						TextColor(tk.TextDescription)
 				}
 			}
 			// 回复、表态与打赏都收到评论底部那一行（见下面的 replyFooter），
@@ -1942,16 +1945,16 @@ func (a *app) replyAction(c *ui.Context, label string, onClick func()) {
 // show a hint, and a logged-in open post gets a Markdown editor whose send
 // button is integrated into the field. 默认只占一行，把空间留给评论列表。
 func (a *app) replyComposer(c *ui.Context, d *detailState) {
-	t := c.Theme()
-	ui.Divider(c)
+	tk := lobetheme.TokensOf(c)
+	layout.Divider(c, layout.DividerProps{})
 	// 输入栏固定在评论卡片底部，不再为右下角的悬浮按钮让出宽度：刷新与
 	// 返回顶部已经收进右上角的悬浮工具条，这里只需要普通的内边距。
-	ui.Column(c).FillWidth().Padding(8, 12).Gap(4).Children(func() {
+	ui.Column(c).FillWidth().Padding(10, 14).Gap(4).Children(func() {
 		if d.replyTo.ID != "" {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				// 回复顶层评论时报楼层；回复楼中楼时它没有楼层，改用作者名。
-				ui.Text(c, "正在回复 "+d.replyTo.label()).FontSize(metaFontSize).
-					TextColor(t.Accent).Grow(1)
+				ui.Text(c, "正在回复 "+d.replyTo.label()).FontSize(tk.FontSizeSM).
+					TextColor(tk.Primary).Grow(1)
 				a.replyAction(c, "取消", func() {
 					d.replyTo = replyTarget{}
 				})
@@ -1959,7 +1962,7 @@ func (a *app) replyComposer(c *ui.Context, d *detailState) {
 		}
 		// 评论已关闭时不展示编辑器，仅给提示。
 		if d.topic != nil && d.topic.CommentsClosed {
-			ui.Text(c, "评论已关闭").FontSize(metaFontSize).TextColor(t.TextMuted)
+			ui.Text(c, "评论已关闭").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 			return
 		}
 		a.replyInput(c, d)
@@ -1979,6 +1982,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 		return
 	}
 	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// 刚粘进来的图片在这里落地：必须在算 expanded 与构造输入框之前，
 	// 和拖放一样，这一帧就要把占位符写进草稿并让输入框展开。
 	a.drainPaste(uploadTargetReply)
@@ -2000,7 +2004,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	if expanded {
 		vpad = 8
 	}
-	box := ui.Column(c).Padding(vpad, 8).Radius(10).Background(t.Background)
+	box := ui.Column(c).Padding(vpad, 8).Radius(tk.BorderRadius).Background(t.Background)
 	// 整个评论框也是拖放区。登记要在 Children 之前；拖进图片后草稿立刻有
 	// 内容，这一帧就该展开，让用户看见刚插进来的占位符。
 	over := a.editorDropZone(box, uploadTargetReply)
