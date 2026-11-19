@@ -2079,6 +2079,27 @@ func TestDetailBodyCollapsesLeft(t *testing.T) {
 	}
 }
 
+// 默认分栏是正文 40% / 评论 60%：正文宽按内容区宽度的四成算，评论区从
+// 四成处开始；拖动仍能把接缝挪走。
+func TestDetailBodyDefaultRatio(t *testing.T) {
+	const width = 1100
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, width, 760)
+	tt.Frame()
+
+	want := float32(width-40) * 0.40
+	if got := a.detail.bodyWidth; got < want-1 || got > want+1 {
+		t.Errorf("正文默认宽度应约为 %.0f（40%%），实际 %.0f", want, got)
+	}
+	comment, ok := tt.Find("评论")
+	if !ok {
+		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
+	}
+	if comment.X < float32(width)*0.38 || comment.X > float32(width)*0.52 {
+		t.Errorf("评论区应从约四成处开始，实际 X=%.0f（窗口宽 %d）", comment.X, width)
+	}
+}
+
 // 两栏宽度通过拖动接缝调整：Lobe 的 DraggablePanel 负责接缝命中与尺寸，
 // 这里验证正文宽度、接缝与评论区一起移动，且不会误触正中的收起按钮。
 func TestDetailBodyResizesByDrag(t *testing.T) {

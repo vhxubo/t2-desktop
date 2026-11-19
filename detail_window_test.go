@@ -186,6 +186,39 @@ func TestDetailWindowTitleAndTabsRender(t *testing.T) {
 	}
 }
 
+// 工具条只剩一枚动作时，不再为它画一条悬浮栏：直接收进详情窗口的自定义
+// 标题栏，和其它图标按钮同一排。
+func TestDetailWindowLoneToolActionInTitleBar(t *testing.T) {
+	a := detailWindowsApp(t)
+	a.openDetailWindow(itemForWindow("POST001"))
+	h := a.detailWindows[0]
+	d := h.states[0]
+	// 没有帖子地址就没有复制链接；非作者、未滚动，独立窗口的标题栏也已经有
+	// 「关闭」，于是工具条只剩「刷新」这一枚。
+	d.topic = nil
+	d.fallbackURL = ""
+
+	tt := ui.NewTester(func(c *ui.Context) { a.detailWindowView(h, c) }, detailWindowWidth, detailWindowHeight)
+	tt.Frame()
+
+	refresh, ok := tt.Access("刷新")
+	if !ok {
+		t.Fatalf("标题栏里应有唯一的刷新动作：%q", tt.Texts())
+	}
+	if refresh.Bounds.Y > titleBarHeight {
+		t.Errorf("单枚动作应落在自定义标题栏内（Y<=%d），实际 %+v", titleBarHeight, refresh.Bounds)
+	}
+	count := 0
+	for _, info := range tt.AccessAll() {
+		if info.Name == "刷新" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("单枚动作只应画一次，实际 %d 个", count)
+	}
+}
+
 func TestDetailWindowsSurviveMainWindowClose(t *testing.T) {
 	a := detailWindowsApp(t)
 	a.openDetailWindow(itemForWindow("POST001"))

@@ -710,12 +710,13 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 		// bodyCollapsed 的写入（如通知定位默认收起）仍然生效。
 		expanded := !d.bodyCollapsed
 		if d.bodyWidth <= 0 {
-			// 首次进入按窗口宽度给一个 55% 的初始宽度；小于这个阈值只可能是
-			// 拖动到最小，DraggablePanel 会保留最小值，不会误判成未初始化。
+			// 首次进入按窗口宽度给一个 40% 的初始宽度：正文读起来是窄栏，
+			// 评论区拿剩下的 60% 展开评论树；小于这个阈值只可能是拖动到
+			// 最小，DraggablePanel 会保留最小值，不会误判成未初始化。
 			if w, _ := c.Size(); w > 0 {
-				d.bodyWidth = (w - 40) * 0.55
+				d.bodyWidth = (w - 40) * 0.40
 			} else {
-				d.bodyWidth = 580
+				d.bodyWidth = 420
 			}
 		}
 		if w, _ := c.Size(); w > 0 {
@@ -771,51 +772,136 @@ func detailReplySurface(t *ui.Theme) ui.Color {
 	return t.Background.Mix(t.Text, 0.05)
 }
 
-// detailToolBar 是详情页右上角的悬浮工具条：返回顶部、刷新与关闭。收藏
-// 已经移到标题下方的作者行最右侧（见 favoriteButton）。工具条绝对定位在
-// 内容区右上角，不参与页面布局，所以正文和评论能多吃到原来被页头占掉的
-// 高度；按钮本体仍是 30×30 的图标块，整条加一层描边底色，压在评论卡片
-// 头部右侧的留白上也能看清。评论卡片的头部行不往右挤占这块空间
-// （见 replyHeader）。
+// detailToolKind 决定一枚工具条动作交给哪支画法。
+type detailToolKind int
+
+const (
+	detailToolPlain    detailToolKind = iota // 普通图标，见 detailToolButton
+	detailToolCopy                           // 复制链接要拿构建期的 Context
+	detailToolRefresh                        // 在途时换成转圈并禁用
+	detailToolComments                       // 评论开关有自己的忙碌态
+)
+
+// detailToolAction 是右上角工具条里的一枚动作。悬浮条与详情窗口的自定义
+// 标题栏共用这一份清单，条件只写一遍：只有一枚时收进标题栏（见
+// detailWindowTitleBar），两枚以上才画悬浮条。
+type detailToolAction struct {
+	kind      detailToolKind
+	icon      *ui.SVG
+	label     string
+	tip       string
+	href      string
+	onClick   func()
+	busy      bool
+	gapBefore bool // 前面加一道短竖线，把分享类动作与页面操作分开
+}
+
+// detailToolActions 按界面顺序列出此刻该出现的动作。
+func (a *app) detailToolActions(d *detailState) []detailToolAction {
+	acts := make([]detailToolAction, 0, 7)
+	// 复制链接排最左边，与页面操作之间隔一道短竖线：分享帖子不是一类事。
+	if href := d.originURL(); href != "" {
+		acts = append(acts, detailToolAction{
+			kind: detailToolCopy, icon: copyLinkIcon,
+			label: "复制帖子链接", tip: "把这篇帖子的链接复制到剪贴板", href: href,
+		})
+	}
+	// 只有正文或评论滚离顶部时才出现：工具条始终可达，不会像旧版页头那样
+	// 为了放它固定占掉一行。正文收起时不看它的偏移：那栏根本没画出来。
+	if first, _ := d.list.Visible(); (!d.bodyCollapsed && d.bodyScroll.Y > 0) || first > 0 {
+		acts = append(acts, detailToolAction{
+			icon: backTopIcon, label: "返回顶部", tip: "正文与评论都回到顶部",
+			// 直接把偏移写回 ScrollState 就是立即回顶（ScrollTo 会走动画）。
+			onClick: func() {
+				d.bodyScroll.X, d.bodyScroll.Y = 0, 0
+				d.list.ScrollTo(0, ui.Start)
+			},
+		})
+	}
+	// 作者本人的三个入口：改标题 / 正文、追加附言、关闭 / 开启评论。接口
+	// 只允许作者本人改，所以入口也只在昵称对得上时出现。
+	if a.canEditTopic(d) {
+		acts = append(acts,
+			detailToolAction{
+				icon: editIcon, label: "编辑帖子", tip: "修改标题与正文",
+				onClick: func() { a.showTopicEdit(d) },
+			},
+			detailToolAction{
+				icon: postscriptIcon, label: "追加附言", tip: "在帖子末尾追加一段附言",
+				onClick: func() { a.showPostscript(d) },
+			},
+		)
+	}
+	if d.topic != nil && a.canToggleComments(d) {
+		icon, label, tip := commentsOffIcon, "关闭评论", "关闭评论：关闭后其他读者不能再回复"
+		if d.topic.CommentsClosed {
+			icon, label, tip = commentBubbleIcon, "开启评论", "重新开启这篇帖子的评论"
+		}
+		busy := d.comments.busy
+		if busy {
+			label, tip = "正在提交评论开关", "正在提交…"
+		}
+		acts = append(acts, detailToolAction{
+			kind: detailToolComments, icon: icon, label: label, tip: tip, busy: busy,
+		})
+	}
+	loading := d.topicLoading || d.replyLoading
+	tip := "重新加载正文与评论"
+	if loading {
+		tip = "正在刷新…"
+	}
+	acts = append(acts, detailToolAction{
+		kind: detailToolRefresh, icon: refreshIcon, label: "刷新", tip: tip, busy: loading,
+	})
+	// 独立详情窗口的自定义标题栏已经有「关闭」，不再悬浮一枚重复的关闭按钮。
+	if d.host == nil {
+		acts = append(acts, detailToolAction{
+			icon: closeIcon, label: "关闭详情", tip: "关闭详情（Esc）", onClick: a.closeDetail,
+		})
+	}
+	// 复制链接之后的第一个动作都隔一道短竖线，不只是「返回顶部」：没有滚动
+	// 时编辑 / 刷新也该和分享分开。
+	if len(acts) > 1 && acts[0].kind == detailToolCopy {
+		acts[1].gapBefore = true
+	}
+	return acts
+}
+
+// detailToolBar 是详情页右上角的悬浮工具条：绝对定位在内容区右上角，不参与
+// 布局，正文和评论能多吃到原来被页头占掉的高度。整条用浅表面加一根细描边
+// 勾边，不再垫一层大阴影——压在评论卡片上像贴纸的正是那圈阴影。
 func (a *app) detailToolBar(c *ui.Context, d *detailState) {
+	acts := a.detailToolActions(d)
+	// 单枚动作交给详情窗口标题栏；没有动作时连空条也不画。
+	if len(acts) == 0 || (len(acts) == 1 && d.host != nil) {
+		return
+	}
 	tk := lobetheme.TokensOf(c)
-	ui.Row(c).Absolute().Top(15).Right(22).Gap(2).Padding(3).Radius(tk.BorderRadius).
-		Background(tk.BgElevated).
-		Shadow(0, 3, 12, 0, tk.Shadow).
-		Children(func() {
-			// 复制链接排在工具条最左边，作者动作 / 刷新 / 关闭在它右边，中间
-			// 隔一道短竖线：分享帖子与页面操作不是一类事。
-			if href := d.originURL(); href != "" {
-				a.detailCopyButton(c, href, "复制帖子链接", "把这篇帖子的链接复制到剪贴板")
+	ui.Row(c).Absolute().Top(15).Right(22).Gap(2).Padding(3).
+		Radius(tk.BorderRadiusLG).Background(tk.BgElevated).
+		Border(1, tk.BorderSecondary).Children(func() {
+		for _, act := range acts {
+			if act.gapBefore {
 				ui.Box(c).Width(1).Height(18).Background(tk.BorderSecondary).Shrink(0)
 			}
-			// 只有正文或评论滚离顶部时才出现：工具条始终可达，不会像旧版
-			// 页头那样为了放它固定占掉一行。正文收起时不看它的偏移：那栏
-			// 根本没画出来，按钮留着也只会让人以为评论还能往上滚。
-			if first, _ := d.list.Visible(); (!d.bodyCollapsed && d.bodyScroll.Y > 0) || first > 0 {
-				a.detailToolButton(c, backTopIcon, "返回顶部", "正文与评论都回到顶部", func() {
-					// 直接把偏移写回 ScrollState 就是立即回顶（ScrollTo 会走一段
-					// 动画，回顶部不必拖时间）；评论列表按行号同样立即回顶。
-					d.bodyScroll.X, d.bodyScroll.Y = 0, 0
-					d.list.ScrollTo(0, ui.Start)
-				})
-			}
-			// 作者本人多三个入口：改标题 / 正文、往帖子末尾追加附言，以及
-			// 关闭 / 开启评论。接口只允许作者本人改，所以入口也只在昵称对得上
-			// 时出现（见 canEditTopic），不拿一个点了必然 403 的按钮占位置。
-			if a.canEditTopic(d) {
-				a.detailToolButton(c, editIcon, "编辑帖子", "修改标题与正文", func() {
-					a.showTopicEdit(d)
-				})
-				a.detailToolButton(c, postscriptIcon, "追加附言", "在帖子末尾追加一段附言", func() {
-					a.showPostscript(d)
-				})
-				// 评论开关同样是作者动作：接口非作者一律 403（见 comments_status.go）。
-				a.commentsStatusButton(c, d)
-			}
-			a.detailRefreshButton(c, d)
-			a.detailToolButton(c, closeIcon, "关闭详情", "关闭详情（Esc）", a.closeDetail)
-		})
+			a.renderDetailToolAction(c, d, act)
+		}
+	})
+}
+
+// renderDetailToolAction 把清单里的一枚动作交给对应的画法，悬浮条与标题栏
+// 之外的按钮规范（尺寸、hover、tooltip、无障碍名）仍由各画法自己负责。
+func (a *app) renderDetailToolAction(c *ui.Context, d *detailState, act detailToolAction) {
+	switch act.kind {
+	case detailToolCopy:
+		a.detailCopyButton(c, act.href, act.label, act.tip)
+	case detailToolRefresh:
+		a.detailRefreshButton(c, d)
+	case detailToolComments:
+		a.commentsStatusButton(c, d)
+	default:
+		a.detailToolButton(c, act.icon, act.label, act.tip, act.onClick)
+	}
 }
 
 // detailToolButton 是悬浮工具条里的纯图标按钮：无边框、无填充，悬停才出现

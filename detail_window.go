@@ -458,6 +458,15 @@ func (h *detailWindow) claimsToasts(target toastTarget) bool {
 func (a *app) detailWindowTitleBar(h *detailWindow, c *ui.Context) {
 	t := c.Theme()
 	d := h.current()
+	// 右上角工具条只剩一枚动作时不再画悬浮条，直接收进这根自定义标题栏；
+	// 清单与悬浮条共用，条件只写一遍（见 detailToolActions）。
+	var lone *detailToolAction
+	if d != nil {
+		if acts := a.detailToolActions(d); len(acts) == 1 {
+			act := acts[0]
+			lone = &act
+		}
+	}
 	ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
 		Background(t.Surface).DragWindow().Children(func() {
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
@@ -470,6 +479,9 @@ func (a *app) detailWindowTitleBar(h *detailWindow, c *ui.Context) {
 			a.accountWindowTag(c)
 		})
 		ui.Row(c).AlignItems(ui.Center).Padding(0, 4).Gap(2).Children(func() {
+			if lone != nil {
+				a.detailTitleToolButton(c, d, *lone)
+			}
 			mergeLabel, mergeTip := "合并详情窗口", "把所有详情窗口收进这个窗口，作为标签切换"
 			if len(a.detailWindows) < 2 {
 				mergeTip = "当前只有一个详情窗口，打开更多帖子后才能合并"
@@ -485,6 +497,27 @@ func (a *app) detailWindowTitleBar(h *detailWindow, c *ui.Context) {
 			titleBarButton(c, titleClose, "关闭", func() { a.closeDetailTab(h, h.active) })
 		})
 	})
+}
+
+// detailTitleToolButton 把工具条里唯一的一枚动作画进详情窗口标题栏：沿用
+// 标题栏 28×28 的图标按钮规格，无障碍名与 tooltip 照旧，忙碌时禁用入口。
+func (a *app) detailTitleToolButton(c *ui.Context, d *detailState, act detailToolAction) {
+	if !a.detailWindowIconButton(c, act.icon, act.label, act.tip, !act.busy) {
+		return
+	}
+	// iconActionButton 的 Clicked 在构建期就返回，所以这里能安全用 c 取剪贴板服务。
+	switch act.kind {
+	case detailToolCopy:
+		a.copyToClipboard(c, act.href, a.detailToastFor(d), "已复制链接")
+	case detailToolRefresh:
+		a.refreshDetail()
+	case detailToolComments:
+		a.askToggleComments(d)
+	default:
+		if act.onClick != nil {
+			act.onClick()
+		}
+	}
 }
 
 // detailWindowIconButton 是标题栏里 28×28 的图标按钮（和普通操作按钮同规
