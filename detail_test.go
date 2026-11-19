@@ -1762,8 +1762,8 @@ func replyRowVisual(tt *ui.Tester, text string) (replyRowPixels, bool) {
 	return out, true
 }
 
-// accentTint 报告一个像素是不是被强调色（#2563eb 那种蓝）染过：半透明的
-// 描边落在白底上仍然偏蓝，中性灰描边的 B 与 R 只差几个数。
+// accentTint 报告一个像素是不是被强调色（蓝色）染过：半透明的描边落在
+// 白底上仍然偏蓝，中性灰描边的 B 与 R 只差几个数。
 func accentTint(c color.RGBA) bool {
 	return int(c.B)-int(c.R) > 25
 }

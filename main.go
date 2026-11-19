@@ -142,12 +142,13 @@ type app struct {
 	// updates 表示更新插件已安装（main 里 mygo.Use 之后置 true）。无头
 	// 测试不装插件，点「检查更新」只走测试钩子，不会碰 updater 的主循环。
 	updates bool
-	// onSettingsOpen / onUpdateCheck / onCoinsOpen / onPandoraOpen 是测试钩子：
-	// 无窗口时用来确认按钮确实接上了动作。生产为 nil。
+	// onSettingsOpen / onUpdateCheck / onCoinsOpen / onPandoraOpen /
+	// onProfileOpen 是测试钩子：无窗口时用来确认按钮确实接上了动作。生产为 nil。
 	onSettingsOpen func()
 	onUpdateCheck  func()
 	onCoinsOpen    func()
 	onPandoraOpen  func()
+	onProfileOpen  func()
 	onAboutOpen    func()
 
 	tab     int
@@ -200,15 +201,15 @@ type app struct {
 	authGate authGate
 
 	// coins 是金币页的聚合状态：余额、今日明细、流水、统计与排行各自独立
-	// 加载，某个高级接口未开通时只降级那一块。标题栏的金币数也读这里的
+	// 加载，某个高级接口未开通时只降级那一块。账号菜单里的金币数也读这里的
 	// balance，两处显示始终是同一个数字。
 	coins *coinState
 	// coinWin 是金币窗口：金币页从「我的」窗口里独立出来，成为一个独立的
-	// mygo 窗口。入口是标题栏上登录账号左侧的金币数（见 coins_window.go）。
+	// mygo 窗口。入口收在标题栏「我的」的账号菜单气泡里（见 profile_ui.go）。
 	// coinShown 表示窗口此刻是否在屏幕上，金币数据此高亮。都只在主线程读写。
 	coinWin   *mygo.Window
 	coinShown bool
-	// coinTagTimer / coinTagGen 维护标题栏金币数的定时刷新；coinTagSeq 与
+	// coinTagTimer / coinTagGen 维护账号菜单金币数的定时刷新；coinTagSeq 与
 	// coinTagLoading 让过期的余额请求结果被丢弃，coinTagPending 记下刷新期间
 	// 又收到的金币变动事件，等这次请求回来再补一次。都只在主线程读写。
 	coinTagTimer   *time.Timer
@@ -222,8 +223,8 @@ type app struct {
 	coinRefreshGen   uint64
 
 	// pandora 是潘多拉抽卡弹窗的状态：今日盲盒、两次抽奖结果与弹窗开合。
-	// 入口是标题栏上的「潘多拉」（见 pandora_dialog.go），弹窗画在主窗口的
-	// dialogs 里；只在主线程读写。
+	// 入口收在标题栏「我的」的账号菜单气泡里（见 profile_ui.go），弹窗画在
+	// 主窗口的 dialogs 里；只在主线程读写。
 	pandora *pandoraState
 
 	// commentCost 是评论框上方那条「发评金币与徽章」状态栏的数据：我的徽章
@@ -276,6 +277,9 @@ type app struct {
 	// 头像按钮据此高亮。都只在主线程读写。
 	profile      *profileState
 	profileShown bool
+	// profileMenuOpen 是标题栏「我的」账号气泡的开合：点账号标识弹出，里面
+	// 收着金币、潘多拉与「我的」三个入口。只在主线程读写。
+	profileMenuOpen bool
 	// composeWin 是「发帖」窗口：入口是主页右下角的悬浮按钮（见 composeFab）。
 	// compose 是它的草稿与各组件状态，界面与请求在 compose.go / compose_ui.go。
 	// 都只在主线程读写；关窗口后草稿保留，退出登录时丢弃。
@@ -915,6 +919,9 @@ func (a *app) reclickTab(idx int) {
 
 func (a *app) onAuthChanged(err error) {
 	a.loginPending = false
+	// 账号菜单属于当前会话：登录、退出、重新授权都先把它收起，别把上一个
+	// 账号的入口留在新会话里。
+	a.profileMenuOpen = false
 	// 标题栏的窗口标题带着账号名：登录、退出、重新授权后都要跟着变，任务栏
 	// 里才好分辨这是哪个账号的窗口。
 	if a.win != nil {
@@ -1397,8 +1404,9 @@ func (a *app) titleBar(c *ui.Context) {
 	h := titleBarHeightFor(c)
 	ui.Row(c).Height(h).FillWidth().AlignItems(ui.Stretch).
 		Padding(0, 0, 0, bar.Left).Background(t.Background).DragWindow().Children(func() {
-		// 左段：品牌名、搜索、通知铃铛，登录后再加上金币、盲盒与头像昵称，
-		// 整体可随标题栏拖动。设置与登录 / 退出登录都在侧边栏底部。
+		// 左段：品牌名、搜索、通知铃铛，登录后再加上账号标识，整体可随
+		// 标题栏拖动。金币、盲盒与「我的」都收在账号标识的气泡里；设置与
+		// 登录 / 退出登录都在侧边栏底部。
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 16).Gap(10).
 			AlignItems(ui.Center).Children(func() {
 			// 品牌名对应 Lobe Header 的 Logo 位，占标题栏左端。
@@ -1411,14 +1419,9 @@ func (a *app) titleBar(c *ui.Context) {
 			// 通知铃铛：未读数叠在铃铛右下角，点开独立窗口（不再是侧边栏页面）。
 			a.notificationBell(c)
 			if a.auth.loggedIn() {
-				// 潘多拉盲盒：独立窗口的入口，放在金币数左侧。今天还能抽时
-				// 入口自带「可抽」角标，窗口开着时高亮。
-				a.pandoraTag(c)
-				// 金币数与账号标识只给登录用户看。金币数在账号左侧：💰 + 千分位
-				// 余额，点开独立的金币窗口。
-				a.coinTag(c)
-				// 头像 + 昵称整体可点，点开「我的」窗口；标题栏不写「已登录」，
-				// 也不放退出按钮：那几个字和按钮都挪到了侧边栏底部。
+				// 头像 + 昵称是账号菜单的锚点：点一下弹出气泡，金币、潘多拉
+				// 与「我的」三个入口都在气泡里选。标题栏不写「已登录」，也不放
+				// 退出按钮：那几个字和按钮都挪到了侧边栏底部。
 				a.profileTag(c, a.auth.username())
 			}
 		})
@@ -1557,19 +1560,15 @@ func feedInset(c *ui.Context) float32 {
 	return inset
 }
 
-// feedHeader 是正文栏顶部的页头：上面一行是日期小字，下面是页面名的
-// 大标题，右端是条目数。整块靠留白、字号差与字距分层，不画底纹和方框；
-// 配色走 Lobe token，让页头与下方列表行的层次一致。
+// feedHeader 是正文栏顶部的页头：左边是页面名的大标题，右端是条目数。
+// 整块靠留白、字号差与字距分层，不画底纹和方框；配色走 Lobe token，
+// 让页头与下方列表行的层次一致。
 func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
 	tk := lobetheme.TokensOf(c)
-	now := c.Now()
 	ui.Column(c).FillWidth().Shrink(0).
 		Padding(24, feedInset(c)+16, 14, feedInset(c)+16).Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.End).Gap(16).Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-				ui.Text(c, now.Format("2006.01.02")+" · "+weekdayCN(now.Weekday())).
-					FontSize(tk.FontSizeSM).Font(sidebarFont).LetterSpacing(1.6).
-					TextColor(tk.TextDescription).SingleLine()
+			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 				ui.Text(c, spec.Label).FontSize(tk.FontSizeHeading4).FontWeight(600).
 					LetterSpacing(-0.4).TextColor(tk.TextHeading).SingleLine()
 			})
@@ -1581,43 +1580,17 @@ func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
 	})
 }
 
-// weekdayCN 把 Go 的星期翻成界面上的「周三」。页头只读本机时钟，不联网。
-func weekdayCN(d time.Weekday) string {
-	switch d {
-	case time.Monday:
-		return "周一"
-	case time.Tuesday:
-		return "周二"
-	case time.Wednesday:
-		return "周三"
-	case time.Thursday:
-		return "周四"
-	case time.Friday:
-		return "周五"
-	case time.Saturday:
-		return "周六"
-	default:
-		return "周日"
-	}
-}
-
-// feedCountLabel 是页头右端的小字：有总数时写「共 N 条」，翻页时再带上
-// 「第 2 / 5 页」；服务端没给总数的页（最新评论）只写已拿到的条数。
+// feedCountLabel 是页头右端的小字：有总数时写「共 N 条」，服务端没给
+// 总数的页（最新评论）只写已拿到的条数。滚动加载不显示当前页码。
 func feedCountLabel(st *tabState) string {
 	n := st.total
-	paged := st.totalPages > 1
 	if n <= 0 {
 		n = len(st.items)
-		paged = false
 	}
 	if n <= 0 {
 		return ""
 	}
-	out := "共 " + strconv.Itoa(n) + " 条"
-	if paged {
-		out += " · 第 " + strconv.Itoa(st.page) + " / " + strconv.Itoa(st.totalPages) + " 页"
-	}
-	return out
+	return "共 " + strconv.Itoa(n) + " 条"
 }
 
 func (a *app) body(c *ui.Context) {

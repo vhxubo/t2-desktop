@@ -10,7 +10,14 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/choice"
+	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/field"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 「发帖」窗口：点主页右下角的悬浮按钮（FAB）打开，写标题与正文（Markdown，
@@ -22,6 +29,10 @@ import (
 // 常驻的控制栏：上面是匿名等发布设置，下面是六块组件，每块点开在弹窗里填写；
 // 已添加的行尾直接有「移除」，不必再进弹窗，底部还有「全部移除」。凡是可以有
 // 多个选项的地方（投票、竞猜、兑换码）都有「批量添加」与批量删除入口。
+//
+// 整套界面走 Lobe UI：颜色取 TokensOf(c)，标签 / 按钮 / 开关 / 输入框 / 提示
+// 分别由 display.Text、action.Button、choice.Switch、field 与 feedback 提供，
+// 和主窗口、账号面板、详情页是同一套设计语言；文案与动作保持不变，只换观感。
 //
 // 这是独立的 mygo 窗口而不是主窗口里的一层遮罩。数据、校验与请求在
 // compose.go；这里只负责窗口的开关与界面。
@@ -171,25 +182,59 @@ func (a *app) redrawComposeWindow() {
 // composeFab 是主页右下角那一列悬浮按钮里的「发帖」：主操作，放在最下面。
 // 位置由 listFabs 的竖列给（见 fabs.go），这里只管长什么样；公开 tab 与
 // 私人 tab 都能用（未登录时点它先走授权）。图标 + 文案一起显示，任何窗口
-// 宽度下都能看出这是「发帖」。
+// 宽度下都能看出这是「发帖」。整颗按钮是 Lobe 的 Primary Button。
 func (a *app) composeFab(c *ui.Context) {
-	t := c.Theme()
-	// 边框始终占 1 DIP：只在悬停时加边框会让按钮在鼠标移入时变大一点，
-	// 位置来回跳。悬停只换边框颜色。
-	ring := t.Accent
-	b := ui.Box(c).Padding(9, 16).Radius(4).
-		Background(t.Accent).Border(1, ring).AlignItems(ui.Center)
-	if b.Hovered() {
-		b.Border(1, t.Text)
-	}
-	b.Children(func() {
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			ui.Icon(c, composeIcon).Size(15, 15).TextColor(t.AccentText)
-			ui.Text(c, "发帖").FontSize(12).Font(sidebarFont).Bold().SingleLine().
-				TextColor(t.AccentText)
-		})
-	})
+	tk := lobetheme.TokensOf(c)
+	b := action.StyleButton(c, ui.ButtonBase(c), "", action.ButtonProps{Variant: action.Primary})
 	b.Label("发帖").Tooltip("写一篇新帖子").OnClick(a.showCompose)
+	b.Children(func() {
+		ui.Icon(c, composeIcon).Size(15, 15).TextColor(tk.PrimaryForeground)
+		ui.Text(c, "发帖").FontSize(12).Font(sidebarFont).Bold().SingleLine()
+	})
+}
+
+/* ------------------------------------------------------------------
+   Lobe 字段的小工具
+---------------------------------------------------------------- */
+
+// composeInputRow 让 Lobe 字段铺满一整行：field 的输入控件返回的是内层输入，
+// 外层那一行默认按内容收缩，这里借 Column 的 stretch 把外层也撑满，再把可继续
+// 配置（Label / Bind / MaxLength）的内层控件交回调用方。
+func composeInputRow(c *ui.Context, build func() ui.Element) ui.Element {
+	var el ui.Element
+	ui.Column(c).FillWidth().AlignItems(ui.Stretch).Children(func() {
+		el = build()
+	})
+	return el
+}
+
+// composeInput 是一行铺满的 Lobe 文本框。
+func composeInput(c *ui.Context, value *string, p field.InputProps) ui.Element {
+	return composeInputRow(c, func() ui.Element { return field.Input(c, value, p) })
+}
+
+// composeTextArea 是一行铺满的 Lobe 多行输入框。
+func composeTextArea(c *ui.Context, value *string, p field.TextAreaProps) ui.Element {
+	return composeInputRow(c, func() ui.Element { return field.TextArea(c, value, p) })
+}
+
+// composeNumber 是一行铺满的 Lobe 数字输入框。
+func composeNumber(c *ui.Context, value *float64, p field.InputNumberProps) ui.Element {
+	return composeInputRow(c, func() ui.Element { return field.InputNumber(c, value, p) })
+}
+
+// composeToggle 是一行 Lobe 开关：开关本体与文字都能切换。原来的 ui.Toggle
+// 把文字画在开关里，点文字也生效；这里开关与文字是两个控件，文字那一半补上
+// 点击，保住同样的手感，两者的无障碍名仍是 label。
+func composeToggle(c *ui.Context, on *bool, label string) {
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		choice.Switch(c, on, choice.SwitchProps{Size: lobetheme.Small}).Label(label)
+		if action.Button(c, label, action.ButtonProps{
+			Variant: action.Text, Size: lobetheme.Small,
+		}).Clicked() {
+			*on = !*on
+		}
+	})
 }
 
 /* ------------------------------------------------------------------
@@ -200,10 +245,10 @@ func (a *app) composeFab(c *ui.Context) {
 // 不需要遮罩，也不占主窗口的位置。
 func (a *app) composeWindowView(c *ui.Context) {
 	a.applyTheme(c)
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// 回执里的「看原文」要打开系统浏览器：服务在 UI 线程取一次，回调里不再碰 Context。
 	a.srv = c.Services()
-	c.Root().Background(t.Background)
+	c.Root().Background(tk.BgLayout)
 	// 本窗口里发起的操作结果以 toast 显示在这里，不退回主窗口。
 	a.drainToasts(c, a.claimsToasts(toastCompose))
 	// Ctrl+Enter 发布：写长文的常用手势。动态模式下发的是短动态。
@@ -243,13 +288,16 @@ func (a *app) composeWindowView(c *ui.Context) {
 		title, hint = "发动态", "· 最多 500 字"
 	}
 	ui.Column(c).Fill().Children(func() {
-		// 自绘标题栏：拖动窗口，右上角是最小化与关闭。
+		// 自绘标题栏：拖动窗口，右上角是最小化与关闭。图标与文字都走 Lobe。
 		ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
-			Background(t.Surface).DragWindow().Children(func() {
+			Background(tk.BgLayout).DragWindow().Children(func() {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
-				ui.Text(c, title).FontSize(13).Bold().SingleLine().TextColor(t.Text)
-				ui.Text(c, hint).FontSize(11).SingleLine().TextColor(t.TextMuted)
+				ui.Icon(c, lucide.SquarePen()).Size(16, 16).TextColor(tk.Primary)
+				display.Text(c, title, display.TextProps{Strong: true, FontSize: 13, Rows: 1})
+				display.Text(c, hint, display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
 				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
@@ -259,38 +307,39 @@ func (a *app) composeWindowView(c *ui.Context) {
 			})
 			titleBarButton(c, titleClose, "关闭", func() { a.closeComposeWindow() })
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
 		// 模式切换：帖子与动态共用一扇窗口，草稿各自保留。
 		ui.Row(c).FillWidth().Padding(6, 14).Children(func() {
-			ui.Segmented(c, &st.mode, composeModeLabels...)
+			action.Segmented(c, &st.mode, composeModeLabels, action.SegmentedProps{})
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
 		if st.mode == composeModeMoment {
 			a.composeMomentBody(c, st)
 		} else {
 			// 主体分两栏：左边专心写，右边常驻组件入口。两栏各自滚动，正文
-			// 写多长都不会把组件列表顶出视野。
+			// 写多长都不会把组件列表顶出视野。ScrollArea 用 Lobe 的细滚动条。
+			c.Key("compose-body")
 			ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-				ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
-					ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-						ui.Column(c).FillWidth().Padding(18, 20).Gap(14).Children(func() {
-							a.composeTitleField(c, st)
-							a.composeEditorSection(c, st)
-							ui.Divider(c)
-							a.composeMessages(c, st)
-							// 节点排在写作区最后：选填，默认留空，由 AI 判定分类。
-							a.composeNodeSection(c, st)
-						})
+				c.Key("compose-writing-scroll")
+				main := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
+					ui.Column(c).FillWidth().Padding(18, 20).Gap(14).Children(func() {
+						a.composeTitleField(c, st)
+						a.composeEditorSection(c, st)
+						layout.Divider(c, layout.DividerProps{})
+						a.composeMessages(c, st)
+						// 节点排在写作区最后：选填，默认留空，由 AI 判定分类。
+						a.composeNodeSection(c, st)
 					})
 				})
-				ui.Box(c).Width(1).AlignSelf(ui.Stretch).Background(t.Border)
+				main.Grow(1).MinHeight(0)
+				ui.Box(c).Width(1).AlignSelf(ui.Stretch).Background(tk.BorderSecondary)
 				a.composeSidebar(c, st)
 			})
 		}
 
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 		a.composeFooter(c, st)
 	})
 	// 弹窗画在内容之上：和授权弹窗一样放在 view 末尾，才能盖住整扇窗口。
@@ -305,53 +354,65 @@ func (a *app) composeWindowView(c *ui.Context) {
 // composeMomentBody 是动态模式：只有一段 1～500 字的正文，不显示标题、节点
 // 与附加组件。结果以 toast 报告，失败原因留在框里。
 func (a *app) composeMomentBody(c *ui.Context, st *composeState) {
-	t := c.Theme()
-	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+	c.Key("compose-moment-scroll")
+	list := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
 		ui.Column(c).FillWidth().Padding(18, 20).Gap(12).Children(func() {
-			ui.Text(c, "写一条动态").FontSize(14).Bold()
-			ui.Text(c, "短内容，最多 500 字；不需要标题和节点。").
-				FontSize(11).TextColor(t.TextMuted).MaxLines(2)
-			ui.TextArea(c, &st.momentDraft).Label("动态内容").
-				Lines(8, 12).FillWidth().MaxLength(composeMomentMax).
-				Placeholder("此刻想说什么？").
-				Bind(&st.momentField)
+			display.Text(c, "写一条动态", display.TextProps{Strong: true, FontSize: 14, Rows: 1})
+			display.Text(c, "短内容，最多 500 字；不需要标题和节点。",
+				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
+			composeTextArea(c, &st.momentDraft, field.TextAreaProps{
+				Placeholder: "此刻想说什么？",
+				MinRows:     8,
+				MaxRows:     12,
+			}).Label("动态内容").MaxLength(composeMomentMax).Bind(&st.momentField)
 			count := utf8.RuneCountInString(st.momentDraft)
-			color := t.TextMuted
+			ctype := display.TextSecondary
 			if count >= composeMomentMax {
-				color = t.Danger
+				ctype = display.TextDanger
 			}
-			ui.Textf(c, "%d / %d 字", count, composeMomentMax).
-				FontSize(10).TextColor(color)
+			display.Text(c, fmt.Sprintf("%d / %d 字", count, composeMomentMax),
+				display.TextProps{Type: ctype, FontSize: 10, Rows: 1})
 			if st.momentErr != "" {
-				ui.Text(c, st.momentErr).FontSize(12).TextColor(t.Danger).MaxLines(3)
+				feedback.Alert(c, st.momentErr, feedback.AlertProps{
+					Type: feedback.Error, Variant: feedback.Soft,
+				})
 			}
 			if a.auth.loggedIn() && !a.hasAuthScope("write:topic") {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "当前授权还不能发动态，需要补充 write:topic 权限。").
-						FontSize(12).TextColor(t.TextMuted).MaxLines(2).Grow(1)
-					if ui.Button(c, "去授权").Clicked() {
+					display.Text(c, "当前授权还不能发动态，需要补充 write:topic 权限。",
+						display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 2}).Grow(1)
+					if action.Button(c, "去授权", action.ButtonProps{
+						Size: lobetheme.Small,
+					}).Clicked() {
 						a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}), nil)
 					}
 				})
 			}
 		})
 	})
+	list.Grow(1).MinHeight(0)
 }
 
 // composeTitleField 是写作区第一块：只有标题。节点放在最下面且是选填的
 // （留空由站点的 AI 判定分类），匿名开关挪到右侧栏，打开窗口时标题就是唯一
 // 要动手填的东西。
 func (a *app) composeTitleField(c *ui.Context, st *composeState) {
-	ui.Field(c, "标题", func() {
-		ui.TextInput(c, &st.title).Label("标题").
-			Placeholder("一句话说清这帖讲什么").FillWidth().
-			MaxLength(composeTitleMax).Bind(&st.titleField)
+	ui.Column(c).FillWidth().Gap(6).Children(func() {
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
+			display.Text(c, "标题", display.TextProps{Strong: true, FontSize: 12, Rows: 1}).Grow(1)
+			display.Text(c, fmt.Sprintf("%d / %d 字", utf8.RuneCountInString(st.title), composeTitleMax),
+				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
+		})
+		in := composeInput(c, &st.title, field.InputProps{
+			Placeholder: "一句话说清这帖讲什么",
+		})
+		in.Label("标题").MaxLength(composeTitleMax).Bind(&st.titleField)
 		// 打开窗口就把焦点放进标题：写帖子的第一件事是给它起个名字。
 		if st.focusTitle {
 			st.titleField.Focus(c)
 			st.focusTitle = false
 		}
-	}).Description(fmt.Sprintf("%d / %d 字", utf8.RuneCountInString(st.title), composeTitleMax))
+	})
 }
 
 // composeNodeSection 是写作区最下面的一块：节点是选填项，默认留空——发帖后
@@ -359,14 +420,15 @@ func (a *app) composeTitleField(c *ui.Context, st *composeState) {
 // 顶部与触发框里都能再清掉。列表读取失败或为空也只是少了一个可选项，仍然
 // 可以照常发布。
 func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
-	t := c.Theme()
-	ui.Divider(c)
+	layout.Divider(c, layout.DividerProps{})
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "节点").FontSize(12).TextColor(t.TextMuted)
-					ui.Text(c, "选填").FontSize(11).TextColor(t.TextMuted)
+					display.Text(c, "节点", display.TextProps{
+						Type: display.TextSecondary, FontSize: 12, Rows: 1,
+					})
+					display.Tag(c, "选填", display.TagProps{Size: lobetheme.Small})
 				})
 				state := "留空即可：发布后由 AI 按内容判定分类。"
 				switch node := st.selectedNode(); {
@@ -382,24 +444,31 @@ func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 				case st.nodeLoaded:
 					state = "没有可用的节点，留空发布时由 AI 判定分类。"
 				}
-				ui.Text(c, state).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+				display.Text(c, state, display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 2,
+				})
 				// 选中节点后补一条简介：列表响应不带可靠的 description，
 				// 单独读一次 GET /v1/nodes/:slug。失败只影响这条说明。
 				if node := st.selectedNode(); node != nil && st.nodeDetailSlug == node.Slug {
 					switch {
 					case st.nodeDetailLoading:
-						ui.Text(c, "正在读取节点简介…").FontSize(11).TextColor(t.TextMuted)
+						display.Text(c, "正在读取节点简介…", display.TextProps{
+							Type: display.TextSecondary, FontSize: 11, Rows: 1,
+						})
 					case st.nodeDetailErr != "":
 						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, "节点简介暂时不可用").FontSize(11).
-								TextColor(t.Danger).MaxLines(1)
-							a.smallAction(c, "重试", false, func() {
-								a.loadNodeDetail(st, node.Slug)
+							display.Text(c, "节点简介暂时不可用", display.TextProps{
+								Type: display.TextDanger, FontSize: 11, Rows: 1,
 							})
+							if action.Button(c, "重试", action.ButtonProps{
+								Size: lobetheme.Small,
+							}).Clicked() {
+								a.loadNodeDetail(st, node.Slug)
+							}
 						})
 					case strings.TrimSpace(st.nodeDetail.Description) != "":
-						ui.Text(c, strings.TrimSpace(st.nodeDetail.Description)).
-							FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+						display.Text(c, strings.TrimSpace(st.nodeDetail.Description),
+							display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 3})
 					}
 				}
 				a.ensureNodeDetail(st)
@@ -418,7 +487,7 @@ func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 		// 失败时把原因摆出来，并留一个重试入口。
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			if st.nodeLoading {
-				ui.Spinner(c).Size(12, 12)
+				feedback.Spin(c, feedback.SpinProps{CustomSize: 12}, nil)
 			}
 			msg := "节点列表还没准备好；留空发布时由 AI 判定分类。"
 			if st.nodeLoading {
@@ -430,9 +499,13 @@ func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 			case st.nodeLoaded:
 				msg = "没有可用的节点，留空发布时由 AI 判定分类。"
 			}
-			ui.Text(c, msg).FontSize(12).TextColor(t.TextMuted).MaxLines(2).Grow(1)
+			display.Text(c, msg, display.TextProps{
+				Type: display.TextSecondary, FontSize: 12, Rows: 2,
+			}).Grow(1)
 			if st.nodeErr != "" || st.nodeLoaded {
-				if ui.Button(c, "重试").Clicked() {
+				if action.Button(c, "重试", action.ButtonProps{
+					Size: lobetheme.Small,
+				}).Clicked() {
 					// 手动重试要跳过失败冷却，并立刻重新请求。
 					st.nodesAt = time.Time{}
 					st.nodeFailedAt = time.Time{}
@@ -447,7 +520,7 @@ func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 // 下面是输入框或预览，中间按需展开表情 / 图片面板。整个编辑框同时是拖放
 // 区：文件落进来就交给上传队列，不必先点开图片面板。
 func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// 刚粘进来的图片在这里落地：必须在构造输入框之前，和拖放一样，这一帧
 	// 就要把占位符写进正文（见 drainPaste）。
 	a.drainPaste(uploadTargetCompose)
@@ -457,7 +530,9 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 		// 与评论区一样只画图标：编辑 / 预览是反复点的开关，图标比文字省地方，
 		// 说明在悬浮提示里。
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, "正文").FontSize(12).TextColor(t.TextMuted).Grow(1)
+			display.Text(c, "正文", display.TextProps{
+				Type: display.TextSecondary, FontSize: 12, Rows: 1,
+			}).Grow(1)
 			ui.Row(c).Gap(2).AlignItems(ui.Center).KeepFocus().
 				Label("正文视图").Children(func() {
 				a.editorIconToggle(c, st.preview == 0, editIcon, "编辑", "编辑模式",
@@ -466,32 +541,32 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 					func() { st.preview = 1 })
 			})
 			a.editorPanelButtons(c, &st.mdEditor, "表情", "上传图片")
-			count := ui.Text(c, fmt.Sprintf("%d / %d 字",
-				utf8.RuneCountInString(st.body), composeContentMax)).
-				FontSize(11).TextColor(t.TextMuted).SingleLine()
+			count := display.Text(c, fmt.Sprintf("%d / %d 字",
+				utf8.RuneCountInString(st.body), composeContentMax),
+				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 			if n := utf8.RuneCountInString(st.body); n > composeContentMax {
-				count.TextColor(t.Danger)
+				count.TextColor(tk.Error)
 			}
 		})
-		zone := ui.Column(c).FillWidth().Radius(10).Background(t.Background)
+		zone := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
+			FillWidth().Radius(10)
 		// 拖放区要在 Children 之前登记：这一帧就得把 flagDropTarget 记进
 		// 节点，下一次 drop 事件才找得到它。悬停时整圈换成强调色。
 		over := a.editorDropZone(zone, uploadTargetCompose)
 		if over {
-			zone.Border(1, t.Accent).Background(t.SurfaceHover)
-		} else {
-			zone.Border(1, t.Border)
+			zone.Border(1, tk.Primary).Background(tk.FillSecondary)
 		}
 		zone.Children(func() {
 			// 工具条固定在输入框上方（「头部」），滚动正文时始终可见。
 			ui.Row(c).FillWidth().Padding(2, 4).Children(func() {
 				a.editorToolbar(c, &st.mdEditor, &st.body)
 			})
-			ui.Divider(c)
+			layout.Divider(c, layout.DividerProps{})
 			a.editorPanels(c, uploadTargetCompose, &st.mdEditor, &st.body, nil)
 			if over {
-				ui.Text(c, "松开即可把图片插入正文").FontSize(11).
-					TextColor(t.Accent).Padding(6, 10)
+				display.Text(c, "松开即可把图片插入正文", display.TextProps{
+					Type: display.TextInfo, FontSize: 11, Rows: 1,
+				}).Padding(6, 10)
 			}
 			if st.preview == 1 {
 				a.composePreview(c, st)
@@ -506,14 +581,15 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 			// 读屏与测试分不清点的是哪一块。
 			// OnPaste：直接粘进来的图片（截图或图片文件）自动走图床，见
 			// pasteIntoEditor；文字照常插入。
-			area := ui.TextArea(c, &st.body).Label("正文内容").
-				Border(0, t.Border).Background(ui.Transparent).FillWidth().
-				Lines(composeEditorLines, composeEditorMaxLine).
-				Placeholder("支持 Markdown：**加粗**、# 标题、> 引用、- 列表、`代码`、[链接](url)、![图片](url) 与 :smile: 表情；图片可直接拖进来或粘贴").
-				OnPaste(func(text string) bool {
-					return a.pasteIntoEditor(uploadTargetCompose, text)
-				}).
-				Bind(&st.bodyField)
+			area := composeTextArea(c, &st.body, field.TextAreaProps{
+				Placeholder: "支持 Markdown：**加粗**、# 标题、> 引用、- 列表、`代码`、[链接](url)、![图片](url) 与 :smile: 表情；图片可直接拖进来或粘贴",
+				MinRows:     composeEditorLines,
+				MaxRows:     composeEditorMaxLine,
+				Variant:     field.InputBorderless,
+			})
+			area.Label("正文内容").OnPaste(func(text string) bool {
+				return a.pasteIntoEditor(uploadTargetCompose, text)
+			}).Bind(&st.bodyField)
 			a.syncComposeSelection(area, st)
 		})
 	})
@@ -608,47 +684,50 @@ func (st *composeState) enabledModuleCount() int {
 // 附加组件。点一行在弹窗里编辑；已添加的行尾直接放「移除」，不必为了移除再
 // 进一次弹窗，底部还有「全部移除」一次清掉所有组件。
 func (a *app) composeSidebar(c *ui.Context, st *composeState) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	ui.Column(c).Width(composeSidebarWidth).FillHeight().MinHeight(0).
-		Background(t.Surface).Padding(14, 12).Gap(8).Children(func() {
-		ui.Text(c, "发布设置").FontSize(13).Bold().TextColor(t.Text).SingleLine()
+		Background(tk.BgContainer).Padding(14, 12).Gap(8).Children(func() {
+		display.Text(c, "发布设置", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
 		ui.Row(c).FillWidth().Children(func() {
-			ui.Toggle(c, &st.anonymous, "匿名发帖").Label("匿名发帖")
+			composeToggle(c, &st.anonymous, "匿名发帖")
 		})
-		ui.Text(c, "匿名只随这篇帖子生效。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
-		ui.Divider(c)
-		ui.Text(c, "附加组件").FontSize(13).Bold().TextColor(t.Text).SingleLine()
-		ui.Text(c, "选填。点一行，在弹窗里设置好再添加。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(3)
-		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+		display.Text(c, "匿名只随这篇帖子生效。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
+		layout.Divider(c, layout.DividerProps{})
+		display.Text(c, "附加组件", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
+		display.Text(c, "选填。点一行，在弹窗里设置好再添加。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 3})
+		c.Key("compose-side-scroll")
+		list := layout.ScrollArea(c, layout.ScrollAreaProps{}, func() {
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
 				for i := range composeModuleSpecs {
 					m := composeModuleSpecs[i]
 					index := i
 					on := *m.flag(st)
-					// 边框始终是 1 DIP，只换颜色：启用状态切换时按钮不会跳。
-					ring := t.Border
-					if on {
-						ring = t.Accent
-					}
 					ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
-						setup := ui.Button(c, "").Grow(1).MinWidth(0).
-							Justify(ui.SpaceBetween).
-							Border(1, ring).Label(m.name).Tooltip(m.hint)
+						// 整行是一张可点的 Lobe Block：描边卡片与悬停底色由组件提供，
+						// 启用时用主色描边。边框始终是 1 DIP，切换时按钮不会跳。
+						setup := layout.Block(c, layout.BlockProps{
+							Clickable: true, Variant: layout.BlockOutlined,
+						}).Grow(1).MinWidth(0).Row().AlignItems(ui.Center).Padding(8, 10)
+						if on {
+							setup.Border(1, tk.Primary)
+						}
 						setup.Children(func() {
-							ui.Text(c, m.name).FontSize(12).SingleLine().
-								TextColor(t.Text).Grow(1)
-							mark, fg := "设置", t.TextMuted
+							display.Text(c, m.name, display.TextProps{
+								Strong: true, FontSize: 12, Rows: 1,
+							}).Grow(1)
+							mark, fg := "设置", display.TextSecondary
 							if on {
-								mark, fg = "已添加", t.Success
+								mark, fg = "已添加", display.TextSuccess
 							}
-							ui.Text(c, mark).FontSize(11).SingleLine().TextColor(fg)
+							display.Text(c, mark, display.TextProps{Type: fg, FontSize: 11, Rows: 1})
 						})
-						setup.OnClick(func() {
+						setup.Label(m.name).Tooltip(m.hint)
+						if setup.Clicked() {
 							st.moduleIndex = index
 							st.moduleOpen = true
-						})
+						}
 						if on {
 							// 移除就在行尾：不用再打开弹窗，填过的内容仍留在草稿里。
 							// 行尾位置窄，用废纸篓图标，说明与无障碍名一起给出移除的是谁。
@@ -662,12 +741,16 @@ func (a *app) composeSidebar(c *ui.Context, st *composeState) {
 				}
 			})
 		})
+		list.Grow(1).MinHeight(0)
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, fmt.Sprintf("已添加 %d / %d 项", st.enabledModuleCount(),
-				len(composeModuleSpecs))).FontSize(11).
-				TextColor(t.TextMuted).SingleLine().Grow(1)
+			display.Text(c, fmt.Sprintf("已添加 %d / %d 项", st.enabledModuleCount(),
+				len(composeModuleSpecs)), display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			}).Grow(1)
 			if st.enabledModuleCount() > 0 {
-				if ui.Button(c, "全部移除").Label("全部移除附加组件").Clicked() {
+				if action.Button(c, "全部移除", action.ButtonProps{
+					Size: lobetheme.Small,
+				}).Label("全部移除附加组件").Clicked() {
 					for _, m := range composeModuleSpecs {
 						*m.flag(st) = false
 					}
@@ -687,7 +770,6 @@ func (a *app) composeModuleDialog(c *ui.Context, st *composeState) {
 		return
 	}
 	m := composeModuleSpecs[st.moduleIndex]
-	t := c.Theme()
 	on := *m.flag(st)
 	label := "添加此组件"
 	if on {
@@ -707,10 +789,14 @@ func (a *app) composeModuleDialog(c *ui.Context, st *composeState) {
 			if on {
 				state = "已添加：会随帖一起发送；移除在右侧栏这一行的行尾。"
 			}
-			ui.Text(c, state).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
-			ui.Divider(c)
-			ui.Text(c, m.hint).FontSize(12).TextColor(t.TextMuted).MaxLines(3)
-			ui.Divider(c)
+			display.Text(c, state, display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 2,
+			})
+			layout.Divider(c, layout.DividerProps{})
+			display.Text(c, m.hint, display.TextProps{
+				Type: display.TextSecondary, FontSize: 12, Rows: 3,
+			})
+			layout.Divider(c, layout.DividerProps{})
 			m.body(a, c, st)
 			// 最后一行不要紧贴滚动区下沿：看起来像被截断。
 			ui.Spacer(c).Height(8)
@@ -732,7 +818,6 @@ func (a *app) composeModuleDialog(c *ui.Context, st *composeState) {
 // 一律用窗口内 toast 报告。
 func (a *app) composeOptionList(c *ui.Context, opts *[]string, checked *[]bool,
 	batchOpen *bool, batchText *string, label string, minCount, maxCount, maxLen int) {
-	t := c.Theme()
 	*checked = syncComposeChecks(*checked, len(*opts))
 	nChecked := 0
 	for _, on := range *checked {
@@ -742,12 +827,14 @@ func (a *app) composeOptionList(c *ui.Context, opts *[]string, checked *[]bool,
 	}
 	batchToggled, removeChecked := false, false
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		add := ui.Button(c, "添加选项").Disabled(len(*opts) >= maxCount)
+		add := action.Button(c, "添加选项", action.ButtonProps{Size: lobetheme.Small}).
+			Disabled(len(*opts) >= maxCount)
 		if add.Clicked() {
 			*opts = append(*opts, "")
 			*checked = append(*checked, false)
 		}
-		if ui.Button(c, "批量添加").Tooltip("一次粘贴多行，每行一个选项").Clicked() {
+		if action.Button(c, "批量添加", action.ButtonProps{Size: lobetheme.Small}).
+			Tooltip("一次粘贴多行，每行一个选项").Clicked() {
 			batchToggled = true
 		}
 		ui.Spacer(c).Grow(1)
@@ -773,16 +860,18 @@ func (a *app) composeOptionList(c *ui.Context, opts *[]string, checked *[]bool,
 		a.toast(toastCompose, msg)
 	}
 	if *batchOpen {
-		ui.Column(c).FillWidth().Gap(6).Radius(8).Background(t.Surface).
-			Border(1, t.Border).Padding(8, 10).Children(func() {
+		layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
+			FillWidth().Padding(8, 10).Children(func() {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "批量添加：一行一个，可直接粘贴多行").
-					FontSize(11).TextColor(t.TextMuted).Grow(1)
-				if ui.Button(c, "取消").Clicked() {
+				display.Text(c, "批量添加：一行一个，可直接粘贴多行",
+					display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1}).Grow(1)
+				if action.Button(c, "取消", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
 					*batchOpen = false
 					*batchText = ""
 				}
-				if ui.PrimaryButton(c, "加入选项").Clicked() {
+				if action.Button(c, "加入选项", action.ButtonProps{
+					Size: lobetheme.Small, Variant: action.Primary,
+				}).Clicked() {
 					lines := composeBatchLines(*batchText)
 					if len(lines) == 0 {
 						a.toast(toastCompose, "请先粘贴要添加的"+label)
@@ -800,22 +889,24 @@ func (a *app) composeOptionList(c *ui.Context, opts *[]string, checked *[]bool,
 					a.toast(toastCompose, msg)
 				}
 			})
-			ui.Text(c, fmt.Sprintf("最多 %d 项", maxCount)).
-				FontSize(11).TextColor(t.TextMuted)
-			ui.TextArea(c, batchText).Label(label+"批量录入").
-				Placeholder("第一行\n第二行\n第三行").FillWidth().Lines(4, 12)
+			display.Text(c, fmt.Sprintf("最多 %d 项", maxCount),
+				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
+			composeTextArea(c, batchText, field.TextAreaProps{
+				Placeholder: "第一行\n第二行\n第三行",
+				MinRows:     4,
+				MaxRows:     12,
+			}).Label(label + "批量录入")
 		})
 	}
 	removeAt := -1
 	for i := range *opts {
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-			ui.Checkbox(c, &(*checked)[i], "").Shrink(0).
+			choice.Checkbox(c, &(*checked)[i], "", choice.CheckboxProps{}).Shrink(0).
 				Label(fmt.Sprintf("勾选%s %d", label, i+1)).
 				Tooltip("勾选后可批量删除")
-			ui.TextInput(c, &(*opts)[i]).
-				Label(fmt.Sprintf("%s %d", label, i+1)).
-				Placeholder(fmt.Sprintf("%s %d", label, i+1)).
-				FillWidth().MaxLength(maxLen)
+			composeInput(c, &(*opts)[i], field.InputProps{
+				Placeholder: fmt.Sprintf("%s %d", label, i+1),
+			}).Label(fmt.Sprintf("%s %d", label, i+1)).MaxLength(maxLen)
 			// 行尾删除同样是图标按钮：无障碍名带上第几项，读屏与点击测试都能区分。
 			remove := iconActionButton(c, trashIcon,
 				fmt.Sprintf("删除%s %d", label, i+1),
@@ -836,14 +927,17 @@ func (a *app) composeOptionList(c *ui.Context, opts *[]string, checked *[]bool,
 // composeVote 是投票块：类型（pk / multiple）、标题（≤16 字）、1～20 个选项、
 // 是否公开结果、可选截止时间与多选时最多可选几项。
 func (a *app) composeVote(c *ui.Context, st *composeState) {
-	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
-		ui.Text(c, "投票类型").FontSize(12).TextColor(t.TextMuted)
-		ui.Segmented(c, &st.voteTypeIndex, "单选", "多选").Label("投票类型")
-		ui.Field(c, "投票标题", func() {
-			ui.TextInput(c, &st.voteTitle).Label("投票标题").
-				Placeholder(fmt.Sprintf("最多 %d 字", composeVoteTitleMax)).
-				FillWidth()
+		display.Text(c, "投票类型", display.TextProps{
+			Type: display.TextSecondary, FontSize: 12, Rows: 1,
+		})
+		action.Segmented(c, &st.voteTypeIndex, []string{"单选", "多选"},
+			action.SegmentedProps{}).Label("投票类型")
+		ui.Column(c).FillWidth().Gap(4).Children(func() {
+			display.Text(c, "投票标题", display.TextProps{FontSize: 12, Rows: 1})
+			composeInput(c, &st.voteTitle, field.InputProps{
+				Placeholder: fmt.Sprintf("最多 %d 字", composeVoteTitleMax),
+			}).Label("投票标题")
 		})
 		// 选项是动态行，支持逐行增删、批量粘贴与勾选批量删除；行数受
 		// 1～20 限制（见 composeOptionList）。
@@ -851,20 +945,26 @@ func (a *app) composeVote(c *ui.Context, st *composeState) {
 			&st.voteBatchOpen, &st.voteBatchText,
 			"投票选项", 1, composeOptionMax, composeOptionTextMax)
 		ui.Row(c).FillWidth().Children(func() {
-			ui.Toggle(c, &st.voteResultVisible, "公开投票结果")
+			composeToggle(c, &st.voteResultVisible, "公开投票结果")
 			ui.Spacer(c).Grow(1)
 		})
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.End).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-				ui.Text(c, "截止时间").FontSize(12).TextColor(t.TextMuted)
-				ui.TextInput(c, &st.voteDeadline).Label("投票截止时间").
-					Placeholder("可选，如 2026-11-20 12:00").FillWidth()
+				display.Text(c, "截止时间", display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 1,
+				})
+				composeInput(c, &st.voteDeadline, field.InputProps{
+					Placeholder: "可选，如 2026-11-20 12:00",
+				}).Label("投票截止时间")
 			})
 			if voteTypeAt(st.voteTypeIndex) == "multiple" {
 				ui.Column(c).Width(150).Gap(4).Children(func() {
-					ui.Text(c, "最多可选").FontSize(12).TextColor(t.TextMuted)
-					ui.NumberInput(c, &st.voteMaxChoices, 1, composeOptionMax, 1).
-						Label("最多可选几项")
+					display.Text(c, "最多可选", display.TextProps{
+						Type: display.TextSecondary, FontSize: 12, Rows: 1,
+					})
+					composeNumber(c, &st.voteMaxChoices, field.InputNumberProps{
+						Min: 1, Max: composeOptionMax, Step: 1,
+					}).Label("最多可选几项")
 				})
 			}
 		})
@@ -873,21 +973,29 @@ func (a *app) composeVote(c *ui.Context, st *composeState) {
 
 // composeScore 是评分块：对象名、0～100 的分值与可选理由。
 func (a *app) composeScore(c *ui.Context, st *composeState) {
-	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
-		ui.Field(c, "评分对象", func() {
-			ui.TextInput(c, &st.scoreTarget).Label("评分对象").
-				Placeholder(fmt.Sprintf("最多 %d 字", composeScoreTargetMax)).FillWidth()
+		ui.Column(c).FillWidth().Gap(4).Children(func() {
+			display.Text(c, "评分对象", display.TextProps{FontSize: 12, Rows: 1})
+			composeInput(c, &st.scoreTarget, field.InputProps{
+				Placeholder: fmt.Sprintf("最多 %d 字", composeScoreTargetMax),
+			}).Label("评分对象")
 		})
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.End).Children(func() {
 			ui.Column(c).Width(160).Gap(4).Children(func() {
-				ui.Text(c, "分值").FontSize(12).TextColor(t.TextMuted)
-				ui.NumberInput(c, &st.scoreValue, 0, 100, 1).Label("分值（0～100）")
+				display.Text(c, "分值", display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 1,
+				})
+				composeNumber(c, &st.scoreValue, field.InputNumberProps{
+					Min: 0, Max: 100, Step: 1,
+				}).Label("分值（0～100）")
 			})
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-				ui.Text(c, "理由").FontSize(12).TextColor(t.TextMuted)
-				ui.TextInput(c, &st.scoreComment).Label("评分理由").
-					Placeholder("可选").FillWidth().MaxLength(composeScoreCommentMax)
+				display.Text(c, "理由", display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 1,
+				})
+				composeInput(c, &st.scoreComment, field.InputProps{
+					Placeholder: "可选",
+				}).Label("评分理由").MaxLength(composeScoreCommentMax)
 			})
 		})
 	})
@@ -895,20 +1003,24 @@ func (a *app) composeScore(c *ui.Context, st *composeState) {
 
 // composeBet 是竞猜块：标题、2～6 个选项与可选参与截止时间。
 func (a *app) composeBet(c *ui.Context, st *composeState) {
-	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
-		ui.Field(c, "竞猜标题", func() {
-			ui.TextInput(c, &st.betTitle).Label("竞猜标题").
-				Placeholder(fmt.Sprintf("最多 %d 字", composeBetTitleMax)).FillWidth()
+		ui.Column(c).FillWidth().Gap(4).Children(func() {
+			display.Text(c, "竞猜标题", display.TextProps{FontSize: 12, Rows: 1})
+			composeInput(c, &st.betTitle, field.InputProps{
+				Placeholder: fmt.Sprintf("最多 %d 字", composeBetTitleMax),
+			}).Label("竞猜标题")
 		})
 		// 竞猜选项与投票共用一套动态行：2～6 项，批量入口也在里面。
 		a.composeOptionList(c, &st.betOptions, &st.betChecked,
 			&st.betBatchOpen, &st.betBatchText,
 			"竞猜选项", composeBetOptionsMin, composeBetOptionsMax, composeBetOptionMax)
 		ui.Column(c).Gap(4).Children(func() {
-			ui.Text(c, "参与截止时间").FontSize(12).TextColor(t.TextMuted)
-			ui.TextInput(c, &st.betDeadline).Label("竞猜参与截止时间").
-				Placeholder("可选，如 2026-11-20 12:00").FillWidth()
+			display.Text(c, "参与截止时间", display.TextProps{
+				Type: display.TextSecondary, FontSize: 12, Rows: 1,
+			})
+			composeInput(c, &st.betDeadline, field.InputProps{
+				Placeholder: "可选，如 2026-11-20 12:00",
+			}).Label("竞猜参与截止时间")
 		})
 	})
 }
@@ -917,51 +1029,65 @@ func (a *app) composeBet(c *ui.Context, st *composeState) {
 // 「批量粘贴」一次追加多行、「清空」一次移除全部，加上说明、每人可领数量
 // 与可选的红包。红包金额只有文档给出的六档，用分段控件选。
 func (a *app) composeRedeem(c *ui.Context, st *composeState) {
-	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		ui.Column(c).Gap(4).Children(func() {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "兑换码（一行一个）").FontSize(12).
-					TextColor(t.TextMuted).Grow(1)
-				if ui.Button(c, "批量粘贴").Label("批量粘贴兑换码").
+				display.Text(c, "兑换码（一行一个）", display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 1,
+				}).Grow(1)
+				if action.Button(c, "批量粘贴", action.ButtonProps{Size: lobetheme.Small}).
+					Label("批量粘贴兑换码").
 					Tooltip("一次粘贴多行，追加到兑换码列表").Clicked() {
 					st.redeemBatchOpen = !st.redeemBatchOpen
 				}
-				clear := ui.Button(c, "清空").Label("清空兑换码").
-					Tooltip("清空全部兑换码").Disabled(st.redeemCodes == "")
+				clear := action.Button(c, "清空", action.ButtonProps{Size: lobetheme.Small}).
+					Label("清空兑换码").Tooltip("清空全部兑换码").Disabled(st.redeemCodes == "")
 				if clear.Clicked() {
 					st.redeemCodes = ""
 					st.redeemBatchText = ""
 					a.toast(toastCompose, "已清空兑换码")
 				}
 			})
-			ui.TextArea(c, &st.redeemCodes).Label("兑换码").
-				Placeholder("一行一个兑换码，也可以用逗号分隔").
-				FillWidth().Lines(4, 10).MaxLength(composeCodeMax * (composeCodeTextMax + 1))
-			ui.Text(c, "支持一次粘贴多行，或用逗号 / 分号分隔；上限 500 个。").
-				FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+			composeTextArea(c, &st.redeemCodes, field.TextAreaProps{
+				Placeholder: "一行一个兑换码，也可以用逗号分隔",
+				MinRows:     4,
+				MaxRows:     10,
+			}).Label("兑换码").MaxLength(composeCodeMax * (composeCodeTextMax + 1))
+			display.Text(c, "支持一次粘贴多行，或用逗号 / 分号分隔；上限 500 个。",
+				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 		})
 		if st.redeemBatchOpen {
 			a.composeRedeemBatch(c, st)
 		}
 		ui.Column(c).Gap(4).Children(func() {
-			ui.Text(c, "兑换说明").FontSize(12).TextColor(t.TextMuted)
-			ui.TextArea(c, &st.codeDescription).Label("兑换说明").
-				Placeholder("可选").FillWidth().Lines(2, 5).MaxLength(composeCodeDescMax)
+			display.Text(c, "兑换说明", display.TextProps{
+				Type: display.TextSecondary, FontSize: 12, Rows: 1,
+			})
+			composeTextArea(c, &st.codeDescription, field.TextAreaProps{
+				Placeholder: "可选",
+				MinRows:     2,
+				MaxRows:     5,
+			}).Label("兑换说明").MaxLength(composeCodeDescMax)
 		})
 		ui.Row(c).Gap(10).AlignItems(ui.End).Children(func() {
 			ui.Column(c).Width(180).Gap(4).Children(func() {
-				ui.Text(c, "每人可领").FontSize(12).TextColor(t.TextMuted)
-				ui.NumberInput(c, &st.maxRedeemPerUser,
-					composeRedeemPerUserLo, composeRedeemPerUserHi, 1).Label("每人可领数量")
+				display.Text(c, "每人可领", display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 1,
+				})
+				composeNumber(c, &st.maxRedeemPerUser, field.InputNumberProps{
+					Min: composeRedeemPerUserLo, Max: composeRedeemPerUserHi, Step: 1,
+				}).Label("每人可领数量")
 			})
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-				ui.Text(c, "红包上限").FontSize(12).TextColor(t.TextMuted)
-				ui.Segmented(c, &st.redPacketIndex, redPacketLabels...).Label("红包金额上限")
+				display.Text(c, "红包上限", display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 1,
+				})
+				action.Segmented(c, &st.redPacketIndex, redPacketLabels,
+					action.SegmentedProps{}).Label("红包金额上限")
 			})
 		})
 		ui.Row(c).FillWidth().Children(func() {
-			ui.Toggle(c, &st.redPacket, "同时开红包")
+			composeToggle(c, &st.redPacket, "同时开红包")
 			ui.Spacer(c).Grow(1)
 		})
 	})
@@ -970,19 +1096,21 @@ func (a *app) composeRedeem(c *ui.Context, st *composeState) {
 // composeRedeemBatch 是兑换码的批量入口：粘贴一段多行文本，一次追加到兑换码
 // 列表里。空行自动丢掉，超过 500 个的部分省略，结果用 toast 报告。
 func (a *app) composeRedeemBatch(c *ui.Context, st *composeState) {
-	t := c.Theme()
-	ui.Column(c).FillWidth().Gap(6).Radius(8).Background(t.Surface).
-		Border(1, t.Border).Padding(8, 10).Children(func() {
+	layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
+		FillWidth().Padding(8, 10).Children(func() {
 		// 按钮放在录入区最上面：弹窗不用滚动就能点「追加兑换码」。
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, fmt.Sprintf("批量粘贴兑换码（已有 %d / %d 个）",
-				len(st.redeemCodeList()), composeCodeMax)).
-				FontSize(11).TextColor(t.TextMuted).Grow(1).MaxLines(2)
-			if ui.Button(c, "取消").Clicked() {
+			display.Text(c, fmt.Sprintf("批量粘贴兑换码（已有 %d / %d 个）",
+				len(st.redeemCodeList()), composeCodeMax), display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 2,
+			}).Grow(1)
+			if action.Button(c, "取消", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
 				st.redeemBatchOpen = false
 				st.redeemBatchText = ""
 			}
-			if ui.PrimaryButton(c, "追加兑换码").Clicked() {
+			if action.Button(c, "追加兑换码", action.ButtonProps{
+				Size: lobetheme.Small, Variant: action.Primary,
+			}).Clicked() {
 				lines := composeBatchLines(st.redeemBatchText)
 				if len(lines) == 0 {
 					a.toast(toastCompose, "请先粘贴要添加的兑换码")
@@ -1008,30 +1136,38 @@ func (a *app) composeRedeemBatch(c *ui.Context, st *composeState) {
 				a.toast(toastCompose, msg)
 			}
 		})
-		ui.Text(c, "一行一个，可直接粘贴多行；空行会丢掉。").
-			FontSize(11).TextColor(t.TextMuted)
-		ui.TextArea(c, &st.redeemBatchText).Label("兑换码批量录入").
-			Placeholder("CODE-1\nCODE-2\nCODE-3").FillWidth().Lines(4, 12)
+		display.Text(c, "一行一个，可直接粘贴多行；空行会丢掉。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
+		composeTextArea(c, &st.redeemBatchText, field.TextAreaProps{
+			Placeholder: "CODE-1\nCODE-2\nCODE-3",
+			MinRows:     4,
+			MaxRows:     12,
+		}).Label("兑换码批量录入")
 	})
 }
 
 // composePool 是金币池块：初始金币（1～1000000）与可选的中奖概率（0.1～0.5）。
 // 概率留 0 表示不发送，由服务端用默认值。
 func (a *app) composePool(c *ui.Context, st *composeState) {
-	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
-		ui.Text(c, "发帖时先往帖子里的金币池放一笔金币，读者浏览时按概率领取。").
-			FontSize(12).TextColor(t.TextMuted).MaxLines(3)
+		display.Text(c, "发帖时先往帖子里的金币池放一笔金币，读者浏览时按概率领取。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 3})
 		ui.Row(c).Gap(10).AlignItems(ui.End).Children(func() {
 			ui.Column(c).Width(200).Gap(4).Children(func() {
-				ui.Text(c, "初始金币").FontSize(12).TextColor(t.TextMuted)
-				ui.NumberInput(c, &st.poolCoins,
-					composePoolCoinsLo, composePoolCoinsHi, 10).Label("金币池初始金币")
+				display.Text(c, "初始金币", display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 1,
+				})
+				composeNumber(c, &st.poolCoins, field.InputNumberProps{
+					Min: composePoolCoinsLo, Max: composePoolCoinsHi, Step: 10,
+				}).Label("金币池初始金币")
 			})
 			ui.Column(c).Width(180).Gap(4).Children(func() {
-				ui.Text(c, "中奖概率（0 = 默认）").FontSize(12).TextColor(t.TextMuted)
-				ui.NumberInput(c, &st.poolProbability, 0, composePoolProbHi, 0.1).
-					Label("中奖概率")
+				display.Text(c, "中奖概率（0 = 默认）", display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 1,
+				})
+				composeNumber(c, &st.poolProbability, field.InputNumberProps{
+					Min: 0, Max: composePoolProbHi, Step: 0.1,
+				}).Label("中奖概率")
 			})
 		})
 	})
@@ -1040,35 +1176,51 @@ func (a *app) composePool(c *ui.Context, st *composeState) {
 // composeGuard 是「谁可以看」：不限制 / 需登录 / 达到等级 / 满足 D20 属性。
 // 文档里的 access_guard_type 就是这四种（不限制时不发字段）。
 func (a *app) composeGuard(c *ui.Context, st *composeState) {
-	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		ui.Column(c).Gap(4).Children(func() {
-			ui.Text(c, "可见范围").FontSize(12).TextColor(t.TextMuted)
-			ui.Select(c, &st.guardChoice, guardTypeLabels).Label("可见范围").FillWidth()
+			display.Text(c, "可见范围", display.TextProps{
+				Type: display.TextSecondary, FontSize: 12, Rows: 1,
+			})
+			options := make([]field.SelectOption, 0, len(guardTypeLabels))
+			for _, l := range guardTypeLabels {
+				options = append(options, field.SelectOption{Value: l, Label: l})
+			}
+			composeInputRow(c, func() ui.Element {
+				return field.Select(c, &st.guardChoice, field.SelectProps{Options: options})
+			}).Label("可见范围")
 		})
 		switch guardFromLabel(st.guardChoice) {
 		case guardLevel:
 			ui.Column(c).Width(200).Gap(4).Children(func() {
-				ui.Text(c, "最低等级（1～100）").FontSize(12).TextColor(t.TextMuted)
-				ui.NumberInput(c, &st.guardLevel,
-					composeGuardLevelLo, composeGuardLevelHi, 1).Label("最低可见等级")
+				display.Text(c, "最低等级（1～100）", display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 1,
+				})
+				composeNumber(c, &st.guardLevel, field.InputNumberProps{
+					Min: composeGuardLevelLo, Max: composeGuardLevelHi, Step: 1,
+				}).Label("最低可见等级")
 			})
 		case guardAttribute:
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.End).Children(func() {
 				ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-					ui.Text(c, "D20 属性名").FontSize(12).TextColor(t.TextMuted)
-					ui.TextInput(c, &st.guardAttr).Label("D20 属性名").
-						Placeholder("如 力量 / 智力").FillWidth()
+					display.Text(c, "D20 属性名", display.TextProps{
+						Type: display.TextSecondary, FontSize: 12, Rows: 1,
+					})
+					composeInput(c, &st.guardAttr, field.InputProps{
+						Placeholder: "如 力量 / 智力",
+					}).Label("D20 属性名")
 				})
 				ui.Column(c).Width(160).Gap(4).Children(func() {
-					ui.Text(c, "属性下限（0～10）").FontSize(12).TextColor(t.TextMuted)
-					ui.NumberInput(c, &st.guardAttrValue,
-						0, composeGuardAttrHi, 1).Label("属性下限")
+					display.Text(c, "属性下限（0～10）", display.TextProps{
+						Type: display.TextSecondary, FontSize: 12, Rows: 1,
+					})
+					composeNumber(c, &st.guardAttrValue, field.InputNumberProps{
+						Min: 0, Max: composeGuardAttrHi, Step: 1,
+					}).Label("属性下限")
 				})
 			})
 		}
-		ui.Text(c, "门槛由服务端判定；写错属性名时发表会返回 400 并说明原因。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		display.Text(c, "门槛由服务端判定；写错属性名时发表会返回 400 并说明原因。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 	})
 }
 
@@ -1079,16 +1231,17 @@ func (a *app) composeGuard(c *ui.Context, st *composeState) {
 // composeMessages 是表单下方的回执与错误：发表成功后给一条可点开的回执，
 // 失败时把服务端的原因原样显示（friendlyError 已经翻译成中文）。
 func (a *app) composeMessages(c *ui.Context, st *composeState) {
-	t := c.Theme()
 	if st.err != "" {
-		ui.Text(c, st.err).FontSize(12).TextColor(t.Danger).MaxLines(4)
+		feedback.Alert(c, st.err, feedback.AlertProps{
+			Type: feedback.Error, Variant: feedback.Soft, Selectable: true,
+		})
 	}
 	// 发表需要 write:topic，默认授权里没有它：提前说明，免得写完才被拦。
 	if a.auth.loggedIn() && !a.hasAuthScope("write:topic") {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "当前授权还不能发帖，需要补充 write:topic 权限。").
-				FontSize(12).TextColor(t.TextMuted).MaxLines(2).Grow(1)
-			if ui.Button(c, "去授权").Clicked() {
+			display.Text(c, "当前授权还不能发帖，需要补充 write:topic 权限。",
+				display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 2}).Grow(1)
+			if action.Button(c, "去授权", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
 				a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}), nil)
 			}
 		})
@@ -1097,15 +1250,21 @@ func (a *app) composeMessages(c *ui.Context, st *composeState) {
 		return
 	}
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, composeReceiptText(st)).FontSize(12).TextColor(t.Success).MaxLines(2).Grow(1)
-		if ui.Button(c, "在应用内打开").Clicked() {
+		display.Text(c, composeReceiptText(st), display.TextProps{
+			Type: display.TextSuccess, FontSize: 12, Rows: 2,
+		}).Grow(1)
+		if action.Button(c, "在应用内打开", action.ButtonProps{
+			Size: lobetheme.Small,
+		}).Clicked() {
 			it := Item{ShortID: st.okShortID, URL: st.okURL}
 			a.closeComposeWindow()
 			// 帖子是在主窗口里打开的：走 publish，主窗口才会按新页面重绘。
 			a.publish(func() { a.openDetail(it) })
 		}
 		if st.okURL != "" {
-			if ui.Button(c, "看原文").Clicked() {
+			if action.Button(c, "看原文", action.ButtonProps{
+				Size: lobetheme.Small,
+			}).Clicked() {
 				a.srv.OpenURL(st.okURL)
 			}
 		}
@@ -1134,7 +1293,6 @@ func composeReceiptText(st *composeState) string {
 // composeFooter 是窗口底部固定的一条：左边是草稿状态，右边是「发布」。
 // 动态模式复用同一条，只换提示、清空范围与按钮文字。
 func (a *app) composeFooter(c *ui.Context, st *composeState) {
-	t := c.Theme()
 	moment := st.mode == composeModeMoment
 	busy := st.posting
 	if moment {
@@ -1142,8 +1300,10 @@ func (a *app) composeFooter(c *ui.Context, st *composeState) {
 	}
 	ui.Row(c).FillWidth().Padding(10, 16).Gap(10).AlignItems(ui.Center).Children(func() {
 		if busy {
-			ui.Spinner(c).Size(14, 14)
-			ui.Text(c, "正在发布…").FontSize(12).TextColor(t.TextMuted).SingleLine()
+			feedback.Spin(c, feedback.SpinProps{CustomSize: 14}, nil)
+			display.Text(c, "正在发布…", display.TextProps{
+				Type: display.TextSecondary, FontSize: 12, Rows: 1,
+			})
 		} else {
 			hint := "Ctrl+Enter 发布"
 			if moment {
@@ -1155,10 +1315,12 @@ func (a *app) composeFooter(c *ui.Context, st *composeState) {
 					hint = "发动态需要登录 2Libra"
 				}
 			}
-			ui.Text(c, hint).FontSize(11).TextColor(t.TextMuted).SingleLine()
+			display.Text(c, hint, display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		}
 		ui.Spacer(c).Grow(1)
-		if ui.Button(c, "清空").Clicked() && !busy {
+		if action.Button(c, "清空", action.ButtonProps{Size: lobetheme.Small}).Clicked() && !busy {
 			if moment {
 				st.resetMomentForm()
 			} else {
@@ -1174,7 +1336,8 @@ func (a *app) composeFooter(c *ui.Context, st *composeState) {
 			if moment {
 				label = "发布动态"
 			}
-			publish := ui.PrimaryButton(c, label).Disabled(busy)
+			publish := action.Button(c, label, action.ButtonProps{Variant: action.Primary}).
+				Disabled(busy)
 			if publish.Clicked() {
 				if moment {
 					a.submitMoment()

@@ -137,26 +137,25 @@ func (a *app) syncNativeAppearance() {
 	mygo.Theme.SetSource(themeSource(a.theme.Mode()))
 }
 
-// 品牌强调色：深色用旧金，浅色用蓝（见 lobeCfg）。
+// 品牌强调色：浅色用蓝 #1D4ED8，深色用亮蓝 #60A5FA（见 lobeCfg）。
 const (
 	darkInkBackground = "#121417"
-	darkInkAccent     = "#b0885a"
 )
 
 // lobeCfg 是全应用共用的 Lobe UI 主题配置。由它派生的主题会让
 // lobeTheme.TokensOf(c) 命中同一套 token，Lobe 组件与自绘部分因此配色一致。
 // 只覆写三处：浅色背景保持纯白（白色页面语义），两套 Primary 族换成应用
-// 原有的品牌强调色（浅色蓝、深色旧金），其余 token 全用 Lobe 默认。
+// 品牌蓝色（浅深各一支），其余 token 全用 Lobe 默认。
 var lobeCfg = func() *lobetheme.Config {
 	light, dark := *lobetheme.Light(), *lobetheme.Dark()
 	light.BgLayout = ui.Hex("#ffffff")
 
-	// 应用品牌强调色：浅色蓝 #2563eb、深色旧金 #b0885a。Lobe 默认 Primary
-	// 是中性灰，覆写成品牌色后，Lobe 的 Primary 按钮/选中态与自绘 t.Accent
-	// 落在同一颜色上，其他页面也保持原有观感。
-	light.Primary, light.PrimaryHover, light.PrimaryActive = ui.Hex("#2563eb"), ui.Hex("#1d4ed8"), ui.Hex("#1e40af")
+	// 应用品牌强调色：浅色 #1D4ED8、深色 #60A5FA，hover / active 在各自
+	// 色阶上依次加深一档。Lobe 默认 Primary 是中性灰，覆写成品牌色后，
+	// Lobe 的 Primary 按钮/选中态与自绘 t.Accent 落在同一颜色上。
+	light.Primary, light.PrimaryHover, light.PrimaryActive = ui.Hex("#1D4ED8"), ui.Hex("#1E40AF"), ui.Hex("#1E3A8A")
 	light.PrimaryForeground = ui.Hex("#ffffff")
-	dark.Primary, dark.PrimaryHover, dark.PrimaryActive = ui.Hex(darkInkAccent), ui.Hex("#c39a6c"), ui.Hex("#9c774d")
+	dark.Primary, dark.PrimaryHover, dark.PrimaryActive = ui.Hex("#60A5FA"), ui.Hex("#3B82F6"), ui.Hex("#2563EB")
 	dark.PrimaryForeground = ui.Hex(darkInkBackground)
 	return lobetheme.NewConfig(light, dark)
 }()

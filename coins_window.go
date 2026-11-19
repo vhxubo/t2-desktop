@@ -14,11 +14,11 @@ import (
 )
 
 // 金币窗口：余额、今日明细、流水、统计与排行从「我的」窗口里独立出来，成为
-// 一个和通知 / 设置 / 我的一样的 mygo 窗口。入口是主窗口标题栏上登录账号
-// 左侧的金币数（见 coinTag）；点一下打开，窗口已经开着时就把它带到前台。
+// 一个和通知 / 设置 / 我的一样的 mygo 窗口。入口收在标题栏「我的」的账号菜单
+// 气泡里；点一下打开，窗口已经开着时就把它带到前台。
 //
 // 数据与请求在 coins.go，窗口里的内容仍然由 coins_ui.go 的 coinsBody 画出；
-// 这里只负责窗口的开关、窗口标题栏，以及标题栏金币数的定时刷新。
+// 这里只负责窗口的开关、窗口标题栏，以及账号菜单金币数的定时刷新。
 
 // 金币窗口的默认尺寸。和其他附属窗口一样用 StateKey 记住用户摆放的位置与
 // 大小，所以这里只是首次打开时的默认值。
@@ -29,7 +29,7 @@ const (
 	coinWinMinHeight = 480
 )
 
-// coinTagRefreshEvery 是标题栏金币数的刷新间隔：登录后先读一次，之后每隔
+// coinTagRefreshEvery 是账号菜单金币数的刷新间隔：登录后先读一次，之后每隔
 // 这么久再读一次余额。提成变量是为了测试能把它缩短。
 var coinTagRefreshEvery = time.Minute
 
@@ -130,48 +130,7 @@ func (a *app) redrawCoinWindow() {
 }
 
 /* ------------------------------------------------------------------
-   标题栏金币数
----------------------------------------------------------------- */
-
-// coinTag 是主窗口标题栏上登录账号左侧的金币数：💰 + 千分位余额。只有登录
-// 用户才出现；余额还没读到时显示破折号，入口本身不隐藏。点它打开金币窗口。
-func (a *app) coinTag(c *ui.Context) {
-	tk := lobetheme.TokensOf(c)
-	cs := a.coins
-	amount, known := "—", false
-	if cs != nil && cs.balanceOK {
-		amount, known = coinThousands(cs.balance), true
-	}
-	b := ui.Row(c).Padding(3, 8).Radius(6).Gap(4).AlignItems(ui.Center).
-		Background(ui.Transparent)
-	open := a.coinWindowVisible()
-	if open || b.Hovered() {
-		b.Background(tk.FillSecondary)
-	}
-	ink := tk.TextSecondary
-	switch {
-	case open:
-		ink = tk.Primary
-	case b.Hovered():
-		ink = tk.Text
-	}
-	b.Children(func() {
-		// 图标放在数字左边；数字用千分位隔开，和金币窗口里的写法一致。
-		// 文案沿用 💰 字形，标题栏各入口的文案与无障碍名都不变。
-		display.Text(c, "💰", display.TextProps{FontSize: 12, Rows: 1})
-		display.Text(c, amount, display.TextProps{
-			Strong: true, FontSize: 12, Rows: 1,
-		}).TextColor(ink)
-	})
-	hint := "查看金币余额、今日明细与流水"
-	if known {
-		hint = "金币余额 " + amount + "，点开金币窗口"
-	}
-	b.Label("金币余额").Tooltip(hint).OnClick(a.showCoins)
-}
-
-/* ------------------------------------------------------------------
-   标题栏金币数的定时刷新
+   账号菜单金币数的定时刷新
 ---------------------------------------------------------------- */
 
 // startCoinTagWatch 在登录后启动金币数刷新：先立即读一次余额，再按

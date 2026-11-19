@@ -204,6 +204,26 @@ func TestProfileWindowView(t *testing.T) {
 	}
 }
 
+// 「我的」窗口的标题栏与页面底色都取 Lobe token（浅色纯白），不再用原生
+// 主题的灰色 Surface；账号面板与设置窗口用的是同一支颜色。
+func TestProfileWindowUsesLobeTokens(t *testing.T) {
+	a := profileWindowApp(t)
+	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
+	tt.Frame()
+	im := tt.Image()
+	want := lobeCfg.Tokens(false).BgLayout
+	for _, p := range [][2]int{
+		{300, 1},
+		{300, titleBarHeight / 2},
+		{300, titleBarHeight - 1},
+	} {
+		got := im.RGBAAt(p[0], p[1])
+		if got.R != want.R || got.G != want.G || got.B != want.B {
+			t.Errorf("(%d,%d) 底色 = %v，期望 Lobe BgLayout %v", p[0], p[1], got, want)
+		}
+	}
+}
+
 // 金币相关的入口都不在「我的」窗口里：余额、签到、金币明细与全部流水
 // 都随金币页一起搬去了独立的金币窗口。
 func TestProfileHasNoCoinEntries(t *testing.T) {
@@ -397,8 +417,8 @@ func TestProfileReplyOpensDetailWithComment(t *testing.T) {
    标题栏入口
 ----------------------------------------------------------------- */
 
-// 标题栏的账号标识可点，点开「我的」；headless 里不创建真实窗口，也不
-// 切走主窗口的页面。
+// 标题栏的账号标识是账号菜单的锚点：点头像或昵称只弹出气泡，气泡里的「我的」
+// 才打开窗口；headless 里不创建真实窗口，也不切走主窗口的页面。
 func TestHeaderAvatarOpensProfile(t *testing.T) {
 	a := profileWindowApp(t)
 	tt := ui.NewTester(a.view, 1080, 720)
@@ -407,7 +427,7 @@ func TestHeaderAvatarOpensProfile(t *testing.T) {
 	if _, ok := tt.Find("我的"); !ok {
 		t.Fatalf("标题栏的头像没有可访问名「我的」：%q", tt.Texts())
 	}
-	// 头像与昵称都还在，点击头像等同于点击这个账号标识。
+	// 头像与昵称都还在，点昵称也等同于点这个账号标识，只开合气泡。
 	if _, ok := tt.Find("jimmy"); !ok {
 		t.Fatalf("标题栏没有头像控件：%q", tt.Texts())
 	}
@@ -415,11 +435,92 @@ func TestHeaderAvatarOpensProfile(t *testing.T) {
 		t.Fatalf("点击头像失败：%v", err)
 	}
 	tt.Frame()
+	if !a.profileMenuOpen {
+		t.Error("点账号标识没有打开账号菜单气泡")
+	}
 	if a.profileWin != nil {
 		t.Error("headless 测试里不该创建「我的」窗口")
 	}
 	if a.pageName != "list" {
 		t.Errorf("点头像不该切走主窗口的页面：%q", a.pageName)
+	}
+	// 气泡里有「我的」入口，点它才打开「我的」窗口。入口的无障碍名与
+	// 标题栏锚点不同，点它不会误触锚点。
+	profileOpened := 0
+	a.onProfileOpen = func() { profileOpened++ }
+	if err := tt.Click("打开我的窗口"); err != nil {
+		t.Fatalf("点账号菜单里的「我的」失败：%v", err)
+	}
+	tt.Frame()
+	if profileOpened != 1 {
+		t.Errorf("点「我的」入口没有触发打开：%d 次", profileOpened)
+	}
+	if a.profileMenuOpen {
+		t.Error("点入口后账号菜单应收起")
+	}
+	if a.profileWin != nil {
+		t.Error("headless 测试里不该创建「我的」窗口")
+	}
+}
+
+// 账号菜单收着金币、潘多拉与「我的」三个入口，点任一行都先收起气泡再进页面。
+func TestAccountMenuRoutesToThreePages(t *testing.T) {
+	freezePandoraNow(t)
+	a := profileWindowApp(t)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	openAccountMenu(t, tt)
+	for _, want := range []string{"金币", "潘多拉", "我的"} {
+		if !tt.HasText(want) {
+			t.Errorf("账号菜单缺少 %q：%q", want, tt.Texts())
+		}
+	}
+
+	calls := 0
+	a.onCoinsOpen = func() { calls++ }
+	if err := tt.Click("金币"); err != nil {
+		t.Fatalf("点金币入口失败：%v", err)
+	}
+	tt.Frame()
+	if calls != 1 || a.profileMenuOpen {
+		t.Errorf("点金币应打开金币窗口并收起气泡：calls=%d, open=%v", calls, a.profileMenuOpen)
+	}
+
+	a.onPandoraOpen = func() { calls++ }
+	openAccountMenu(t, tt)
+	if err := tt.Click("潘多拉"); err != nil {
+		t.Fatalf("点潘多拉入口失败：%v", err)
+	}
+	tt.Frame()
+	if calls != 2 || a.profileMenuOpen {
+		t.Errorf("点潘多拉应打开抽卡弹窗并收起气泡：calls=%d, open=%v", calls, a.profileMenuOpen)
+	}
+	if a.pandora == nil || !a.pandora.open {
+		t.Error("点潘多拉入口没有打开抽卡弹窗")
+	}
+	// 抽卡弹窗盖住主窗口，先关掉才能再点标题栏的账号菜单。
+	a.closePandora()
+	tt.Frame()
+
+	a.onProfileOpen = func() { calls++ }
+	openAccountMenu(t, tt)
+	if err := tt.Click("打开我的窗口"); err != nil {
+		t.Fatalf("点「我的」入口失败：%v", err)
+	}
+	tt.Frame()
+	if calls != 3 || a.profileMenuOpen {
+		t.Errorf("点「我的」应打开窗口并收起气泡：calls=%d, open=%v", calls, a.profileMenuOpen)
+	}
+}
+
+// 账号切换 / 退出时账号菜单要收起，不能把上一个账号的入口留在气泡里。
+func TestAccountMenuClosesOnAuthChange(t *testing.T) {
+	a := profileWindowApp(t)
+	a.profileMenuOpen = true
+	a.auth.Logout()
+	a.onAuthChanged(nil)
+	if a.profileMenuOpen {
+		t.Error("退出登录后账号菜单没有收起")
 	}
 }
 

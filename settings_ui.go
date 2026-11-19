@@ -7,6 +7,14 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/updater"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/choice"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	"github.com/lobehub/lobe-mygo/pkg/nav"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 设置窗口的尺寸：比代理弹窗宽一些，放得下「代理 / 图库 / 缓存 / 更新 / 窗口 / 外观」几页。
@@ -128,26 +136,32 @@ func (a *app) checkForUpdates() {
 
 /* ------------------------------------------------------------------
    设置窗口的界面
+
+   整套界面走 Lobe UI：颜色取 TokensOf(c)，标签 / 按钮 / 分段 / 字段 / 提示
+   分别由 display.Text、action.Button、action.Segmented、field 与 feedback 提供，
+   与主窗口及各附属窗口用同一套设计语言。文案与动作保持不变，只换观感。
 ---------------------------------------------------------------- */
 
 // settingsWindowView 是设置窗口的 view。窗口自己带标题栏与窗口按钮，所以
 // 这里不需要遮罩，也不占主窗口的位置。
 func (a *app) settingsWindowView(c *ui.Context) {
 	a.applyTheme(c)
-	t := c.Theme()
-	c.Root().Background(t.Background)
+	tk := lobetheme.TokensOf(c)
+	c.Root().Background(tk.BgLayout)
 	// 保存代理、清理缓存的结果以 toast 显示在这个窗口里。
 	a.drainToasts(c, a.claimsToasts(toastSettings))
 	// Esc 直接关掉设置窗口，和系统偏好设置的直觉一致。
 	c.OnShortcut(0, ui.KeyEscape, a.closeSettingsWindow)
 
 	ui.Column(c).Fill().Children(func() {
-		// 自绘标题栏：拖动窗口、右上角是最小化与关闭，按钮与主窗口同一套画法。
+		// 自绘标题栏：拖动窗口、右上角是最小化与关闭。图标换成 Lucide 的
+		// 齿轮，文字走 display.Text，配色走 Lobe token，按钮与主窗口同一套画法。
 		ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
-			Background(t.Surface).DragWindow().Children(func() {
+			Background(tk.BgLayout).DragWindow().Children(func() {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "设置").FontSize(13).Bold().SingleLine().TextColor(t.Text)
+				ui.Icon(c, lucide.Settings()).Size(16, 16).TextColor(tk.Primary)
+				display.Text(c, "设置", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
 				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
@@ -157,20 +171,33 @@ func (a *app) settingsWindowView(c *ui.Context) {
 			})
 			titleBarButton(c, titleClose, "关闭", func() { a.closeSettingsWindow() })
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
 		// 分类标签固定在内容区上方：切页只换下面的 section，页面高度跟着
-		// 当前这块内容走，不再由五块加起来决定。
+		// 当前这块内容走，不再由六块加起来决定。
 		ui.Row(c).FillWidth().Padding(2, 12).Children(func() {
 			c.Key("settings-tabs")
-			ui.Tabs(c, &a.settingsTab, settingsTabLabels...)
+			items := make([]nav.TabItem, 0, len(settingsTabLabels))
+			for _, label := range settingsTabLabels {
+				items = append(items, nav.TabItem{Label: label})
+			}
+			sel := a.settingsTab
+			nav.Tabs(c, &sel, nav.TabsProps{
+				Items:   items,
+				Variant: nav.TabsSquare,
+				Size:    lobetheme.Small,
+			}, nil)
+			if sel != a.settingsTab && sel >= 0 && sel < len(settingsTabLabels) {
+				a.settingsTab = sel
+			}
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
 		// 每页给一个独立的 key，避免不同分类复用彼此的输入框 / 分段控件状态。
 		c.Key(fmt.Sprintf("settings-page-%d", a.settingsTab))
-		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-			ui.Column(c).FillWidth().Padding(18, 20).Children(func() {
+		// ScrollArea 用 Lobe 的细滚动条与边缘渐隐，不再用 mygo 原生 Scroll。
+		list := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
+			ui.Column(c).FillWidth().Padding(18, 20).Gap(10).Children(func() {
 				switch a.settingsTab {
 				case settingsTabHosts:
 					a.imageHostsSection(c)
@@ -187,29 +214,98 @@ func (a *app) settingsWindowView(c *ui.Context) {
 				}
 			})
 		})
+		list.Grow(1).MinHeight(0)
 	})
 	// 设置里也有带令牌的请求（例如官方图床测试）：缺权限时弹在这里。
 	a.authDialogFor(c, toastSettings)
 }
 
-// settingsSection 画一块带标题的设置区域，各分类共用同一套版式。
+// settingsSection 画一块带标题的 Lobe 卡片，各分类共用同一套版式。描边、圆角
+// 与底色来自 layout.Block，标题走 display.Text。
 func settingsSection(c *ui.Context, title string, body func()) {
-	t := c.Theme()
-	ui.Column(c).FillWidth().Gap(8).Children(func() {
-		ui.Text(c, title).FontSize(13).Bold().TextColor(t.Text)
-		body()
+	card := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
+		FillWidth().Padding(14, 14)
+	card.Children(func() {
+		ui.Column(c).FillWidth().Gap(10).Children(func() {
+			display.Text(c, title, display.TextProps{Strong: true, FontSize: 13, Rows: 1})
+			body()
+		})
 	})
 }
+
+/* ------------------------------------------------------------------
+   Lobe 字段的小工具
+---------------------------------------------------------------- */
+
+// settingsField 在整行上画一个带可见标签的 Lobe 字段：field 的输入控件返回的是
+// 内层输入，外层那一行默认按内容收缩，这里借 Column 的 stretch 把外层撑满，
+// 再把可以继续配置（Label / Bind）的内层控件交回调用方。可见文字由 display.Text
+// 画，控件的 Label 供读屏与无头测试命中。
+func settingsField(c *ui.Context, label string, build func() ui.Element) ui.Element {
+	var el ui.Element
+	ui.Column(c).FillWidth().Gap(5).AlignItems(ui.Stretch).Children(func() {
+		if label != "" {
+			display.Text(c, label, display.TextProps{FontSize: 12, Rows: 1})
+		}
+		el = build()
+	})
+	return el
+}
+
+// settingsHalfField 同上，但外层只占一行的一半，用于成对的输入框。
+func settingsHalfField(c *ui.Context, label string, build func() ui.Element) ui.Element {
+	var el ui.Element
+	ui.Column(c).Grow(1).MinWidth(0).Gap(5).AlignItems(ui.Stretch).Children(func() {
+		display.Text(c, label, display.TextProps{FontSize: 12, Rows: 1})
+		el = build()
+	})
+	return el
+}
+
+// settingsDescription 是每页开头的说明文字。
+func settingsDescription(c *ui.Context, text string, rows int) {
+	display.Text(c, text, display.TextProps{
+		Type: display.TextSecondary, FontSize: 12, Rows: rows,
+	})
+}
+
+// settingsChoice 画一整行的 Lobe 分段选择，返回这一帧选中的序号。用的是
+// choice.ToggleGroup 的 Segmented 样式而不是 action.Segmented：后者切换时有
+// 一枚游标滑过 240ms，紧接着点另一档会落在旧游标上（无头测试里尤其明显），
+// 而设置里的几档只是普通选项，按钮自己的高亮就够了。
+func settingsChoice(c *ui.Context, label string, options []string, index int) int {
+	if index < 0 || index >= len(options) {
+		index = 0
+	}
+	selected := []string{options[index]}
+	items := make([]choice.ToggleItem, 0, len(options))
+	for _, option := range options {
+		items = append(items, choice.ToggleItem{Value: option, Label: option})
+	}
+	choice.ToggleGroup(c, &selected, choice.ToggleGroupProps{
+		Items: items, Variant: choice.ToggleSegmented, Size: lobetheme.Small,
+	}).Label(label)
+	if len(selected) > 0 {
+		for i, option := range options {
+			if selected[0] == option {
+				return i
+			}
+		}
+	}
+	return index
+}
+
+/* ------------------------------------------------------------------
+   更新一块：检查更新
+---------------------------------------------------------------- */
 
 // updateSettingsSection 是「更新」一块：应用每天在后台自动检查一次，这里给
 // 想立即确认版本的人一个入口。
 func (a *app) updateSettingsSection(c *ui.Context) {
-	t := c.Theme()
 	settingsSection(c, "更新", func() {
-		ui.Text(c, "应用每天自动检查一次 GitHub Release；检查更新和下载更新包都会走「网络代理」里设置的代理。现在想确认版本可以手动检查，更新窗口会说明结果或列出新版本。").
-			FontSize(12).TextColor(t.TextMuted).MaxLines(3)
+		settingsDescription(c, "应用每天自动检查一次 GitHub Release；检查更新和下载更新包都会走「网络代理」里设置的代理。现在想确认版本可以手动检查，更新窗口会说明结果或列出新版本。", 3)
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "检查更新").Clicked() {
+			if action.Button(c, "检查更新", action.ButtonProps{}).Clicked() {
 				a.checkForUpdates()
 			}
 			ui.Spacer(c).Grow(1)
@@ -225,20 +321,19 @@ func (a *app) updateSettingsSection(c *ui.Context) {
 // 不用点保存；结果用窗口内 toast 说明。托盘不可用时「收进托盘」说不通，
 // 所以直接说明它会按退出处理。
 func (a *app) windowSettingsSection(c *ui.Context) {
-	t := c.Theme()
 	settingsSection(c, "窗口", func() {
-		ui.Text(c, "多账号时每个账号一个窗口：关掉某个账号的窗口只是把它挂回账号面板，"+
+		settingsDescription(c, "多账号时每个账号一个窗口：关掉某个账号的窗口只是把它挂回账号面板，"+
 			"未读数照样更新、随时点开；所有窗口都关掉才结束应用。"+
 			"收进托盘则应用继续在后台接收通知，点托盘图标回到窗口；"+
-			"退出应用会在关窗口时结束整个应用。").
-			FontSize(12).TextColor(t.TextMuted).MaxLines(4)
-		if ui.Segmented(c, &a.closeMode.mode, "每次询问", "关闭窗口", "收进托盘", "退出应用").
-			Label("关闭主窗口时").Changed() {
-			a.setCloseMode(a.closeMode.mode)
+			"退出应用会在关窗口时结束整个应用。", 4)
+		if sel := settingsChoice(c, "关闭主窗口时",
+			[]string{"每次询问", "关闭窗口", "收进托盘", "退出应用"}, a.closeMode.mode,
+		); sel != a.closeMode.mode {
+			a.setCloseMode(sel)
 		}
 		if !a.trayReady {
-			ui.Text(c, "系统托盘当前不可用，关闭窗口只能直接关掉。").
-				FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+			display.Text(c, "系统托盘当前不可用，关闭窗口只能直接关掉。",
+				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 		}
 	})
 }
@@ -251,13 +346,13 @@ func (a *app) windowSettingsSection(c *ui.Context) {
 // 这里，侧边栏不再单独占三行。选完立即落盘并同步原生外观，结果用窗口内 toast
 // 说明；主题是进程级共享状态，所有窗口都会跟着重画。
 func (a *app) appearanceSettingsSection(c *ui.Context) {
-	t := c.Theme()
 	settingsSection(c, "外观", func() {
-		ui.Text(c, "跟随系统会随操作系统的深浅色自动切换；固定浅色或深色后，"+
-			"即使系统切换外观也保持不变。").
-			FontSize(12).TextColor(t.TextMuted).MaxLines(3)
-		if ui.Segmented(c, &a.theme.mode, "跟随系统", "浅色", "深色").
-			Label("外观").Changed() {
+		settingsDescription(c, "跟随系统会随操作系统的深浅色自动切换；固定浅色或深色后，"+
+			"即使系统切换外观也保持不变。", 3)
+		if sel := settingsChoice(c, "外观",
+			[]string{"跟随系统", "浅色", "深色"}, a.theme.mode,
+		); sel != a.theme.mode {
+			a.theme.mode = sel
 			a.saveThemeChoice()
 		}
 	})
@@ -367,48 +462,36 @@ func (a *app) clearImageCache() {
 // imageCacheSection 是「图片缓存」一块：分两类显示占用大小，并提供清理与
 // 重新统计按钮。头像与表情内容稳定、长期保留；帖子图片按 TTL 自动清理。
 func (a *app) imageCacheSection(c *ui.Context) {
-	t := c.Theme()
 	s := a.cacheStatus.snapshot()
 
 	settingsSection(c, "图片缓存", func() {
-		ui.Text(c, "头像与表情的内容几乎不变，长期缓存在本机；帖子里的外部图片 "+
-			formatDurationCN(imageCacheTTL)+"后自动清理。").
-			FontSize(12).TextColor(t.TextMuted).MaxLines(3)
+		settingsDescription(c, "头像与表情的内容几乎不变，长期缓存在本机；帖子里的外部图片 "+
+			formatDurationCN(imageCacheTTL)+"后自动清理。", 3)
 
 		if !s.Scanned {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				if s.Busy {
-					ui.Spinner(c).Size(12, 12)
+					feedback.Spin(c, feedback.SpinProps{CustomSize: 12}, nil)
 				}
-				ui.Text(c, "正在统计缓存大小…").FontSize(12).TextColor(t.TextMuted)
+				display.Text(c, "正在统计缓存大小…", display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 1,
+				})
 			})
 		} else {
-			ui.Column(c).Gap(2).Children(func() {
-				ui.Row(c).Gap(6).Children(func() {
-					ui.Text(c, "头像与表情").FontSize(12).Width(90)
-					ui.Text(c, fmt.Sprintf("%s（%d 个文件）",
-						formatBytes(s.Stats.StableBytes), s.Stats.StableFiles)).
-						FontSize(12).TextColor(t.TextMuted)
-				})
-				ui.Row(c).Gap(6).Children(func() {
-					ui.Text(c, "帖子图片").FontSize(12).Width(90)
-					ui.Text(c, fmt.Sprintf("%s（%d 个文件）",
-						formatBytes(s.Stats.TempBytes), s.Stats.TempFiles)).
-						FontSize(12).TextColor(t.TextMuted)
-				})
-				ui.Row(c).Gap(6).Children(func() {
-					ui.Text(c, "合计").FontSize(12).Width(90).Bold()
-					ui.Text(c, formatBytes(s.Stats.TotalBytes())).
-						FontSize(12).TextColor(t.TextMuted)
-				})
+			ui.Column(c).Gap(4).Children(func() {
+				cacheRow(c, "头像与表情", fmt.Sprintf("%s（%d 个文件）",
+					formatBytes(s.Stats.StableBytes), s.Stats.StableFiles), false)
+				cacheRow(c, "帖子图片", fmt.Sprintf("%s（%d 个文件）",
+					formatBytes(s.Stats.TempBytes), s.Stats.TempFiles), false)
+				cacheRow(c, "合计", formatBytes(s.Stats.TotalBytes()), true)
 			})
 		}
 
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "清理缓存").Disabled(s.Busy).Clicked() {
+			if action.Button(c, "清理缓存", action.ButtonProps{}).Disabled(s.Busy).Clicked() {
 				a.clearImageCache()
 			}
-			if ui.Button(c, "重新统计").Disabled(s.Busy).Clicked() {
+			if action.Button(c, "重新统计", action.ButtonProps{}).Disabled(s.Busy).Clicked() {
 				a.startCacheStats()
 			}
 			ui.Spacer(c).Grow(1)
@@ -417,9 +500,23 @@ func (a *app) imageCacheSection(c *ui.Context) {
 		// 结果走 toast，这里只说明正在做什么：进度是当前状态，不是结论。
 		if s.Progress != "" {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Spinner(c).Size(12, 12)
-				ui.Text(c, s.Progress).FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+				feedback.Spin(c, feedback.SpinProps{CustomSize: 12}, nil)
+				display.Text(c, s.Progress, display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 2,
+				})
 			})
 		}
+	})
+}
+
+// cacheRow 是缓存统计的一行：左边字段名占固定宽度，右边是大小与文件数。
+func cacheRow(c *ui.Context, label, value string, strong bool) {
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		display.Text(c, label, display.TextProps{
+			Strong: strong, FontSize: 12, Rows: 1,
+		}).Width(90)
+		display.Text(c, value, display.TextProps{
+			Type: display.TextSecondary, FontSize: 12, Rows: 1,
+		})
 	})
 }

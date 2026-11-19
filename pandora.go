@@ -167,9 +167,9 @@ func pandoraActiveEvent(status pandoraStatus, known bool) (pandoraBox, bool) {
 	return box, true
 }
 
-// pandoraEntryName 是标题栏入口的可见文字：抽中事件后直接显示事件名，
-// 没有进行中的事件时才显示「潘多拉」。名字过长时截断，标题栏里的金币数
-// 与账号标识不能被挤出窗口。
+// pandoraEntryName 是账号菜单里潘多拉入口的可见文字：抽中事件后直接显示
+// 事件名，没有进行中的事件时才显示「潘多拉」。名字过长时截断，气泡里的
+// 其它入口不会被挤出窗口。
 func pandoraEntryName(st *pandoraState) string {
 	if box, ok := pandoraActiveEvent(pandoraDisplayStatus(st)); ok {
 		return truncate(strings.TrimSpace(box.EventName), 10)
@@ -177,8 +177,8 @@ func pandoraEntryName(st *pandoraState) string {
 	return "潘多拉"
 }
 
-// pandoraEntryHint 是入口的悬浮说明：事件名 + 具体效果 + 剩余时间。没有
-// 进行中的事件时退回抽奖状态说明。
+// pandoraEntryHint 是账号菜单里潘多拉入口的悬浮说明：事件名 + 具体效果 +
+// 剩余时间。没有进行中的事件时退回抽奖状态说明。
 func pandoraEntryHint(st *pandoraState) string {
 	status, known := pandoraDisplayStatus(st)
 	if box, ok := pandoraActiveEvent(status, known); ok {

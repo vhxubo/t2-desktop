@@ -9,12 +9,24 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/field"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	"github.com/lobehub/lobe-mygo/pkg/nav"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 「我的」窗口：点击标题栏上登录账号的头像打开。它和通知、设置一样是独立
 // 窗口，而不是主窗口里的一层遮罩——四块内容（概览、我的内容、回复、权限）
 // 都要滚动和分页，塞进主窗口的弹窗里只会互相挤。
+//
+// 整套界面走 Lobe UI：标题栏、资料头与四个标签页统一用 Token 配色和 Lobe
+// 组件（nav.Tabs、display.Avatar、layout.Block 等），与账号面板、设置窗口
+// 是同一套设计语言。文案与动作保持不变，只换观感。
 //
 // 数据、状态与请求在 profile.go；这里只负责窗口的开关与界面。
 
@@ -22,9 +34,19 @@ import (
    入口、显示与关闭
 ---------------------------------------------------------------- */
 
+// profileTabIcons 与 profileTabLabels 一一对应：图标只是标签前的装饰，文案仍
+// 是读屏与点击测试命中的无障碍名。
+var profileTabIcons = []*ui.SVG{
+	lucide.ChartNoAxesColumn(), lucide.FolderClosed(), lucide.MessageCircle(),
+	lucide.Award(), lucide.ShieldCheck(),
+}
+
 // showProfile 是「我的」窗口的全局入口：任何窗口、任何 goroutine 都能调用。
 // 它把工作挪到主线程；窗口已经开着就只把它带到前台，不会开出第二个。
 func (a *app) showProfile() {
+	if a.onProfileOpen != nil {
+		a.onProfileOpen()
+	}
 	a.publish(a.showProfileWindow)
 }
 
@@ -111,33 +133,123 @@ func (a *app) redrawProfileWindow() {
 	}
 }
 
-// profileTag 是标题栏右侧的账号标识：头像 + 昵称，整体可点，点开「我的」。
-// 只显示昵称，不再写「已登录」：头像和昵称本身就说明身份，那几个字只会挤占
-// 标题栏宽度。昵称还没读到时只画头像，仍然是「我的」的入口。
+// profileTag 是标题栏右侧的账号标识：头像 + 昵称。它只作账号菜单的锚点，
+// 点一下弹出气泡，金币、潘多拉与「我的」三个入口都收在气泡里。只显示昵称，
+// 不再写「已登录」：头像和昵称本身就说明身份，那几个字只会挤占标题栏宽度。
+// 昵称还没读到时只画头像，仍然是账号菜单的入口。
 func (a *app) profileTag(c *ui.Context, name string) {
-	t := c.Theme()
-	tag := ui.Box(c).Padding(2, 5).Radius(6).Background(ui.Transparent)
-	if a.profileWindowVisible() || tag.Hovered() {
-		tag.Background(t.SurfaceHover)
+	tk := lobetheme.TokensOf(c)
+	tag := ui.Box(c).Padding(2, 5).Radius(tk.BorderRadiusSM)
+	if a.profileMenuOpen || a.profileWindowVisible() || tag.Hovered() {
+		tag.Background(tk.FillSecondary)
 	}
 	tag.Children(func() {
+		a.profileTagIdentity(c, name)
+	})
+	tag.Label("我的").Tooltip("打开账号菜单：金币、潘多拉与「我的」")
+	// Lobe 的 Popover 点锚点开合、点窗外与 Esc 关闭；气泡挂在账号标识下方。
+	// 锚点本身不再挂 OnClick：点它只开合气泡，进哪个页面在气泡里选。
+	lobeoverlay.Popover(c, tag, &a.profileMenuOpen, lobeoverlay.PopoverProps{
+		Placement: lobeoverlay.Bottom,
+	}, func() {
+		a.profileMenuPanel(c)
+	})
+}
+
+// profileTagIdentity 画账号标识里的头像与昵称。两段都不挂 OnClick，让这一帧
+// 的点击传到外层的账号菜单锚点，由 Popover 开合气泡。昵称还没读到时只画头像。
+func (a *app) profileTagIdentity(c *ui.Context, name string) {
+	tk := lobetheme.TokensOf(c)
+	ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 		if name == "" {
 			// 昵称还没读到（身份接口慢或失败）：仍然给一个可点的头像位，
-			// 「我的」窗口自己会拉资料，不至于没有入口。
-			avatarView(c, "", a.avatarBitmap(a.auth.avatarURL()), userAvatarSize(12))
+			// 账号菜单自己会带进「我的」窗口，不至于没有入口。
+			display.Avatar(c, "", display.AvatarProps{
+				Size: userAvatarSize(12), Shape: display.AvatarCircle,
+				Image: a.avatarBitmap(a.auth.avatarURL()),
+			})
 			return
 		}
-		a.userTag(c, userTagSpec{
-			Name:   name,
-			Avatar: a.auth.avatarURL(),
-			Size:   12,
-			Color:  t.TextMuted,
-			// 这是自己的账号区，点它打开「我的」；默认的资料卡留给别处的
-			// 用户标识。
-			Click: a.showProfile,
-		})
+		avatarView(c, name, a.avatarBitmap(a.auth.avatarURL()), userAvatarSize(12))
+		ui.Text(c, name).FontSize(12).SingleLine().TextColor(tk.TextSecondary)
 	})
-	tag.Label("我的").Tooltip("打开「我的」窗口").OnClick(a.showProfile)
+}
+
+// profileMenuPanel 是账号菜单气泡的内容：金币、潘多拉与「我的」三个入口。
+// 金币行带余额，潘多拉行沿用动态名字与「可抽」角标，三个入口点一下都先收起
+// 气泡再进对应页面。
+func (a *app) profileMenuPanel(c *ui.Context) {
+	ui.Column(c).Width(236).Gap(2).Children(func() {
+		a.profileMenuCoinsRow(c)
+		a.profileMenuPandoraRow(c)
+		a.profileMenuMineRow(c)
+	})
+}
+
+// profileMenuRow 画账号菜单里的一行：图标 + 文案 + 可选右侧信息。整行可点，
+// 点下去先收起气泡，再执行 goAction。图标只是装饰；可见文案是 label，读屏
+// 与点击测试命中的无障碍名可用 accessName 另给（空时用 label），提示说明
+// 点了会发生什么。
+func (a *app) profileMenuRow(c *ui.Context, icon *ui.SVG, label, accessName, tip string, trailing func(), goAction func()) {
+	tk := lobetheme.TokensOf(c)
+	row := ui.Row(c).FillWidth().Padding(7, 8).Radius(tk.BorderRadiusSM).
+		Gap(8).AlignItems(ui.Center).Background(ui.Transparent)
+	if row.Hovered() {
+		row.Background(tk.FillSecondary)
+	}
+	row.Children(func() {
+		ui.Icon(c, icon).Size(16, 16).TextColor(tk.TextSecondary)
+		ui.Text(c, label).FontSize(12).SingleLine()
+		if trailing != nil {
+			ui.Spacer(c).Grow(1)
+			trailing()
+		}
+	})
+	name := label
+	if accessName != "" {
+		name = accessName
+	}
+	row.Label(name).Tooltip(tip)
+	if row.Clicked() {
+		a.profileMenuOpen = false
+		goAction()
+	}
+}
+
+// profileMenuCoinsRow 是账号菜单的金币入口：金币图标 + 千分位余额（还没读到
+// 时是破折号），点开独立的金币窗口。
+func (a *app) profileMenuCoinsRow(c *ui.Context) {
+	tk := lobetheme.TokensOf(c)
+	balance := "—"
+	if a.coins != nil && a.coins.balanceOK {
+		balance = coinThousands(a.coins.balance)
+	}
+	a.profileMenuRow(c, lucide.Coins(), "金币", "金币", "查看金币余额、今日明细与流水", func() {
+		ui.Text(c, balance).FontSize(11).TextColor(tk.TextSecondary).SingleLine()
+	}, func() { a.showCoins() })
+}
+
+// profileMenuPandoraRow 是账号菜单的潘多拉入口：抽中事件后显示事件名，今天
+// 还能抽时右侧带「可抽」角标，点开抽卡弹窗。
+func (a *app) profileMenuPandoraRow(c *ui.Context) {
+	tk := lobetheme.TokensOf(c)
+	a.profileMenuRow(c, pandoraIcon, pandoraEntryName(a.pandora), "", pandoraEntryHint(a.pandora), func() {
+		if a.pandoraReady() {
+			ui.Box(c).Height(14).Padding(0, 4).Radius(999).Center().
+				Background(tk.Error).Children(func() {
+				ui.Text(c, "可抽").FontSize(9).Bold().SingleLine().TextColor(ui.Hex("#ffffff"))
+			})
+		}
+	}, func() { a.showPandora() })
+}
+
+// profileMenuMineRow 是账号菜单的「我的」入口：点开「我的」窗口。
+func (a *app) profileMenuMineRow(c *ui.Context) {
+	// 可见文案与标题栏锚点一样是「我的」，无障碍名另给一个唯一的，读屏与
+	// 点击测试才分得清锚点和气泡里的入口。
+	a.profileMenuRow(c, lucide.UserRound(), "我的", "打开我的窗口", "打开「我的」窗口", nil, func() {
+		a.showProfile()
+	})
 }
 
 /* ------------------------------------------------------------------
@@ -148,10 +260,10 @@ func (a *app) profileTag(c *ui.Context, name string) {
 // 这里不需要遮罩，也不占主窗口的位置。
 func (a *app) profileWindowView(c *ui.Context) {
 	a.applyTheme(c)
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// 帖子行等入口可能把链接交给系统浏览器，服务取本窗口自己的那份。
 	a.srv = c.Services()
-	c.Root().Background(t.Background)
+	c.Root().Background(tk.BgLayout)
 	// 本窗口里发起的操作结果以 toast 显示在这里，不退回主窗口。
 	a.drainToasts(c, a.claimsToasts(toastProfile))
 	// Esc 收起窗口：随时可以再打开。
@@ -165,13 +277,15 @@ func (a *app) profileWindowView(c *ui.Context) {
 	ui.Column(c).Fill().Children(func() {
 		// 自绘标题栏：拖动窗口、右上角最小化与关闭，画法与主窗口一致。
 		ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
-			Background(t.Surface).DragWindow().Children(func() {
+			Background(tk.BgLayout).DragWindow().Children(func() {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, profileIcon).Size(16, 16).TextColor(t.Accent)
-				ui.Text(c, "我的").FontSize(13).Bold().SingleLine().TextColor(t.Text)
+				ui.Icon(c, lucide.UserRound()).Size(16, 16).TextColor(tk.Primary)
+				display.Text(c, "我的", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
 				if name := a.profileTitleName(ps); name != "" {
-					ui.Text(c, name).FontSize(11).TextColor(t.TextMuted).SingleLine()
+					display.Text(c, name, display.TextProps{
+						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+					})
 				}
 				a.accountWindowTag(c)
 			})
@@ -182,17 +296,33 @@ func (a *app) profileWindowView(c *ui.Context) {
 			})
 			titleBarButton(c, titleClose, "关闭", a.closeProfileWindow)
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
 		a.profileHeader(c, ps)
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
-		// 标签页：内容各占满剩余高度，自己滚动。
+		// 标签页用 Lobe 的 nav.Tabs：选中态与滑动指示块由组件负责。切换时只
+		// 换正文，窗口还是这一扇；各页的滚动与分页状态都留在 profileState。
 		ui.Row(c).FillWidth().Padding(6, 12).Children(func() {
-			ui.Tabs(c, &ps.tab, profileTabLabels...)
+			c.Key("profile-tabs")
+			items := make([]nav.TabItem, 0, len(profileTabLabels))
+			for i, label := range profileTabLabels {
+				items = append(items, nav.TabItem{Label: label, Icon: profileTabIcons[i]})
+			}
+			sel := ps.tab
+			nav.Tabs(c, &sel, nav.TabsProps{
+				Items:   items,
+				Variant: nav.TabsSquare,
+				Size:    lobetheme.Small,
+			}, nil)
+			if sel != ps.tab && sel >= 0 && sel < len(profileTabLabels) {
+				ps.tab = sel
+			}
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
+		// 每页给一个独立的 key，避免不同页复用彼此的输入框 / 分段控件状态。
+		c.Key(fmt.Sprintf("profile-page-%d", ps.tab))
 		ui.Column(c).Grow(1).MinHeight(0).Padding(12, 16).Children(func() {
 			switch ps.tab {
 			case profileTabContent:
@@ -229,7 +359,7 @@ func (a *app) profileTitleName(ps *profileState) string {
 
 // profileHeader 是资料头：大头像、昵称、用户 ID 与注册时间，右侧是刷新。
 func (a *app) profileHeader(c *ui.Context, ps *profileState) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	u := ps.user
 	name := a.profileTitleName(ps)
 	avatar := u.Avatar
@@ -244,12 +374,24 @@ func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 		title = "已登录"
 	}
 	ui.Row(c).FillWidth().Padding(14, 16).Gap(14).AlignItems(ui.Center).Children(func() {
-		avatarView(c, name, a.avatarBitmap(avatar), 48)
+		// 头像走 Lobe 的 Avatar：有缓存位图就用它，没加载过时按昵称画
+		// 首字母占位，形状、底色与账号面板里的头像一致。
+		var image ui.ImageSource
+		if bmp := a.avatarBitmap(avatar); bmp != nil {
+			image = bmp
+		}
+		display.Avatar(c, name, display.AvatarProps{
+			Size: 48, Shape: display.AvatarCircle, Image: image,
+			Fallback: display.AvatarText, Background: tk.FillTertiary,
+		})
 		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, title).FontSize(16).Bold().SingleLine()
+				display.Text(c, title, display.TextProps{Strong: true, FontSize: 16, Rows: 1})
 				if u.IsPro {
-					ui.Text(c, "PRO").FontSize(10).TextColor(t.Accent)
+					display.Tag(c, "PRO", display.TagProps{
+						Size: lobetheme.Small, Color: display.TagGold,
+						Variant: display.TagFilled, Round: true,
+					})
 				}
 				// 本人资料头也展示佩戴中的徽章；数据来自已经拉到的
 				// GET /v1/users/:name，切换徽章后由 syncProfileEquippedBadges
@@ -257,12 +399,14 @@ func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 				a.authorBadges(c, u.Badges)
 			})
 			line := profileIdentityLine(u)
+			lineType := display.TextSecondary
 			if ps.infoErr != "" {
 				line = "资料暂时不可用：" + ps.infoErr
+				lineType = display.TextDanger
 			} else if ps.infoLoading && !ps.infoLoaded {
 				line = "正在读取账号资料…"
 			}
-			ui.Text(c, line).FontSize(11).TextColor(t.TextMuted).SingleLine()
+			display.Text(c, line, display.TextProps{Type: lineType, FontSize: 11, Rows: 1})
 		})
 		a.profileAvatarEntry(c, ps)
 		a.smallAction(c, "刷新", ps.infoLoading, func() { a.reloadProfile() })
@@ -274,13 +418,15 @@ func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 ---------------------------------------------------------------- */
 
 func (a *app) profileOverviewBody(c *ui.Context, ps *profileState) {
-	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+	// Lobe 的细滚动条与边缘渐隐，替换 mygo 原生 Scroll。
+	list := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
 		ui.Column(c).FillWidth().Gap(14).Children(func() {
 			a.profileStatsSection(c, ps)
 			a.profileAttributesSection(c, ps)
 			a.profileAuthEntry(c, ps)
 		})
 	})
+	list.Grow(1).MinHeight(0)
 }
 
 // profileStatsSection 是「最近统计」：粉丝、关注、主页访问与等级来自公开
@@ -319,34 +465,37 @@ func profileCountText(known bool, n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// profileStatChip 是一块统计。onClick 非空时整块可点（粉丝 / 关注打开
-// 名单），悬停给浅底与强调色描边，免得它看起来和旁边的只读数字一样。
+// profileStatChip 是一块统计。onClick 非空时整块是可点的 Lobe Block（粉丝 /
+// 关注打开名单），悬停给浅底与强调色描边，免得它看起来和旁边的只读数字一样。
 func profileStatChip(c *ui.Context, label, value string, onClick func()) {
-	t := c.Theme()
-	b := ui.Box(c).Padding(6, 10).Radius(8).Background(t.Surface).Border(1, t.Border)
+	tk := lobetheme.TokensOf(c)
+	b := layout.Block(c, layout.BlockProps{
+		Variant:   layout.BlockOutlined,
+		Clickable: onClick != nil,
+	}).Padding(6, 10).Shrink(0)
 	if onClick != nil {
 		if b.Hovered() {
-			b.Background(t.SurfaceHover)
-			b.Border(1, t.Accent)
+			b.Background(tk.FillTertiary).Border(1, tk.Primary)
 		}
 		b.Label(label).Tooltip("查看" + label + "名单")
 		b.OnClick(onClick)
 	}
 	b.Children(func() {
 		ui.Column(c).Gap(1).Children(func() {
-			ui.Text(c, value).FontSize(14).Bold().SingleLine()
-			ui.Text(c, label).FontSize(10).TextColor(t.TextMuted).SingleLine()
+			display.Text(c, value, display.TextProps{Strong: true, FontSize: 14, Rows: 1})
+			display.Text(c, label, display.TextProps{
+				Type: display.TextSecondary, FontSize: 10, Rows: 1,
+			})
 		})
 	})
 }
 
 // profileAuthEntry 是概览页底部的授权管理快速入口：一段说明 + 一个出口。
 func (a *app) profileAuthEntry(c *ui.Context, ps *profileState) {
-	t := c.Theme()
 	settingsSection(c, "授权管理", func() {
-		ui.Text(c, "本应用通过 2Libra OAuth 读取你的账号，只能用你授予的权限范围；"+
-			"随时可以在站点后台撤销，撤销后本应用的接口调用会立即失效。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		display.Text(c, "本应用通过 2Libra OAuth 读取你的账号，只能用你授予的权限范围；"+
+			"随时可以在站点后台撤销，撤销后本应用的接口调用会立即失效。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 3})
 		a.smallAction(c, "查看当前权限", false, func() { ps.tab = profileTabAccount })
 	})
 }
@@ -366,14 +515,17 @@ var profileContentEmpty = [][2]string{
 	{"还没有创建合集。", "在帖子详情页的「合集」里新建；这里可以改名、删除与查看合集内容。"},
 }
 
+// profileContentEmptyIcons 与四段空状态一一对应：图标只是空状态的装饰，两行
+// 文案仍由 profileContentEmpty 给出。
+var profileContentEmptyIcons = []*ui.SVG{
+	lucide.FileText(), lucide.Heart(), lucide.Bookmark(), lucide.FolderClosed(),
+}
+
 func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
-	t := c.Theme()
 	kind := ps.contentKind
 	if kind < 0 || kind >= profileContentCount {
 		kind, ps.contentKind = profileContentTopics, profileContentTopics
 	}
-	st := &ps.content[kind]
-	spec := profileContentSpecs[kind]
 
 	// 点开一个合集时整块换成它里面的帖子，「返回合集列表」再回到这一页的分段。
 	if kind == profileContentCollections && ps.collBrowse != nil {
@@ -383,40 +535,64 @@ func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
 		return
 	}
 
-	// 分段切换：帖子 / 收藏 / 书签 / 合集。每段各有一份列表状态，已经拉过的
-	// 保留着，来回切换不会重新请求。
-	ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
-		ui.Tabs(c, &ps.contentKind, profileContentLabels...)
+	// 分段切换用 Lobe 的 nav.Tabs。每段各有一份列表状态，已经拉过的保留着，
+	// 来回切换不会重新请求。
+	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+		c.Key("profile-content-tabs")
+		items := make([]nav.TabItem, 0, profileContentCount)
+		for _, label := range profileContentLabels {
+			items = append(items, nav.TabItem{Label: label})
+		}
+		sel := kind
+		nav.Tabs(c, &sel, nav.TabsProps{
+			Items:   items,
+			Variant: nav.TabsRounded,
+			Size:    lobetheme.Small,
+		}, nil)
+		if sel != kind && sel >= 0 && sel < profileContentCount {
+			kind, ps.contentKind = sel, sel
+		}
 		ui.Spacer(c).Grow(1)
+		st := &ps.content[kind]
 		if st.loaded {
-			ui.Textf(c, "共 %d %s", profileContentTotal(st), profileContentUnits[kind]).
-				FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, fmt.Sprintf("共 %d %s", profileContentTotal(st), profileContentUnits[kind]),
+				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 		}
 		a.smallAction(c, "刷新", st.loading, func() { a.reloadProfileContent(kind) })
 	})
 
+	st := &ps.content[kind]
+	spec := profileContentSpecs[kind]
 	switch {
 	case st.loading && len(st.items) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(24, 24)
-			ui.Text(c, "正在加载"+profileContentLabels[kind]+"…").
-				FontSize(12).TextColor(t.TextMuted)
+			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Large}, nil)
+			display.Text(c, "正在加载"+profileContentLabels[kind]+"…",
+				display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 1})
 		})
 		return
 	case st.err != "":
-		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(10).Children(func() {
-			ui.Text(c, "加载失败").FontSize(14).Bold()
-			ui.Text(c, st.err).FontSize(12).TextColor(t.Danger).MaxLines(3)
-			if ui.Button(c, "重试").Clicked() {
-				a.loadProfileContent(kind, 1)
-			}
+		ui.Column(c).Grow(1).MinHeight(0).Center().Children(func() {
+			feedback.Result(c, feedback.ResultProps{
+				Status:   feedback.ResultError,
+				Title:    "加载失败",
+				SubTitle: st.err,
+				Extra: func() {
+					if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+						a.loadProfileContent(kind, 1)
+					}
+				},
+			})
 		})
 		return
 	case len(st.items) == 0:
 		empty := profileContentEmpty[kind]
-		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(6).Children(func() {
-			ui.Text(c, empty[0]).FontSize(13).TextColor(t.TextMuted)
-			ui.Text(c, empty[1]).FontSize(11).TextColor(t.TextMuted)
+		ui.Column(c).Grow(1).MinHeight(0).Center().Children(func() {
+			display.Empty(c, display.EmptyProps{
+				Icon:        profileContentEmptyIcons[kind],
+				Title:       empty[0],
+				Description: empty[1],
+			})
 		})
 		return
 	}
@@ -464,31 +640,25 @@ func (a *app) profileContentRow(c *ui.Context, kind int, it Item) {
 // profileBookmarkRow 是「我的内容 - 书签」的一行：整行打开评论，右侧一枚
 // 移除按钮。
 func (a *app) profileBookmarkRow(c *ui.Context, it Item) {
-	t := c.Theme()
 	busy := a.profile != nil && a.profile.bookmarkBusy == it.CommentID
 	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Grow(1).MinWidth(0).Children(func() {
 			a.rowWith(c, it, a.openProfileItem)
 		})
-		b := ui.Box(c).Size(28, 28).Radius(8).Center().Background(ui.Transparent)
-		hovered := b.Hovered() && !busy
-		if hovered {
-			b.Background(t.SurfaceHover)
+		if busy {
+			b := ui.Box(c).Size(28, 28).Center()
+			b.Children(func() { feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil) })
+			b.Label("移除书签").Tooltip("从书签里移除这条评论")
+			return
 		}
-		ink := t.TextMuted
-		if hovered {
-			ink = t.Danger
-		}
-		b.Children(func() {
-			if busy {
-				ui.Spinner(c).Size(12, 12)
-				return
-			}
-			ui.Icon(c, bookmarkOnIcon).Size(15, 15).TextColor(ink)
+		// 移除是危险动作：Lobe 的 ActionIcon 平时用弱化的错误色，悬停加深，
+		// 图标按钮的标签与 tooltip 保持原来的无障碍名和说明。
+		b := action.StyleActionIcon(c, ui.ButtonBase(c), bookmarkOnIcon, action.ActionIconProps{
+			Size: lobetheme.Small, Danger: true,
 		})
 		b.Label("移除书签").Tooltip("从书签里移除这条评论")
-		if !busy {
-			b.OnClick(func() { a.removeProfileBookmark(it) })
+		if b.Clicked() {
+			a.removeProfileBookmark(it)
 		}
 	})
 }
@@ -531,25 +701,32 @@ func (a *app) profileCollectionRow(c *ui.Context, it Item) {
 // profileMoreContent 是分页列表底部的续拉行：还有下一页时给按钮，续拉失败
 // 时给出原因并可重试，已有内容保持不动。
 func (a *app) profileMoreContent(c *ui.Context, kind int, st *tabState) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	switch {
 	case st.moreErr != "":
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "加载更多失败："+st.moreErr).FontSize(11).
-				TextColor(t.Danger).MaxLines(2).Grow(1)
+			display.Text(c, "加载更多失败："+st.moreErr, display.TextProps{
+				Type: display.TextDanger, FontSize: 11, Rows: 2,
+			}).Grow(1)
 			a.smallAction(c, "重试", false, func() { a.loadProfileContent(kind, st.page) })
 		})
 	case st.loading && len(st.items) > 0:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Spinner(c).Size(14, 14)
-			ui.Text(c, "正在加载更多…").FontSize(11).TextColor(t.TextMuted)
+			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+			display.Text(c, "正在加载更多…", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		})
 	// 服务端给了总数且已经全部拿到时不再给按钮：留着它只会让人点一下拿到
 	// 空页，白等一次请求。
 	case !st.noMore && (st.totalPages == 0 || st.page < st.totalPages) &&
 		!(st.total > 0 && len(st.items) >= st.total):
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "加载更多").Clicked() {
+			b := action.Button(c, "加载更多", action.ButtonProps{
+				Size: lobetheme.Small, Variant: action.Default,
+			})
+			b.TextColor(tk.Primary)
+			if b.Clicked() {
 				a.loadProfileContent(kind, st.page+1)
 			}
 			ui.Spacer(c).Grow(1)
@@ -562,12 +739,12 @@ func (a *app) profileMoreContent(c *ui.Context, kind int, st *tabState) {
 ---------------------------------------------------------------- */
 
 func (a *app) profileRepliesBody(c *ui.Context, ps *profileState) {
-	t := c.Theme()
 	name := a.auth.username()
 	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "我的回复").FontSize(13).Bold()
+		display.Text(c, "我的回复", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
 		if ps.replyLoaded {
-			ui.Textf(c, "共 %d 条", ps.replyTotal).FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, fmt.Sprintf("共 %d 条", ps.replyTotal),
+				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 		}
 		ui.Spacer(c).Grow(1)
 		a.smallAction(c, "刷新", ps.replyLoading, func() {
@@ -578,9 +755,11 @@ func (a *app) profileRepliesBody(c *ui.Context, ps *profileState) {
 	})
 
 	if name == "" {
-		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(6).Children(func() {
-			ui.Text(c, "还不知道当前账号的用户名").FontSize(13).Bold()
-			ui.Text(c, "点右上角「刷新」重新读取账号资料后再试。").FontSize(11).TextColor(t.TextMuted)
+		ui.Column(c).Grow(1).MinHeight(0).Center().Children(func() {
+			display.Empty(c, display.EmptyProps{
+				Title:       "还不知道当前账号的用户名",
+				Description: "点右上角「刷新」重新读取账号资料后再试。",
+			})
 		})
 		return
 	}
@@ -588,23 +767,32 @@ func (a *app) profileRepliesBody(c *ui.Context, ps *profileState) {
 	switch {
 	case ps.replyLoading && len(ps.replies) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(24, 24)
-			ui.Text(c, "正在加载我的回复…").FontSize(12).TextColor(t.TextMuted)
+			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Large}, nil)
+			display.Text(c, "正在加载我的回复…",
+				display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 1})
 		})
 		return
 	case ps.replyErr != "":
-		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(10).Children(func() {
-			ui.Text(c, "加载失败").FontSize(14).Bold()
-			ui.Text(c, ps.replyErr).FontSize(12).TextColor(t.Danger).MaxLines(3)
-			if ui.Button(c, "重试").Clicked() {
-				a.loadProfileReplies(name, 1)
-			}
+		ui.Column(c).Grow(1).MinHeight(0).Center().Children(func() {
+			feedback.Result(c, feedback.ResultProps{
+				Status:   feedback.ResultError,
+				Title:    "加载失败",
+				SubTitle: ps.replyErr,
+				Extra: func() {
+					if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+						a.loadProfileReplies(name, 1)
+					}
+				},
+			})
 		})
 		return
 	case len(ps.replies) == 0:
-		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(6).Children(func() {
-			ui.Text(c, "还没有发表过回复。").FontSize(13).TextColor(t.TextMuted)
-			ui.Text(c, "在帖子详情页底部的评论框里发表评论。").FontSize(11).TextColor(t.TextMuted)
+		ui.Column(c).Grow(1).MinHeight(0).Center().Children(func() {
+			display.Empty(c, display.EmptyProps{
+				Icon:        lucide.MessageCircle(),
+				Title:       "还没有发表过回复。",
+				Description: "在帖子详情页底部的评论框里发表评论。",
+			})
 		})
 		return
 	}
@@ -625,22 +813,29 @@ func (a *app) profileRepliesBody(c *ui.Context, ps *profileState) {
 // profileMoreReplies 是回复列表底部的续拉行：还有下一页时给按钮，续拉失败
 // 时给出原因并可重试，已有内容保持不动。
 func (a *app) profileMoreReplies(c *ui.Context, ps *profileState, name string) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	switch {
 	case ps.replyMoreErr != "":
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "加载更多失败："+ps.replyMoreErr).FontSize(11).
-				TextColor(t.Danger).MaxLines(2).Grow(1)
+			display.Text(c, "加载更多失败："+ps.replyMoreErr, display.TextProps{
+				Type: display.TextDanger, FontSize: 11, Rows: 2,
+			}).Grow(1)
 			a.smallAction(c, "重试", false, func() { a.loadProfileReplies(name, ps.replyPage) })
 		})
 	case ps.replyLoading:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Spinner(c).Size(14, 14)
-			ui.Text(c, "正在加载更多…").FontSize(11).TextColor(t.TextMuted)
+			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+			display.Text(c, "正在加载更多…", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		})
 	case !ps.replyNoMore:
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "加载更多").Clicked() {
+			b := action.Button(c, "加载更多", action.ButtonProps{
+				Size: lobetheme.Small, Variant: action.Default,
+			})
+			b.TextColor(tk.Primary)
+			if b.Clicked() {
 				a.loadProfileReplies(name, ps.replyPage+1)
 			}
 			ui.Spacer(c).Grow(1)
@@ -649,15 +844,14 @@ func (a *app) profileMoreReplies(c *ui.Context, ps *profileState, name string) {
 }
 
 func (a *app) profileReplyRow(c *ui.Context, it Item) {
-	t := c.Theme()
-	row := ui.ButtonBase(c).FillWidth().Padding(10, 12).Radius(10).
-		Background(t.Background).Border(1, t.Border)
-	if row.Hovered() {
-		row.Background(t.SurfaceHover)
-	}
+	// 整行是一张可点的 Lobe Block：描边、圆角与悬停底色都跟随主题 token。
+	row := layout.Block(c, layout.BlockProps{
+		Variant:   layout.BlockOutlined,
+		Clickable: true,
+	}).FillWidth().Padding(10, 12)
 	row.Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-			ui.Text(c, it.Title).FontSize(12).MaxLines(2)
+			display.Text(c, it.Title, display.TextProps{FontSize: 12, Rows: 2})
 			parts := make([]string, 0, 3)
 			if x := it.Extra; x != nil {
 				if x.PostTitle != "" {
@@ -671,16 +865,22 @@ func (a *app) profileReplyRow(c *ui.Context, it Item) {
 				}
 			}
 			if len(parts) > 0 {
-				ui.Text(c, strings.Join(parts, " · ")).FontSize(11).
-					TextColor(t.TextMuted).SingleLine()
+				display.Text(c, strings.Join(parts, " · "),
+					display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 			}
 		})
 	})
+	row.Label(it.Title)
 	if it.ShortID != "" {
 		row.Tooltip("打开原帖并定位这条回复")
-		row.OnClick(func() { a.openProfileDetail(it) })
+		if row.Clicked() {
+			a.openProfileDetail(it)
+		}
 	} else if it.URL != "" {
-		row.OnClick(func() { a.openExternal(it.URL) })
+		row.Tooltip("在浏览器里打开")
+		if row.Clicked() {
+			a.openExternal(it.URL)
+		}
 	}
 }
 
@@ -689,9 +889,8 @@ func (a *app) profileReplyRow(c *ui.Context, it Item) {
 ---------------------------------------------------------------- */
 
 func (a *app) profileAccountBody(c *ui.Context, ps *profileState) {
-	t := c.Theme()
 	u := ps.user
-	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+	list := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
 		ui.Column(c).FillWidth().Gap(14).Children(func() {
 			settingsSection(c, "账号", func() {
 				a.profileAccountRow(c, "用户名", profileOrDash(u.Name, a.auth.username()))
@@ -701,45 +900,52 @@ func (a *app) profileAccountBody(c *ui.Context, ps *profileState) {
 				a.profileAccountRow(c, "粉丝 / 关注",
 					profileFollowText(ps.infoLoaded, u.Followers, u.Following))
 			})
-			ui.Divider(c)
+			layout.Divider(c, layout.DividerProps{})
 
 			settingsSection(c, "授权范围", func() {
 				scopes := a.auth.scopes()
 				if len(scopes) == 0 {
-					ui.Text(c, "令牌里没有 scope 信息：可能是旧版本授权的会话，"+
-						"重新登录一次即可拿到完整范围。").
-						FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+					display.Text(c, "令牌里没有 scope 信息：可能是旧版本授权的会话，"+
+						"重新登录一次即可拿到完整范围。",
+						display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 3})
 				} else {
-					ui.Text(c, "当前令牌携带 "+fmt.Sprintf("%d", len(scopes))+" 项权限：").
-						FontSize(11).TextColor(t.TextMuted)
+					display.Text(c, "当前令牌携带 "+fmt.Sprintf("%d", len(scopes))+" 项权限：",
+						display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 					for _, s := range scopes {
 						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, s).FontSize(11).Width(110).SingleLine()
-							ui.Text(c, profileScopeLabel(s)).FontSize(11).
-								TextColor(t.TextMuted).SingleLine().Grow(1)
+							display.Text(c, s, display.TextProps{FontSize: 11, Rows: 1}).Width(110)
+							display.Text(c, profileScopeLabel(s), display.TextProps{
+								Type: display.TextSecondary, FontSize: 11, Rows: 1,
+							}).Grow(1)
 						})
 					}
 				}
 			})
-			ui.Divider(c)
+			layout.Divider(c, layout.DividerProps{})
 
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				if ui.Button(c, "退出登录").Clicked() {
+				logout := action.Button(c, "退出登录", action.ButtonProps{
+					Size: lobetheme.Small, Variant: action.Text,
+				})
+				logout.TextColor(lobetheme.TokensOf(c).Error)
+				if logout.Clicked() {
 					a.logoutAccount()
 				}
 				ui.Spacer(c).Grow(1)
 			})
-			ui.Text(c, "撤销授权页在 2Libra 站点的「授权应用」里；撤销后需要重新登录本应用。").
-				FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+			display.Text(c, "撤销授权页在 2Libra 站点的「授权应用」里；撤销后需要重新登录本应用。",
+				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 		})
 	})
+	list.Grow(1).MinHeight(0)
 }
 
 func (a *app) profileAccountRow(c *ui.Context, label, value string) {
-	t := c.Theme()
 	ui.Row(c).FillWidth().Gap(10).Children(func() {
-		ui.Text(c, label).FontSize(12).Width(90).TextColor(t.TextMuted)
-		ui.Text(c, value).FontSize(12).SingleLine()
+		display.Text(c, label, display.TextProps{
+			Type: display.TextSecondary, FontSize: 12, Rows: 1,
+		}).Width(90)
+		display.Text(c, value, display.TextProps{FontSize: 12, Rows: 1})
 	})
 }
 
@@ -972,7 +1178,6 @@ func (a *app) profileCollectionDialogs(c *ui.Context) {
 	if ps == nil {
 		return
 	}
-	t := c.Theme()
 	if ps.collEdit != "" {
 		open := true
 		ok := feedback.Modal(c, &open, feedback.ModalProps{
@@ -982,11 +1187,11 @@ func (a *app) profileCollectionDialogs(c *ui.Context) {
 			CancelText: "取消",
 		}, func() {
 			ui.Column(c).FillWidth().Gap(10).Children(func() {
-				ui.TextInput(c, &ps.collDraft).Label("合集名称").
-					Placeholder("合集名称").MaxLength(collectionNameMax).
-					FillWidth().Disabled(ps.collBusy != "")
-				ui.Textf(c, "最多 %d 个字；改名不会改变合集里的帖子。", collectionNameMax).
-					FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+				field.Input(c, &ps.collDraft, field.InputProps{
+					Placeholder: "合集名称", Size: lobetheme.Small,
+				}).Label("合集名称").FillWidth().Disabled(ps.collBusy != "")
+				display.Text(c, fmt.Sprintf("最多 %d 个字；改名不会改变合集里的帖子。", collectionNameMax),
+					display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 			})
 		})
 		// 取消、✕、Esc 与点窗外都由 Modal 关窗：清空草稿状态。
@@ -1018,9 +1223,9 @@ func (a *app) profileCollectionDialogs(c *ui.Context) {
 		OkText:     "确认删除",
 		CancelText: "取消",
 	}, func() {
-		ui.Text(c, "删除"+name+"只删合集本身：合集里的帖子会被取消挂载，"+
-			"帖子、评论和浏览数都不受影响。删除不可恢复。").
-			TextColor(t.TextMuted).MaxLines(3)
+		display.Text(c, "删除"+name+"只删合集本身：合集里的帖子会被取消挂载，"+
+			"帖子、评论和浏览数都不受影响。删除不可恢复。",
+			display.TextProps{Type: display.TextSecondary, Rows: 3})
 	})
 	if !open {
 		ps.collDelete = ""

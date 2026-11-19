@@ -8,6 +8,13 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/choice"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/field"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 设置窗口里的「图库（图床）」一块。
@@ -21,25 +28,23 @@ import (
 // imageHostsSection 一次只展开一条图库的字段：设置窗口只有 520 宽，把十几条
 // 预设的所有输入框全铺开会变成一屏填不完的表单。
 func (a *app) imageHostsSection(c *ui.Context) {
-	t := c.Theme()
 	settingsSection(c, "图库（图床）", func() {
-		ui.Text(c, "写帖子或评论时拖入、选择、粘贴的图片会传到「当前使用」的图库。"+
+		settingsDescription(c, "写帖子或评论时拖入、选择、粘贴的图片会传到「当前使用」的图库。"+
 			"Kappa / MJJ.Today / ImgBB / Appinn / Skyimg 这类图床免注册、免 Token；"+
 			"2Libra 官方图床只对 Pro 会员开放。免费图床变动频繁，可以点下面的"+
-			"「测试这个图床」确认还能不能用。").
-			FontSize(12).TextColor(t.TextMuted).MaxLines(4)
+			"「测试这个图床」确认还能不能用。", 4)
 		a.imageHostActivePicker(c)
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 		a.imageHostEditor(c)
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Spacer(c).Grow(1)
-			if ui.Button(c, "添加自定义图库").Clicked() {
+			if action.Button(c, "添加自定义图库", action.ButtonProps{}).Clicked() {
 				a.addCustomImageHost()
 			}
-			if ui.Button(c, "恢复默认").Clicked() {
+			if action.Button(c, "恢复默认", action.ButtonProps{}).Clicked() {
 				a.resetImageHosts()
 			}
-			if ui.PrimaryButton(c, "保存图库设置").Clicked() {
+			if action.Button(c, "保存图库设置", action.ButtonProps{Variant: action.Primary}).Clicked() {
 				if err := a.saveImageHosts(); err != nil {
 					a.toast(toastSettings, err.Error())
 				} else {
@@ -50,20 +55,31 @@ func (a *app) imageHostsSection(c *ui.Context) {
 	})
 }
 
+// selectOptions 把一串名字转成 Lobe 下拉框的选项：值与显示文字相同。
+func selectOptions(names []string) []field.SelectOption {
+	out := make([]field.SelectOption, 0, len(names))
+	for _, name := range names {
+		out = append(out, field.SelectOption{Value: name, Label: name})
+	}
+	return out
+}
+
 // imageHostActivePicker 只在已启用的图库里选「当前使用」，切换立即生效并
 // 落盘（编辑器里的下拉框走的是同一个 setActiveHostByLabel）。
 func (a *app) imageHostActivePicker(c *ui.Context) {
-	t := c.Theme()
 	names := a.hostNames()
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "当前使用").FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(0)
+		display.Text(c, "当前使用", display.TextProps{
+			Type: display.TextSecondary, FontSize: 12, Rows: 1,
+		}).Shrink(0)
 		if len(names) == 0 {
-			ui.Text(c, "没有启用的图库，请在下面勾选一条").
-				FontSize(12).TextColor(t.Danger).SingleLine()
+			display.Text(c, "没有启用的图库，请在下面勾选一条",
+				display.TextProps{Type: display.TextDanger, FontSize: 12, Rows: 1})
 			return
 		}
-		if ui.Select(c, &a.hostActiveLabel, names).
-			Label("当前使用的图库").FillWidth().Changed() {
+		if field.Select(c, &a.hostActiveLabel, field.SelectProps{
+			Options: selectOptions(names), Size: lobetheme.Small,
+		}).Label("当前使用的图库").Changed() {
 			a.setActiveHostByLabel(a.hostActiveLabel)
 		}
 	})
@@ -71,11 +87,10 @@ func (a *app) imageHostActivePicker(c *ui.Context) {
 
 // imageHostEditor 画出当前选中要编辑的那一条图库的全部字段。
 func (a *app) imageHostEditor(c *ui.Context) {
-	t := c.Theme()
 	all := a.allHostNames()
 	if len(all) == 0 {
-		ui.Text(c, "还没有图库配置，点「恢复默认」重建预设。").
-			FontSize(12).TextColor(t.TextMuted)
+		display.Text(c, "还没有图库配置，点「恢复默认」重建预设。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 2})
 		return
 	}
 	// 名字改过 / 条目删过之后，选中项可能已经不在列表里，退回第一条。
@@ -87,50 +102,80 @@ func (a *app) imageHostEditor(c *ui.Context) {
 	if h == nil {
 		return
 	}
-	if ui.Select(c, &a.hostEditLabel, all).
-		Label("要编辑的图库").FillWidth().Changed() {
+	if settingsField(c, "要编辑的图库", func() ui.Element {
+		return field.Select(c, &a.hostEditLabel, field.SelectProps{
+			Options: selectOptions(all), Size: lobetheme.Small,
+		}).Label("要编辑的图库")
+	}).Changed() {
 		a.hostMaxFor = "" // 换条目时重新读这一条的 MB 草稿
 	}
-	// NumberInput 只认 float64，MaxBytes 是 int64：用一份按 ID 绑定的草稿，
+	// InputNumber 只认 float64，MaxBytes 是 int64：用一份按 ID 绑定的草稿，
 	// 每帧把草稿写回配置，换条目时才重新初始化。
 	if a.hostMaxFor != h.ID {
 		a.hostMaxFor = h.ID
 		a.hostMaxDraft = float64(h.MaxBytes >> 20)
 	}
-	ui.Checkbox(c, &h.Enabled, "启用（不启用则不出现在编辑器里）")
-	ui.TextInput(c, &h.Name).Label("名称").FillWidth()
+	choice.Checkbox(c, &h.Enabled, "启用（不启用则不出现在编辑器里）", choice.CheckboxProps{})
+	settingsField(c, "名称", func() ui.Element {
+		return field.Input(c, &h.Name, field.InputProps{Size: lobetheme.Small}).Label("名称")
+	})
 	if h.Kind == imageHostOfficial {
 		a.officialHostStatus(c)
 	} else if h.Adapter != "" {
 		a.adapterHostFields(c, h)
 	} else {
-		ui.TextInput(c, &h.Endpoint).Label("上传接口地址").
-			Placeholder("https://example.com/api/v1/upload").FillWidth()
-		ui.Row(c).FillWidth().Gap(8).Children(func() {
-			ui.TextInput(c, &h.Field).Label("文件字段名").
-				Placeholder("file").Grow(1).MinWidth(0)
-			ui.TextInput(c, &h.URLPath).Label("返回 URL 路径").
-				Placeholder("data.url，留空自动查找").Grow(1).MinWidth(0)
+		settingsField(c, "上传接口地址", func() ui.Element {
+			return field.Input(c, &h.Endpoint, field.InputProps{
+				Placeholder: "https://example.com/api/v1/upload", Size: lobetheme.Small,
+			}).Label("上传接口地址")
 		})
-		ui.TextInput(c, &h.Header).Label("请求头（一行一个）").
-			Placeholder("Authorization: Bearer {{token}}").FillWidth()
-		ui.TextInput(c, &h.Token).Label("Token（替换上面的 {{token}}）").
-			Password().FillWidth()
-		ui.TextArea(c, &h.Form).Label("附加表单字段（一行一个 name=value）").
-			Placeholder("reqtype=fileupload").FillWidth().Lines(2, 4)
-		ui.Checkbox(c, &h.TextResponse, "响应体直接就是图片地址（Catbox / x0.at 这类纯文本接口）")
-		ui.Text(c, "响应里图片地址的路径用点分隔，如 data.url；"+
+		ui.Row(c).Gap(8).Children(func() {
+			settingsHalfField(c, "文件字段名", func() ui.Element {
+				return field.Input(c, &h.Field, field.InputProps{
+					Placeholder: "file", Size: lobetheme.Small,
+				}).Label("文件字段名")
+			})
+			settingsHalfField(c, "返回 URL 路径", func() ui.Element {
+				return field.Input(c, &h.URLPath, field.InputProps{
+					Placeholder: "data.url，留空自动查找", Size: lobetheme.Small,
+				}).Label("返回 URL 路径")
+			})
+		})
+		settingsField(c, "请求头（一行一个）", func() ui.Element {
+			return field.Input(c, &h.Header, field.InputProps{
+				Placeholder: "Authorization: Bearer {{token}}", Size: lobetheme.Small,
+			}).Label("请求头（一行一个）")
+		})
+		settingsField(c, "Token（替换上面的 {{token}}）", func() ui.Element {
+			return field.InputPassword(c, &h.Token, field.InputProps{Size: lobetheme.Small}).
+				Label("Token（替换上面的 {{token}}）")
+		})
+		settingsField(c, "附加表单字段（一行一个 name=value）", func() ui.Element {
+			return field.TextArea(c, &h.Form, field.TextAreaProps{
+				Placeholder: "reqtype=fileupload", MinRows: 2, MaxRows: 4,
+			}).Label("附加表单字段（一行一个 name=value）")
+		})
+		choice.Checkbox(c, &h.TextResponse,
+			"响应体直接就是图片地址（Catbox / x0.at 这类纯文本接口）", choice.CheckboxProps{})
+		display.Text(c, "响应里图片地址的路径用点分隔，如 data.url；"+
 			"留空时会在 JSON 里自动找第一个 http(s) 图片地址。"+
-			"附加字段的值里可以写 {{token}} 与 {{filename}}。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+			"附加字段的值里可以写 {{token}} 与 {{filename}}。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 	}
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "单张上限").FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(0)
-		ui.NumberInput(c, &a.hostMaxDraft,
-			float64(minImageMaxBytes>>20), float64(maxImageMaxBytes>>20), 1).
-			Label("单张上限（MB）")
-		ui.Text(c, "MB").FontSize(11).TextColor(t.TextMuted).SingleLine()
-		ui.Spacer(c).Grow(1)
+		display.Text(c, "单张上限", display.TextProps{
+			Type: display.TextSecondary, FontSize: 12, Rows: 1,
+		}).Shrink(0)
+		ui.Column(c).Grow(1).MinWidth(0).AlignItems(ui.Stretch).Children(func() {
+			field.InputNumber(c, &a.hostMaxDraft, field.InputNumberProps{
+				Min:  float64(minImageMaxBytes >> 20),
+				Max:  float64(maxImageMaxBytes >> 20),
+				Step: 1, Size: lobetheme.Small,
+			}).Label("单张上限（MB）")
+		})
+		display.Text(c, "MB", display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 1,
+		}).Shrink(0)
 	})
 	mb := int64(a.hostMaxDraft)
 	if mb < minImageMaxBytes>>20 {
@@ -147,22 +192,28 @@ func (a *app) imageHostEditor(c *ui.Context) {
 	// 免费图床经常悄悄下线：给一个当场验证的入口，比让用户拖一张真图去试
 	// 再回来看报错省事。测试图是 1×1 的 PNG，不会暴露用户自己的照片。
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		if ui.Button(c, "测试这个图床").Disabled(a.hostTesting != "").
+		if action.Button(c, "测试这个图床", action.ButtonProps{Size: lobetheme.Small}).
+			Disabled(a.hostTesting != "").
 			Tooltip("上传一张 1×1 的测试图，确认接口地址、字段名与返回解析都对").
 			Clicked() {
 			a.testImageHost(h)
 		}
 		if a.hostTesting == h.ID {
-			ui.Text(c, "正在上传测试图…").FontSize(11).TextColor(t.TextMuted).SingleLine()
+			feedback.Spin(c, feedback.SpinProps{CustomSize: 11}, nil)
+			display.Text(c, "正在上传测试图…", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		}
 		ui.Spacer(c).Grow(1)
 	})
 	if h.Note != "" {
-		ui.Text(c, h.Note).FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		display.Text(c, h.Note, display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 3,
+		})
 	}
 	if h.Builtin {
-		ui.Text(c, "内置预设：字段可改、可停用，不能删除。").
-			FontSize(11).TextColor(t.TextMuted)
+		display.Text(c, "内置预设：字段可改、可停用，不能删除。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 	} else if iconActionButton(c, trashIcon, "删除此图库",
 		"从图库列表里删掉「"+h.Name+"」，之后上传不再选它").Clicked() {
 		a.removeImageHost(h.ID)
@@ -170,36 +221,47 @@ func (a *app) imageHostEditor(c *ui.Context) {
 	// 官方图床的门槛已经在 officialHostStatus 里说过了，这里只给通用图床
 	// 补一句「还不能用」的原因，免得同一件事说两遍。
 	if !a.hostReady(h) && h.Kind != imageHostOfficial {
-		ui.Text(c, "还不能用："+a.hostNotReadyReason(h)).
-			FontSize(11).TextColor(t.Danger).MaxLines(2)
+		display.Text(c, "还不能用："+a.hostNotReadyReason(h),
+			display.TextProps{Type: display.TextDanger, FontSize: 11, Rows: 2})
 	}
 }
 
 // adapterHostFields 画内置协议那几家的字段：接口地址可以留空（用内置地址），
 // 只有 StarDots 要 Key + Secret + 存储桶，Imgur 可以填自己的 Client-ID。
 func (a *app) adapterHostFields(c *ui.Context, h *imageHost) {
-	t := c.Theme()
-	ui.TextInput(c, &h.Endpoint).Label("上传接口地址（留空用内置地址）").
-		Placeholder(adapterEndpoint(h.Adapter)).FillWidth()
+	settingsField(c, "上传接口地址（留空用内置地址）", func() ui.Element {
+		return field.Input(c, &h.Endpoint, field.InputProps{
+			Placeholder: adapterEndpoint(h.Adapter), Size: lobetheme.Small,
+		}).Label("上传接口地址（留空用内置地址）")
+	})
 	switch h.Adapter {
 	case adapterStarDots:
-		ui.Row(c).FillWidth().Gap(8).Children(func() {
-			ui.TextInput(c, &h.Token).Label("API Key").Grow(1).MinWidth(0)
-			ui.TextInput(c, &h.Secret).Label("API Secret").Password().Grow(1).MinWidth(0)
+		ui.Row(c).Gap(8).Children(func() {
+			settingsHalfField(c, "API Key", func() ui.Element {
+				return field.Input(c, &h.Token, field.InputProps{Size: lobetheme.Small}).Label("API Key")
+			})
+			settingsHalfField(c, "API Secret", func() ui.Element {
+				return field.InputPassword(c, &h.Secret, field.InputProps{Size: lobetheme.Small}).Label("API Secret")
+			})
 		})
-		ui.TextInput(c, &h.Bucket).Label("存储桶（Bucket）").FillWidth()
-		ui.Text(c, "Key 与 Secret 在 StarDots 控制台的「Key and Secret」页生成；"+
-			"上传时应用按官方规则现签一个 MD5 签名。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		settingsField(c, "存储桶（Bucket）", func() ui.Element {
+			return field.Input(c, &h.Bucket, field.InputProps{Size: lobetheme.Small}).Label("存储桶（Bucket）")
+		})
+		display.Text(c, "Key 与 Secret 在 StarDots 控制台的「Key and Secret」页生成；"+
+			"上传时应用按官方规则现签一个 MD5 签名。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 	case adapterImgur:
-		ui.TextInput(c, &h.Token).Label("Client-ID（留空用内置公共 ID）").FillWidth()
-		ui.Text(c, "填自己的 Client-ID 最稳；留空时在内置的几个公共 Client-ID 之间轮换，"+
-			"随时可能被限流。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		settingsField(c, "Client-ID（留空用内置公共 ID）", func() ui.Element {
+			return field.Input(c, &h.Token, field.InputProps{Size: lobetheme.Small}).
+				Label("Client-ID（留空用内置公共 ID）")
+		})
+		display.Text(c, "填自己的 Client-ID 最稳；留空时在内置的几个公共 Client-ID 之间轮换，"+
+			"随时可能被限流。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 	default:
-		ui.Text(c, "这条内置协议不用填 Token：令牌、签名、请求头都由应用按站点规则处理，"+
-			"接口地址留空就用内置地址。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		display.Text(c, "这条内置协议不用填 Token：令牌、签名、请求头都由应用按站点规则处理，"+
+			"接口地址留空就用内置地址。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 	}
 }
 
@@ -207,29 +269,29 @@ func (a *app) adapterHostFields(c *ui.Context, h *imageHost) {
 // 明确告诉用户当前账号是不是 Pro、为什么还不能用，并留一个重新确认的入口
 // （登录状态是缓存来的，换会员后不一定马上更新）。
 func (a *app) officialHostStatus(c *ui.Context) {
-	t := c.Theme()
-	ui.Text(c, "2Libra 官方图床：需要 upload 权限，每人每天 20 张，单张不超过 10 MB；"+
-		"只对 Pro 会员开放，缺权限时应用会自动弹出授权。").
-		FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+	display.Text(c, "2Libra 官方图床：需要 upload 权限，每人每天 20 张，单张不超过 10 MB；"+
+		"只对 Pro 会员开放，缺权限时应用会自动弹出授权。",
+		display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 3})
 	if a.auth == nil || !a.auth.loggedIn() {
-		ui.Text(c, "当前未登录：登录 2Libra 后会自动确认 Pro 状态。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		display.Text(c, "当前未登录：登录 2Libra 后会自动确认 Pro 状态。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 		return
 	}
 	pro, known := a.proStatus()
 	switch {
 	case !known:
-		ui.Text(c, "还没确认当前账号的 Pro 状态，可以点下面的按钮重新确认。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		display.Text(c, "还没确认当前账号的 Pro 状态，可以点下面的按钮重新确认。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 	case pro:
-		ui.Text(c, "当前账号是 Pro，可以直接使用。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		display.Text(c, "当前账号是 Pro，可以直接使用。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 	default:
-		ui.Text(c, "当前账号不是 Pro，官方图床不可用；请在上面「当前使用」里换用免 Token 图床（Kappa / Catbox）。").
-			FontSize(11).TextColor(t.Danger).MaxLines(3)
+		display.Text(c, "当前账号不是 Pro，官方图床不可用；请在上面「当前使用」里换用免 Token 图床（Kappa / Catbox）。",
+			display.TextProps{Type: display.TextDanger, FontSize: 11, Rows: 3})
 	}
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		if ui.Button(c, "重新确认 Pro 状态").Disabled(a.proChecking).Clicked() {
+		if action.Button(c, "重新确认 Pro 状态", action.ButtonProps{Size: lobetheme.Small}).
+			Disabled(a.proChecking).Clicked() {
 			a.refreshProStatus(true)
 		}
 		ui.Spacer(c).Grow(1)

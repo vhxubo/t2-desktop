@@ -7,6 +7,15 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// openAccountMenu 点标题栏「我的」打开账号菜单气泡，并跑一帧让气泡画出来。
+func openAccountMenu(t *testing.T, tt *ui.Tester) {
+	t.Helper()
+	if err := tt.Click("我的"); err != nil {
+		t.Fatalf("点账号菜单失败：%v", err)
+	}
+	tt.Frame()
+}
+
 // lum is the perceived brightness of a pixel, 0 (black) to 255 (white).
 func lum(im *image.RGBA, x, y int) float64 {
 	c := im.RGBAAt(x, y)

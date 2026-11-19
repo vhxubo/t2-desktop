@@ -1029,8 +1029,8 @@ func TestCoinThousandsGroupsDigits(t *testing.T) {
 	}
 }
 
-// 标题栏金币数只给登录用户看：未登录时那个位置什么都不画，登录后显示
-// 💰 + 千分位余额，并且排在账号标识的左边，点一下打开金币窗口。
+// 账号菜单里的金币入口只给登录用户看：未登录时没有账号菜单，登录后点开
+// 气泡显示千分位余额，点一下打开金币窗口。
 func TestCoinTagShownOnlyForLoggedInUser(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1080, 720)
@@ -1050,39 +1050,28 @@ func TestCoinTagShownOnlyForLoggedInUser(t *testing.T) {
 
 	tt = ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
-	if !tt.HasText("💰") || !tt.HasText("1,234,567") {
-		t.Fatalf("登录后标题栏没有金币数：%q", tt.Texts())
+	// 标题栏只留账号标识，金币数收在气泡里；不开菜单看不到余额。
+	if tt.HasText("1,234,567") {
+		t.Fatalf("关闭气泡时不该直接显示金币数：%q", tt.Texts())
 	}
-	coinR, ok := tt.Find("金币余额")
-	if !ok {
-		t.Fatalf("金币数没有可访问名：%q", tt.Texts())
-	}
-	userR, ok := tt.Find("jimmy")
-	if !ok {
+	if _, ok := tt.Find("jimmy"); !ok {
 		t.Fatalf("标题栏没有账号标识：%q", tt.Texts())
 	}
-	if coinR.X >= userR.X {
-		t.Errorf("金币数应在账号标识左侧：金币 x=%.0f，账号 x=%.0f", coinR.X, userR.X)
+	openAccountMenu(t, tt)
+	if !tt.HasText("1,234,567") {
+		t.Fatalf("气泡里没有金币数：%q", tt.Texts())
 	}
-	iconR, ok := tt.Find("💰")
-	if !ok {
-		t.Fatalf("金币数缺少 💰 图标：%q", tt.Texts())
-	}
-	amountR, ok := tt.Find("1,234,567")
-	if !ok {
-		t.Fatalf("找不到千分位余额：%q", tt.Texts())
-	}
-	if iconR.X >= amountR.X {
-		t.Errorf("💰 图标应在金额左侧：图标 x=%.0f，金额 x=%.0f", iconR.X, amountR.X)
+	if _, ok := tt.Find("金币"); !ok {
+		t.Fatalf("气泡里没有金币入口：%q", tt.Texts())
 	}
 
 	opened := 0
 	a.onCoinsOpen = func() { opened++ }
-	if err := tt.Click("金币余额"); err != nil {
-		t.Fatalf("点击金币数失败：%v", err)
+	if err := tt.Click("金币"); err != nil {
+		t.Fatalf("点击金币入口失败：%v", err)
 	}
 	if opened != 1 {
-		t.Errorf("点金币数没有打开金币窗口：opened=%d", opened)
+		t.Errorf("点金币入口没有打开金币窗口：opened=%d", opened)
 	}
 	if a.coinWin != nil {
 		t.Error("headless 测试里不该创建金币窗口")

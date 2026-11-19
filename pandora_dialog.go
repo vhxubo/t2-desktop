@@ -82,38 +82,6 @@ func (a *app) pandoraReady() bool {
 	return false
 }
 
-// pandoraTag 是主窗口标题栏上的潘多拉入口：礼物盒 + 名字，登录后常驻，
-// 未登录不画。抽中事件后名字直接换成事件名（例如「金币雨」），悬浮说明
-// 里写具体效果；今天还能抽时右侧加一个「可抽」小角标。弹窗开着时高亮。
-func (a *app) pandoraTag(c *ui.Context) {
-	t := c.Theme()
-	open := a.pandora != nil && a.pandora.open
-	b := ui.Row(c).Padding(3, 8).Radius(6).Gap(5).AlignItems(ui.Center).
-		Background(ui.Transparent)
-	if open || b.Hovered() {
-		b.Background(t.SurfaceHover)
-	}
-	ink := t.Accent
-	if open {
-		ink = t.Accent
-	} else if b.Hovered() {
-		ink = t.Text
-	}
-	b.Children(func() {
-		ui.Icon(c, pandoraIcon).Size(14, 14).TextColor(ink)
-		ui.Text(c, pandoraEntryName(a.pandora)).FontSize(12).Bold().
-			SingleLine().TextColor(ink)
-		if a.pandoraReady() {
-			ui.Box(c).Height(14).Padding(0, 4).Radius(999).Center().
-				Background(t.Danger).Children(func() {
-				ui.Text(c, "可抽").FontSize(9).Bold().SingleLine().
-					TextColor(ui.Hex("#ffffff"))
-			})
-		}
-	})
-	b.Label("潘多拉").Tooltip(pandoraEntryHint(a.pandora)).OnClick(a.showPandora)
-}
-
 /* ------------------------------------------------------------------
     弹窗界面
 --------------------------------------------------------------- */

@@ -561,11 +561,15 @@ func TestPandoraTitleBarEntry(t *testing.T) {
 	a := pandoraTestApp(t, false)
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
-	if !tt.HasText("潘多拉") {
-		t.Fatalf("登录后标题栏没有潘多拉入口：%q", tt.Texts())
+	if _, ok := tt.Find("我的"); !ok {
+		t.Fatalf("登录后标题栏没有账号菜单：%q", tt.Texts())
 	}
 	opened := 0
 	a.onPandoraOpen = func() { opened++ }
+	openAccountMenu(t, tt)
+	if !tt.HasText("潘多拉") {
+		t.Fatalf("账号菜单里没有潘多拉入口：%q", tt.Texts())
+	}
 	if err := tt.Click("潘多拉"); err != nil {
 		t.Fatalf("点击潘多拉入口失败：%v", err)
 	}
@@ -576,7 +580,7 @@ func TestPandoraTitleBarEntry(t *testing.T) {
 		t.Error("点潘多拉入口没有打开抽卡弹窗")
 	}
 
-	// 抽中事件后，标题栏直接显示事件名；悬浮说明写具体效果。
+	// 抽中事件后，账号菜单里直接显示事件名；悬浮说明写具体效果。
 	a.pandora = &pandoraState{
 		entryKnown: true,
 		entryStatus: pandoraStatus{
@@ -593,11 +597,9 @@ func TestPandoraTitleBarEntry(t *testing.T) {
 	}
 	tt = ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
+	openAccountMenu(t, tt)
 	if !tt.HasText("金币雨") {
-		t.Fatalf("抽中事件后首页没有直接显示事件名：%q", tt.Texts())
-	}
-	if _, ok := tt.Find("潘多拉"); !ok {
-		t.Errorf("标题栏入口丢失了可访问名：%q", tt.Texts())
+		t.Fatalf("抽中事件后账号菜单没有直接显示事件名：%q", tt.Texts())
 	}
 	if name := pandoraEntryName(a.pandora); name != "金币雨" {
 		t.Errorf("入口显示名 = %q，期望事件名 金币雨", name)
@@ -605,20 +607,6 @@ func TestPandoraTitleBarEntry(t *testing.T) {
 	if hint := pandoraEntryHint(a.pandora); !strings.Contains(hint, "金币雨") ||
 		!strings.Contains(hint, "小小金币雨，获得 67 金币。") {
 		t.Errorf("悬浮说明没有具体效果：%q", hint)
-	}
-	// 最小窗口宽度下，事件名不能挤到金币数上。
-	tt = ui.NewTester(a.view, 760, 600)
-	tt.Frame()
-	eventR, ok := tt.Find("金币雨")
-	if !ok {
-		t.Fatalf("窄窗口下标题栏没有事件名：%q", tt.Texts())
-	}
-	coinR, ok := tt.Find("金币余额")
-	if !ok {
-		t.Fatalf("窄窗口下找不到金币数：%q", tt.Texts())
-	}
-	if eventR.X+eventR.W > coinR.X {
-		t.Errorf("事件名挤到了金币数：事件 %v，金币 %v", eventR, coinR)
 	}
 
 	// 事件过期后不再顶替入口名，退回「潘多拉」。
@@ -657,7 +645,8 @@ func TestPandoraEntryTooltipShowsEffect(t *testing.T) {
 	}
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
-	r, ok := tt.Find("潘多拉")
+	openAccountMenu(t, tt)
+	r, ok := tt.Find("金币雨")
 	if !ok {
 		t.Fatalf("找不到潘多拉入口：%q", tt.Texts())
 	}
@@ -669,7 +658,7 @@ func TestPandoraEntryTooltipShowsEffect(t *testing.T) {
 	if !tt.HasText("小小金币雨，获得 67 金币。") {
 		t.Fatalf("悬浮后没有显示具体效果：%q", tt.Texts())
 	}
-	// 指针离开后提示自己收起，首页回到只显示事件名。
+	// 指针离开后提示自己收起，气泡里回到只显示事件名。
 	tt.Move(10, 400)
 	tt.Advance(time.Second)
 	if tt.HasText("小小金币雨，获得 67 金币。") {
@@ -680,7 +669,7 @@ func TestPandoraEntryTooltipShowsEffect(t *testing.T) {
 	}
 }
 
-// 事件名过长时截断：标题栏里的金币数与账号标识不能被挤出窗口。
+// 事件名过长时截断：账号菜单里的其它入口不会被长名字挤走。
 func TestPandoraEntryNameTruncates(t *testing.T) {
 	// 事件名里的 expire_at 是固定日期，不冻结「现在」的话过一天这个用例
 	// 就会因为事件过期而看不到事件名（返回的只是默认「潘多拉」）。
@@ -700,23 +689,17 @@ func TestPandoraEntryNameTruncates(t *testing.T) {
 	}
 	tt := ui.NewTester(a.view, 760, 600)
 	tt.Frame()
-	nameR, ok := tt.Find("潘多拉")
-	if !ok {
-		t.Fatalf("找不到潘多拉入口：%q", tt.Texts())
+	openAccountMenu(t, tt)
+	name := pandoraEntryName(a.pandora)
+	if !tt.HasText(name) {
+		t.Fatalf("气泡里没有潘多拉事件名：%q", tt.Texts())
 	}
-	coinR, ok := tt.Find("金币余额")
-	if !ok {
-		t.Fatalf("找不到金币数：%q", tt.Texts())
-	}
-	if nameR.X+nameR.W > coinR.X {
-		t.Errorf("长事件名挤到了金币数：入口 %v，金币 %v", nameR, coinR)
-	}
-	if !strings.Contains(pandoraEntryName(a.pandora), "…") {
-		t.Errorf("长事件名没有截断：%q", pandoraEntryName(a.pandora))
+	if !strings.Contains(name, "…") {
+		t.Errorf("长事件名没有截断：%q", name)
 	}
 }
 
-// 登录 / 启动时静默读一次今日状态：首页标题栏不用先打开潘多拉弹窗就能
+// 登录 / 启动时静默读一次今日状态：账号菜单不用先打开潘多拉弹窗就能
 // 显示抽中的事件名；失败不弹授权。
 func TestPandoraEntryLoadsOnLogin(t *testing.T) {
 	freezePandoraNow(t)
@@ -752,11 +735,12 @@ func TestPandoraEntryLoadsOnLogin(t *testing.T) {
 	a.autoLoad = false
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
+	openAccountMenu(t, tt)
 	if !tt.HasText("金币雨") {
-		t.Fatalf("首页没有直接显示潘多拉事件名：%q", tt.Texts())
+		t.Fatalf("账号菜单没有直接显示潘多拉事件名：%q", tt.Texts())
 	}
 	if hint := pandoraEntryHint(a.pandora); !strings.Contains(hint, "小小金币雨，获得 67 金币。") {
-		t.Errorf("首页悬浮说明没有具体效果：%q", hint)
+		t.Errorf("账号菜单悬浮说明没有具体效果：%q", hint)
 	}
 }
 

@@ -3,7 +3,12 @@ package main
 import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 「我的」资料头的换头像入口与气泡。数据、上传与状态回填在 avatar.go。
@@ -27,17 +32,10 @@ func openAvatarDialog(parent *mygo.Window) ([]string, error) {
 // profileAvatarEntry 是资料头右侧的换头像图标：开着气泡时高亮，悬停给浅底。
 // 只画图标，说明与可能扣费的提醒放在 tooltip 与气泡里。
 func (a *app) profileAvatarEntry(c *ui.Context, ps *profileState) {
-	t := c.Theme()
-	b := ui.Box(c).Size(26, 26).Radius(6).Center().Background(ui.Transparent).Shrink(0)
-	if ps.avatarOpen || b.Hovered() {
-		b.Background(t.SurfaceHover)
-	}
-	ink := t.TextMuted
-	if ps.avatarOpen || b.Hovered() {
-		ink = t.Text
-	}
-	b.Children(func() {
-		ui.Icon(c, imageIcon).Size(15, 15).TextColor(ink)
+	// Lobe 的 ActionIcon：气泡开着时保持高亮，悬停给浅底；标签与悬浮说明
+	// 分开写，前者供读屏与点击测试命中，后者说清可能扣费的后果。
+	b := action.StyleActionIcon(c, ui.ButtonBase(c), lucide.ImagePlus(), action.ActionIconProps{
+		Size: lobetheme.Small, GlyphSize: 15, Active: ps.avatarOpen,
 	})
 	b.Label("更换头像").Tooltip("更换头像；首次免费，之后可能扣除金币")
 	b.OnClick(func() { a.openAvatarPopup(ps) })
@@ -53,38 +51,42 @@ func (a *app) profileAvatarEntry(c *ui.Context, ps *profileState) {
 // profileAvatarPanel 是换头像气泡：说明格式与大小、选择本地图片、恢复默认。
 // 上传期间只留进度，结果用 toast 报告；失败原因留在气泡里，方便原图重试。
 func (a *app) profileAvatarPanel(c *ui.Context, ps *profileState) {
-	t := c.Theme()
 	ui.Column(c).Width(300).Gap(8).Children(func() {
-		ui.Text(c, "换一张头像").FontSize(metaFontSize).TextColor(t.TextMuted)
+		display.Text(c, "换一张头像", display.TextProps{
+			Type: display.TextSecondary, FontSize: metaFontSize, Rows: 1,
+		})
 		if !a.auth.loggedIn() {
 			a.loginHintFor(c, toastProfile, "登录后才能更换头像。")
 			return
 		}
-		ui.Text(c, "支持 JPEG / PNG / WebP，单张不超过 5 MB。首次设置免费，之后每次可能扣除金币。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+		display.Text(c, "支持 JPEG / PNG / WebP，单张不超过 5 MB。首次设置免费，之后每次可能扣除金币。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 3})
 		if ps.avatarErr != "" {
-			ui.Text(c, ps.avatarErr).FontSize(11).TextColor(t.Danger).MaxLines(2)
+			feedback.Alert(c, ps.avatarErr, feedback.AlertProps{
+				Type: feedback.Error, Variant: feedback.Soft,
+			})
 		}
 		if ps.avatarBusy {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Spinner(c).Size(13, 13)
-				ui.Text(c, "正在上传头像…").FontSize(11).TextColor(t.TextMuted)
+				feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+				display.Text(c, "正在上传头像…",
+					display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 			})
 			return
 		}
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-			if ui.PrimaryButton(c, "选择图片…").Clicked() {
+			if action.Button(c, "选择图片…", action.ButtonProps{
+				Size: lobetheme.Small, Variant: action.Primary,
+			}).Clicked() {
 				a.pickAvatar(ps)
 			}
 			ui.Spacer(c).Grow(1)
 			if ps.user.Avatar != "" {
-				reset := ui.Button(c, "重置为默认头像").
-					Background(ui.Transparent).TextColor(t.TextMuted).
-					FontSize(11).Padding(2, 6).Radius(6)
-				if reset.Hovered() {
-					reset.Background(t.SurfaceHover).TextColor(t.Danger)
-				}
-				reset.Tooltip("恢复默认头像；可能扣除金币")
+				reset := action.Button(c, "重置为默认头像", action.ButtonProps{
+					Size: lobetheme.Small, Variant: action.Text,
+				})
+				reset.TextColor(lobetheme.TokensOf(c).Error).
+					Tooltip("恢复默认头像；可能扣除金币")
 				if reset.Clicked() {
 					a.resetAvatar(ps)
 				}

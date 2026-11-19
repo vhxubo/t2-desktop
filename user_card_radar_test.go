@@ -161,7 +161,9 @@ func TestUserCardRadarStates(t *testing.T) {
 	}
 }
 
-// countUserCardAccent 数雷达图矩形里接近强调色（#2563eb）的像素。
+// countUserCardAccent 数雷达图矩形里接近强调色的像素。蓝色的蓝通道高、
+// 红通道低、绿通道居中，据此把灰阶网格线与白底排除掉。浅色 #1D4ED8 与
+// 深色 #60A5FA 两支蓝色都落在阈值内。
 func countUserCardAccent(img *image.RGBA, r ui.Rect) int {
 	if img == nil {
 		return 0
@@ -172,7 +174,7 @@ func countUserCardAccent(img *image.RGBA, r ui.Rect) int {
 	for y := y0; y < y1; y++ {
 		for x := x0; x < x1; x++ {
 			rr, gg, bb, _ := img.At(x, y).RGBA()
-			if bb>>8 > 190 && rr>>8 < 90 && gg>>8 < 150 {
+			if bb>>8 > 190 && rr>>8 < 110 && gg>>8 > 60 && gg>>8 < 220 {
 				n++
 			}
 		}
