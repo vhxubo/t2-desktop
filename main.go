@@ -1116,16 +1116,17 @@ const navRailWidth float32 = 64
 // 和无衬线字体形成两层质感。
 const sidebarFont = "monospace"
 
-// sidebar 是 Lobe 风格的可展开侧边栏：layout.DraggableSideNav 提供拖拽调宽
-// 与展开/折叠（通过 navExpanded），内容与 Lobe 的 display.List 配套——把
+// sidebar 是 Lobe 风格的可展开侧边栏：layout.DraggableSideNav 提供拖拽调宽，
+// 展开/折叠只走底部列表的「展开 / 折叠侧边栏」入口（见 sidebarFooterList），
+// 不再在接缝上画一个重复的开关。内容与 Lobe 的 display.List 配套——把
 // nav.Collapse / nav.RailWidth 交给 List，收起时行缩成图标方块，展开时显示
 // 文字。顶部是账号，中部是浏览页，底部是外观与账号入口。
 func (a *app) sidebar(c *ui.Context) {
 	layout.DraggableSideNav(c, &a.navWidth, &a.navExpanded, layout.DraggableSideNavProps{
-		MinWidth:                navRailWidth,
-		MaxWidth:                280,
-		ShowHandleWhenCollapsed: true,
-		HighlightHandle:         true,
+		MinWidth:        navRailWidth,
+		MaxWidth:        280,
+		NoHandle:        true,
+		HighlightHandle: true,
 		Header: func(nav layout.SideNavState) {
 			a.sidebarHeader(c, nav)
 		},

@@ -393,3 +393,72 @@ func TestAboutWindowRowsAligned(t *testing.T) {
 		lastX = r.X
 	}
 }
+
+// 侧边栏的折叠 / 展开只保留底部列表那一处入口：接缝上不再画一个重复的开关。
+// Lobe 组件自带的 handle 也带「展开 / 折叠侧边栏」无障碍名（测试里是英文的
+// Expand / Collapse side nav），按名字数一遍就能看出重复。
+func TestSidebarHasSingleCollapseToggle(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	count := func(name string) int {
+		n := 0
+		for _, info := range tt.AccessAll() {
+			if info.Name == name {
+				n++
+			}
+		}
+		return n
+	}
+	only := func(name string) {
+		t.Helper()
+		if got := count(name); got != 1 {
+			t.Errorf("应只有一个「%s」入口，实际 %d 个", name, got)
+		}
+	}
+	absent := func(name string) {
+		t.Helper()
+		if got := count(name); got != 0 {
+			t.Errorf("不该有「%s」入口，实际 %d 个", name, got)
+		}
+	}
+	// 组件自带的 handle 在测试里用英文无障碍名；两种状态下都不能出现。
+	noSeamHandle := func() {
+		t.Helper()
+		absent("Expand side nav")
+		absent("Collapse side nav")
+	}
+
+	// 默认折叠：底部列表给出「展开侧边栏」。
+	if a.navExpanded {
+		t.Fatal("前置条件：默认应是折叠态")
+	}
+	only("展开侧边栏")
+	only("Resize side nav") // 拖拽调宽的接缝保留，只是不再带开关
+	absent("折叠侧边栏")
+	noSeamHandle()
+
+	// 点一下展开：入口换成「折叠侧边栏」，同样只有一处。
+	if err := tt.Click("展开侧边栏"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !a.navExpanded {
+		t.Fatal("点「展开侧边栏」后没有展开")
+	}
+	only("折叠侧边栏")
+	absent("展开侧边栏")
+	noSeamHandle()
+
+	// 再点一下收起，回到原来的状态。
+	if err := tt.Click("折叠侧边栏"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.navExpanded {
+		t.Fatal("点「折叠侧边栏」后没有收起")
+	}
+	only("展开侧边栏")
+	noSeamHandle()
+}
