@@ -528,9 +528,9 @@ func TestPandoraCardShowsOneResultAtATime(t *testing.T) {
 	}
 }
 
-// 金币窗口的今日页不再写「开启请到站点操作」：那一行改成入口，点开主
-// 窗口里的潘多拉抽卡弹窗。
-func TestCoinWindowPandoraRowOpensWindow(t *testing.T) {
+// 金币窗口不再放潘多拉入口：它和签到一样收在标题栏「我的」的账号菜单里。
+// 即使金币页读到了盲盒状态，窗口里也不该出现前往抽卡的入口。
+func TestCoinWindowHasNoPandoraEntry(t *testing.T) {
 	a := pandoraTestApp(t, false)
 	a.coins.baseLoaded = true
 	a.coins.todayLoaded = true
@@ -540,19 +540,13 @@ func TestCoinWindowPandoraRowOpensWindow(t *testing.T) {
 	}
 	tt := ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
 	tt.Frame()
-	if tt.HasText("开启请到站点操作") {
-		t.Errorf("金币窗口还在让用户去站点开盲盒：%q", tt.Texts())
+	for _, forbidden := range []string{"打开潘多拉", "潘多拉盲盒", "开启请到站点操作"} {
+		if _, ok := tt.Find(forbidden); ok {
+			t.Errorf("金币窗口不该出现潘多拉入口 %q：%q", forbidden, tt.Texts())
+		}
 	}
-	if !tt.HasText("打开潘多拉") {
-		t.Fatalf("金币窗口缺少潘多拉入口：%q", tt.Texts())
-	}
-	opened := 0
-	a.onPandoraOpen = func() { opened++ }
-	if err := tt.Click("潘多拉盲盒"); err != nil {
-		t.Fatalf("点击金币窗口的潘多拉入口失败：%v", err)
-	}
-	if opened != 1 {
-		t.Errorf("金币窗口的潘多拉入口没有打开窗口：opened=%d", opened)
+	if tt.HasText("金币雨") {
+		t.Errorf("金币窗口不该展示盲盒事件：%q", tt.Texts())
 	}
 }
 

@@ -15,10 +15,10 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 金币页的数据层。这一页是独立的金币窗口（见 coins_window.go），入口是
-// 主窗口标题栏上登录账号左侧的金币数。除签到外都是只读端点，与
-// api-economy.md 的「金币查询 / 签到 / 榜单」一一对应；标「需开通」的端点
-// 失败时只降级展示，不参与授权弹窗。
+// 金币页的数据层。这一页是独立的金币窗口（见 coins_window.go），入口收在
+// 标题栏「我的」的账号菜单里。除签到外都是只读端点，与 api-economy.md 的
+// 「金币查询 / 签到 / 榜单」一一对应；标「需开通」的端点失败时只降级展示，
+// 不参与授权弹窗。
 //
 //	GET  /v1/me/coins/balance              余额
 //	GET  /v1/me/coins/transactions         金币流水（分页 + 日期 / reason 过滤，无 limit）
@@ -31,11 +31,11 @@ import (
 //	GET  /v1/coins/ranking                 金币排行榜（需开通）
 //	GET  /v1/pandora/today                 今日盲盒状态（需开通，只读）
 //
-// 签到是金币窗口里唯一的写操作：它没有请求体、没有幂等键，今日重复签到由
-// 服务端以 409 conflict 拒绝。开盲盒、竞猜、兑换、解锁等其它会改变金币的
-// 操作仍然不做，界面上也不提供入口；发帖、回复、表态与打赏在各自的页面里，
-// 成功后统一发出金币变动事件（见 coin_events.go），本页已经加载过的数据会
-// 跟着刷新。
+// 签到是这里唯一的写操作：它没有请求体、没有幂等键，今日重复签到由服务端以
+// 409 conflict 拒绝。入口收在账号菜单里（见 profile_ui.go），金币窗口只展示
+// 状态。开盲盒、竞猜、兑换、解锁等其它会改变金币的操作仍然不做，界面上也不
+// 提供入口；发帖、回复、表态与打赏在各自的页面里，成功后统一发出金币变动
+// 事件（见 coin_events.go），本页已经加载过的数据会跟着刷新。
 const (
 	coinBalancePath        = "/v1/me/coins/balance"
 	coinBalanceRankingPath = "/v1/me/coins/balance-with-ranking"

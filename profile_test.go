@@ -463,26 +463,37 @@ func TestHeaderAvatarOpensProfile(t *testing.T) {
 	}
 }
 
-// 账号菜单收着金币、潘多拉与「我的」三个入口，点任一行都先收起气泡再进页面。
-func TestAccountMenuRoutesToThreePages(t *testing.T) {
+// 账号菜单收着签到、金币、潘多拉与「我的」四个入口，点任一行都先收起气泡
+// 再进对应页面。
+func TestAccountMenuRoutesToFourPages(t *testing.T) {
 	freezePandoraNow(t)
 	a := profileWindowApp(t)
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
 	openAccountMenu(t, tt)
-	for _, want := range []string{"金币", "潘多拉", "我的"} {
+	for _, want := range []string{"签到", "金币", "潘多拉", "我的"} {
 		if !tt.HasText(want) {
 			t.Errorf("账号菜单缺少 %q：%q", want, tt.Texts())
 		}
 	}
 
 	calls := 0
+	a.onSignIn = func() { calls++ }
+	if err := tt.Click("签到"); err != nil {
+		t.Fatalf("点签到入口失败：%v", err)
+	}
+	tt.Frame()
+	if calls != 1 || a.profileMenuOpen {
+		t.Errorf("点签到应提交签到并收起气泡：calls=%d, open=%v", calls, a.profileMenuOpen)
+	}
+
 	a.onCoinsOpen = func() { calls++ }
+	openAccountMenu(t, tt)
 	if err := tt.Click("金币"); err != nil {
 		t.Fatalf("点金币入口失败：%v", err)
 	}
 	tt.Frame()
-	if calls != 1 || a.profileMenuOpen {
+	if calls != 2 || a.profileMenuOpen {
 		t.Errorf("点金币应打开金币窗口并收起气泡：calls=%d, open=%v", calls, a.profileMenuOpen)
 	}
 
@@ -492,7 +503,7 @@ func TestAccountMenuRoutesToThreePages(t *testing.T) {
 		t.Fatalf("点潘多拉入口失败：%v", err)
 	}
 	tt.Frame()
-	if calls != 2 || a.profileMenuOpen {
+	if calls != 3 || a.profileMenuOpen {
 		t.Errorf("点潘多拉应打开抽卡弹窗并收起气泡：calls=%d, open=%v", calls, a.profileMenuOpen)
 	}
 	if a.pandora == nil || !a.pandora.open {
@@ -508,7 +519,7 @@ func TestAccountMenuRoutesToThreePages(t *testing.T) {
 		t.Fatalf("点「我的」入口失败：%v", err)
 	}
 	tt.Frame()
-	if calls != 3 || a.profileMenuOpen {
+	if calls != 4 || a.profileMenuOpen {
 		t.Errorf("点「我的」应打开窗口并收起气泡：calls=%d, open=%v", calls, a.profileMenuOpen)
 	}
 }

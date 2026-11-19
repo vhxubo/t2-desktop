@@ -146,7 +146,7 @@ func (a *app) profileTag(c *ui.Context, name string) {
 	tag.Children(func() {
 		a.profileTagIdentity(c, name)
 	})
-	tag.Label("我的").Tooltip("打开账号菜单：金币、潘多拉与「我的」")
+	tag.Label("我的").Tooltip("打开账号菜单：签到、金币、潘多拉与「我的」")
 	// Lobe 的 Popover 点锚点开合、点窗外与 Esc 关闭；气泡挂在账号标识下方。
 	// 锚点本身不再挂 OnClick：点它只开合气泡，进哪个页面在气泡里选。
 	lobeoverlay.Popover(c, tag, &a.profileMenuOpen, lobeoverlay.PopoverProps{
@@ -175,11 +175,12 @@ func (a *app) profileTagIdentity(c *ui.Context, name string) {
 	})
 }
 
-// profileMenuPanel 是账号菜单气泡的内容：金币、潘多拉与「我的」三个入口。
-// 金币行带余额，潘多拉行沿用动态名字与「可抽」角标，三个入口点一下都先收起
-// 气泡再进对应页面。
+// profileMenuPanel 是账号菜单气泡的内容：签到、金币、潘多拉与「我的」四个
+// 入口。金币行带余额，签到行带今日状态，潘多拉行沿用动态名字与「可抽」角标；
+// 点任一行都先收起气泡再进对应页面。
 func (a *app) profileMenuPanel(c *ui.Context) {
 	ui.Column(c).Width(236).Gap(2).Children(func() {
+		a.profileMenuSignRow(c)
 		a.profileMenuCoinsRow(c)
 		a.profileMenuPandoraRow(c)
 		a.profileMenuMineRow(c)
@@ -214,6 +215,29 @@ func (a *app) profileMenuRow(c *ui.Context, icon *ui.SVG, label, accessName, tip
 		a.profileMenuOpen = false
 		goAction()
 	}
+}
+
+// profileMenuSignRow 是账号菜单的签到入口：显示今日签到状态，点一下直接提交
+// 签到，结果由 toast 报告。金币窗口里不再放签到按钮，入口统一收在这里。
+func (a *app) profileMenuSignRow(c *ui.Context) {
+	tk := lobetheme.TokensOf(c)
+	status := "签到领金币"
+	if cs := a.coins; cs != nil {
+		switch {
+		case cs.signBusy:
+			status = "正在签到…"
+		case cs.sign.Known && cs.sign.Signed:
+			status = "今日已签到"
+			if cs.sign.Streak > 0 {
+				status += fmt.Sprintf(" · 连续 %d 天", cs.sign.Streak)
+			}
+		case cs.sign.Known:
+			status = "今日未签到"
+		}
+	}
+	a.profileMenuRow(c, lucide.CalendarCheck2(), "签到", "签到", "提交今日签到并领取金币", func() {
+		ui.Text(c, status).FontSize(11).TextColor(tk.TextSecondary).SingleLine()
+	}, func() { a.signInNow() })
 }
 
 // profileMenuCoinsRow 是账号菜单的金币入口：金币图标 + 千分位余额（还没读到

@@ -777,9 +777,9 @@ func TestCoinBreakdownRangeChipsInUI(t *testing.T) {
 	}
 }
 
-// 金币页唯一会改变金币的入口是签到。按钮只在今天还没签到时出现；开盲盒、
-// 打赏等其它写操作仍然只引导用户去站点。
-func TestCoinPageOnlySignsAndNeverOtherWrites(t *testing.T) {
+// 金币窗口只展示状态，不再放写操作入口：签到与潘多拉都收在标题栏「我的」的
+// 账号菜单里。今日签到状态仍要看得见。
+func TestCoinPageHasNoWriteEntries(t *testing.T) {
 	a := testApp(t)
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
 		t.Fatal(err)
@@ -787,12 +787,12 @@ func TestCoinPageOnlySignsAndNeverOtherWrites(t *testing.T) {
 	a.coins.baseLoaded, a.coins.todayLoaded, a.coins.sign = true, true, coinSignStatus{Known: true, Signed: false}
 	tt := ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
 	tt.Frame()
-	if _, ok := tt.Find("立即签到"); !ok {
-		t.Fatalf("未签到时缺少签到按钮：%q", tt.Texts())
+	if !tt.HasText("今日未签到") {
+		t.Errorf("金币窗口不显示签到状态：%q", tt.Texts())
 	}
-	for _, forbidden := range []string{"签到领金币", "开盲盒", "打赏"} {
-		if tt.HasText(forbidden) {
-			t.Errorf("金币页不该出现写操作入口 %q：%q", forbidden, tt.Texts())
+	for _, forbidden := range []string{"立即签到", "签到领金币", "开盲盒", "打赏", "打开潘多拉", "潘多拉盲盒"} {
+		if _, ok := tt.Find(forbidden); ok {
+			t.Errorf("金币窗口不该出现入口 %q：%q", forbidden, tt.Texts())
 		}
 	}
 	// 金币窗口自带标题栏与窗口按钮，和通知 / 设置窗口一致。
@@ -960,9 +960,9 @@ func TestCoinSignNeedsWriteEconomyScope(t *testing.T) {
 	}
 }
 
-// 签到按钮接在金币窗口的余额卡片里：未签到时出现，点一下真的提交；结果以
-// 金币窗口自己的 toast 报告，签完之后按钮消失。
-func TestCoinSignButtonSubmitsAndReportsToast(t *testing.T) {
+// 账号菜单的签到入口：点一下真的提交签到，气泡随后收起；金币窗口里不再有
+// 这颗按钮。签到成功后气泡再打开时显示已签到。
+func TestAccountMenuSignSubmits(t *testing.T) {
 	var posts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -990,29 +990,30 @@ func TestCoinSignButtonSubmitsAndReportsToast(t *testing.T) {
 	a.coins.baseLoaded, a.coins.balance, a.coins.balanceOK = true, 100, true
 	a.coins.todayLoaded = true
 	a.coins.sign = coinSignStatus{Known: true, Signed: false}
-	tt := ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
+	called := 0
+	a.onSignIn = func() { called++ }
+	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
-	if _, ok := tt.Find("立即签到"); !ok {
-		t.Fatalf("未签到时缺少签到按钮：%q", tt.Texts())
+	openAccountMenu(t, tt)
+	if !tt.HasText("今日未签到") {
+		t.Fatalf("账号菜单不显示签到状态：%q", tt.Texts())
 	}
-	if err := tt.Click("立即签到"); err != nil {
-		t.Fatalf("点击签到失败：%v", err)
+	if err := tt.Click("签到"); err != nil {
+		t.Fatalf("点账号菜单的签到入口失败：%v", err)
+	}
+	if called != 1 || a.profileMenuOpen {
+		t.Errorf("点签到应提交并收起气泡：called=%d, open=%v", called, a.profileMenuOpen)
 	}
 	waitCoin(t, "点击签到提交", func() bool {
 		return posts.Load() == 1 && !a.coins.signBusy && a.coins.sign.Signed
 	})
-
-	tt = ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
-	tt.Frame()
-	if !tt.HasText("获得 5 金币 · 连续 6 天") {
-		t.Fatalf("金币窗口没有显示签到结果的 toast：%q", tt.Texts())
+	// 再开气泡，状态应变成已签到。
+	openAccountMenu(t, tt)
+	if !tt.HasText("今日已签到") {
+		t.Errorf("签到后账号菜单状态没更新：%q", tt.Texts())
 	}
 	if _, ok := tt.Find("立即签到"); ok {
-		t.Errorf("已签到后仍显示签到按钮：%q", tt.Texts())
-	}
-	tt.Advance(6 * time.Second)
-	if tt.HasText("获得 5 金币 · 连续 6 天") {
-		t.Errorf("签到提示过期后还留在窗口里，说明它是内联文字而不是 toast：%q", tt.Texts())
+		t.Error("金币窗口的签到按钮不该出现在账号菜单里")
 	}
 }
 
@@ -1159,16 +1160,15 @@ func TestCoinWindowMinimumSize(t *testing.T) {
 		}
 	}
 
-	// 未签到时多出一颗签到按钮，最小尺寸下它也不能被挤出窗口。
+	// 未签到时仍只显示状态，不再有签到按钮；最小尺寸下状态也不能被挤出窗口。
 	a.coins.sign = coinSignStatus{Known: true, Signed: false}
 	tt = ui.NewTester(a.coinWindowView, coinWinMinWidth, coinWinMinHeight)
 	tt.Frame()
-	r, ok := tt.Find("立即签到")
-	if !ok {
-		t.Fatalf("最小窗口下缺少签到按钮：%q", tt.Texts())
+	if !tt.HasText("今日未签到") {
+		t.Fatalf("最小窗口下缺少签到状态：%q", tt.Texts())
 	}
-	if r.X < 0 || r.X+r.W > coinWinMinWidth {
-		t.Errorf("签到按钮超出 %d 宽的窗口：x=%.0f 宽 %.0f", coinWinMinWidth, r.X, r.W)
+	if _, ok := tt.Find("立即签到"); ok {
+		t.Error("金币窗口不该有签到按钮")
 	}
 }
 

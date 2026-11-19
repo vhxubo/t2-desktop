@@ -143,12 +143,14 @@ type app struct {
 	// 测试不装插件，点「检查更新」只走测试钩子，不会碰 updater 的主循环。
 	updates bool
 	// onSettingsOpen / onUpdateCheck / onCoinsOpen / onPandoraOpen /
-	// onProfileOpen 是测试钩子：无窗口时用来确认按钮确实接上了动作。生产为 nil。
+	// onProfileOpen / onSignIn 是测试钩子：无窗口时用来确认按钮确实接上了
+	// 动作。生产为 nil。
 	onSettingsOpen func()
 	onUpdateCheck  func()
 	onCoinsOpen    func()
 	onPandoraOpen  func()
 	onProfileOpen  func()
+	onSignIn       func()
 	onAboutOpen    func()
 
 	tab     int

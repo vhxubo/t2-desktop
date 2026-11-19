@@ -20,9 +20,9 @@ import (
 
 // 金币窗口的界面：标题栏下面是余额 / 今日获得 / 签到状态，再按「今日、历史、
 // 统计、排行、兑换」切换。窗口本身在 coins_window.go；这里只画窗口里的内容。
-// 金币窗口里的写操作只有签到（POST /v1/me/sign）：余额卡片里有一颗签到
-// 按钮，结果以 toast 报告。发帖、回复、表态与打赏在各自的页面里，成功后发出
-// 金币变动事件（见 coin_events.go），本页已经加载过的块会一起刷新。
+// 窗口里没有写操作：签到与潘多拉的入口都收在标题栏「我的」的账号菜单里（见
+// profile_ui.go），这里只展示签到状态。发帖、回复、表态与打赏在各自的页面里，
+// 成功后发出金币变动事件（见 coin_events.go），本页已经加载过的块会一起刷新。
 //
 // 整套界面走 Lobe UI：分段、按钮、卡片、标签、提示与空状态都用 lobe-mygo 的
 // 组件，颜色取 TokensOf(c)，与通知 / 设置 / 我的等窗口同一套设计语言。转圈沿用
@@ -177,30 +177,14 @@ func (a *app) coinBalanceCard(c *ui.Context, cs *coinState) {
 						Type: display.TextSecondary, FontSize: 12, Rows: 1,
 					})
 				default:
-					a.coinSignButton(c, cs)
+					// 签到入口统一收在标题栏「我的」的账号菜单里，这里只报状态。
+					display.Text(c, "今日未签到", display.TextProps{
+						Type: display.TextSecondary, FontSize: 12, Rows: 1,
+					})
 				}
 			})
 		})
 	})
-}
-
-// coinSignButton 是余额卡片里的签到按钮：只在今天还没签到时出现。签到会
-// 改变金币，结果一律交给 toast（见 signInNow），按钮本身不写结果文字。
-func (a *app) coinSignButton(c *ui.Context, cs *coinState) {
-	tip := "签到领金币"
-	if cs.signErr != "" {
-		// 读签到状态失败不影响提交：一次签到也可能把缺的权限补出来。
-		tip = "签到状态未知，仍可尝试签到"
-	}
-	// 可访问名与可见文字分开：流水行里的「签到」也是同一个词，读屏与测试
-	// 需要能准确指到这颗按钮。
-	b := action.Button(c, "签到", action.ButtonProps{
-		Size: lobetheme.Small, Variant: action.Primary,
-	})
-	b.Label("立即签到").Tooltip(tip)
-	if b.Clicked() {
-		a.signInNow()
-	}
 }
 
 // signInNow 提交今日签到。未登录或缺少 write:economy 时走全局授权弹窗，
@@ -208,6 +192,9 @@ func (a *app) coinSignButton(c *ui.Context, cs *coinState) {
 // 处理。成功后先用响应里的状态点亮按钮，再刷新余额与今日明细，因为签到会
 // 同时改变金币与流水。
 func (a *app) signInNow() {
+	if a.onSignIn != nil {
+		a.onSignIn()
+	}
 	cs := a.coins
 	if cs == nil || cs.signBusy {
 		return
@@ -349,9 +336,6 @@ func (a *app) coinTodayView(c *ui.Context, cs *coinState) {
 				}
 			}
 
-			if cs.pandoraSeen {
-				a.coinPandoraLine(c, cs)
-			}
 		})
 	})
 	list.Grow(1).FillWidth().MinHeight(0)
@@ -693,37 +677,6 @@ func (a *app) coinRankRow(c *ui.Context, e coinRankEntry) {
 			a.openExternal(siteBaseURL + "/user/" + url.PathEscape(e.Username) + "/about")
 		})
 	}
-}
-
-func (a *app) coinPandoraLine(c *ui.Context, cs *coinState) {
-	tk := lobetheme.TokensOf(c)
-	status := "今日盲盒：暂无"
-	switch {
-	case cs.pandora.OpenedToday:
-		status = "今日盲盒：已开启"
-	case cs.pandora.CanOpen:
-		status = "今日盲盒：可开启"
-	case cs.pandora.HasBox:
-		status = "今日盲盒：已领取"
-	}
-	row := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockFilled}).
-		FillWidth().Padding(8, 10).Gap(8)
-	row.Children(func() {
-		display.Icon(c, lucide.Gift(), display.IconProps{Size: display.IconSmall}).
-			TextColor(tk.Primary)
-		display.Text(c, status, display.TextProps{FontSize: 11, Rows: 1})
-		if cs.pandora.EventTitle != "" {
-			display.Text(c, "· "+cs.pandora.EventTitle, display.TextProps{
-				Type: display.TextSecondary, FontSize: 11, Rows: 1,
-			})
-		}
-		ui.Spacer(c).Grow(1)
-		display.Text(c, "打开潘多拉", display.TextProps{
-			Type: display.TextInfo, FontSize: 10, Rows: 1,
-		})
-	})
-	row.Label("潘多拉盲盒").Tooltip("打开潘多拉抽卡弹窗，抽取盲盒").
-		OnClick(a.showPandora)
 }
 
 func (a *app) coinTransactionRow(c *ui.Context, tx coinTransaction, today bool) {
