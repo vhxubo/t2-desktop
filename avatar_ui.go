@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 )
 
 // 「我的」资料头的换头像入口与气泡。数据、上传与状态回填在 avatar.go。
@@ -40,7 +41,11 @@ func (a *app) profileAvatarEntry(c *ui.Context, ps *profileState) {
 	})
 	b.Label("更换头像").Tooltip("更换头像；首次免费，之后可能扣除金币")
 	b.OnClick(func() { a.openAvatarPopup(ps) })
-	ui.Popover(c, b, &ps.avatarOpen, func() {
+	// Lobe 的气泡：点锚点开合、点窗外与 Esc 关闭，面板用 Lobe token。
+	// 气泡挂在资料头图标下方，不遮住头像本身。
+	lobeoverlay.Popover(c, b, &ps.avatarOpen, lobeoverlay.PopoverProps{
+		Placement: lobeoverlay.Bottom,
+	}, func() {
 		a.profileAvatarPanel(c, ps)
 	})
 }

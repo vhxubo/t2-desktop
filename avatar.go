@@ -88,7 +88,9 @@ func (c *Client) deleteAvatar(ctx context.Context) (string, error) {
    本机状态：会话里的头像、账号索引与「我的」资料头
 --------------------------------------------------------------- */
 
-// openAvatarPopup 打开「更换头像」气泡。未登录时先走全局授权弹窗。
+// openAvatarPopup 在点「更换头像」时确认登录。气泡的开合由 Lobe 的 Popover
+// 自己处理（点锚点切换、点窗外与 Esc 关闭），这里只负责未登录时先走授权，并在
+// 授权回来后把气泡打开。
 func (a *app) openAvatarPopup(ps *profileState) {
 	if ps == nil || a.profile != ps || ps.avatarBusy {
 		return
@@ -96,12 +98,12 @@ func (a *app) openAvatarPopup(ps *profileState) {
 	if !a.auth.loggedIn() {
 		a.requestLoginFor(toastProfile, "登录后才能更换头像。", func() {
 			if a.profile == ps {
-				a.openAvatarPopup(ps)
+				ps.avatarOpen = true
+				ps.avatarErr = ""
 			}
 		})
 		return
 	}
-	ps.avatarOpen = true
 	ps.avatarErr = ""
 }
 
