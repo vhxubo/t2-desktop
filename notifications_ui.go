@@ -7,6 +7,13 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/choice"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/field"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
@@ -14,6 +21,11 @@ import (
 // 的铃铛（带未读数值）是它的入口，任何窗口、任何 goroutine 都可以调用
 // showNotifications 把它打开。点开一条消息，帖子与评论回到主窗口里打开。
 // 数据、长连接与已读落账在 notify.go。
+//
+// 界面整体走 Lobe UI：卡片、标签、按钮、勾选框、搜索框、转圈与空状态都用
+// lobe-mygo 的组件，颜色取 TokensOf(c)，与主窗口及各附属窗口同一套观感。
+// 只有铃铛的红点角标仍是自绘 Box：它压在图标右下角且不能越出标题栏，像素
+// 几何被测试断言，Lobe 的 Badge 固定落在内容右上角，不能替代这一定位。
 
 // 通知窗口的默认尺寸。用 StateKey 记住用户把它放在哪、拉成多大，所以这里
 // 只是首次打开时的默认值。
@@ -63,7 +75,8 @@ func (a *app) notificationBell(c *ui.Context) {
 		// 数字离图标也远；现在数值贴在铃铛上，看起来就是一个角标。
 		ui.Box(c).Width(16).Height(16).Shrink(0).Children(func() {
 			if idx >= 0 {
-				ui.Icon(c, tabIcons[idx]).Size(16, 16).TextColor(ink)
+				display.Icon(c, tabIcons[idx], display.IconProps{Size: display.IconSmall}).
+					FontSize(16).TextColor(ink)
 			}
 			if count := unreadCountText(a.unread); count != "" {
 				// 角标外圈用铃铛底色描一圈，压住铃铛线条处也留得出一条缝，
@@ -75,7 +88,8 @@ func (a *app) notificationBell(c *ui.Context) {
 				ui.Box(c).Absolute().Right(-3).Bottom(-3).
 					MinWidth(14).Height(14).Padding(0, 3).Radius(999).Center().
 					Border(1, ring).Background(t.Danger).Children(func() {
-					ui.Text(c, count).FontSize(9).Bold().SingleLine().TextColor(ui.Hex("#ffffff"))
+					display.Text(c, count, display.TextProps{Strong: true, FontSize: 9, Rows: 1}).
+						TextColor(ui.RGB(255, 255, 255))
 				})
 			}
 		})
@@ -218,10 +232,10 @@ func (a *app) showMainWindow() {
 // 所以这里不需要遮罩，也不占主窗口的位置。
 func (a *app) notificationsWindowView(c *ui.Context) {
 	a.applyTheme(c)
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// 消息行等入口可能把链接交给系统浏览器，服务取本窗口自己的那份。
 	a.srv = c.Services()
-	c.Root().Background(t.Background)
+	c.Root().Background(tk.BgLayout)
 	// 标记已读等操作的结果以 toast 显示在这个窗口里。
 	a.drainToasts(c, a.claimsToasts(toastNotifications))
 	// Esc 收起窗口而不是退出：消息中心随时可以再打开。
@@ -239,19 +253,25 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 
 	ui.Column(c).Fill().Children(func() {
 		// 自绘标题栏：拖动窗口、双击最大化，右上角是最小化与关闭，按钮与
-		// 主窗口同一套画法。
+		// 主窗口同一套画法。图标用 Lucide 铃铛，文字走 Lobe 的 display.Text。
 		ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
-			Background(t.Surface).DragWindow().Children(func() {
+			Background(tk.BgLayout).DragWindow().Children(func() {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, tabIcons[idx]).Size(16, 16).TextColor(t.Accent)
-				ui.Text(c, "通知").FontSize(13).Bold().SingleLine()
-				ui.Text(c, unreadText).FontSize(11).TextColor(t.TextMuted).SingleLine()
-				switch {
-				case a.streamLive:
-					ui.Text(c, "· 已连接").FontSize(11).TextColor(t.Success).SingleLine()
-				default:
-					ui.Text(c, "· 未连接").FontSize(11).TextColor(t.TextMuted).SingleLine()
+				display.Icon(c, lucide.Bell(), display.IconProps{Size: display.IconSmall}).
+					TextColor(tk.Primary)
+				display.Text(c, "通知", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
+				display.Text(c, unreadText, display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
+				if a.streamLive {
+					display.Text(c, "· 已连接", display.TextProps{
+						Type: display.TextSuccess, FontSize: 11, Rows: 1,
+					})
+				} else {
+					display.Text(c, "· 未连接", display.TextProps{
+						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+					})
 				}
 				a.accountWindowTag(c)
 			})
@@ -266,21 +286,16 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 				}
 			})
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
-		ui.Column(c).Grow(1).MinHeight(0).Padding(10, 12).Gap(8).Children(func() {
+		ui.Column(c).Grow(1).MinHeight(0).Padding(10, 12).Gap(10).Children(func() {
 			a.notificationActions(c, st)
 			// 关键词搜索与分段筛选可以叠加：接口把 keyword 和 type / unread_only
 			// 当独立参数处理。
 			a.notificationSearchRow(c, st)
-
 			// 分段筛选直接映射接口的 type / unread_only，切换后按新参数重拉。
-			ui.Row(c).FillWidth().Gap(6).Wrap().Children(func() {
-				for i := range notificationFilters {
-					a.notificationFilterChip(c, i, st)
-				}
-			})
-			ui.Divider(c)
+			a.notificationFilterRow(c, st)
+			layout.Divider(c, layout.DividerProps{})
 
 			a.notificationsList(c, st)
 		})
@@ -291,21 +306,32 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 
 // notificationSearchRow 是通知窗口里的关键词搜索：在自己的通知里按内容
 // 过滤（接口的 keyword 参数，1–50 字，忽略大小写的包含匹配）。只有点「搜索」
-// 才发请求——接口按次计配额，用户还在打字时不该把中间状态发出去。
+// 或回车才发请求——接口按次计配额，用户还在打字时不该把中间状态发出去。
 func (a *app) notificationSearchRow(c *ui.Context, st *tabState) {
-	t := c.Theme()
-	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-		ui.Icon(c, searchIcon).Size(14, 14).TextColor(t.TextMuted)
-		ui.TextInput(c, &st.keywordDraft).Label("搜索通知内容").
-			Placeholder("在通知里搜内容（1–50 字）").
-			MaxLength(notificationKeywordMax).Grow(1).MinWidth(0)
-		a.smallAction(c, "搜索", st.loading, func() {
-			a.applyNotificationKeyword(st, st.keywordDraft)
-		})
-		if st.keyword != "" {
-			a.smallAction(c, "清除搜索", false, func() {
-				a.applyNotificationKeyword(st, "")
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		// field.Input 返回的是内层输入框，借 Column 的 stretch 把外层那一行
+		// 也撑满，再给输入框本身接上无障碍名与长度上限。
+		ui.Box(c).Grow(1).MinWidth(0).Children(func() {
+			in := composeInput(c, &st.keywordDraft, field.InputProps{
+				Placeholder: "在通知里搜内容（1–50 字）",
+				Size:        lobetheme.Small,
+				Prefix:      lucide.Search(),
 			})
+			in.Label("搜索通知内容").MaxLength(notificationKeywordMax)
+		})
+		// 搜索按钮始终可点：applyNotificationKeyword 会拦掉相同关键词的重复
+		// 请求，没必要在列表加载时把它画成淡蓝的禁用态。
+		if action.Button(c, "搜索", action.ButtonProps{
+			Size: lobetheme.Small, Variant: action.Primary,
+		}).Clicked() {
+			a.applyNotificationKeyword(st, st.keywordDraft)
+		}
+		if st.keyword != "" {
+			if action.Button(c, "清除搜索", action.ButtonProps{
+				Size: lobetheme.Small, Variant: action.Text,
+			}).Clicked() {
+				a.applyNotificationKeyword(st, "")
+			}
 		}
 	})
 }
@@ -341,7 +367,6 @@ func (a *app) applyNotificationKeyword(st *tabState, keyword string) {
 // notificationActions 是窗口里的操作行：全部已读、已读本页、勾选批量、
 // 刷新与原生通知开关。勾选批量只在真勾了消息时出现，避免空按钮占位。
 func (a *app) notificationActions(c *ui.Context, st *tabState) {
-	t := c.Theme()
 	ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
 		a.smallAction(c, "全部已读", st.markingAll || (a.unread == 0 && !hasUnreadItem(st.items)),
 			func() { a.markAllNotificationsRead(toastNotifications) })
@@ -361,7 +386,9 @@ func (a *app) notificationActions(c *ui.Context, st *tabState) {
 		a.smallAction(c, "刷新", st.loading, func() { a.reloadNotifications() })
 		switch {
 		case a.notify == nil:
-			ui.Text(c, "原生通知不可用").FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, "原生通知不可用", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		case a.nativeNotify:
 			a.smallAction(c, "原生通知：开", false, func() { a.nativeNotify = false })
 		default:
@@ -370,52 +397,94 @@ func (a *app) notificationActions(c *ui.Context, st *tabState) {
 	})
 }
 
+// smallAction 是各窗口复用的一枚轻量文字按钮：直接用 Lobe 的 Button（文字
+// 变体自带透明底与悬停底色），不再给通用 ui.Button 手涂背景、描边与字号。
+// 操作结果仍由 toast 报告，所以这里不留内联反馈。
+func (a *app) smallAction(c *ui.Context, label string, disabled bool, onClick func()) {
+	b := action.Button(c, label, action.ButtonProps{Size: lobetheme.Small, Variant: action.Text})
+	b.Disabled(disabled)
+	if b.Clicked() {
+		onClick()
+	}
+}
+
+// notificationFilterRow 用 Lobe 的 Segmented 画分段筛选：选项直接来自
+// notificationFilters 的文案，绑定 st.filter；切换后走 setNotificationFilter
+// 清掉旧页并按新参数重拉。Segmented 自己带滑动指示块与选中配色。
+func (a *app) notificationFilterRow(c *ui.Context, st *tabState) {
+	options := make([]string, len(notificationFilters))
+	for i := range notificationFilters {
+		options[i] = notificationFilters[i].Label
+	}
+	selected := st.filter
+	action.Segmented(c, &selected, options, action.SegmentedProps{
+		Size: lobetheme.Small, Block: true,
+	}).Tooltip(notificationFilterAt(st.filter).Hint)
+	if selected != st.filter {
+		a.setNotificationFilter(selected)
+	}
+}
+
 // notificationsList 画窗口里的消息区：加载中、错误、空状态与列表。
 func (a *app) notificationsList(c *ui.Context, st *tabState) {
-	t := c.Theme()
 	switch {
 	case st.loading && len(st.items) == 0:
-		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(28, 28)
-			ui.Text(c, "正在加载通知…").TextColor(t.TextMuted)
+		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(10).Children(func() {
+			feedback.Spin(c, feedback.SpinProps{CustomSize: 28}, nil)
+			display.Text(c, "正在加载通知…", display.TextProps{
+				Type: display.TextSecondary, Rows: 1,
+			})
 		})
 	case st.err != "":
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(12).Padding(24).Children(func() {
-			ui.Text(c, "加载失败").FontSize(16).Bold()
-			ui.Text(c, st.err).TextColor(t.Danger).MaxLines(4)
-			if ui.Button(c, "重试").Clicked() {
-				a.reloadNotifications()
-			}
-			if strings.Contains(st.err, "登录") || strings.Contains(st.err, "授权") {
-				if ui.Button(c, "去授权").Clicked() {
-					a.requestLoginFor(toastNotifications, "登录并授权后才能继续查看「通知」。",
-						func() { a.reloadNotifications() })
+			feedback.Alert(c, "加载失败", feedback.AlertProps{
+				Type: feedback.Error, Variant: feedback.Soft,
+				Description: st.err, Selectable: true,
+			})
+			ui.Row(c).Gap(8).Children(func() {
+				if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+					a.reloadNotifications()
 				}
-			}
+				if strings.Contains(st.err, "登录") || strings.Contains(st.err, "授权") {
+					if action.Button(c, "去授权", action.ButtonProps{
+						Size: lobetheme.Small, Variant: action.Primary,
+					}).Clicked() {
+						a.requestLoginFor(toastNotifications, "登录并授权后才能继续查看「通知」。",
+							func() { a.reloadNotifications() })
+					}
+				}
+			})
 		})
 	case len(st.items) == 0:
 		// 关键词筛选没有结果与「本来就没有通知」是两回事：前者要给出关键词
 		// 与清除入口，后者才该建议去别的分类看看。
 		if st.keyword != "" {
-			ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Padding(24).Children(func() {
-				ui.Text(c, "没有匹配的通知").FontSize(15).Bold()
-				ui.Text(c, "没有找到包含「"+st.keyword+"」的消息。换个关键词，或者清除搜索。").
-					TextColor(t.TextMuted).MaxLines(3)
-				a.smallAction(c, "清除搜索", false, func() {
-					a.applyNotificationKeyword(st, "")
-				})
+			display.Empty(c, display.EmptyProps{
+				Icon:        lucide.Search(),
+				Title:       "没有匹配的通知",
+				Description: "没有找到包含「" + st.keyword + "」的消息。换个关键词，或者清除搜索。",
+				Action: func() {
+					if action.Button(c, "清除搜索", action.ButtonProps{
+						Size: lobetheme.Small,
+					}).Clicked() {
+						a.applyNotificationKeyword(st, "")
+					}
+				},
 			})
 			return
 		}
 		meta := notificationFilterAt(st.filter)
-		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Padding(24).Children(func() {
-			ui.Text(c, meta.EmptyTitle).FontSize(15).Bold()
-			ui.Text(c, meta.EmptyHint).TextColor(t.TextMuted).MaxLines(3)
-			if st.filter != notificationFilterAll {
-				if ui.Button(c, "查看全部").Clicked() {
-					a.setNotificationFilter(notificationFilterAll)
+		display.Empty(c, display.EmptyProps{
+			Icon: lucide.Inbox(), Title: meta.EmptyTitle, Description: meta.EmptyHint,
+			Action: func() {
+				if st.filter != notificationFilterAll {
+					if action.Button(c, "查看全部", action.ButtonProps{
+						Size: lobetheme.Small,
+					}).Clicked() {
+						a.setNotificationFilter(notificationFilterAll)
+					}
 				}
-			}
+			},
 		})
 	default:
 		idx := notificationTabIndex()
@@ -453,39 +522,6 @@ func hasUnreadItem(items []Item) bool {
 		}
 	}
 	return false
-}
-
-func (a *app) notificationFilterChip(c *ui.Context, index int, st *tabState) {
-	t := c.Theme()
-	option := notificationFilters[index]
-	active := st.filter == index
-	chip := ui.Button(c, option.Label).FontSize(12).Padding(3, 10).Radius(999)
-	if active {
-		chip.Background(t.Accent).TextColor(t.AccentText)
-	} else {
-		chip.Background(t.Surface).TextColor(t.TextMuted).Border(1, t.Border)
-	}
-	chip.Tooltip(option.Hint)
-	if chip.Clicked() && !active {
-		a.setNotificationFilter(index)
-	}
-}
-
-func (a *app) smallAction(c *ui.Context, label string, disabled bool, onClick func()) {
-	t := c.Theme()
-	button := ui.Button(c, label).
-		Background(ui.Transparent).
-		TextColor(t.Text).
-		FontSize(12).
-		Padding(2, 6).
-		Radius(6)
-	if button.Hovered() {
-		button.Background(t.SurfaceHover)
-	}
-	button.Disabled(disabled)
-	if button.Clicked() {
-		onClick()
-	}
 }
 
 func (a *app) setNotificationFilter(filter int) {
@@ -530,27 +566,23 @@ func (a *app) reloadNotifications() {
 }
 
 // notificationRow 一条消息就是一张和列表同宽的卡片：勾选框、未读点与「标为
-// 已读」都在卡片里，表态的表情与人名写在同一行。整张卡片可点，点开的是这条
-// 消息的目标。
+// 已读」都在卡片里，表态的表情与人名写在同一行。整张卡片是一张可点的 Lobe
+// Block，点开的是这条消息的目标。
 func (a *app) notificationRow(c *ui.Context, it Item) {
 	n := it.Notif
 	if n == nil {
 		return
 	}
-	t := c.Theme()
 	tk := lobetheme.TokensOf(c)
 	v := notificationViewOf(n)
 	unread := !n.IsRead
 	st := a.tabs[notificationTabIndex()]
 	reading := st != nil && st.reading[n.ID]
 
-	// 通知卡片沿用 Lobe 的描边容器：容器底色 + 次级描边，悬停铺 FillTertiary，
-	// 圆角取主题；与主页列表行同一套视觉语言。
-	card := ui.ButtonBase(c).FillWidth().Padding(12, 16).Radius(tk.BorderRadius).
-		Background(tk.BgContainer).Border(1, tk.BorderSecondary).Transition(listRowTransition)
-	if card.Hovered() {
-		card.Background(tk.FillTertiary)
-	}
+	// 通知卡片沿用 Lobe 的描边 Block：容器底色 + 次级描边，悬停铺 FillTertiary，
+	// 圆角取主题；与主页列表行、账号面板同一套视觉语言。
+	card := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockOutlined}).
+		FillWidth().Padding(12, 16).Gap(4)
 	card.Children(func() {
 		ui.Column(c).FillWidth().Gap(4).Children(func() {
 			// 卡片头：勾选框（仅未读）、未读点、类型、时间，未读时右上角是
@@ -559,21 +591,28 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 			ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 				if unread && st != nil {
 					checked := st.selected[n.ID]
-					ui.Checkbox(c, &checked, "").Shrink(0).
-						Label("勾选这条消息").Tooltip("勾选后可批量标记已读")
+					choice.Checkbox(c, &checked, "", choice.CheckboxProps{Size: 14}).
+						Shrink(0).Label("勾选这条消息").Tooltip("勾选后可批量标记已读")
 					if checked != st.selected[n.ID] {
 						setNotificationSelected(st, n.ID, checked)
 					}
 				}
 				if unread {
-					ui.Text(c, "●").FontSize(9).TextColor(tk.Primary)
+					feedback.Badge(c, feedback.BadgeProps{Color: tk.Primary}, nil).Shrink(0)
 				}
-				ui.Text(c, v.TypeLabel).FontSize(tk.FontSizeSM).Bold().TextColor(notificationToneColor(t, v.Tone))
+				display.Tag(c, v.TypeLabel, display.TagProps{
+					Size: lobetheme.Small, Color: notificationTagColor(v.Tone),
+					Variant: display.TagFilled, Round: true,
+				})
 				if v.ActorIsAlias {
-					ui.Text(c, "匿名").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
+					display.Text(c, "匿名", display.TextProps{
+						Type: display.TextSecondary, FontSize: tk.FontSizeSM, Rows: 1,
+					})
 				}
 				if when := relativeTime(n.CreatedAt); when != "" {
-					ui.Text(c, when).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
+					display.Text(c, when, display.TextProps{
+						Type: display.TextSecondary, FontSize: tk.FontSizeSM, Rows: 1,
+					})
 				}
 				ui.Spacer(c).Grow(1)
 				if unread {
@@ -602,19 +641,27 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 					// 表态消息但服务端没给表情和人名：补一个主语，句子不能只剩动词。
 					action = "有人" + action
 				}
-				ui.Text(c, action).FontSize(13).Bold().MaxLines(2)
+				display.Text(c, action, display.TextProps{Strong: true, FontSize: 13, Rows: 2})
 			}
 			if v.TargetTitle != "" {
-				ui.Text(c, "《"+v.TargetTitle+"》").FontSize(tk.FontSize).TextColor(tk.Text).SingleLine()
+				display.Text(c, "《"+v.TargetTitle+"》", display.TextProps{
+					FontSize: tk.FontSize, Rows: 1,
+				})
 			}
 			if v.Excerpt != "" {
-				ui.Text(c, v.Excerpt).FontSize(tk.FontSize).TextColor(tk.Text).MaxLines(3)
+				display.Text(c, v.Excerpt, display.TextProps{
+					FontSize: tk.FontSize, Rows: 3,
+				})
 			}
 			if v.Detail != "" {
-				ui.Text(c, v.Detail).FontSize(tk.FontSize).TextColor(notificationToneColor(t, v.DetailTone)).MaxLines(2)
+				display.Text(c, v.Detail, display.TextProps{
+					Type: notificationDetailTextType(v.DetailTone), FontSize: tk.FontSize, Rows: 2,
+				})
 			}
 			if len(v.Meta) > 0 {
-				ui.Text(c, strings.Join(v.Meta, " · ")).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription).MaxLines(2)
+				display.Text(c, strings.Join(v.Meta, " · "), display.TextProps{
+					Type: display.TextSecondary, FontSize: tk.FontSizeSM, Rows: 2,
+				})
 			}
 		})
 	})
@@ -632,18 +679,13 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 }
 
 // notificationReadAction 是未读消息卡片右上角的「标为已读」。它只是卡片里的
-// 一个小动作，不占一整列：字小、悬停换强调色，点它不会连带打开消息。
+// 一个小动作，不占一整列：Lobe 的文字按钮，悬停换强调色，点它不会连带打开消息。
 func (a *app) notificationReadAction(c *ui.Context, busy bool, onClick func()) {
-	t := c.Theme()
 	label := "标为已读"
 	if busy {
 		label = "正在标记…"
 	}
-	b := ui.Button(c, label).Background(ui.Transparent).FontSize(11).
-		Padding(1, 6).Radius(6).TextColor(t.TextMuted)
-	if b.Hovered() {
-		b.TextColor(t.Accent)
-	}
+	b := action.Button(c, label, action.ButtonProps{Size: lobetheme.Small, Variant: action.Text})
 	b.Disabled(busy).Tooltip("只把这一条标为已读")
 	if b.Clicked() {
 		onClick()
@@ -654,8 +696,8 @@ func (a *app) notificationReadAction(c *ui.Context, busy bool, onClick func()) {
 // 一行胶囊，不同表情不再各占一组括号；人名去重后只出现一次——同一个人用了两
 // 种表情也只写一个名字——名字之间用顿号相连，超出上限的人用「等 N 人」收尾。
 // 这一行后面接着的就是这条消息要说什么（「表态了你的帖子」）。
-func (a *app) notificationReactionLine(c *ui.Context, o notificationReactionOverview, action string) {
-	t := c.Theme()
+func (a *app) notificationReactionLine(c *ui.Context, o notificationReactionOverview, actionText string) {
+	tk := lobetheme.TokensOf(c)
 	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
 		for _, g := range o.Groups {
 			a.notificationReactionChip(c, g)
@@ -666,50 +708,68 @@ func (a *app) notificationReactionLine(c *ui.Context, o notificationReactionOver
 		}
 		for i, u := range names {
 			if i > 0 {
-				ui.Text(c, "、").FontSize(11).TextColor(t.TextMuted)
+				display.Text(c, "、", display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
 			}
 			a.userTag(c, userTagSpec{
 				Name:   u.Name,
 				Avatar: u.Avatar,
 				Label:  "@" + u.Name,
 				Size:   11,
-				Color:  t.TextMuted,
+				Color:  tk.TextSecondary,
 				Badges: u.Badges,
 			})
 		}
 		if others := notificationReactionOthers(o, len(names)); others > 0 {
-			ui.Textf(c, "等 %d 人", others).FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, fmt.Sprintf("等 %d 人", others), display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		}
-		ui.Text(c, action).FontSize(12).TextColor(t.Text)
+		display.Text(c, actionText, display.TextProps{FontSize: 12, Rows: 1})
 	})
 }
 
 // notificationReactionChip 是一枚表情胶囊：与详情页的表态摘要是同一套圆角
 // 胶囊。只有一次表态时不写数字，「👍 1」比「👍」更吵。
 func (a *app) notificationReactionChip(c *ui.Context, g notificationReactionGroup) {
-	t := c.Theme()
 	label := g.Emoji
 	if g.Count > 1 {
 		label = fmt.Sprintf("%s %d", g.Emoji, g.Count)
 	}
-	chip := ui.Box(c).Padding(1, 7).Radius(999).Shrink(0).Center().
-		Background(t.Background).Border(1, t.Border)
-	chip.Label(fmt.Sprintf("%s，%d 次表态", g.Emoji, g.Count))
-	chip.Children(func() {
-		ui.Text(c, label).FontSize(11).TextColor(t.TextMuted).SingleLine()
-	})
+	display.Tag(c, label, display.TagProps{
+		Size: lobetheme.Small, Variant: display.TagOutlined, Round: true,
+	}).Label(fmt.Sprintf("%s，%d 次表态", g.Emoji, g.Count))
 }
 
-func notificationToneColor(t *ui.Theme, tone string) ui.Color {
+// notificationTagColor 把消息语气映射成 Lobe Tag 的状态色，类型标签直接用
+// 组件自己的配色，不再给通用文本手涂颜色（空值是中性色）。
+func notificationTagColor(tone string) display.TagColor {
 	switch tone {
 	case "success":
-		return t.Success
+		return display.TagSuccess
 	case "warning":
-		return t.Warning
+		return display.TagWarning
 	case "danger":
-		return t.Danger
+		return display.TagError
 	case "primary", "info":
-		return t.Accent
+		return display.TagInfo
 	}
-	return t.TextMuted
+	return display.TagColor("")
+}
+
+// notificationDetailTextType 把补充文案的语气映射成 Lobe 文本的类型，
+// 颜色由 display.Text 按 token 给出。
+func notificationDetailTextType(tone string) display.TextType {
+	switch tone {
+	case "success":
+		return display.TextSuccess
+	case "warning":
+		return display.TextWarning
+	case "danger":
+		return display.TextDanger
+	case "primary", "info":
+		return display.TextInfo
+	}
+	return display.TextSecondary
 }
