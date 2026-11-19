@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/egoist/mygo/ui"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 )
 
 // 金币池（api-read.md 的 extra.reward_pool、api-economy.md 的「金币池」）
@@ -201,7 +202,9 @@ func (a *app) rewardPoolSection(c *ui.Context, d *detailState, p *rewardPoolInfo
 				if btn.Clicked() {
 					a.openRewardPoolPopup(d)
 				}
-				ui.Popover(c, btn, &d.pool.open, func() {
+				lobeoverlay.Popover(c, btn, &d.pool.open, lobeoverlay.PopoverProps{
+					Placement: lobeoverlay.Bottom,
+				}, func() {
 					a.rewardPoolPanel(c, d)
 				})
 			}
@@ -217,8 +220,9 @@ func (a *app) rewardPoolSection(c *ui.Context, d *detailState, p *rewardPoolInfo
    注资气泡
 --------------------------------------------------------------- */
 
-// openRewardPoolPopup 打开金币池注资气泡。未登录时先走全局授权弹窗，成功后
-// 同一次点击自动重开；金额为空或越界时先填最小值。
+// openRewardPoolPopup 给金币池注资气泡做准备。气泡的开合由 Lobe 的 Popover
+// 自己处理（点锚点切换、点窗外与 Esc 关闭），这里只负责未登录时先走授权，
+// 并在授权回来后打开气泡；金额为空或越界时先夹到合法区间。
 func (a *app) openRewardPoolPopup(d *detailState) {
 	if d == nil || a.detail != d {
 		return
@@ -226,12 +230,17 @@ func (a *app) openRewardPoolPopup(d *detailState) {
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能给金币池注资。", func() {
 			if a.detail == d {
-				a.openRewardPoolPopup(d)
+				d.pool.open = true
+				a.prepareRewardPoolAmount(d)
 			}
 		})
 		return
 	}
-	d.pool.open = true
+	a.prepareRewardPoolAmount(d)
+}
+
+// prepareRewardPoolAmount 把注资金额夹到 200～1000，并清掉上一次的错误。
+func (a *app) prepareRewardPoolAmount(d *detailState) {
 	d.pool.err = ""
 	if d.pool.amount < rewardPoolCoinsLo {
 		d.pool.amount = rewardPoolCoinsLo
