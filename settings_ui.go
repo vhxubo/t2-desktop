@@ -9,7 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 设置窗口的尺寸：比代理弹窗宽一些，放得下「代理 / 更新 / 图片缓存 / 图库」几块。
+// 设置窗口的尺寸：比代理弹窗宽一些，放得下「代理 / 图库 / 缓存 / 更新 / 窗口 / 外观」几页。
 const (
 	settingsWindowWidth  = 520
 	settingsWindowHeight = 700
@@ -17,17 +17,19 @@ const (
 	settingsWindowMinH   = 420
 )
 
-// 设置窗口按分类分页：五块内容各占一页，不再堆成一条要滚很久的长页面。
-// 标签固定在内容区上方；每页的草稿都绑在 app 字段上，切页不会丢。
+// 设置窗口按分类分页：每块内容各占一页，不再堆成一条要滚很久的长页面。
+// 标签固定在内容区上方；每页的草稿都绑在 app 字段上，切页不会丢。外观页排
+// 在最后，原有几页的序号保持不变，默认打开仍是网络代理。
 const (
 	settingsTabProxy = iota
 	settingsTabHosts
 	settingsTabCache
 	settingsTabUpdates
 	settingsTabWindow
+	settingsTabAppearance
 )
 
-var settingsTabLabels = []string{"网络代理", "图库", "图片缓存", "更新", "窗口"}
+var settingsTabLabels = []string{"网络代理", "图库", "图片缓存", "更新", "窗口", "外观"}
 
 /* ------------------------------------------------------------------
    设置窗口：全局入口、显示与关闭
@@ -177,6 +179,8 @@ func (a *app) settingsWindowView(c *ui.Context) {
 					a.updateSettingsSection(c)
 				case settingsTabWindow:
 					a.windowSettingsSection(c)
+				case settingsTabAppearance:
+					a.appearanceSettingsSection(c)
 				default:
 					a.proxySettingsSection(c)
 				}
@@ -234,6 +238,26 @@ func (a *app) windowSettingsSection(c *ui.Context) {
 		if !a.trayReady {
 			ui.Text(c, "系统托盘当前不可用，关闭窗口只能直接关掉。").
 				FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		}
+	})
+}
+
+/* ------------------------------------------------------------------
+   外观一块：跟随系统 / 浅色 / 深色
+--------------------------------------------------------------- */
+
+// appearanceSettingsSection 是「外观」一块：原来侧边栏底部的三个外观入口收在
+// 这里，侧边栏不再单独占三行。选完立即落盘并同步原生外观，结果用窗口内 toast
+// 说明；主题是进程级共享状态，所有窗口都会跟着重画。
+func (a *app) appearanceSettingsSection(c *ui.Context) {
+	t := c.Theme()
+	settingsSection(c, "外观", func() {
+		ui.Text(c, "跟随系统会随操作系统的深浅色自动切换；固定浅色或深色后，"+
+			"即使系统切换外观也保持不变。").
+			FontSize(12).TextColor(t.TextMuted).MaxLines(3)
+		if ui.Segmented(c, &a.theme.mode, "跟随系统", "浅色", "深色").
+			Label("外观").Changed() {
+			a.saveThemeChoice()
 		}
 	})
 }

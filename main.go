@@ -1263,13 +1263,11 @@ func (a *app) selectTab(idx int) {
 	}
 }
 
-// sidebarFooterItems 是底部常驻入口的数据：外观三档、账号/设置/关于、登录/退出。
+// sidebarFooterItems 是底部常驻入口的数据：账号/设置/关于、登录/退出。外观
+// 三档已经收进设置窗口的「外观」页，侧边栏不再单独占三行。
 func (a *app) sidebarFooterItems() []display.ListItem {
 	items := []display.ListItem{
 		{Key: "expand", Label: "展开侧边栏", Icon: lucide.PanelLeftOpen()},
-		{Key: "theme:system", Label: "外观：跟随系统", Icon: lucide.Monitor()},
-		{Key: "theme:light", Label: "外观：浅色", Icon: lucide.Sun()},
-		{Key: "theme:dark", Label: "外观：深色", Icon: lucide.Moon()},
 		{Key: "accounts", Label: "账号", Icon: lucide.UsersRound()},
 		{Key: "settings", Label: "设置", Icon: lucide.Settings()},
 		{Key: "about", Label: "关于", Icon: lucide.Info()},
@@ -1303,7 +1301,7 @@ func (a *app) sidebarFooterItems() []display.ListItem {
 func (a *app) sidebarFooterList(c *ui.Context, nav layout.SideNavState) {
 	items := a.sidebarFooterItems()
 	if !nav.Expanded {
-		sidebarRail(c, items, "", func(key string) { a.handleSidebarAction(c, key) })
+		sidebarRail(c, items, "", a.handleSidebarAction)
 		return
 	}
 	ui.Column(c).Padding(0, 0, 0, sidebarListInset(nav)).Children(func() {
@@ -1313,23 +1311,17 @@ func (a *app) sidebarFooterList(c *ui.Context, nav layout.SideNavState) {
 			Collapse:  nav.Collapse,
 			RailWidth: nav.RailWidth,
 		})
-		a.handleSidebarAction(c, clicked)
+		a.handleSidebarAction(clicked)
 	})
 }
 
 // handleSidebarAction 分发底部 List 的点击 key。
-func (a *app) handleSidebarAction(c *ui.Context, key string) {
+func (a *app) handleSidebarAction(key string) {
 	switch key {
 	case "":
 		return
 	case "expand":
 		a.navExpanded = !a.navExpanded
-	case "theme:system":
-		a.setThemeMode(c, themeFollowSystem)
-	case "theme:light":
-		a.setThemeMode(c, themeLight)
-	case "theme:dark":
-		a.setThemeMode(c, themeDark)
 	case "accounts":
 		a.showAccounts()
 	case "settings":
@@ -1404,7 +1396,7 @@ func (a *app) titleBar(c *ui.Context) {
 	ui.Row(c).Height(h).FillWidth().AlignItems(ui.Stretch).
 		Padding(0, 0, 0, bar.Left).Background(t.Background).DragWindow().Children(func() {
 		// 左段：品牌名、搜索、通知铃铛，登录后再加上金币、盲盒与头像昵称，
-		// 整体可随标题栏拖动。外观、设置与登录 / 退出登录都在侧边栏底部。
+		// 整体可随标题栏拖动。设置与登录 / 退出登录都在侧边栏底部。
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 16).Gap(10).
 			AlignItems(ui.Center).Children(func() {
 			// 品牌名对应 Lobe Header 的 Logo 位，占标题栏左端。

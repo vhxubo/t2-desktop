@@ -12,16 +12,16 @@ import (
 )
 
 // sidebarWidth 是左侧导航栏的宽度，与 view 里的布局一致（见 main.go 的
-// navSidebarWidth）。底部的设置、外观与账号入口都得待在这条带子里，不能
-// 溢到右侧内容区。
+// navSidebarWidth）。底部的设置与账号入口都得待在这条带子里，不能溢到右侧
+// 内容区。
 const sidebarWidth = navSidebarWidth
 
-// 设置入口在主页左侧 Lobe 导航轨里，外观三档在它上面，登录 / 退出登录再往下：
-// 这三样都不在标题栏里了，标题栏只留品牌、铃铛和登录后的头像昵称。
+// 设置入口在主页左侧 Lobe 导航轨里，登录 / 退出登录再往下：这些都不在标题栏
+// 里了，标题栏只留品牌、铃铛和登录后的头像昵称。外观三档已收进设置窗口。
 const logoutLabel = "退出登录"
 const loginLabel = "登录 2Libra"
 
-func TestSidebarFooterHoldsThemesSettingsAndAccount(t *testing.T) {
+func TestSidebarFooterHoldsSettingsAndAccount(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
@@ -40,7 +40,7 @@ func TestSidebarFooterHoldsThemesSettingsAndAccount(t *testing.T) {
 	if login.Y <= set.Y {
 		t.Errorf("「登录」的 y=%.0f，应在设置入口（y=%.0f）下方", login.Y, set.Y)
 	}
-	for _, label := range []string{"外观：跟随系统", "外观：浅色", "外观：深色", loginLabel} {
+	for _, label := range []string{loginLabel} {
 		r, ok := tt.Find(label)
 		if !ok {
 			t.Fatalf("侧边栏缺少 %q：%q", label, tt.Texts())
@@ -49,14 +49,10 @@ func TestSidebarFooterHoldsThemesSettingsAndAccount(t *testing.T) {
 			t.Errorf("%q 的 x=%.0f 宽 %.0f，超出 %d 宽的导航轨", label, r.X, r.W, sidebarWidth)
 		}
 	}
-	// 外观在设置上面：先看到三档图标，再往下才是「设置」。
+	// 外观三档已经从侧边栏移除，统一到设置窗口的「外观」页里。
 	for _, label := range []string{"外观：跟随系统", "外观：浅色", "外观：深色"} {
-		r, _ := tt.Find(label)
-		if r.Y >= set.Y {
-			t.Errorf("%q 的 y=%.0f，应在设置入口（y=%.0f）上方", label, r.Y, set.Y)
-		}
-		if r.Y >= login.Y {
-			t.Errorf("%q 的 y=%.0f，应在账号入口（y=%.0f）上方", label, r.Y, login.Y)
+		if _, ok := tt.Find(label); ok {
+			t.Errorf("侧边栏不该再有 %q：%q", label, tt.Texts())
 		}
 	}
 	// 设置仍然是独立窗口的入口。
@@ -471,7 +467,7 @@ func TestSidebarExpandedRowsHaveLeftInset(t *testing.T) {
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 
-	for _, name := range []string{"首页", "设置", "外观：跟随系统"} {
+	for _, name := range []string{"首页", "设置", "账号"} {
 		row, ok := tt.Access(name)
 		if !ok {
 			t.Fatalf("展开态缺少 %q：%q", name, tt.Texts())
@@ -492,7 +488,7 @@ func TestSidebarCollapsedIconsShowTooltips(t *testing.T) {
 	if a.navExpanded {
 		t.Fatal("前置条件：默认应是折叠态")
 	}
-	for _, name := range []string{"首页", "设置", "外观：跟随系统", "展开侧边栏"} {
+	for _, name := range []string{"首页", "设置", "账号", "展开侧边栏"} {
 		info, ok := tt.Access(name)
 		if !ok {
 			t.Fatalf("折叠态缺少 %q：%q", name, tt.Texts())

@@ -94,31 +94,30 @@ func TestThemeModePersists(t *testing.T) {
 	}
 }
 
-// 主页侧边栏底部直接摆三个外观图标，点击即切换并落盘，全程没有弹窗。测试
-// 从深色系统开始，这样「浅色」按钮是否真的覆盖系统外观也能一起验证。
-func TestThemeButtonsSwitchAndPersist(t *testing.T) {
+// 外观三档收进设置窗口的「外观」页，侧边栏不再单独摆三个按钮。点选即切换
+// 并落盘，结果用窗口内 toast 说明。测试从深色系统开始，这样选「浅色」是否
+// 真的覆盖系统外观也能一起验证。
+func TestThemeChoiceInSettingsSwitchesAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	a := newApp(dir)
 	a.autoLoad = false
-	tt := ui.NewTesterWith(a.view, 1100, 760, ui.TesterOptions{Dark: true})
-	tt.Frame()
+	a.settingsTab = settingsTabAppearance
+	st := ui.NewTesterWith(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight,
+		ui.TesterOptions{Dark: true})
+	st.Frame()
 
-	for _, label := range []string{"外观：跟随系统", "外观：浅色", "外观：深色"} {
-		if _, ok := tt.Find(label); !ok {
-			t.Fatalf("标题栏缺少 %q：%q", label, tt.Texts())
+	for _, label := range []string{"跟随系统", "浅色", "深色"} {
+		if _, ok := st.Find(label); !ok {
+			t.Fatalf("设置窗口外观页缺少 %q：%q", label, st.Texts())
 		}
 	}
 
-	// 深色系统下点「浅色」：立刻固定浅色，配置写成 light。
-	if err := tt.Click("外观：浅色"); err != nil {
+	// 深色系统下选「浅色」：立刻固定浅色，配置写成 light。
+	if err := st.Click("浅色"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Frame()
 	if a.theme.mode != themeLight {
-		t.Fatalf("点「浅色」后模式 = %d，期望浅色", a.theme.mode)
-	}
-	if got := pageLum(t, tt); got < 240 {
-		t.Errorf("固定浅色后页面亮度 %.0f，期望浅色主题", got)
+		t.Fatalf("选「浅色」后模式 = %d，期望浅色", a.theme.mode)
 	}
 	var cfg themeConfig
 	if err := readJSONFile(filepath.Join(dir, "theme.json"), &cfg); err != nil {
@@ -127,17 +126,17 @@ func TestThemeButtonsSwitchAndPersist(t *testing.T) {
 	if cfg.Mode != "light" {
 		t.Errorf("theme.json 模式 = %q，期望 light", cfg.Mode)
 	}
+	st.Frame()
+	if !st.HasText("外观：浅色") {
+		t.Errorf("切换后没有弹出 toast：%q", st.Texts())
+	}
 
-	// 点「深色」：图标按钮直接换主题，配置跟着改。
-	if err := tt.Click("外观：深色"); err != nil {
+	// 选「深色」：直接换主题，配置跟着改。
+	if err := st.Click("深色"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Frame()
 	if a.theme.mode != themeDark {
-		t.Fatalf("点「深色」后模式 = %d，期望深色", a.theme.mode)
-	}
-	if got := pageLum(t, tt); got > 80 {
-		t.Errorf("固定深色后页面亮度 %.0f，期望深色主题", got)
+		t.Fatalf("选「深色」后模式 = %d，期望深色", a.theme.mode)
 	}
 	if err := readJSONFile(filepath.Join(dir, "theme.json"), &cfg); err != nil {
 		t.Fatalf("再次切换后没有写入 theme.json：%v", err)
@@ -146,16 +145,12 @@ func TestThemeButtonsSwitchAndPersist(t *testing.T) {
 		t.Errorf("theme.json 模式 = %q，期望 dark", cfg.Mode)
 	}
 
-	// 点「跟随系统」：系统仍是深色，页面保持深色，配置回到 system。
-	if err := tt.Click("外观：跟随系统"); err != nil {
+	// 选「跟随系统」：配置回到 system，系统仍是深色。
+	if err := st.Click("跟随系统"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Frame()
 	if a.theme.mode != themeFollowSystem {
-		t.Fatalf("点「跟随系统」后模式 = %d，期望跟随系统", a.theme.mode)
-	}
-	if got := pageLum(t, tt); got > 80 {
-		t.Errorf("跟随深色系统时页面亮度 %.0f，期望深色主题", got)
+		t.Fatalf("选「跟随系统」后模式 = %d，期望跟随系统", a.theme.mode)
 	}
 	if err := readJSONFile(filepath.Join(dir, "theme.json"), &cfg); err != nil {
 		t.Fatalf("切回跟随后没有写入 theme.json：%v", err)
