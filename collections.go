@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 )
 
 // 合集（api-write.md / api-read.md 的「合集」）
@@ -279,8 +280,9 @@ func (a *app) canCollectTopic(d *detailState) bool {
 	return d != nil && d.topic != nil && a.isMine(d.topic.Author)
 }
 
-// toggleCollectionPicker 开 / 关合集气泡。打开时顺手读一次列表，第一帧里
-// 就能看到自己的合集。
+// toggleCollectionPicker 开 / 关合集气泡（显式入口，登录回调与测试用）。
+// 打开时顺手读一次列表，第一帧里就能看到自己的合集。点按钮时走
+// prepareCollectionPicker，开合交给 Lobe Popover。
 func (a *app) toggleCollectionPicker(d *detailState) {
 	if d == nil || !a.detailLive(d) || !a.canCollectTopic(d) {
 		return
@@ -289,6 +291,15 @@ func (a *app) toggleCollectionPicker(d *detailState) {
 	if d.coll.open {
 		a.ensureCollections(d)
 	}
+}
+
+// prepareCollectionPicker 准备合集气泡：先把列表读起来，开合由 Lobe Popover
+// 在处理点击时切换，这里不能再碰 coll.open。
+func (a *app) prepareCollectionPicker(d *detailState) {
+	if d == nil || !a.detailLive(d) || !a.canCollectTopic(d) {
+		return
+	}
+	a.ensureCollections(d)
 }
 
 // assignTopicCollection 归入（add=true）或移出（add=false）当前帖子。
@@ -496,14 +507,16 @@ func (a *app) collectionButton(c *ui.Context, d *detailState) {
 				})
 				return
 			}
-			a.toggleCollectionPicker(d)
+			a.prepareCollectionPicker(d)
 		})
 	}
-	if d.coll.open {
-		ui.Popover(c, b, &d.coll.open, func() {
-			a.collectionPanel(c, d)
-		})
-	}
+	// Lobe 的 Popover 在点按钮时切换开合；关着时也要建出来，否则那一次点击
+	// 传不到 Popover，气泡就打不开。
+	lobeoverlay.Popover(c, b, &d.coll.open, lobeoverlay.PopoverProps{
+		Placement: lobeoverlay.Bottom,
+	}, func() {
+		a.collectionPanel(c, d)
+	})
 }
 
 // collectionPanel 是合集气泡的内容：我的合集（点一行就归入）、新建入口，
