@@ -1122,9 +1122,11 @@ const feedMaxWidth float32 = 760
 const navSidebarWidth = 64
 const navRailWidth float32 = 64
 
-// navListInset 是展开态列表在 Compact 行内边距之外再留的左侧空白：图标不再
-// 贴着侧边栏左缘，与折叠后图标轨的居中位置对齐。
-const navListInset float32 = 8
+// navListInset 是展开态列表在 Compact 行内边距（8）之外再留的左侧空白，让
+// 展开后的图标与折叠态图标轨（以及左上角开关）的中心严格对齐在 32 DIP：
+// 8 + 16 = 24 是图标左缘，加半个 16 的图标宽正好落在 32。折叠进度插值时，
+// List 自身的居中留白与本值此消彼长，图标不会在展开/收起过程中横跳。
+const navListInset float32 = 16
 
 // sidebarListInset 随折叠进度收回展开态的额外左留白，让行滑进图标轨时不错位。
 func sidebarListInset(nav layout.SideNavState) float32 {
@@ -1136,10 +1138,10 @@ func sidebarListInset(nav layout.SideNavState) float32 {
 const sidebarFont = "monospace"
 
 // sidebar 是 Lobe 风格的可展开侧边栏：layout.DraggableSideNav 提供拖拽调宽，
-// 展开/折叠只走底部列表的「展开 / 折叠侧边栏」入口（见 sidebarFooterList），
-// 不再在接缝上画一个重复的开关。内容与 Lobe 的 display.List 配套——把
-// nav.Collapse / nav.RailWidth 交给 List，收起时行缩成图标方块，展开时显示
-// 文字。顶部是账号，中部是浏览页，底部是外观与账号入口。
+// 展开/折叠只走顶部开关（见 sidebarHeader），不再在接缝或底部列表上画重复的
+// 开关。内容与 Lobe 的 display.List 配套——把 nav.Collapse / nav.RailWidth 交给
+// List，收起时行缩成图标方块，展开时显示文字。顶部是开关，中部是浏览页，底部
+// 是外观与账号入口。
 func (a *app) sidebar(c *ui.Context) {
 	layout.DraggableSideNav(c, &a.navWidth, &a.navExpanded, layout.DraggableSideNavProps{
 		MinWidth:        navRailWidth,
@@ -1157,22 +1159,26 @@ func (a *app) sidebar(c *ui.Context) {
 	})
 }
 
-// sidebarHeader 是可展开侧边栏的顶部：品牌标记 + 账号头像，折叠时只留头像
-// 图标，展开时并排显示应用名。点头像开账号面板。
+// sidebarHeader 是可展开侧边栏的顶部：折叠/展开开关 + 品牌名。开关常驻左上角，
+// 折叠时只留图标，展开时并排显示应用名；底部列表不再放重复的开关。
 func (a *app) sidebarHeader(c *ui.Context, nav layout.SideNavState) {
-	ui.Column(c).Gap(6).Padding(10, 6, 6, 6).Children(func() {
-		b := ui.ButtonBase(c).Label("账号头像").Tooltip("打开账号面板").OnClick(a.showAccounts)
-		b.Row().Gap(10).AlignItems(ui.Center).Radius(lobetheme.TokensOf(c).BorderRadius).Padding(4, 6)
-		b.Children(func() {
-			if a.auth.loggedIn() {
-				avatarView(c, "", a.avatarBitmap(a.auth.avatarURL()), 24)
-			} else {
-				ui.Icon(c, lucide.UserRound()).FontSize(18)
-			}
-			if nav.Expanded {
-				ui.Text(c, "T2 Desktop").FontSize(13).FontWeight(600).SingleLine()
-			}
+	name := "展开侧边栏"
+	icon := lucide.PanelLeftOpen()
+	if a.navExpanded {
+		name = "折叠侧边栏"
+		icon = lucide.PanelLeftClose()
+	}
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(10, 16, 6, 16).Children(func() {
+		b := action.StyleActionIcon(c, ui.ButtonBase(c), icon, action.ActionIconProps{
+			BlockSize: 32, GlyphSize: 18,
 		})
+		b.Label(name).Tooltip(name)
+		if b.Clicked() {
+			a.navExpanded = !a.navExpanded
+		}
+		if nav.Expanded {
+			ui.Text(c, "T2 Desktop").FontSize(13).FontWeight(600).SingleLine()
+		}
 	})
 }
 
@@ -1276,15 +1282,9 @@ func (a *app) selectTab(idx int) {
 // 三档已经收进设置窗口的「外观」页，侧边栏不再单独占三行。
 func (a *app) sidebarFooterItems() []display.ListItem {
 	items := []display.ListItem{
-		{Key: "expand", Label: "展开侧边栏", Icon: lucide.PanelLeftOpen()},
 		{Key: "accounts", Label: "账号", Icon: lucide.UsersRound()},
 		{Key: "settings", Label: "设置", Icon: lucide.Settings()},
 		{Key: "about", Label: "关于", Icon: lucide.Info()},
-	}
-	// 折叠时把「展开」换成「折叠」，两种状态都有明确入口。
-	if a.navExpanded {
-		items[0].Label = "折叠侧边栏"
-		items[0].Icon = lucide.PanelLeftClose()
 	}
 	switch {
 	case a.loginPending:
@@ -1329,8 +1329,6 @@ func (a *app) handleSidebarAction(key string) {
 	switch key {
 	case "":
 		return
-	case "expand":
-		a.navExpanded = !a.navExpanded
 	case "accounts":
 		a.showAccounts()
 	case "settings":

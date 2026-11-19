@@ -1,6 +1,7 @@
 package main
 
 import (
+	"image"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -390,7 +391,7 @@ func TestAboutWindowRowsAligned(t *testing.T) {
 	}
 }
 
-// 侧边栏的折叠 / 展开只保留底部列表那一处入口：接缝上不再画一个重复的开关。
+// 侧边栏的折叠 / 展开只保留顶部那一处开关：接缝与底部列表都不再画重复的开关。
 // Lobe 组件自带的 handle 也带「展开 / 折叠侧边栏」无障碍名（测试里是英文的
 // Expand / Collapse side nav），按名字数一遍就能看出重复。
 func TestSidebarHasSingleCollapseToggle(t *testing.T) {
@@ -426,11 +427,19 @@ func TestSidebarHasSingleCollapseToggle(t *testing.T) {
 		absent("Collapse side nav")
 	}
 
-	// 默认折叠：底部列表给出「展开侧边栏」。
+	// 默认折叠：顶部开关给出「展开侧边栏」。
 	if a.navExpanded {
 		t.Fatal("前置条件：默认应是折叠态")
 	}
 	only("展开侧边栏")
+	// 开关位于左上角的侧边栏头部，不在底部列表里。
+	toggle, ok := tt.Access("展开侧边栏")
+	if !ok {
+		t.Fatal("顶部开关不可访问")
+	}
+	if toggle.Bounds.X+toggle.Bounds.W > sidebarWidth+1 {
+		t.Errorf("展开开关的 x=%.0f 宽 %.0f，越出了 %d 宽的导航轨", toggle.Bounds.X, toggle.Bounds.W, sidebarWidth)
+	}
 	only("Resize side nav") // 拖拽调宽的接缝保留，只是不再带开关
 	absent("折叠侧边栏")
 	noSeamHandle()
@@ -442,6 +451,13 @@ func TestSidebarHasSingleCollapseToggle(t *testing.T) {
 	tt.Frame()
 	if !a.navExpanded {
 		t.Fatal("点「展开侧边栏」后没有展开")
+	}
+	fold, ok := tt.Access("折叠侧边栏")
+	if !ok {
+		t.Fatal("顶部开关展开后不可访问")
+	}
+	if fold.Description != "折叠侧边栏" {
+		t.Errorf("折叠开关的悬浮说明 = %q，期望同名 tooltip", fold.Description)
 	}
 	only("折叠侧边栏")
 	absent("展开侧边栏")
@@ -457,6 +473,61 @@ func TestSidebarHasSingleCollapseToggle(t *testing.T) {
 	}
 	only("展开侧边栏")
 	noSeamHandle()
+}
+
+// railInkCenter 量一行里图标墨迹的水平中心。无障碍矩形在展开态覆盖整行，
+// 拿不到图标自身的边界，所以按像素取导航轨左半边的墨迹范围；图标是左右对称
+// 的，这个中心就是它的对齐位置。
+func railInkCenter(im *image.RGBA, y0, y1 int) float32 {
+	minX, maxX := 999, -1
+	for y := y0; y < y1; y++ {
+		for x := 0; x < int(navRailWidth/2)+8; x++ {
+			if lum(im, x, y) < 205 {
+				if x < minX {
+					minX = x
+				}
+				if x > maxX {
+					maxX = x
+				}
+			}
+		}
+	}
+	return float32(minX+maxX) / 2
+}
+
+// 顶部开关、导航项与底部项在展开和收起两态必须落在同一条竖线上，否则点开
+// 侧边栏时整列图标会横向跳一下。中心对准的是折叠图标轨的中线 32 DIP。
+func TestSidebarIconsAlignAcrossExpandStates(t *testing.T) {
+	near := func(a, b float32) bool { return a-b < 1.5 && b-a < 1.5 }
+	for _, expanded := range []bool{false, true} {
+		a := testApp(t)
+		a.navExpanded = expanded
+		tt := ui.NewTester(a.view, 1100, 760)
+		tt.Frame()
+		im := tt.Image()
+		toggle := "展开侧边栏"
+		if expanded {
+			toggle = "折叠侧边栏"
+		}
+		centers := make([]float32, 0, 3)
+		for _, name := range []string{toggle, "首页", "设置"} {
+			info, ok := tt.Access(name)
+			if !ok {
+				t.Fatalf("展开=%v 时找不到 %q：%q", expanded, name, tt.Texts())
+			}
+			b := info.Bounds
+			c := railInkCenter(im, int(b.Y), int(b.Y+b.H))
+			centers = append(centers, c)
+			if !near(c, navRailWidth/2) {
+				t.Errorf("展开=%v 时 %q 的图标中心 %.1f，未对准轨中线 %.1f", expanded, name, c, navRailWidth/2)
+			}
+		}
+		for i, c := range centers {
+			if !near(c, centers[0]) {
+				t.Errorf("展开=%v 时第 %d 个图标中心 %.1f 与顶部开关 %.1f 不齐", expanded, i, c, centers[0])
+			}
+		}
+	}
 }
 
 // 展开后图标不能贴着侧边栏左缘：列表行整体往右让出一段留白，和折叠后
@@ -478,8 +549,8 @@ func TestSidebarExpandedRowsHaveLeftInset(t *testing.T) {
 	}
 }
 
-// 折叠后的图标轨用 Lobe ActionIcon：每一项的无障碍描述就是它的名字，
-// 指针停在上面时由 Lobe 的 tooltip 把名字显示出来。
+// 折叠后的图标轨用 Lobe ActionIcon：每一项（含顶部展开开关）的无障碍描述
+// 就是它的名字，指针停在上面时由 Lobe 的 tooltip 把名字显示出来。
 func TestSidebarCollapsedIconsShowTooltips(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1100, 760)
