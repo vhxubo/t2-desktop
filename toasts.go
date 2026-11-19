@@ -28,7 +28,7 @@ const (
 	toastCompose                          // 发帖窗口
 	toastUserCard                         // 用户资料窗口：关注 / 取关
 	toastSearch                           // 搜索窗口
-	toastPandora                          // 潘多拉窗口：开盒 / 重抽结果
+	toastPandora                          // 潘多拉弹窗：错误与授权提示（抽卡结果只画在卡片里）
 	toastReply                            // 独立写评论窗口：发送结果
 	toastEdit                             // 编辑窗口：保存 / 追加附言的结果
 	toastFollows                          // 关注与粉丝窗口：回关 / 取关
@@ -64,8 +64,6 @@ func (a *app) toastWindow(target toastTarget) *mygo.Window {
 		return a.userCardWin
 	case toastSearch:
 		return a.searchWin
-	case toastPandora:
-		return a.pandoraWin
 	case toastReply:
 		return a.replyWin
 	case toastEdit:

@@ -1041,9 +1041,9 @@ func TestCreateReplyUsesConfiguredProxy(t *testing.T) {
 	}
 }
 
-// 盲盒的延期是又一个用 postJSON 的写出口：必须经配置的代理，不能因为
-// 和开盒 / 重抽共用 Client 就假设它天然不会直连。
-func TestPandoraExtendUsesConfiguredProxy(t *testing.T) {
+// 盲盒重抽是用 postJSON 的写出口：必须经配置的代理，不能因为和开盒共用
+// Client 就假设它天然不会直连。
+func TestPandoraRerollUsesConfiguredProxy(t *testing.T) {
 	clearProxyEnv(t)
 	var mu sync.Mutex
 	var paths, bodies []string
@@ -1053,7 +1053,7 @@ func TestPandoraExtendUsesConfiguredProxy(t *testing.T) {
 		paths = append(paths, r.Method+" "+r.URL.Path)
 		bodies = append(bodies, string(body))
 		mu.Unlock()
-		_, _ = fmt.Fprint(w, envelopeJSON(`{"cost":12,"next_cost":20,"active_extended":true}`))
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"box":{"box_instance_id":"b1","event_name":"金币雨"}}`))
 	}))
 	defer proxySrv.Close()
 
@@ -1066,21 +1066,21 @@ func TestPandoraExtendUsesConfiguredProxy(t *testing.T) {
 		Base:   "http://upstream.invalid/api",
 		bearer: func() string { return "tok" },
 	}
-	res, err := c.extendPandora(context.Background(), "k1", "b1")
+	res, err := c.rerollPandora(context.Background(), "k1", "b1")
 	if err != nil {
-		t.Fatalf("经代理延期失败：%v", err)
+		t.Fatalf("经代理重抽失败：%v", err)
 	}
-	if !res.CostKnown || res.Cost != 12 || !res.NextCostKnown || res.NextCost != 20 {
-		t.Errorf("延期响应解析不对：%+v", res)
+	if !res.Status.BoxKnown || res.Status.Box.EventName != "金币雨" {
+		t.Errorf("重抽响应解析不对：%+v", res)
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(paths) != 1 || paths[0] != "POST /api/v1/pandora/extend" {
-		t.Fatalf("代理收到的请求 = %v，期望延期 POST", paths)
+	if len(paths) != 1 || paths[0] != "POST /api/v1/pandora/reroll" {
+		t.Fatalf("代理收到的请求 = %v，期望重抽 POST", paths)
 	}
 	if !strings.Contains(bodies[0], `"box_instance_id":"b1"`) {
-		t.Errorf("延期请求体不对：%q", bodies[0])
+		t.Errorf("重抽请求体不对：%q", bodies[0])
 	}
 }
 

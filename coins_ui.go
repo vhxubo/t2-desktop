@@ -722,7 +722,7 @@ func (a *app) coinPandoraLine(c *ui.Context, cs *coinState) {
 			Type: display.TextInfo, FontSize: 10, Rows: 1,
 		})
 	})
-	row.Label("潘多拉盲盒").Tooltip("打开潘多拉窗口，开启盲盒或再抽一次").
+	row.Label("潘多拉盲盒").Tooltip("打开潘多拉抽卡弹窗，抽取盲盒").
 		OnClick(a.showPandora)
 }
 

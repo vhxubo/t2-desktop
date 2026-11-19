@@ -40,8 +40,6 @@ func accountWindowCases() []accountWindowCase {
 		}, func(a *app) func(*ui.Context) { return a.editWindowView }},
 		{"金币", coinWindowWidth, coinWindowHeight, nil,
 			func(a *app) func(*ui.Context) { return a.coinWindowView }},
-		{"潘多拉", pandoraWindowWidth, pandoraWindowHeight, nil,
-			func(a *app) func(*ui.Context) { return a.pandoraWindowView }},
 		{"用户资料", userCardWindowWidth, userCardWindowHeight, func(a *app) {
 			a.userCard = newUserCardState("bob")
 		}, func(a *app) func(*ui.Context) { return a.userCardWindowView }},

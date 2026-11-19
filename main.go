@@ -221,12 +221,10 @@ type app struct {
 	coinRefreshTimer *time.Timer
 	coinRefreshGen   uint64
 
-	// pandora 是潘多拉窗口的状态：今日盲盒、两次抽奖进度与动作结果。入口是
-	// 标题栏上的「潘多拉」（见 pandora_window.go），窗口单独一个 mygo 窗口。
-	// pandoraShown 表示窗口此刻是否在屏幕上；都只在主线程读写。
-	pandora      *pandoraState
-	pandoraWin   *mygo.Window
-	pandoraShown bool
+	// pandora 是潘多拉抽卡弹窗的状态：今日盲盒、两次抽奖结果与弹窗开合。
+	// 入口是标题栏上的「潘多拉」（见 pandora_dialog.go），弹窗画在主窗口的
+	// dialogs 里；只在主线程读写。
+	pandora *pandoraState
 
 	// commentCost 是评论框上方那条「发评金币与徽章」状态栏的数据：我的徽章
 	// （含 attributes）、佩戴状态与正在切换的那一枚（见 comment_cost.go）。
@@ -621,7 +619,6 @@ func (a *app) publish(fn func()) {
 		a.redrawSettingsWindow()
 		a.redrawProfileWindow()
 		a.redrawCoinWindow()
-		a.redrawPandoraWindow()
 		a.redrawComposeWindow()
 		a.redrawReplyWindow()
 		a.redrawEditWindow()
@@ -968,7 +965,7 @@ func (a *app) onAuthChanged(err error) {
 	a.coins = newCoinState()
 	// 潘多拉状态在「同一个账号重新授权」时要保留：授权成功后重跑的可能是
 	// 重抽，必须还拿着原来的 box_instance_id。换账号 / 退出才整体丢弃；
-	// 保留时把「已加载」标成过期，窗口下一帧会重读今日状态。
+	// 保留时把「已加载」标成过期，弹窗下一帧会重读今日状态。
 	switch {
 	case !a.auth.loggedIn(), a.pandora == nil:
 		a.pandora = newPandoraState()
@@ -1006,7 +1003,7 @@ func (a *app) onAuthChanged(err error) {
 		// 写回金币窗口共用的状态。
 		a.startCoinTagWatch()
 		// 潘多拉入口也静默读一次今日状态：首页标题栏要能直接显示抽中的
-		// 事件名，不必先打开潘多拉窗口。
+		// 事件名，不必先打开潘多拉弹窗。
 		a.loadPandoraEntry()
 		// 官方图床只对 Pro 开放：登录后就把 Pro 状态读回来，别等用户拖图
 		// 片时才提示「还没确认」。
@@ -1021,8 +1018,8 @@ func (a *app) onAuthChanged(err error) {
 		// 金币窗口与标题栏金币数也只属于当前账号：停掉定时刷新并关掉窗口。
 		a.stopCoinTagWatch()
 		a.closeCoinWindow()
-		// 潘多拉窗口展示的是当前账号的盲盒与抽奖结果，退出后一并关掉。
-		a.closePandoraWindow()
+		// 潘多拉弹窗展示的是当前账号的盲盒与抽奖结果，退出后一并关掉。
+		a.closePandora()
 		// 发帖窗口里的草稿属于上一个账号，退出后一并关掉并丢弃。
 		a.closeComposeWindow()
 		a.compose = nil
@@ -1103,6 +1100,8 @@ func (a *app) view(c *ui.Context) {
 // 在这里；这里只负责在图片到位后把它打开（见 viewerTick）。
 func (a *app) dialogs(c *ui.Context) {
 	a.viewerTick()
+	// 抽卡弹窗先画：抽卡缺权限时授权框后画、叠在它上面，关掉授权还能回来。
+	a.pandoraDialog(c)
 	a.authDialogFor(c, toastMain)
 	a.closePromptDialog(c)
 }

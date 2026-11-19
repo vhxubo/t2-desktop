@@ -40,8 +40,8 @@ import "time"
 //	coinEventIncoming    收到表态 / 打赏 / 回复等新通知                pollNotifications
 //	coinEventForeground  回到前台，校准在站点上的金币变动              onBecameActive
 //
-// 盲盒延期这个能力这个应用还没有入口；
-// 以后加上时，同样在成功后调用 coinsChanged。用户直接在站点上完成它们
+// 盲盒延期 / 站点的其它写操作没有入口，抽卡界面只提供开盒与重抽；
+// 以后若是重新加上，同样在成功后调用 coinsChanged。用户直接在站点上完成它们
 // 不会产生站内通知，由 coinEventForeground 与标题栏金币数的定时刷新兜底。
 // restricted_unlock 与 redeem_code 只是本地事件名（文档没给解锁 / 领取的
 // 流水 reason），用来触发刷新，不拿它们去匹配金币流水的文案。

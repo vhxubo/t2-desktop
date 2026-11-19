@@ -2,425 +2,125 @@ package main
 
 import (
 	"strings"
-	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 潘多拉窗口的内容：顶部是一张「今日抽奖」大卡片，明确写出两次抽奖的
-// 进度与下一步按钮；下面是本次事件的展示与规则说明。
-//
-// 两次抽奖的产品约定见 pandora.go 的 canReroll：开启一次 + 重抽一次，
-// 服务端就算给了更多重抽次数，这里也不提供第三个入口。
+// 潘多拉抽卡卡片：只展示当前这一张。没有盒子时给一颗抽取按钮；抽到之后
+// 展示事件与稀有度，若还能重抽，旁边给一个重置图标，点它才抽第二张。
+// 进度格、倒计时、规则说明和结果 toast 都不在这一层出现。
 
-func (a *app) pandoraBody(c *ui.Context, st *pandoraState) {
-	ui.Scroll(c).Fill().MinHeight(0).Padding(14, 16).Gap(14).Children(func() {
-		a.pandoraHeroCard(c, st)
-		if st.err != "" || st.wait {
-			a.pandoraErrorCard(c, st)
-		}
-		if st.status.BoxKnown {
-			a.pandoraEventCard(c, st)
-		}
-		a.pandoraRulesCard(c, st)
-	})
-}
-
-// pandoraHeroCard 是窗口里最显眼的一块：今天抽到了第几次、还能不能抽，
-// 以及那颗真正发起抽奖的按钮。
-func (a *app) pandoraHeroCard(c *ui.Context, st *pandoraState) {
-	t := c.Theme()
-	now := pandoraNow()
-	accentTint := t.Accent.Mix(t.Background, 0.90)
-	ui.Box(c).FillWidth().Padding(16, 16).Radius(14).
-		Background(accentTint).Border(1, t.Accent.Mix(t.Background, 0.62)).
-		Children(func() {
-			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Start).Children(func() {
-				ui.Box(c).Size(42, 42).Shrink(0).Radius(12).Center().
-					Background(t.Accent.Mix(t.Background, 0.80)).Children(func() {
-					ui.Icon(c, pandoraIcon).Size(24, 24).TextColor(t.Accent)
-				})
-				ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, "今日潘多拉").FontSize(18).Bold().SingleLine()
-						ui.Spacer(c).Grow(1)
-						a.smallAction(c, "刷新", st.loading || st.busy != "", a.reloadPandora)
-					})
-					ui.Text(c, a.pandoraHeroSubtitle(st)).FontSize(12).
-						TextColor(t.TextMuted).MaxLines(2)
-				})
-				ui.Column(c).Shrink(0).Gap(0).AlignItems(ui.End).Children(func() {
-					ui.Textf(c, "%d / 2", st.status.drawsUsed()).FontSize(24).Bold().
-						TextColor(t.Accent).SingleLine()
-					ui.Text(c, "今日抽奖").FontSize(10).TextColor(t.TextMuted).SingleLine()
-				})
-			})
-
-			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Stretch).Children(func() {
-				a.pandoraStepChip(c, "第一次", "开启盲盒", pandoraStepOne(st, now))
-				a.pandoraStepChip(c, "第二次", "再抽一次", pandoraStepTwo(st, now))
-			})
-
-			a.pandoraDrawAction(c, st, now)
-
-			if st.status.NextOpenAt != "" {
-				ui.Text(c, "下一次发放："+pandoraWhenText(st.status.NextOpenAt)+
-					pandoraRemainSuffix(st.status.NextOpenAt)).
-					FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+func (a *app) pandoraCard(c *ui.Context, st *pandoraState) {
+	tk := lobetheme.TokensOf(c)
+	switch {
+	case st.err != "" || st.wait:
+		// 整块读不到时说明原因并给重试入口，这是页面级状态，留在卡里。
+		ui.Column(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, pandoraCardError(st)).FontSize(12).TextColor(tk.ErrorText).
+				MaxLines(2)
+			if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+				a.reloadPandora()
 			}
-			ui.Text(c, "抽奖可能消耗金币或改变站内状态，结果与扣费以服务端返回为准。").
-				FontSize(10).TextColor(t.TextMuted).MaxLines(2)
 		})
-}
-
-// pandoraStepState 是两次抽奖里某一步的状态：等待、正在进行、已完成、
-// 不可用。颜色与文案都由它决定。
-type pandoraStepState int
-
-const (
-	pandoraStepPending pandoraStepState = iota
-	pandoraStepActive
-	pandoraStepDone
-	pandoraStepOff
-)
-
-func pandoraStepOne(st *pandoraState, now time.Time) pandoraStepState {
-	switch {
+	case st.busy != "":
+		a.pandoraCardProgress(c, "抽取中…")
+	case st.loading && !st.loaded:
+		a.pandoraCardProgress(c, "读取中…")
+	case st.status.BoxKnown && (st.status.OpenedToday || st.status.HasBox):
+		a.pandoraDrawnCard(c, st)
 	case st.status.CanOpen:
-		return pandoraStepActive
-	case st.status.OpenedToday:
-		return pandoraStepDone
-	case st.status.Known:
-		return pandoraStepOff
-	}
-	return pandoraStepPending
-}
-
-func pandoraStepTwo(st *pandoraState, now time.Time) pandoraStepState {
-	switch {
-	case st.status.canReroll(now):
-		return pandoraStepActive
-	case st.status.BoxKnown && st.status.Box.RerollUsed > 0:
-		return pandoraStepDone
-	case st.status.OpenedToday:
-		return pandoraStepOff
-	}
-	return pandoraStepPending
-}
-
-// pandoraStepChip 画「第一次 / 第二次」的进度格。完成用成功色，进行中用
-// 强调色，不可用保持中性灰 —— 不靠颜色单独传达状态，旁边始终有文字。
-func (a *app) pandoraStepChip(c *ui.Context, step, label string, state pandoraStepState) {
-	t := c.Theme()
-	background := t.Background
-	border := t.Border
-	ink := t.TextMuted
-	detail := ""
-	switch state {
-	case pandoraStepActive:
-		background = t.Accent.Mix(t.Background, 0.90)
-		border = t.Accent
-		ink = t.Accent
-		detail = "待抽取"
-	case pandoraStepDone:
-		background = t.Success.Mix(t.Background, 0.90)
-		border = t.Success.Mix(t.Background, 0.55)
-		ink = t.Success
-		detail = "已完成"
-	case pandoraStepOff:
-		detail = "不可用"
+		a.pandoraUnopenedCard(c)
 	default:
-		detail = "未开始"
+		ui.Text(c, "今天没有可抽的盲盒").FontSize(13).TextColor(tk.TextSecondary)
 	}
-	ui.Box(c).Grow(1).MinWidth(0).Padding(9, 10).Radius(9).
-		Background(background).Border(1, border).Children(func() {
-		ui.Column(c).Gap(2).Children(func() {
-			ui.Text(c, step+" · "+label).FontSize(12).Bold().SingleLine().TextColor(ink)
-			ui.Text(c, detail).FontSize(10).TextColor(t.TextMuted).SingleLine()
-		})
+}
+
+func (a *app) pandoraCardProgress(c *ui.Context, text string) {
+	tk := lobetheme.TokensOf(c)
+	ui.Row(c).FillWidth().Padding(36, 0).Gap(10).AlignItems(ui.Center).
+		Justify(ui.Center).Children(func() {
+		ui.Spinner(c).Size(18, 18)
+		ui.Text(c, text).FontSize(13).TextColor(tk.TextSecondary)
 	})
 }
 
-// pandoraDrawAction 是抽奖按钮区：有次数时给一颗主按钮，没有时说明为什么。
-func (a *app) pandoraDrawAction(c *ui.Context, st *pandoraState, now time.Time) {
-	t := c.Theme()
-	switch {
-	case st.busy == "open":
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Spinner(c).Size(16, 16)
-			ui.Text(c, "正在开启盲盒…").FontSize(12).TextColor(t.TextMuted)
+// pandoraUnopenedCard 是还没抽的卡背：一个礼物盒加一颗抽取按钮，不写多余
+// 的规则说明。
+func (a *app) pandoraUnopenedCard(c *ui.Context) {
+	tk := lobetheme.TokensOf(c)
+	ui.Column(c).FillWidth().Gap(16).Children(func() {
+		ui.Box(c).FillWidth().MinHeight(180).Radius(14).Center().
+			Background(tk.FillTertiary).Border(1, tk.Border).Children(func() {
+			ui.Icon(c, pandoraIcon).Size(46, 46).TextColor(tk.Primary)
 		})
-		return
-	case st.busy == "reroll":
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Spinner(c).Size(16, 16)
-			ui.Text(c, "正在重抽…").FontSize(12).TextColor(t.TextMuted)
-		})
-		return
-	case st.busy == "extend":
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Spinner(c).Size(16, 16)
-			ui.Text(c, "正在延期…").FontSize(12).TextColor(t.TextMuted)
-		})
-		return
-	}
-	if st.status.CanOpen {
-		b := ui.PrimaryButton(c, "开启盲盒（第 1 次）")
-		b.Label("开启潘多拉盲盒")
-		b.Tooltip("开启今天的潘多拉盲盒，抽完还能再重抽一次")
+		b := action.Button(c, "抽取", action.ButtonProps{Variant: action.Primary})
+		b.Label("抽取潘多拉盲盒")
 		if b.Clicked() {
 			a.openPandoraBox()
 		}
-		ui.Text(c, "开启后会展示本次事件；今天还有一次重抽机会。").
-			FontSize(11).TextColor(t.TextMuted)
-		return
-	}
-	if st.status.canReroll(now) {
-		b := ui.PrimaryButton(c, "再抽一次（第 2 次）")
-		b.Label("重抽潘多拉盲盒")
-		tip := "用一次重抽机会，再抽一个结果"
-		if box := st.status.Box; box.RerollDeadlineAt != "" {
-			tip += "；截止 " + pandoraClock(box.RerollDeadlineAt)
-		}
-		b.Tooltip(tip)
-		if b.Clicked() {
-			a.rerollPandoraBox()
-		}
-		detail := "重抽会再取一个结果；今天的两次抽奖用完就不再提供入口。"
-		if box := st.status.Box; box.RerollDeadlineAt != "" {
-			detail = "重抽截止 " + pandoraClock(box.RerollDeadlineAt) + "；" + detail
-		}
-		ui.Text(c, detail).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
-		return
-	}
-	switch {
-	case st.status.OpenedToday || st.status.HasBox:
-		ui.Text(c, "今天的两次抽奖已用完，明天再来。").
-			FontSize(12).TextColor(t.TextMuted).MaxLines(2)
-	default:
-		ui.Text(c, "今天还没有可抽的盲盒，下一次发放后再来。").
-			FontSize(12).TextColor(t.TextMuted).MaxLines(2)
-	}
-}
-
-func (a *app) pandoraHeroSubtitle(st *pandoraState) string {
-	switch {
-	case st.loading && !st.loaded:
-		return "正在读取今日盲盒…"
-	case st.wait:
-		return "等待授权后继续读取今日盲盒。"
-	case st.err != "":
-		return "今日盲盒状态暂时不可用，可以稍后刷新"
-	case st.status.CanOpen:
-		return "第一次抽奖已就绪：开启今天的盲盒，看看会抽到什么事件。"
-	case st.status.canReroll(pandoraNow()):
-		return "第一次已开启；今天还有一次重抽机会，截止前可以再抽一次。"
-	case st.status.OpenedToday:
-		return "今天的两次抽奖都已结束，明天 0 点前后会发放新的盲盒。"
-	}
-	return "今天还没有盲盒发放，下一次发放时间见下方。"
-}
-
-func (a *app) pandoraErrorCard(c *ui.Context, st *pandoraState) {
-	t := c.Theme()
-	text := "今日盲盒暂时读不到：" + st.err
-	if st.wait {
-		text = "今日盲盒需要授权后才能读取；授权完成会自动继续。"
-	}
-	ui.Row(c).FillWidth().Padding(10, 12).Radius(10).
-		Background(t.Danger.Mix(t.Background, 0.92)).
-		Border(1, t.Danger.Mix(t.Background, 0.60)).
-		Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, text).FontSize(11).
-			TextColor(t.Danger).MaxLines(3).Grow(1)
-		a.smallAction(c, "重试", st.loading, a.reloadPandora)
 	})
 }
 
-// pandoraEventCard 展示本次抽到的事件：稀有度、事件名、站点拼好的标题、
-// 数值、生效与到期时间，以及重抽的进度。
-func (a *app) pandoraEventCard(c *ui.Context, st *pandoraState) {
-	t := c.Theme()
+// pandoraDrawnCard 展示本次抽到的那一张：稀有度、事件名与效果。抽完第一张
+// 后若还有重抽机会，给一个重置图标；不点它就停在这张结果上，不发第二次
+// 请求。
+func (a *app) pandoraDrawnCard(c *ui.Context, st *pandoraState) {
+	tk := lobetheme.TokensOf(c)
 	box := st.status.Box
-	rarity := pandoraRarityColor(t, pandoraBoxRarity(box))
-	title := "本次事件"
-	switch {
-	case box.RerollUsed > 0:
-		title = "第二次抽奖结果"
-	case st.status.OpenedToday || st.status.HasBox:
-		title = "第一次抽奖结果"
+	rarity := pandoraBoxRarity(box)
+	tint := pandoraRarityColor(c.Theme(), rarity)
+	label := pandoraRarityLabel(rarity)
+	name := strings.TrimSpace(box.EventName)
+	if name == "" {
+		name = strings.TrimSpace(box.EventCode)
 	}
-	ui.Box(c).FillWidth().Padding(14, 16).Radius(12).
-		Background(t.Background).Border(1, t.Border).Children(func() {
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, title).FontSize(13).Bold().SingleLine()
-			ui.Spacer(c).Grow(1)
-			if label := pandoraRarityLabel(pandoraBoxRarity(box)); label != "" {
-				ui.Box(c).Padding(2, 8).Radius(999).
-					Background(rarity.Mix(t.Background, 0.86)).
-					Border(1, rarity.Mix(t.Background, 0.55)).Children(func() {
-					ui.Text(c, "稀有度 "+label).FontSize(10).Bold().TextColor(rarity).SingleLine()
+	effect := strings.TrimSpace(box.EventTitle)
+
+	ui.Column(c).FillWidth().Gap(12).Children(func() {
+		ui.Box(c).FillWidth().MinHeight(180).Padding(20, 16).Radius(14).
+			Background(tint.Mix(tk.BgContainer, 0.88)).
+			Border(1, tint.Mix(tk.BgContainer, 0.55)).Children(func() {
+			ui.Column(c).Fill().Gap(10).AlignItems(ui.Center).Justify(ui.Center).
+				Children(func() {
+					ui.Box(c).Size(52, 52).Radius(14).Center().
+						Background(tint.Mix(tk.BgContainer, 0.78)).Children(func() {
+						ui.Icon(c, pandoraIcon).Size(28, 28).TextColor(tint)
+					})
+					if label != "" {
+						ui.Text(c, label).FontSize(11).Bold().TextColor(tint)
+					}
+					if name != "" {
+						ui.Text(c, name).FontSize(22).Bold().TextColor(tk.Text)
+					}
+					if effect != "" {
+						ui.Text(c, effect).FontSize(13).TextColor(tk.TextSecondary).
+							MaxLines(2)
+					}
 				})
-			}
 		})
-
-		name := strings.TrimSpace(box.EventName)
-		if name == "" {
-			name = strings.TrimSpace(box.EventCode)
-		}
-		if name != "" {
-			nameColor := rarity
-			if pandoraRarityLabel(pandoraBoxRarity(box)) == "" {
-				nameColor = t.Text
-			}
-			ui.Text(c, name).FontSize(20).Bold().SingleLine().TextColor(nameColor)
-		}
-		if eventTitle := strings.TrimSpace(box.EventTitle); eventTitle != "" &&
-			!strings.Contains(name, eventTitle) {
-			ui.Text(c, eventTitle).FontSize(13).TextColor(t.Text).MaxLines(3)
-		}
-
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Start).Wrap().Children(func() {
-			if box.RolledKnown {
-				a.pandoraFact(c, "抽到的数值", coinAmountText(box.RolledValue))
-			}
-			if box.ApplyAt != "" {
-				a.pandoraFact(c, "生效时间", pandoraClock(box.ApplyAt))
-			} else if box.OpenAt != "" {
-				a.pandoraFact(c, "开启时间", pandoraClock(box.OpenAt))
-			}
-			if box.ExpireAt != "" {
-				remain := pandoraRemainText(box.ExpireAt, pandoraNow())
-				value := pandoraClock(box.ExpireAt)
-				if remain != "" {
-					value += "（" + remain + "）"
-				}
-				a.pandoraFact(c, "事件到期", value)
-			}
-			if st.status.ActiveExtended {
-				a.pandoraFact(c, "状态", "已延期")
-			}
-		})
-
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, pandoraRerollText(st)).FontSize(11).
-				TextColor(t.TextMuted).MaxLines(2).Grow(1)
-			if st.status.canReroll(pandoraNow()) {
-				b := ui.PrimaryButton(c, "再抽一次")
-				b.Label("重抽潘多拉盲盒")
-				b.Disabled(st.busy != "")
+		// 重置只负责「再抽一次」：点了才发第二次请求，不点就什么都不做。
+		if st.status.canReroll(pandoraNow()) {
+			ui.Row(c).FillWidth().Justify(ui.Center).Children(func() {
+				b := action.ActionIcon(c, lucide.RotateCcw(), action.ActionIconProps{
+					Size:  lobetheme.Large,
+					Title: "重抽一次",
+				})
 				if b.Clicked() {
 					a.rerollPandoraBox()
 				}
-			}
-		})
-
-		// 延期入口：延长本次事件的生效时间，会扣金币，价格逐次上涨。
-		// 只在有盒子、事件还没到期时给出；服务端还有最终裁决权。
-		a.pandoraExtendRow(c, st)
-	})
-}
-
-// pandoraExtendRow 画「延期生效时间」的一行。价格取自上次延期响应的
-// next_cost，没延期过就不猜；正在延期时换成进度说明并禁用按钮。
-func (a *app) pandoraExtendRow(c *ui.Context, st *pandoraState) {
-	t := c.Theme()
-	if !st.status.canExtend(pandoraNow()) {
-		return
-	}
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, pandoraExtendHint(st)).FontSize(11).
-			TextColor(t.TextMuted).MaxLines(2).Grow(1)
-		switch st.busy {
-		case "extend":
-			ui.Row(c).Shrink(0).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Spinner(c).Size(14, 14)
-				ui.Text(c, "正在延期…").FontSize(11).TextColor(t.TextMuted)
 			})
-		default:
-			b := ui.Button(c, "延期事件")
-			b.Label("延期潘多拉盲盒")
-			b.Tooltip(pandoraExtendTooltip(st))
-			b.Disabled(st.busy != "")
-			if b.Clicked() {
-				a.extendPandoraBox()
-			}
 		}
 	})
 }
 
-// pandoraExtendHint 说明延期这一行的状态：已延期过就点明，否则写清会扣金币。
-func pandoraExtendHint(st *pandoraState) string {
-	if st.status.ActiveExtended {
-		return "本次事件已延期；再次延期会继续延长到期时间。"
+func pandoraCardError(st *pandoraState) string {
+	if st.wait {
+		return "等待授权后继续读取盲盒"
 	}
-	return "想把本次事件留得更久？延期会消耗金币。"
-}
-
-// pandoraExtendTooltip 把已知的下次价格写到悬浮说明里；没有就不编。
-func pandoraExtendTooltip(st *pandoraState) string {
-	tip := "花金币延长本次事件的生效时间；价格以服务端返回为准。"
-	if st.extendNextCostKnown && st.extendNextCost > 0 {
-		tip = "约 " + coinAmountText(st.extendNextCost) + " 金币，" +
-			"花金币延长本次事件的生效时间；价格以服务端返回为准。"
-	}
-	return tip
-}
-
-func (a *app) pandoraFact(c *ui.Context, label, value string) {
-	t := c.Theme()
-	ui.Column(c).Shrink(0).Gap(1).Children(func() {
-		ui.Text(c, label).FontSize(10).TextColor(t.TextMuted).SingleLine()
-		ui.Text(c, value).FontSize(12).TextColor(t.Text).SingleLine()
-	})
-}
-
-// pandoraRerollText 说明当前重抽状态；服务端给了截止时间就一起写出来。
-func pandoraRerollText(st *pandoraState) string {
-	box := st.status.Box
-	switch {
-	case box.RerollUsed > 0:
-		return "重抽已用完：今天的两次抽奖都结束了。"
-	case st.status.canReroll(pandoraNow()):
-		if box.RerollDeadlineAt != "" {
-			return "今天还能重抽一次，截止 " + pandoraClock(box.RerollDeadlineAt) + "。"
-		}
-		return "今天还能重抽一次。"
-	case box.RerollLimit <= 0:
-		return "这个盲盒没有提供重抽次数。"
-	default:
-		return "重抽机会已过期或已用完。"
-	}
-}
-
-func (a *app) pandoraRulesCard(c *ui.Context, st *pandoraState) {
-	t := c.Theme()
-	balance := ""
-	if cs := a.coins; cs != nil && cs.balanceOK {
-		balance = "当前金币 " + coinThousands(cs.balance) + "。"
-	}
-	ui.Column(c).FillWidth().Gap(6).Padding(0, 2).Children(func() {
-		ui.Text(c, "关于潘多拉").FontSize(12).Bold().SingleLine()
-		for _, line := range []string{
-			"每天 0 点前后（东八区）发放一个盲盒，开启后得到一个随机事件。",
-			"本应用把一天的抽奖定为两次：先开启，再重抽一次；重抽会用服务端返回的新结果更新展示。",
-			"事件生效期间可以花金币延期，延长它的到期时间；延不占抽奖次数，价格逐次上涨，以服务端返回为准。",
-			"开盒、重抽与延期都可能扣金币或改变站内状态，扣费与结果以服务端为准；网络失败不会自动重试，需再点一次。",
-			balance,
-		} {
-			if line != "" {
-				ui.Text(c, "· "+line).FontSize(10).TextColor(t.TextMuted).MaxLines(3)
-			}
-		}
-	})
-}
-
-// pandoraRemainSuffix 给「下一次发放」补一句剩余时间，解析不了就留空。
-func pandoraRemainSuffix(raw string) string {
-	if remain := pandoraRemainText(raw, pandoraNow()); remain != "" {
-		return "（" + remain + "）"
-	}
-	return ""
+	return "盲盒暂时读不到：" + st.err
 }
 
 // pandoraBoxRarity 优先用 rarity，缺省回退 tier_code（线上两者通常相同）。
