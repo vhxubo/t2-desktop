@@ -745,7 +745,9 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 				// 让正文整块悬在中间（和双栏时的顶部对齐不一致）。撑满后正文
 				// 照旧从顶部往下排，收起前后位置不跳。
 				ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() { buildBody() })
-				detailExpandToggle(c, tk, true, "展开评论", "展开评论区，恢复双栏", chevronLeftIcon,
+				// 正文铺满时没有接缝可依，箭头改贴在右上角工具条下方，不再
+				// 悬在半空垂直居中。
+				detailExpandToggle(c, tk, true, true, "展开评论", "展开评论区，恢复双栏", chevronLeftIcon,
 					func() { d.replyCollapsed = false })
 				return
 			}
@@ -754,7 +756,7 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 				replyCol := ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).
 					Radius(replyRadius).Background(replyBg)
 				replyCol.Children(func() { a.replyPane(c, d) })
-				detailExpandToggle(c, tk, false, "展开正文", "展开正文，恢复双栏", chevronRightIcon,
+				detailExpandToggle(c, tk, false, false, "展开正文", "展开正文，恢复双栏", chevronRightIcon,
 					func() { d.bodyCollapsed = false })
 				return
 			}
@@ -801,6 +803,13 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 
 var detailSeamFade = ui.Animation{Duration: 160 * time.Millisecond, Ease: motion.EaseOut}
 
+// 接缝箭头只是提示，不该像主按钮那么抢眼：悬浮时也只淡入到半透明。
+const detailSeamArrowOpacity float32 = 0.55
+
+// 正文铺满时，「展开评论」贴在右上角悬浮工具条下方（工具条顶端 6.5、高约
+// 38），不再按接缝的逻辑垂直居中。
+const detailExpandTop float32 = 56
+
 // detailSplitToggles 在两栏接缝上画对称的一对收起按钮：左半边收起正文、
 // 右半边收起评论，两枚都以接缝为中心。悬浮任意一栏或按钮时两枚一起淡入，
 // 不会藏掉其中一边让人找不到。
@@ -816,8 +825,9 @@ func detailSplitToggles(c *ui.Context, d *detailState, tk *lobetheme.Tokens, bod
 		left.Hovered() || right.Hovered() || left.FocusVisible() || right.FocusVisible() {
 		shown = 1
 	}
-	left.Opacity(left.AnimateTo("shown", shown, detailSeamFade))
-	right.Opacity(right.AnimateTo("shown", shown, detailSeamFade))
+	target := shown * detailSeamArrowOpacity
+	left.Opacity(left.AnimateTo("shown", target, detailSeamFade))
+	right.Opacity(right.AnimateTo("shown", target, detailSeamFade))
 	leftInk, rightInk := tk.TextTertiary, tk.TextTertiary
 	if left.Hovered() {
 		leftInk = tk.TextSecondary
@@ -836,13 +846,18 @@ func detailSplitToggles(c *ui.Context, d *detailState, tk *lobetheme.Tokens, bod
 }
 
 // detailExpandToggle 在一栏收起后，于内容区对应边缘留一条窄栏放展开按钮：
-// atRight 为真贴右边缘（展开评论），否则贴左边缘（展开正文）。restore 由调用
-// 方决定清掉哪一份收起状态。
-func detailExpandToggle(c *ui.Context, tk *lobetheme.Tokens, atRight bool, label, tip string, icon *ui.SVG, restore func()) {
+// atRight 为真贴右边缘（展开评论），否则贴左边缘（展开正文）。atTop 为真时
+// 贴顶部工具条下方，否则垂直居中；正文铺满时没有接缝，箭头不宜悬在半空。
+// restore 由调用方决定清掉哪一份收起状态。
+func detailExpandToggle(c *ui.Context, tk *lobetheme.Tokens, atRight, atTop bool, label, tip string, icon *ui.SVG, restore func()) {
 	b := ui.ButtonBase(c).Label(label).Tooltip(tip).
-		Absolute().TopPercent(50).TranslatePercent(0, -50).
-		Size(16, 40).Radius(8).Cursor(ui.CursorPointer).
+		Absolute().Size(16, 40).Radius(8).Cursor(ui.CursorPointer).
 		Background(tk.BgContainer).Border(1, tk.BorderSecondary)
+	if atTop {
+		b.Top(detailExpandTop)
+	} else {
+		b.TopPercent(50).TranslatePercent(0, -50)
+	}
 	if atRight {
 		b.Right(0)
 	} else {

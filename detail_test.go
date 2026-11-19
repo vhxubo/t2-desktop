@@ -2191,7 +2191,8 @@ func TestDetailReplyCollapsesRight(t *testing.T) {
 		t.Errorf("评论收起后正文不该上下居中：标题 %+v / 原来 %+v", full, title)
 	}
 
-	// 展开入口贴在右边缘，垂直高度与收起入口一致。
+	// 展开入口贴在右边缘、右上角工具条下方；正文铺满时没有接缝，不该再
+	// 按收起入口的高度垂直居中。
 	expand, ok := tt.Find("展开评论")
 	if !ok {
 		t.Fatalf("评论收起后找不到展开图标：%q", tt.Texts())
@@ -2199,8 +2200,8 @@ func TestDetailReplyCollapsesRight(t *testing.T) {
 	if expand.X < 1000 {
 		t.Errorf("展开评论应停在右边缘的窄栏上：%+v", expand)
 	}
-	if d := expand.Y - collapseReply.Y; d > 2 || d < -2 {
-		t.Errorf("展开评论应停在收起前的高度：%+v / 收起前 %+v", expand, collapseReply)
+	if expand.Y < 60 || expand.Y > 140 || expand.Y >= collapseReply.Y-200 {
+		t.Errorf("展开评论应贴在右上角工具条下方，而不是垂直居中：%+v / 收起入口 %+v", expand, collapseReply)
 	}
 	if _, ok := tt.Find("收起正文"); ok {
 		t.Errorf("评论收起后不该再画收起正文，避免两边同时收起：%q", tt.Texts())
