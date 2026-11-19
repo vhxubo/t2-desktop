@@ -1443,8 +1443,8 @@ func TestReplyRowMarksTopicAuthorWithOP(t *testing.T) {
 	}
 }
 
-// 当前账号自己的回复描一圈半透明的强调色虚线框、底色也提亮一档；别人的回复
-// 仍是普通的中性实线描边。
+// 平铺的评论行不再画整圈卡片描边：自己的回复用一档淡底 + 行首一段连续竖条
+// 标记，别人的回复保持透明、没有强调色标记。
 func TestReplyRowHighlightsOwnReply(t *testing.T) {
 	a := detailAppWithReplies(t)
 	a.theme.mode = themeLight
@@ -1458,41 +1458,153 @@ func TestReplyRowHighlightsOwnReply(t *testing.T) {
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 
-	mine, ok := replyRowBorder(tt, "我自己的回复")
+	mineText, ok := tt.Find("我自己的回复")
 	if !ok {
 		t.Fatalf("找不到自己的那条回复：%q", tt.Texts())
 	}
-	other, ok := replyRowBorder(tt, "别人的回复")
+	mine, ok := replyRowVisual(tt, "我自己的回复")
+	if !ok {
+		t.Fatalf("找不到自己的那条回复：%q", tt.Texts())
+	}
+	other, ok := replyRowVisual(tt, "别人的回复")
 	if !ok {
 		t.Fatalf("找不到别人的那条回复：%q", tt.Texts())
 	}
 	t.Logf("自己的：%+v", mine)
 	t.Logf("别人的：%+v", other)
 
-	if b := int(mine.border.B) - int(mine.border.R); b < 40 {
-		t.Errorf("自己的回复应有强调色描边：%v", mine.border)
+	// 自己的回复：行首有一段蓝色竖条（旧版虚线框会量到多段），底色比别人的
+	// 透明行深一档；竖条紧贴行首，不再绕着整行画一圈。
+	if !accentTint(mine.border) {
+		t.Errorf("自己的回复行首应有强调色标记：%v", mine.border)
 	}
-	if mine.border == other.border {
-		t.Errorf("自己的回复与别人的回复描边同色：%v", mine.border)
+	if mine.dashes != 1 {
+		t.Errorf("自己的回复标记应是一段连续竖条，却量到 %d 段", mine.dashes)
 	}
-	// 半透明：描边只上三分之一的强调色（#2563eb 的 R 只有 37），落在行底色
-	// 上之后要明显更淡。
-	if mine.border.R < 140 {
-		t.Errorf("自己的回复描边应当半透明、比满色强调色淡：%v", mine.border)
-	}
-	// 虚线：沿左边框上下量，强调色像素分成好几段，段与段之间留空。
-	if mine.dashes < 3 {
-		t.Errorf("自己的回复应为虚线框，只量到 %d 段", mine.dashes)
-	}
-	if b := int(other.border.B) - int(other.border.R); b > 20 {
-		t.Errorf("别人的回复不该有强调色描边：%v", other.border)
-	}
-	if other.dashes > 0 {
-		t.Errorf("别人的回复应为实线，却量到 %d 段：%v", other.dashes, other.border)
+	if want := int(mineText.X) - 10; absInt(mine.markerX-want) > 2 {
+		t.Errorf("标记应贴在行首左侧约 10px：markerX=%d，期望约 %d", mine.markerX, want)
 	}
 	if mine.fill == other.fill {
-		t.Errorf("自己的回复底色应比别人更亮一档：%v", mine.fill)
+		t.Errorf("自己的回复底色应比别人深一档：%v", mine.fill)
 	}
+	if colorLum(mine.fill) >= colorLum(other.fill) {
+		t.Errorf("自己的回复底色应比别人更暗：自己 %v / 别人 %v", mine.fill, other.fill)
+	}
+
+	// 别人的回复保持平铺透明：既没有强调色竖条，也没有虚线 / 实线边框。
+	if accentTint(other.border) {
+		t.Errorf("别人的回复不该有强调色标记：%v", other.border)
+	}
+	if other.dashes > 0 {
+		t.Errorf("别人的回复不该有边框标记，却量到 %d 段：%v", other.dashes, other.border)
+	}
+}
+
+// 评论树的前序摊平顺序足以判断祖先层是否还在延续：下一行更深，说明当前层
+// 的竖线还要往下画；下一行变浅，说明当前子树结束，竖线要折向内容。
+func TestReplyTreeGuides(t *testing.T) {
+	rows := []replyItem{
+		{ID: "r1", Depth: 0},
+		{ID: "c1", Depth: 1},
+		{ID: "g1", Depth: 2},
+		{ID: "c2", Depth: 1},
+		{ID: "r2", Depth: 0},
+		{ID: "c3", Depth: 1},
+	}
+	got := replyTreeGuides(rows)
+	want := [][]bool{
+		nil,
+		{true},        // c1 下面还有 g1，0 层竖线继续
+		{true, false}, // g1 的下一行退回 1 层，1 层竖线到此折出
+		{false},       // c2 是 r1 的最后一条子回复
+		nil,
+		{false}, // c3 是最后一行
+	}
+	if len(got) != len(want) {
+		t.Fatalf("导轨数量 = %d，期望 %d", len(got), len(want))
+	}
+	for i := range want {
+		if len(got[i].cont) != len(want[i]) {
+			t.Fatalf("第 %d 行导轨长度 = %d，期望 %d", i, len(got[i].cont), len(want[i]))
+		}
+		for l := range want[i] {
+			if got[i].cont[l] != want[i][l] {
+				t.Errorf("第 %d 行第 %d 层延续 = %v，期望 %v", i, l, got[i].cont[l], want[i][l])
+			}
+		}
+	}
+}
+
+// 评论树按 Depth 逐层缩进，并在正文左侧留下对应的竖线：一级回复一条、二级
+// 回复两条。这里量的是正文与作者行的位置，以及竖线所在列上确实画了线。
+func TestReplyTreeRowsIndentAndRail(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.theme.mode = themeLight
+	a.detail.replyList = []replyItem{
+		{ID: "root", Author: "rootAuthor", Floor: 1, Content: "顶层评论"},
+		{ID: "child", Author: "childAuthor", ParentID: "root", ParentFloor: 1,
+			ParentAuthor: "rootAuthor", ParentSummary: "顶层评论",
+			Content: "一层回复", Depth: 1, HasChildren: true},
+		{ID: "grand", Author: "grandAuthor", ParentID: "child",
+			ParentAuthor: "childAuthor", ParentSummary: "一层回复",
+			Content: "二层回复", Depth: 2},
+		{ID: "sibling", Author: "siblingAuthor", ParentID: "root", ParentFloor: 1,
+			ParentAuthor: "rootAuthor", ParentSummary: "顶层评论",
+			Content: "另一个回复", Depth: 1},
+	}
+	a.detail.replyTotal = len(a.detail.replyList)
+	a.detail.rebuildDisplay()
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	root, ok := tt.Find("顶层评论")
+	if !ok {
+		t.Fatalf("找不到顶层正文：%q", tt.Texts())
+	}
+	child, ok := tt.Find("一层回复")
+	if !ok {
+		t.Fatalf("找不到一层正文：%q", tt.Texts())
+	}
+	grand, ok := tt.Find("二层回复")
+	if !ok {
+		t.Fatalf("找不到二层正文：%q", tt.Texts())
+	}
+	if d := child.X - root.X; absInt(int(d-replyTreeIndent)) > 2 {
+		t.Errorf("一层回复应比顶层缩进 %.0fpx，实际 %.1fpx（顶层 %.1f / 一层 %.1f）",
+			replyTreeIndent, d, root.X, child.X)
+	}
+	if d := grand.X - child.X; absInt(int(d-replyTreeIndent)) > 2 {
+		t.Errorf("二层回复应比一层缩进 %.0fpx，实际 %.1fpx（一层 %.1f / 二层 %.1f）",
+			replyTreeIndent, d, child.X, grand.X)
+	}
+
+	im := tt.Image()
+	// 竖线位于本层缩进带中间：正文左移 15px 是最近一条，再左移 22px 是上一层。
+	// 用作者行的高度取样，避开正文折叠按钮和底行图标。
+	railAt := func(authorText, name string, offsets ...int) {
+		t.Helper()
+		author, found := tt.Find(authorText)
+		if !found {
+			t.Fatalf("找不到 %s 的作者：%q", name, tt.Texts())
+		}
+		y := int(author.Y + author.H/2)
+		for _, off := range offsets {
+			x := int(grand.X) - off
+			hits := 0
+			for yy := y - 4; yy <= y+4; yy++ {
+				if colorLum(im.RGBAAt(x, yy)) < 245 {
+					hits++
+				}
+			}
+			if hits < 5 {
+				t.Errorf("%s 左侧 %dpx 处应画着评论树竖线，只量到 %d/9 个深色像素", name, off, hits)
+			}
+		}
+	}
+	// 一层回复下面还有二层回复，0 层导轨贯穿；二层回复同时有 0/1 两层导轨。
+	railAt("childAuthor", "一层回复", 15)
+	railAt("grandAuthor", "二层回复", 15, 37)
 }
 
 // isTopicAuthor 先认作者 id，没有 id 时才退回昵称；匿名帖的「匿名」不算楼主，
@@ -1531,20 +1643,21 @@ func TestReplyTopicAuthorMatch(t *testing.T) {
 	}
 }
 
-// replyRowPixels 是量出来的一行评论的描边与底色。
+// replyRowPixels 量出来的一行平铺评论的底色与行首状态标记。
 type replyRowPixels struct {
-	fill   color.RGBA // 正文左边的行底色
-	border color.RGBA // 左描边上最像强调色的那个像素
-	dashes int        // 沿左描边数到的强调色段数：实线是 1，虚线是好几段
+	fill    color.RGBA // 正文左边的行底色
+	border  color.RGBA // 行首标记上最像强调色的那个像素
+	dashes  int        // 沿行首上下量到的连续强调色段数；连续竖条是 1
+	markerX int        // 强调色标记所在的列，没找到时为 -1
 }
 
-// replyRowBorder 从一条评论的正文往左量这行的描边与底色：正文左边是这行的
-// 内边距（行底色），再往左是 1～2 DIP 的描边。虚线意味着某个 y 上可能正好
-// 落在空档里，所以先在正文左侧一小片区域里找出蓝色像素最多的那一列（描边
-// 本身），再沿这一列上下量段数；描边不是蓝色时退回「离行底色最远」的那个
-// 像素，抗锯齿把描边边缘混成过渡色时也能取到它的本色。
-func replyRowBorder(tt *ui.Tester, text string) (replyRowPixels, bool) {
+// replyRowVisual 从一条评论的正文往左量这行的底色与行首状态标记：正文左边
+// 就是平铺的行底色，再往左约 10px 是「定位 / 置顶 / 自己」的短竖条。仍按列
+// 扫描一小段，是为了兼容标记抗锯齿后的边缘；没有强调色时退回「离行底色最
+// 远」的像素，检查不该有标记的行时也能量出中性色。
+func replyRowVisual(tt *ui.Tester, text string) (replyRowPixels, bool) {
 	var out replyRowPixels
+	out.markerX = -1
 	r, ok := tt.Find(text)
 	if !ok {
 		return out, false
@@ -1552,8 +1665,7 @@ func replyRowBorder(tt *ui.Tester, text string) (replyRowPixels, bool) {
 	im := tt.Image()
 	y := int(r.Y + r.H/2)
 	out.fill = im.RGBAAt(int(r.X)-2, y)
-	// 行底色上下各留白 10～12，正文与头部行之间隔着 Gap：这个窗口只取
-	// 行内部，避开上下的横描边。
+	// 只取行内部，避开上下的顶层分隔线。
 	from, to := y-40, y+12
 	if from < 0 {
 		from = 0
@@ -1574,7 +1686,7 @@ func replyRowBorder(tt *ui.Tester, text string) (replyRowPixels, bool) {
 		}
 	}
 	if column < 0 {
-		// 没有强调色描边：按原来的办法取离行底色最远的像素。
+		// 没有强调色标记：取离行底色最远的像素，确认它只是中性灰。
 		column = int(r.X) - 3
 		best := -1
 		for x := int(r.X) - 3; x >= int(r.X)-22 && x >= 0; x-- {
@@ -1584,6 +1696,7 @@ func replyRowBorder(tt *ui.Tester, text string) (replyRowPixels, bool) {
 		}
 		return out, true
 	}
+	out.markerX = column
 	best := -1
 	inDash := false
 	for yy := from; yy <= to; yy++ {

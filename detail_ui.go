@@ -1307,6 +1307,9 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 		// 基于它。
 		d.rebuildDisplay()
 		rows := d.display
+		// 评论树连线：display 是前序摊平的树，下一行比第 l 层深就说明该层
+		// 竖线还要往下画。给每行算好各层的延续状态，replyRow 据此画导轨。
+		guides := replyTreeGuides(rows)
 		d.list.Key = func(i int) any {
 			if i >= 0 && i < len(rows) && rows[i].ID != "" {
 				return rows[i].ID
@@ -1325,9 +1328,12 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 		// MyGo 的 ui.List 是虚拟化滚动区：只构建可视行，长帖也不会一次
 		// 排完所有评论；Grow(1) + MinHeight(0) 让它吃满卡片中间，输入栏
 		// 始终固定在卡片底部。
+		//
+		// 平铺的评论区：行与行之间没有卡片间距（Gap 0），行距由每行自己的
+		// 上下 padding 给出，纵向导轨因此能首尾相接成一整条评论树。
 		ui.List(c, &d.list, len(rows), func(i int) {
-			a.replyRow(c, rows[i], d.focusID, isNewReply(rows[i].CreatedAt, d.readBase))
-		}).Grow(1).MinHeight(0).Padding(6, 12).Gap(10)
+			a.replyRow(c, rows[i], guides[i], d.focusID, isNewReply(rows[i].CreatedAt, d.readBase))
+		}).Grow(1).MinHeight(0).Padding(6, 12).Gap(0)
 		a.loadMoreFooter(c, d.replyMoreErr, d.replyLoading, func() {
 			a.loadReplies(d.replyPage)
 		})
@@ -1471,37 +1477,103 @@ func (a *app) opTag(c *ui.Context) {
 		Tooltip("楼主的回复")
 }
 
-func (a *app) replyRow(c *ui.Context, r replyItem, focusID string, isNew bool) {
+// 评论树的导轨几何。评论区是前序摊平的树：每条评论按 Depth 缩进，左侧的
+// 竖线加肘形把父子关系连起来，替代原来「一条评论一张圆角卡片」的画法。
+// 列表 Gap 为 0、行距由行内 padding 给出，相邻行的竖线因此首尾相接。
+const (
+	replyTreeIndent = float32(22) // 每层的横向缩进
+	replyRailInset  = float32(7)  // 竖线在本层缩进带里的横向位置
+	replyRowPadY    = float32(10) // 行内上下留白，也是相邻评论之间的行距
+	replyElbowInset = float32(21) // 肘部相对行顶的纵向位置（对齐头像中线）
+)
+
+// replyTreeGuide 是一条评论在评论树里的连线状态：cont[l] 说第 l 层祖先在
+// 本行下方还有后代，竖线因此贯穿整行；否则本行是那棵子树的最后一行，竖线
+// 到肘部为止并向右折出。
+type replyTreeGuide struct {
+	cont []bool
+}
+
+// replyTreeGuides 为摊平后的评论列表算出每行的连线状态。前序排列保证同一
+// 棵子树的行连续，所以只要比较下一行的深度就能判断某一层是否继续。
+func replyTreeGuides(rows []replyItem) []replyTreeGuide {
+	out := make([]replyTreeGuide, len(rows))
+	for i, r := range rows {
+		if r.Depth <= 0 {
+			continue
+		}
+		g := replyTreeGuide{cont: make([]bool, r.Depth)}
+		next := -1
+		if i+1 < len(rows) {
+			next = rows[i+1].Depth
+		}
+		for l := 0; l < r.Depth; l++ {
+			g.cont[l] = next > l
+		}
+		out[i] = g
+	}
+	return out
+}
+
+func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID string, isNew bool) {
 	t := c.Theme()
 	tk := lobetheme.TokensOf(c)
-	bg := t.Surface
-	border := t.Border
-	borderWidth := float32(1)
-	dashed := false
-	if r.Pinned {
-		border = t.Accent
+	focused := focusID != "" && r.ID != "" && r.ID == focusID
+	mine := a.isMine(r.Author)
+
+	// 平铺的一行：静止时透明，悬浮只铺一层极淡的表面；没有卡片底色、圆角与
+	// 描边。自己的回复与定位到的回复各留一档淡底，取代原来的虚线 / 实线框。
+	row := ui.Column(c).FillWidth().Padding(replyRowPadY, 12, replyRowPadY,
+		12+float32(r.Depth)*replyTreeIndent).Gap(6)
+	row.Background(ui.Transparent)
+	switch {
+	case focused:
+		row.Background(tk.PrimaryFillSecondary)
+	case mine:
+		row.Background(tk.PrimaryFillQuaternary)
+	case row.Hovered():
+		row.Background(tk.FillQuaternary)
 	}
-	// 当前账号自己的回复描一圈虚线框、底色再提亮一点点：一长串别人的回复里，
-	// 一眼就能找到「我发的这条」。描边只上三分之一的强调色（其余是底色透出来
-	// 的），再用 1 DIP 的虚线，比置顶 / 定位那种实线强调色描边轻得多，不会把
-	// 正文压下去。
-	if a.isMine(r.Author) {
-		border, borderWidth, dashed = t.Accent.Alpha(0.35), 1, true
-		bg = t.Accent.Mix(t.Surface, 0.94)
+
+	// 状态标记是贴着行首的一小段强调竖条，不再用整圈描边。层级不同用浓淡
+	// 区分：定位到的最亮、置顶次之、自己的回复居中。
+	marker, markerW := ui.Transparent, float32(0)
+	switch {
+	case focused:
+		marker, markerW = tk.Primary, 3
+	case r.Pinned:
+		marker, markerW = tk.Primary, 2
+	case mine:
+		marker, markerW = tk.Primary.Alpha(0.55), 2
 	}
-	// 定位到某条回复时仍是实线强调色：那是「刚跳到这里」的短暂提示，
-	// 和自己那条常驻的虚线框不是一回事。
-	if focusID != "" && r.ID != "" && r.ID == focusID {
-		bg = t.SurfaceHover
-		border, borderWidth, dashed = t.Accent, 1.5, false
-	}
-	left := float32(12)
-	left += float32(r.Depth) * 14
-	row := ui.Column(c).FillWidth().Padding(10, 12, 10, left).Radius(tk.BorderRadius).
-		Background(bg).Border(borderWidth, border).Gap(6)
-	if dashed {
-		row.BorderStyle(ui.BorderDashed)
-	}
+	rail := tk.Border
+	row.Draw(func(p *ui.Painter, box ui.Rect) {
+		if markerW > 0 {
+			p.Line(box.X+2, box.Y+6, box.X+2, box.Y+box.H-6, markerW, marker)
+		}
+		elbowY := box.Y + replyElbowInset
+		contentX := box.X + 12 + float32(r.Depth)*replyTreeIndent - 4
+		for l := 0; l < r.Depth; l++ {
+			x := box.X + 12 + float32(l)*replyTreeIndent + replyRailInset
+			cont := l < len(tree.cont) && tree.cont[l]
+			endY := box.Y + box.H
+			if !cont {
+				endY = elbowY
+			}
+			p.Line(x, box.Y, x, endY, 1, rail)
+			if l == r.Depth-1 || !cont {
+				to := contentX
+				if l+1 < r.Depth {
+					to = box.X + 12 + float32(l+1)*replyTreeIndent + replyRailInset
+				}
+				p.Line(x, elbowY, to, elbowY, 1, rail)
+			}
+		}
+		// 顶层楼层之间一道极淡的分隔线：平铺成一整块，但不会糊成一片。
+		if r.Depth == 0 {
+			p.Line(box.X+12, box.Y+box.H-1, box.X+box.W-12, box.Y+box.H-1, 1, tk.BorderSecondary)
+		}
+	})
 	hovered := row.Hovered()
 	// 评论已关闭时整条都不能回复；已删除的评论同样不提供回复入口。
 	closed := a.detail != nil && a.detail.topic != nil && a.detail.topic.CommentsClosed
