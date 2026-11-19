@@ -741,7 +741,10 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Children(func() {
 			if d.replyCollapsed {
 				// 右栏已收起：正文占满整行，右边缘留一条窄栏把评论区拉回来。
-				ui.Column(c).Grow(1).MinWidth(0).Children(func() { buildBody() })
+				// 这里必须 FillHeight：ui.Row 默认把子元素垂直居中，不撑满就会
+				// 让正文整块悬在中间（和双栏时的顶部对齐不一致）。撑满后正文
+				// 照旧从顶部往下排，收起前后位置不跳。
+				ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() { buildBody() })
 				detailExpandToggle(c, tk, true, "展开评论", "展开评论区，恢复双栏", chevronLeftIcon,
 					func() { d.replyCollapsed = false })
 				return

@@ -2186,6 +2186,10 @@ func TestDetailReplyCollapsesRight(t *testing.T) {
 	if d := full.X - title.X; d > 1 || d < -1 {
 		t.Errorf("评论收起后正文起点不该移动：%+v / 原来 %+v", full, title)
 	}
+	// 收起后正文仍从顶部往下排，不被 ui.Row 整块垂直居中：标题的 Y 不该下移。
+	if d := full.Y - title.Y; d > 2 || d < -2 {
+		t.Errorf("评论收起后正文不该上下居中：标题 %+v / 原来 %+v", full, title)
+	}
 
 	// 展开入口贴在右边缘，垂直高度与收起入口一致。
 	expand, ok := tt.Find("展开评论")
