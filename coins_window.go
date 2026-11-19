@@ -86,6 +86,7 @@ func (a *app) showCoinWindow() {
 		a.coinWin = nil
 		a.setCoinWindowShown(false)
 		a.authGateWindowClosed(toastCoins)
+		a.accountWindowClosed(win)
 	})
 	a.setCoinWindowShown(true)
 }

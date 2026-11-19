@@ -109,7 +109,10 @@ func (a *app) showScoresWindow() {
 		Content:           ui.View(a.scoresWindowView),
 	})
 	a.scoresWin = win
-	win.OnClosed(func() { a.scoresWin = nil })
+	win.OnClosed(func() {
+		a.scoresWin = nil
+		a.accountWindowClosed(win)
+	})
 	a.win.Invalidate()
 }
 

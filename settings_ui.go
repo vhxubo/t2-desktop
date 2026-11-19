@@ -83,6 +83,7 @@ func (a *app) showSettingsWindow() {
 	win.OnClosed(func() {
 		a.settingsWin = nil
 		a.authGateWindowClosed(toastSettings)
+		a.accountWindowClosed(win)
 	})
 }
 

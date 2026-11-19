@@ -57,7 +57,10 @@ func (a *app) showAboutWindow() {
 		Content:           ui.View(a.aboutWindowView),
 	})
 	a.aboutWin = win
-	win.OnClosed(func() { a.aboutWin = nil })
+	win.OnClosed(func() {
+		a.aboutWin = nil
+		a.accountWindowClosed(win)
+	})
 }
 
 // closeAboutWindow 关掉「关于」窗口。只在主线程调用。

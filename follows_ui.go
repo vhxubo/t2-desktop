@@ -78,6 +78,7 @@ func (a *app) showFollowsWindow(tab int) {
 		a.followsWin = nil
 		a.setFollowsWindowShown(false)
 		a.authGateWindowClosed(toastFollows)
+		a.accountWindowClosed(win)
 	})
 	a.setFollowsWindowShown(true)
 }

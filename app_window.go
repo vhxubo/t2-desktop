@@ -109,54 +109,102 @@ func (a *app) afterMainWindowOpen() {
 	}()
 }
 
-// onMainWindowClosed 是主窗口真的关掉之后：附属窗口照旧收掉，但详情窗口
-// 留着——它们是独立的 mygo 窗口，关主窗口不该把正在读的几篇帖子一起关了。
-// 还有详情窗口时只把其中一扇顶上来当排队的窗口，等最后一扇详情窗口关掉
-// 再收这个账号的界面状态（见 afterDetailWindowRemoved）。
+// onMainWindowClosed 是主窗口真的关掉之后：其它窗口一律留着。详情窗口、
+// 通知 / 设置 / 金币等附属窗口都是各自的 mygo 窗口，关主窗口不该把它们一起
+// 关了——那样既丢了正在读的帖子，也会在恰好没有详情窗口时误触 mygo 的
+// 「最后一个窗口关了就退出」。把还活着的一扇顶上来当 publish / toast 的
+// 出口，等这个账号最后一扇窗口关掉再收尾（见 accountWindowClosed）。
 func (a *app) onMainWindowClosed() {
 	a.mainClosed = true
-	a.stopCoinTagWatch()
-	a.stopNotificationWatch()
-	a.closeNotificationWindow()
-	a.closeSettingsWindow()
-	a.closeProfileWindow()
-	a.closeCoinWindow()
-	a.closePandoraWindow()
-	a.closeComposeWindow()
-	a.closeReplyWindow()
-	a.closeEditWindow()
-	a.closeSearchWindow()
-	a.closeAboutWindow()
-	a.closeNetLogWindow()
-	a.closeFollowsWindow()
-	a.closeUserCardWindow()
-	a.closeViewerWindow()
-	if len(a.detailWindows) > 0 {
-		// 主窗口没了，但详情窗口还活着：留一扇做 publish / toast 的出口。
-		if a.win == nil {
-			for _, h := range a.detailWindows {
-				if !h.removed && h.win != nil {
-					a.win = h.win
-					break
-				}
+	a.accountWindowClosed(a.win)
+}
+
+// accountWindowClosed 在任意一扇窗口关掉后调用（窗口的 OnClosed 回调、只在
+// 主线程）：主窗口还开着时什么也不做；主窗口已关时把还活着的一扇顶上来当
+// 排队的窗口，让后台结果和 toast 仍有落点。这个账号再没有别的窗口时，才
+// 真正收掉它的界面状态。
+func (a *app) accountWindowClosed(closed *mygo.Window) {
+	if a.win == closed {
+		a.win = nil
+	}
+	if !a.mainClosed {
+		return
+	}
+	// 留一扇活着窗口顶上；详情窗口还带着正文状态，也要有人接着读。
+	a.win = a.anyLiveWindow()
+	if a.detail == nil {
+		for _, h := range a.detailWindows {
+			if !h.removed {
+				a.detail = h.current()
+				break
 			}
 		}
-		if a.detail == nil {
-			for _, h := range a.detailWindows {
-				if !h.removed {
-					a.detail = h.current()
-					break
-				}
-			}
-		}
+	}
+	if a.hasLiveWindow() {
 		return
 	}
 	a.finalizeAccountWindow()
 }
 
+// anyLiveWindow 找一扇这个账号还开着的窗口：详情窗口优先，然后是通知、
+// 设置、金币等附属窗口。主窗口关掉后用它顶上 a.win；无头测试里原生窗口
+// 都是 nil，这里也只会返回 nil，生命周期改由 hasLiveWindow 判断。
+func (a *app) anyLiveWindow() *mygo.Window {
+	for _, h := range a.detailWindows {
+		if !h.removed && h.win != nil {
+			return h.win
+		}
+	}
+	for _, win := range []*mygo.Window{
+		a.notifWin, a.settingsWin, a.aboutWin, a.netLogWin,
+		a.profileWin, a.coinWin, a.pandoraWin, a.composeWin,
+		a.replyWin, a.editWin, a.searchWin, a.followsWin,
+		a.userCardWin, a.viewerWin, a.scoresWin,
+	} {
+		if win != nil {
+			return win
+		}
+	}
+	return nil
+}
+
+// hasLiveWindow 报告主窗口已关之后，这个账号是否还有别的窗口开着。详情窗口
+// 的状态（而非原生窗口对象）算数：无头测试里没有原生窗口，但详情状态还在，
+// 账号的生命周期就不能结束。
+func (a *app) hasLiveWindow() bool {
+	if !a.mainClosed {
+		return true
+	}
+	for _, h := range a.detailWindows {
+		if !h.removed {
+			return true
+		}
+	}
+	for _, win := range []*mygo.Window{
+		a.notifWin, a.settingsWin, a.aboutWin, a.netLogWin,
+		a.profileWin, a.coinWin, a.pandoraWin, a.composeWin,
+		a.replyWin, a.editWin, a.searchWin, a.followsWin,
+		a.userCardWin, a.viewerWin, a.scoresWin,
+	} {
+		if win != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // finalizeAccountWindow 是这个账号所有窗口都没了之后的收尾：通知长连接、
-// 界面状态都交回账号册（账号本身仍挂在账号册里）。
+// 界面状态都交回账号册（账号本身仍挂在账号册里）。late 的窗口回调可能再
+// 走到这里，finalized 保证只收一次。
 func (a *app) finalizeAccountWindow() {
+	if a.finalized {
+		return
+	}
+	a.finalized = true
+	// 后台刷新跟着账号的生命周期：只要还有一扇窗口开着，通知长连接与金币
+	// 数就继续更新；最后一扇关掉才停。
+	a.stopCoinTagWatch()
+	a.stopNotificationWatch()
 	a.win = nil
 	if a.book == nil {
 		return

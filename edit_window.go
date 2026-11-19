@@ -127,6 +127,7 @@ func (a *app) openEditWindow(st *editState) {
 		if a.win != nil {
 			a.win.Invalidate()
 		}
+		a.accountWindowClosed(win)
 	})
 }
 

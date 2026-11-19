@@ -81,6 +81,7 @@ func (a *app) showPandoraWindow() {
 		a.pandoraWin = nil
 		a.setPandoraWindowShown(false)
 		a.authGateWindowClosed(toastPandora)
+		a.accountWindowClosed(win)
 	})
 	a.setPandoraWindowShown(true)
 }

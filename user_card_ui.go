@@ -95,6 +95,7 @@ func (a *app) showUserCardWindow(username string) {
 		a.userCard = nil // 关掉就丢掉这份资料，下次打开重新拉
 		a.setUserCardWindowShown(false)
 		a.authGateWindowClosed(toastUserCard)
+		a.accountWindowClosed(win)
 	})
 	a.setUserCardWindowShown(true)
 }

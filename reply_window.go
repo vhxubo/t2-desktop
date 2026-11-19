@@ -107,6 +107,7 @@ func (a *app) openReplyWindow() {
 		if a.win != nil {
 			a.win.Invalidate()
 		}
+		a.accountWindowClosed(win)
 	})
 }
 

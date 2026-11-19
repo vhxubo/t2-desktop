@@ -141,11 +141,13 @@ func (a *app) openComposeWindow() {
 	win.OnClosed(func() {
 		a.composeWin = nil
 		a.authGateWindowClosed(toastCompose)
+		a.accountWindowClosed(win)
 	})
 }
 
-// closeComposeWindow 关掉发帖窗口：主窗口关闭或退出登录时调用。草稿留在
-// a.compose 里，下次打开继续写。只在主线程调用。
+// closeComposeWindow 关掉发帖窗口：用户关窗或退出登录时调用。关主窗口不再
+// 顺手收掉它——每个窗口独立。草稿留在 a.compose 里，下次打开继续写。只在
+// 主线程调用。
 func (a *app) closeComposeWindow() {
 	win := a.composeWin
 	if win == nil {

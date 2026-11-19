@@ -237,15 +237,18 @@ type app struct {
 	detailStack []*detailState // 正文内联跳转的返回栈
 	// detailWindows 是这扇主窗口开出的所有详情窗口（一篇一扇，可合并成
 	// 一扇带标签的窗口）。详情窗口与主窗口互不牵连：关掉一篇不影响别的
-	// 标签、别的窗口；主窗口关掉后详情窗口仍可继续看，最后一个详情窗口
-	// 关掉时这个账号的界面才真正收掉。都只在主线程读写。
+	// 标签、别的窗口；主窗口关掉后详情窗口仍可继续看，最后一扇窗口关掉时
+	// 这个账号的界面才真正收掉。都只在主线程读写。
 	detailWindows []*detailWindow
 	nextDetailID  int
-	mainClosed    bool // 主窗口已经真的关掉，但详情窗口还开着
-	emojis        map[string]emojiInfo
-	emojiLoading  bool
-	emojiTried    bool
-	md            *markdown.Options
+	mainClosed    bool // 主窗口已经真的关掉，但还有别的窗口开着
+	// finalized 保证这个账号的界面只收尾一次：所有窗口（主窗口、详情窗口与
+	// 各附属窗口）都关掉时才 finalize，晚到的窗口关闭回调不再重复收尾。
+	finalized    bool
+	emojis       map[string]emojiInfo
+	emojiLoading bool
+	emojiTried   bool
+	md           *markdown.Options
 	// commentMd 是评论正文的 Markdown 选项：与正文同一套渲染，字号更小
 	// （commentTextStyle），让评论区比正文紧凑一号。
 	commentMd *markdown.Options
@@ -2005,9 +2008,10 @@ func (a *app) handleCallbackURL(raw string) {
 // （AllowForeground），因此这次抢前台是被系统允许的。各附属窗口的「打开即拉起」
 // 用的也是这套 IsMinimized→Restore / Show / Focus / Invalidate 写法。
 func (a *app) raiseMainWindow() {
-	// 主窗口已经关了：a.win 现在指着一扇详情窗口（只用来排后台结果），
-	// 不能把它当成主窗口硬拉到前台。
+	// 主窗口已经关了，但详情 / 其它窗口还开着：a.win 只是后台结果的出口，
+	// 不能把它当主窗口硬拉到前台。重开一扇真正的主窗口，其它窗口照旧留着。
 	if a.mainClosed {
+		a.openMainWindow()
 		return
 	}
 	win := a.win

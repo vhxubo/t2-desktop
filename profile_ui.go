@@ -73,6 +73,7 @@ func (a *app) showProfileWindow() {
 		a.profileWin = nil
 		a.setProfileWindowShown(false)
 		a.authGateWindowClosed(toastProfile)
+		a.accountWindowClosed(win)
 	})
 	a.setProfileWindowShown(true)
 }

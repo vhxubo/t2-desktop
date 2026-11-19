@@ -152,6 +152,7 @@ func (a *app) showNotificationWindow() {
 		a.notifWin = nil
 		a.setNotificationWindowShown(false)
 		a.authGateWindowClosed(toastNotifications)
+		a.accountWindowClosed(win)
 	})
 	a.setNotificationWindowShown(true)
 }

@@ -62,6 +62,7 @@ func (a *app) showSearchWindow() {
 		a.stopSearchTimer()
 		a.searchWin = nil
 		a.authGateWindowClosed(toastSearch)
+		a.accountWindowClosed(win)
 	})
 	if a.win != nil {
 		a.win.Invalidate() // 标题栏的放大镜高亮跟着窗口状态走

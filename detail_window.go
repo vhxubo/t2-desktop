@@ -270,26 +270,10 @@ func (a *app) disposeDetailState(d *detailState) {
 	d.dead = true
 }
 
-// afterDetailWindowRemoved 在主窗口已关、详情窗口也全关掉后收掉这个账号的
-// 界面状态；只要还有详情窗口，账号的生命周期就继续。刚关掉的那扇如果正被
-// 借来当排队的窗口，先换一扇还开着的顶上。
+// afterDetailWindowRemoved 在详情窗口关掉后走通用的窗口收尾：只要这个账号
+// 还有别的窗口（详情或其它附属窗口），生命周期就继续，最后一扇关掉才收尾。
 func (a *app) afterDetailWindowRemoved(closed *mygo.Window) {
-	if a.mainClosed && a.win == closed {
-		a.win = nil
-		for _, h := range a.detailWindows {
-			if !h.removed && h.win != nil {
-				a.win = h.win
-				if a.detail == nil {
-					a.detail = h.current()
-				}
-				break
-			}
-		}
-	}
-	if len(a.detailWindows) > 0 || !a.mainClosed || a.win != nil {
-		return
-	}
-	a.finalizeAccountWindow()
+	a.accountWindowClosed(closed)
 }
 
 // closeAllDetailWindows 退出账号、收进托盘以外的一次性清理（Destroy 不弹

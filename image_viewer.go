@@ -190,6 +190,7 @@ func (a *app) showViewerWindow() {
 		if v := a.viewer; v != nil {
 			v.close()
 		}
+		a.accountWindowClosed(win)
 	})
 }
 

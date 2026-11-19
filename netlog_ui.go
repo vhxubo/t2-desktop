@@ -77,6 +77,7 @@ func (a *app) showNetLogWindow() {
 	win.OnClosed(func() {
 		a.netLogWin = nil
 		a.unwatchNetLog()
+		a.accountWindowClosed(win)
 	})
 }
 
