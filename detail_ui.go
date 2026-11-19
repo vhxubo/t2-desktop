@@ -725,7 +725,7 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 				d.bodyWidth = w * 0.8
 			}
 		}
-		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Padding(12, 14).Children(func() {
+		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Children(func() {
 			// 正文可滚动（Grow(1) 吃满面板剩余高度，MinHeight(0) 让它收缩到比
 			// 内容更矮，正文在框内滚动）；作者信息收在标题下方，底部固定的是
 			// 表态 / 打赏互动栏。面板内部铺一层 Lobe 表面，靠背景色与评论区
@@ -744,10 +744,11 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 					a.topicInteractionBar(c, d)
 				})
 			})
-			// 评论区卡片的底色比页面底色略深一点（浅灰 / 深灰），和正文面板
-			// 分出层次；收起正文时它吃掉整行。
+			// 评论区用一块底色和白色正文面板分出层次；收起正文时它吃掉整行。
+			// 浅色下做成平角的阅读面板，深色沿用原来的圆角卡片。
+			replyRadius, replyBg := detailReplyStyle(t, tk)
 			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).
-				Radius(tk.BorderRadiusLG).Background(detailReplySurface(t)).Children(func() {
+				Radius(replyRadius).Background(replyBg).Children(func() {
 				a.replyPane(c, d)
 			})
 		})
@@ -765,11 +766,17 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 	// 构建时已经就地挂好，这里不需要再叠一层弹窗。
 }
 
-// detailReplySurface 是评论区卡片的底色：页面底色与文字色按很小比例混合，
-// 得到浅色下的浅灰、深色下的深灰。比单独写死两个十六进制值更能跟随主题，
-// 也不会和正文卡片（页面底色 + 描边）混成一片。
-func detailReplySurface(t *ui.Theme) ui.Color {
-	return t.Background.Mix(t.Text, 0.05)
+// detailReplyStyle 返回评论区面板的圆角与底色。
+//
+// 浅色主题去掉圆角，让评论区成为一块通体的阅读面板；底色用 Lobe 的次级
+// 表面色叠在页面底色上（约 #f0f0f0），与纯白的正文面板拉开一点层次，又
+// 不会像直接混文字色那样发脏。深色主题沿用原来的做法：圆角卡片 + 页面
+// 底色混一点文字色得到的深灰。
+func detailReplyStyle(t *ui.Theme, tk *lobetheme.Tokens) (float32, ui.Color) {
+	if t.Dark {
+		return tk.BorderRadiusLG, t.Background.Mix(t.Text, 0.05)
+	}
+	return 0, tk.FillSecondary.Over(t.Background)
 }
 
 // detailToolKind 决定一枚工具条动作交给哪支画法。
@@ -877,7 +884,9 @@ func (a *app) detailToolBar(c *ui.Context, d *detailState) {
 		return
 	}
 	tk := lobetheme.TokensOf(c)
-	ui.Row(c).Absolute().Top(15).Right(22).Gap(2).Padding(3).
+	// 悬浮条与右栏「评论」标题垂直居中：标题中心距内容区顶部约 25，悬浮条
+	// 本身高约 38（30 的按钮 + 内边距 + 描边），所以顶部落在 6 附近。
+	ui.Row(c).Absolute().Top(6.5).Right(22).Gap(2).Padding(3).
 		Radius(tk.BorderRadiusLG).Background(tk.BgElevated).
 		Border(1, tk.BorderSecondary).Children(func() {
 		for _, act := range acts {

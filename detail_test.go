@@ -611,8 +611,8 @@ func TestTopicInteractionBarStaysPinned(t *testing.T) {
 	}
 }
 
-// 详情页是左右两张卡片：左边标题 + 正文，右边评论；评论卡片用和页面
-// 不同的底色分出来，输入框固定在评论卡片底部。
+// 详情页是左右两栏：左边标题 + 正文，右边评论；评论区用和页面不同的底色
+// 分出来，输入框固定在评论区底部。
 func TestDetailSplitViewLayout(t *testing.T) {
 	a := detailAppWithReplies(t)
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -668,6 +668,52 @@ func TestDetailSplitViewLayout(t *testing.T) {
 	panel := im.RGBAAt(int(comment.X)-6, int(comment.Y+comment.H/2))
 	if page == panel {
 		t.Errorf("评论卡片没有独立底色：页面 %v / 卡片 %v", page, panel)
+	}
+}
+
+// 浅色主题把评论区做成平角的浅灰面板，深色仍用原来的圆角卡片 + 主题混合灰。
+// 两套主题都要测：别把浅色的平角处理套到深色上，也别让深色丢了圆角。
+func TestDetailReplyStyleByTheme(t *testing.T) {
+	rgba := func(c ui.Color) [4]uint8 { return [4]uint8{c.R, c.G, c.B, c.A} }
+
+	light := homeTheme(false)
+	tkLight := lobeCfg.Tokens(false)
+	lightRadius, lightBg := detailReplyStyle(light, tkLight)
+	if lightRadius != 0 {
+		t.Errorf("浅色评论区应去掉圆角，实际半径 %v", lightRadius)
+	}
+	if got, want := rgba(lightBg), rgba(tkLight.FillSecondary.Over(light.Background)); got != want {
+		t.Errorf("浅色评论区底色应使用 Lobe 次级表面色：得到 %v，期望 %v", got, want)
+	}
+
+	dark := homeTheme(true)
+	tkDark := lobeCfg.Tokens(true)
+	darkRadius, darkBg := detailReplyStyle(dark, tkDark)
+	if darkRadius != tkDark.BorderRadiusLG {
+		t.Errorf("深色评论区应保留大圆角，实际半径 %v（期望 %v）", darkRadius, tkDark.BorderRadiusLG)
+	}
+	if got, want := rgba(darkBg), rgba(dark.Background.Mix(dark.Text, 0.05)); got != want {
+		t.Errorf("深色评论区底色错误：得到 %v，期望 %v", got, want)
+	}
+}
+
+// 悬浮工具条压在右栏顶部，要和「评论」标题上下居中：标题与工具条中心
+// 对齐，才不会看起来一边高一边低。
+func TestDetailToolbarCenteredWithReplyTitle(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	title, ok := tt.Find("评论")
+	if !ok {
+		t.Fatalf("找不到评论标题：%q", tt.Texts())
+	}
+	tool, ok := tt.Find("复制帖子链接")
+	if !ok {
+		t.Fatalf("找不到悬浮工具条按钮：%q", tt.Texts())
+	}
+	if d := (tool.Y + tool.H/2) - (title.Y + title.H/2); d > 1 || d < -1 {
+		t.Errorf("悬浮工具条没有和评论标题居中：工具条中心 %.1f / 标题中心 %.1f",
+			tool.Y+tool.H/2, title.Y+title.H/2)
 	}
 }
 

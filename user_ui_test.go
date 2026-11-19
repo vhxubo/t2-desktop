@@ -60,8 +60,8 @@ func TestDetailAuthorAvatarFollowsNameSize(t *testing.T) {
 	if got, want := author.Bounds.W, userAvatarSize(postAuthorFontSize); got != want {
 		t.Errorf("帖子作者头像宽 %.1f，期望 %.1f", got, want)
 	}
-	// 头像在正文卡片内（卡片左边 14 + 正文内边距 24），不再贴着窗口页头。
-	if author.Bounds.X < 30 {
+	// 正文卡片贴着窗口左缘，头像靠卡片自己的 28px 滚动内边距留白，不再贴边。
+	if author.Bounds.X < 20 {
 		t.Errorf("帖子作者头像应在正文卡片内：x=%.1f", author.Bounds.X)
 	}
 	for _, name := range []string{"dannyng", "alice", "mod"} {
