@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
 // 编辑个人介绍（api-economy.md 的「个人介绍」）
@@ -130,7 +131,8 @@ func (a *app) submitUserCardAbout() {
 }
 
 // userCardAboutEditor 是编辑个人介绍的模态框：正文、公开开关、字数与确认。
-// 保存按钮上写明 500 金币，用户点它才发请求。
+// 保存按钮上写明 500 金币，用户点它才发请求。用 Lobe 的 Modal 统一标题、
+// ✕ 关闭、取消/确认与滚动区；保存期间的进度留在内容里。
 func (a *app) userCardAboutEditor(c *ui.Context) {
 	cs := a.userCard
 	if cs == nil || !cs.aboutEditOpen {
@@ -143,9 +145,13 @@ func (a *app) userCardAboutEditor(c *ui.Context) {
 	if count > userAboutMaxChars {
 		countColor = t.Danger
 	}
-	dismissed := ui.Modal(c, &open, func() {
-		ui.Column(c).Width(420).Gap(10).Children(func() {
-			ui.Text(c, "编辑个人介绍").FontSize(16).Bold()
+	ok := feedback.Modal(c, &open, feedback.ModalProps{
+		Title:      "编辑个人介绍",
+		Width:      420,
+		OkText:     "保存并支付 500 金币",
+		CancelText: "取消",
+	}, func() {
+		ui.Column(c).FillWidth().Gap(10).Children(func() {
 			ui.Text(c, "保存会消耗 500 金币，审核通过后扣除；违规内容会被清空并暂停编辑。").
 				FontSize(11).TextColor(t.TextMuted).MaxLines(3)
 			ui.TextArea(c, &cs.aboutDraft).Label("个人介绍").
@@ -159,26 +165,23 @@ func (a *app) userCardAboutEditor(c *ui.Context) {
 			if cs.aboutErrEdit != "" {
 				ui.Text(c, cs.aboutErrEdit).FontSize(11).TextColor(t.Danger).MaxLines(2)
 			}
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Spacer(c).Grow(1)
-				if cs.aboutBusy {
+			if cs.aboutBusy {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Spinner(c).Size(13, 13)
 					ui.Text(c, "正在保存…").FontSize(11).TextColor(t.TextMuted)
-					return
-				}
-				if ui.Button(c, "取消").Clicked() {
-					cs.aboutEditOpen = false
-					cs.aboutErrEdit = ""
-				}
-				save := ui.PrimaryButton(c, "保存并支付 500 金币")
-				if save.Clicked() {
-					a.submitUserCardAbout()
-				}
-			})
+				})
+			}
 		})
 	})
-	if dismissed.Dismissed() {
+	// 取消、✕、Esc 与点窗外都由 Modal 关窗：清掉草稿状态。
+	if !open {
 		cs.aboutEditOpen = false
 		cs.aboutErrEdit = ""
+		return
+	}
+	// busy 时 Modal 的确认按钮仍是亮的，submit 自己会拦住重复提交；
+	// 成功后由异步回调清掉 aboutEditOpen，弹窗自然消失。
+	if ok {
+		a.submitUserCardAbout()
 	}
 }
