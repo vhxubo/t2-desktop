@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/egoist/mygo/ui"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 )
 
 // 详情页的临时回复身份
@@ -171,8 +172,8 @@ func (a *app) applyReplyIdentity(d *detailState, host replySurface, id, name str
 	a.toast(target, "已切换为以 @"+name+" 的身份回复，关闭详情页后恢复")
 }
 
-// toggleReplyIdentityPicker 开关身份气泡：在另一扇窗口里点开时把气泡挪过去，
-// 而不是同时显示两个。
+// toggleReplyIdentityPicker 开关身份气泡（显式入口）。点标签时走
+// prepareReplyIdentityPicker，开合交给 Lobe Popover。
 func (a *app) toggleReplyIdentityPicker(d *detailState, host replySurface) {
 	if d == nil {
 		return
@@ -182,6 +183,16 @@ func (a *app) toggleReplyIdentityPicker(d *detailState, host replySurface) {
 		return
 	}
 	d.identityOpen = true
+	d.identityHost = host
+}
+
+// prepareReplyIdentityPicker 记下这次点击所在的 host。开合完全交给 Lobe
+// Popover：它在构建期切换 identityOpen，OnClick 在帧末才跑，这里不能再碰
+// identityOpen，否则会把刚打开的气泡关掉。
+func (a *app) prepareReplyIdentityPicker(d *detailState, host replySurface) {
+	if d == nil {
+		return
+	}
 	d.identityHost = host
 }
 
@@ -257,9 +268,13 @@ func (a *app) replyIdentityBadge(c *ui.Context, d *detailState, host replySurfac
 		badge.Label("当前账号").Tooltip(
 			"点一下换个账号来回复这篇帖子；只对这一篇生效，关闭详情页后恢复")
 	}
-	badge.OnClick(func() { a.toggleReplyIdentityPicker(d, host) })
-	if d.identityOpen && d.identityHost == host {
-		ui.Popover(c, badge, &d.identityOpen, func() {
+	badge.OnClick(func() { a.prepareReplyIdentityPicker(d, host) })
+	// 气泡关着时每个 host 都要把 Popover 建出来，否则点开的那一次点击不会
+	// 传到 Lobe；气泡开着时只让拥有它的 host 建，避免两扇窗口同时弹出。
+	if !d.identityOpen || d.identityHost == host {
+		lobeoverlay.Popover(c, badge, &d.identityOpen, lobeoverlay.PopoverProps{
+			Placement: lobeoverlay.Bottom,
+		}, func() {
 			a.replyIdentityPanel(c, d, host)
 		})
 	}
