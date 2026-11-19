@@ -1,6 +1,9 @@
 package main
 
-import "github.com/egoist/mygo/ui"
+import (
+	"github.com/egoist/mygo/ui"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
+)
 
 // 两列级联选择（Cascader）。
 //
@@ -80,9 +83,10 @@ func cascader(c *ui.Context, label string, options []cascaderOption, value *stri
 		ui.Text(c, display).FontSize(12).SingleLine().TextColor(textColor)
 		ui.Icon(c, chevronDownIcon).Size(10, 10).TextColor(t.TextMuted)
 	})
-	trigger.OnClick(func() { st.open = !st.open })
-
-	ui.Popover(c, trigger, &st.open, func() {
+	// Lobe 的 Popover 自己处理点触发框开合，这里不再手动翻转 st.open。
+	lobeoverlay.Popover(c, trigger, &st.open, lobeoverlay.PopoverProps{
+		Placement: lobeoverlay.Bottom,
+	}, func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Start).Children(func() {
 			// 两列都限高并各自滚动，窗口缩到最小尺寸时面板也不会长出窗口。
 			ui.Scroll(c).Width(180).MaxHeight(320).Children(func() {
