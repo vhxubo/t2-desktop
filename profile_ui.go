@@ -9,6 +9,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
 // 「我的」窗口：点击标题栏上登录账号的头像打开。它和通知、设置一样是独立
@@ -963,7 +964,8 @@ func (a *app) submitDeleteCollection() {
 }
 
 // profileCollectionDialogs 是改名与删除的对话框。同一时刻只开一个：改名优先，
-// 关掉之后才轮到删除确认。
+// 关掉之后才轮到删除确认。两者都用 Lobe 的 Modal：标题、✕ 关闭、取消/确认
+// 与滚动区由组件提供，和发帖弹窗用的是同一套 token 与动画。
 func (a *app) profileCollectionDialogs(c *ui.Context) {
 	ps := a.profile
 	if ps == nil {
@@ -972,31 +974,29 @@ func (a *app) profileCollectionDialogs(c *ui.Context) {
 	t := c.Theme()
 	if ps.collEdit != "" {
 		open := true
-		dismissed := ui.Modal(c, &open, func() {
-			ui.Column(c).Width(380).Gap(10).Children(func() {
-				ui.Text(c, "重命名合集").FontSize(16).Bold()
+		ok := feedback.Modal(c, &open, feedback.ModalProps{
+			Title:      "重命名合集",
+			Width:      380,
+			OkText:     "保存",
+			CancelText: "取消",
+		}, func() {
+			ui.Column(c).FillWidth().Gap(10).Children(func() {
 				ui.TextInput(c, &ps.collDraft).Label("合集名称").
 					Placeholder("合集名称").MaxLength(collectionNameMax).
 					FillWidth().Disabled(ps.collBusy != "")
 				ui.Textf(c, "最多 %d 个字；改名不会改变合集里的帖子。", collectionNameMax).
 					FontSize(11).TextColor(t.TextMuted).MaxLines(2)
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Spacer(c).Grow(1)
-					if ui.Button(c, "取消").Clicked() {
-						ps.collEdit, ps.collDraft = "", ""
-					}
-					save := ui.PrimaryButton(c, "保存")
-					if ps.collBusy != "" {
-						save.Disabled(true)
-					}
-					if save.Clicked() {
-						a.submitRenameCollection()
-					}
-				})
 			})
 		})
-		if dismissed.Dismissed() {
+		// 取消、✕、Esc 与点窗外都由 Modal 关窗：清空草稿状态。
+		if !open {
 			ps.collEdit, ps.collDraft = "", ""
+			return
+		}
+		// busy 时 Modal 的确认按钮仍是亮的，但 submit 自己会拦住重复提交；
+		// 成功后由异步回调清掉 collEdit，弹窗自然消失。
+		if ok {
+			a.submitRenameCollection()
 		}
 		return
 	}
@@ -1011,28 +1011,21 @@ func (a *app) profileCollectionDialogs(c *ui.Context) {
 		}
 	}
 	open := true
-	dismissed := ui.Modal(c, &open, func() {
-		ui.Column(c).Width(420).Gap(10).Children(func() {
-			ui.Text(c, "删除合集？").FontSize(16).Bold()
-			ui.Text(c, "删除"+name+"只删合集本身：合集里的帖子会被取消挂载，"+
-				"帖子、评论和浏览数都不受影响。删除不可恢复。").
-				TextColor(t.TextMuted).MaxLines(3)
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Spacer(c).Grow(1)
-				if ui.Button(c, "取消").Clicked() {
-					ps.collDelete = ""
-				}
-				confirm := ui.PrimaryButton(c, "确认删除")
-				if ps.collBusy != "" {
-					confirm.Disabled(true)
-				}
-				if confirm.Clicked() {
-					a.submitDeleteCollection()
-				}
-			})
-		})
+	ok := feedback.Modal(c, &open, feedback.ModalProps{
+		Title:      "删除合集？",
+		Width:      420,
+		OkText:     "确认删除",
+		CancelText: "取消",
+	}, func() {
+		ui.Text(c, "删除"+name+"只删合集本身：合集里的帖子会被取消挂载，"+
+			"帖子、评论和浏览数都不受影响。删除不可恢复。").
+			TextColor(t.TextMuted).MaxLines(3)
 	})
-	if dismissed.Dismissed() {
+	if !open {
 		ps.collDelete = ""
+		return
+	}
+	if ok {
+		a.submitDeleteCollection()
 	}
 }
