@@ -7,6 +7,13 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/field"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 搜索窗口：和通知 / 设置 / 我的 / 金币一样是一个独立的 mygo 窗口。入口是主
@@ -15,6 +22,12 @@ import (
 //
 // 为什么不放进侧边栏：搜索是「随时用一下就走」的动作，不是一页常驻内容；
 // 独立窗口还能让主窗口的列表保持原来的滚动位置。
+//
+// 界面整体走 Lobe UI：搜索框、分段筛选、标签芯片、空状态、转圈与提示分别由
+// field.Input、action.Segmented / Button、display.Empty、feedback.Spin / Alert
+// 提供，颜色取 TokensOf(c)，和主窗口及各附属窗口同一套观感。列表仍用 mygo
+// 的虚拟 ui.List：Lobe 没有带 AtEnd 无限滚动的列表组件，通知窗口也一样保留。
+// 标题栏按钮沿用应用统一的 titleBarButton（图标 + tooltip 的关闭按钮约定）。
 
 /* ------------------------------------------------------------------
    窗口
@@ -111,9 +124,9 @@ func (a *app) searchWindowVisible() bool { return a.searchWin != nil }
 
 func (a *app) searchWindowView(c *ui.Context) {
 	a.applyTheme(c)
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	a.srv = c.Services()
-	c.Root().Background(t.Background)
+	c.Root().Background(tk.BgLayout)
 	// 本窗口里发起的操作结果以 toast 显示在这里，不退回主窗口。
 	a.drainToasts(c, a.claimsToasts(toastSearch))
 	// Esc 关闭窗口：随时可以从标题栏的放大镜再打开。
@@ -125,15 +138,18 @@ func (a *app) searchWindowView(c *ui.Context) {
 	}
 	ui.Column(c).Fill().Children(func() {
 		// 自绘标题栏：拖动窗口、右上角最小化与关闭，画法与其它附属窗口一致。
+		// 图标换成 Lucide 放大镜，文字走 display.Text，配色走 Lobe token。
 		ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
-			Background(t.Surface).DragWindow().Children(func() {
+			Background(tk.BgLayout).DragWindow().Children(func() {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, searchIcon).Size(15, 15).TextColor(t.TextMuted)
-				ui.Text(c, "搜索").FontSize(13).Bold().SingleLine().TextColor(t.Text)
+				display.Icon(c, lucide.Search(), display.IconProps{Size: display.IconSmall}).
+					TextColor(tk.Primary)
+				display.Text(c, "搜索", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
 				if st.loaded {
-					ui.Textf(c, "共 %d 条", st.total).FontSize(11).
-						TextColor(t.TextMuted).SingleLine()
+					display.Text(c, fmt.Sprintf("共 %d 条", st.total), display.TextProps{
+						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+					})
 				}
 				a.accountWindowTag(c)
 			})
@@ -144,19 +160,27 @@ func (a *app) searchWindowView(c *ui.Context) {
 			})
 			titleBarButton(c, titleClose, "关闭", a.closeSearchWindow)
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
-		// 输入与类型：输入框占满整行，类型分段控件在下。
+		// 输入与类型：Lobe 的 Search 图标前缀输入框占满整行，类型用分段控件。
 		ui.Column(c).FillWidth().Padding(12, 14).Gap(10).Children(func() {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, searchIcon).Size(16, 16).TextColor(t.TextMuted)
-				ui.TextInput(c, &st.q).
-					Placeholder("搜索帖子、用户、节点或标签（至少 2 个字）").
-					FillWidth().Bind(&st.input)
+			in := composeInput(c, &st.q, field.InputProps{
+				Placeholder: "搜索帖子、用户、节点或标签（至少 2 个字）",
+				Size:        lobetheme.Small,
+				Prefix:      lucide.Search(),
 			})
-			ui.Segmented(c, &st.kind, searchKindLabels...)
+			in.Label("搜索关键词").Bind(&st.input)
+			// action.Segmented 绑到本地值，写回 st.kind 后由下面的逐帧比较
+			// 统一清掉旧类型的结果并重排防抖。
+			selected := st.kind
+			action.Segmented(c, &selected, searchKindLabels, action.SegmentedProps{
+				Size: lobetheme.Small, Block: true,
+			})
+			if selected != st.kind {
+				st.kind = selected
+			}
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
 		// 输入或类型变了：重排防抖。视图每帧都会走一遍，靠 lastQ / lastKind
 		// 判断，只有真的变了才动请求。换类型要清掉上一次的结果，避免旧类型
@@ -196,9 +220,9 @@ func (a *app) searchWindowView(c *ui.Context) {
 	a.authDialogFor(c, toastSearch)
 }
 
-// searchBody 是结果区：各种说明与结果列表。
+// searchBody 是结果区：各种说明与结果列表。整页级的空 / 错误状态保留内联，
+// 因为它们要说明页面为什么空着，并给出「重试」入口（不是一次操作的回执）。
 func (a *app) searchBody(c *ui.Context, st *searchState) {
-	t := c.Theme()
 	query := strings.TrimSpace(st.q)
 	switch {
 	case query == "":
@@ -208,29 +232,40 @@ func (a *app) searchBody(c *ui.Context, st *searchState) {
 		a.searchPlaceholder(c, "关键词太短", "至少输入 2 个字符再搜索。")
 		return
 	case searchKind(st.kind) == searchFavorites && !a.auth.loggedIn():
-		ui.Column(c).Grow(1).Center().Gap(12).Padding(24).Children(func() {
-			ui.Text(c, "搜索自己的收藏需要登录").FontSize(15).Bold()
-			ui.Text(c, "收藏是私人内容，只有登录后才能搜索。").TextColor(t.TextMuted)
-			if ui.PrimaryButton(c, "去登录").Clicked() {
-				a.requestLoginFor(toastSearch, "登录后才能搜索自己的收藏。", func() {
-					a.runSearch(st, st.gen, 1)
-				})
-			}
+		ui.Column(c).Grow(1).MinHeight(0).Center().Children(func() {
+			display.Empty(c, display.EmptyProps{
+				Icon:        lucide.Bookmark(),
+				Title:       "搜索自己的收藏需要登录",
+				Description: "收藏是私人内容，只有登录后才能搜索。",
+				Action: func() {
+					if action.Button(c, "去登录", action.ButtonProps{
+						Size: lobetheme.Small, Variant: action.Primary,
+					}).Clicked() {
+						a.requestLoginFor(toastSearch, "登录后才能搜索自己的收藏。", func() {
+							a.runSearch(st, st.gen, 1)
+						})
+					}
+				},
+			})
 		})
 		return
 	}
 	switch {
 	case st.loading && len(st.hits) == 0:
-		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(26, 26)
-			ui.Text(c, searchSearching).TextColor(t.TextMuted)
+		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
+			feedback.Spin(c, feedback.SpinProps{CustomSize: 26}, nil)
+			display.Text(c, searchSearching, display.TextProps{
+				Type: display.TextSecondary, Rows: 1,
+			})
 		})
 		return
 	case st.err != "":
-		ui.Column(c).Grow(1).Center().Gap(12).Padding(24).Children(func() {
-			ui.Text(c, "搜索失败").FontSize(15).Bold()
-			ui.Text(c, st.err).TextColor(t.Danger).MaxLines(3)
-			if ui.Button(c, "重试").Clicked() {
+		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(12).Padding(24).Children(func() {
+			feedback.Alert(c, "搜索失败", feedback.AlertProps{
+				Type: feedback.Error, Variant: feedback.Soft,
+				Description: st.err,
+			})
+			if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
 				a.runSearch(st, st.gen, 1)
 			}
 		})
@@ -246,12 +281,16 @@ func (a *app) searchBody(c *ui.Context, st *searchState) {
 	}
 
 	if st.note != "" {
-		ui.Text(c, st.note).FontSize(11).TextColor(t.TextMuted).Padding(0, 14, 6, 14).MaxLines(2)
+		display.Text(c, st.note, display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 2,
+		}).Padding(0, 14, 6, 14)
 	}
 	if st.firstLoading && len(st.hits) > 0 {
 		ui.Row(c).Padding(0, 14, 6, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Spinner(c).Size(13, 13)
-			ui.Text(c, searchSearching).FontSize(11).TextColor(t.TextMuted)
+			feedback.Spin(c, feedback.SpinProps{CustomSize: 13}, nil)
+			display.Text(c, searchSearching, display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		})
 	}
 	hits := st.hits
@@ -271,68 +310,86 @@ func (a *app) searchBody(c *ui.Context, st *searchState) {
 	}
 	if st.loading && !st.firstLoading && len(st.hits) > 0 {
 		ui.Row(c).Padding(6, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Spinner(c).Size(13, 13)
-			ui.Text(c, "正在加载更多…").FontSize(11).TextColor(t.TextMuted)
+			feedback.Spin(c, feedback.SpinProps{CustomSize: 13}, nil)
+			display.Text(c, "正在加载更多…", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		})
 	}
 }
 
-// searchPlaceholder 是结果区的空状态：标题 + 一行说明，居中。
+// searchPlaceholder 是结果区的空状态：Lobe 的 Empty（图标 + 标题 + 一行说明），
+// 在剩余空间里居中。
 func (a *app) searchPlaceholder(c *ui.Context, title, hint string) {
-	t := c.Theme()
-	ui.Column(c).Grow(1).Center().Gap(8).Padding(24).Children(func() {
-		ui.Icon(c, searchIcon).Size(30, 30).TextColor(t.TextMuted)
-		ui.Text(c, title).FontSize(14).Bold()
-		ui.Text(c, hint).FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+	ui.Column(c).Grow(1).MinHeight(0).Center().Children(func() {
+		display.Empty(c, display.EmptyProps{
+			Icon: lucide.Search(), Title: title, Description: hint,
+		})
 	})
 }
 
 // searchHome 是空关键词时的首页：搜索说明 + 热门标签。标签来自
 // GET /v1/tags/hot，点一下就把名字填进搜索框并切到「标签」类型。
+// 滚动用 Lobe 的 ScrollArea，细滚动条与边缘渐隐和窗口其它页面一致。
 func (a *app) searchHome(c *ui.Context, st *searchState) {
-	t := c.Theme()
-	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+	tk := lobetheme.TokensOf(c)
+	sc := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
 		ui.Column(c).FillWidth().Padding(28, 24).Gap(18).Children(func() {
 			ui.Column(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
-				ui.Icon(c, searchIcon).Size(30, 30).TextColor(t.TextMuted)
-				ui.Text(c, "输入关键词开始搜索").FontSize(14).Bold()
-				ui.Text(c, "帖子、用户、节点与标签都能搜。关键词至少 2 个字。").
-					FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+				display.Icon(c, lucide.Search(), display.IconProps{Size: display.IconLarge}).
+					FontSize(30).TextColor(tk.TextQuaternary)
+				display.Text(c, "输入关键词开始搜索", display.TextProps{
+					Strong: true, FontSize: 14, Rows: 1,
+				})
+				display.Text(c, "帖子、用户、节点与标签都能搜。关键词至少 2 个字。",
+					display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 2})
 			})
 			a.searchHotTagsBlock(c, st)
 		})
 	})
+	sc.Grow(1).MinHeight(0)
 }
 
 // searchHotTagsBlock 是空状态里的热门标签块：周期切换、加载 / 失败 / 空
 // 状态与一排标签芯片。最多画 24 枚，避免一次把整页塞满。
 func (a *app) searchHotTagsBlock(c *ui.Context, st *searchState) {
-	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "热门标签").FontSize(13).Bold()
+			display.Text(c, "热门标签", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
 			ui.Spacer(c).Grow(1)
-			ui.Segmented(c, &st.hotTagsSpan, hotTagPeriodLabels...)
+			span := st.hotTagsSpan
+			action.Segmented(c, &span, hotTagPeriodLabels, action.SegmentedProps{
+				Size: lobetheme.Small,
+			})
+			if span != st.hotTagsSpan {
+				st.hotTagsSpan = span
+			}
 		})
 
 		switch {
 		case st.hotTagsErr != "":
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "热门标签暂时不可用："+st.hotTagsErr).FontSize(11).
-					TextColor(t.Danger).MaxLines(2).Grow(1)
-				a.smallAction(c, "重试", st.hotTagsLoading, func() {
-					a.loadHotTags(st, hotTagPeriod(st.hotTagsSpan))
-				})
+			feedback.Alert(c, "热门标签暂时不可用", feedback.AlertProps{
+				Type: feedback.Error, Variant: feedback.Soft,
+				Description: st.hotTagsErr,
+			})
+			a.smallAction(c, "重试", st.hotTagsLoading, func() {
+				a.loadHotTags(st, hotTagPeriod(st.hotTagsSpan))
 			})
 		case st.hotTagsLoading && len(st.hotTags) == 0:
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Spinner(c).Size(14, 14)
-				ui.Text(c, "正在读取热门标签…").FontSize(11).TextColor(t.TextMuted)
+				feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+				display.Text(c, "正在读取热门标签…", display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
 			})
 		case len(st.hotTags) == 0 && st.hotTagsLoaded:
-			ui.Text(c, "这个周期还没有热门标签。").FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, "这个周期还没有热门标签。", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		case len(st.hotTags) == 0:
-			ui.Text(c, "正在读取热门标签…").FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, "正在读取热门标签…", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		default:
 			tags := st.hotTags
 			if len(tags) > 24 {
@@ -346,8 +403,12 @@ func (a *app) searchHotTagsBlock(c *ui.Context, st *searchState) {
 						label += " " + strconv.Itoa(tag.Count)
 						tip += fmt.Sprintf("（%d 个帖子）", tag.Count)
 					}
-					chip := ui.Button(c, label).FontSize(11).Padding(3, 8).Radius(10)
-					chip.Label("标签 " + tag.Name).Tooltip(tip)
+					// Lobe 的胶囊按钮当芯片：填充底 + 全圆角，可读名与
+					// tooltip 照旧，测试仍按「标签 <名字>」点它。
+					chip := action.Button(c, label, action.ButtonProps{
+						Size: lobetheme.Small, Variant: action.Filled,
+					})
+					chip.Radius(999).Label("标签 " + tag.Name).Tooltip(tip)
 					if chip.Clicked() {
 						a.searchHotTag(st, tag.Name)
 					}
@@ -359,17 +420,17 @@ func (a *app) searchHotTagsBlock(c *ui.Context, st *searchState) {
 
 // searchRow 画一条结果：帖子 / 收藏用主窗口同一套列表行；用户点开资料卡；
 // 节点与标签在浏览器打开站点对应页面（应用内还没有节点页与标签页）。
+// 非帖子的行是一张可点的 Lobe Block：描边卡片与悬停底色都来自主题。
 func (a *app) searchRow(c *ui.Context, st *searchState, hit searchHit) {
-	t := c.Theme()
 	switch hit.kind {
 	case searchPosts, searchFavorites:
 		a.rowWith(c, hit.item, a.openSearchTopic)
 		return
 	}
-	row := ui.ButtonBase(c).FillWidth().Padding(12, 14).Radius(10).
-		Background(t.Background).Border(1, t.Border)
+	row := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockOutlined}).
+		FillWidth().Row().AlignItems(ui.Center).Padding(12, 14)
 	row.Children(func() {
-		ui.Column(c).Grow(1).Gap(3).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
 			switch hit.kind {
 			case searchUsers:
 				a.userTag(c, userTagSpec{
@@ -379,26 +440,42 @@ func (a *app) searchRow(c *ui.Context, st *searchState, hit searchHit) {
 					Bold:   true,
 					Badges: hit.badges,
 				})
-				ui.Text(c, "用户").FontSize(11).TextColor(t.TextMuted).SingleLine()
+				display.Text(c, "用户", display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
 			case searchNodes:
-				ui.Text(c, hit.name).FontSize(14).Bold().MaxLines(2)
+				display.Text(c, hit.name, display.TextProps{
+					Strong: true, FontSize: 14, Rows: 2,
+				})
 				label := "节点"
 				if hit.parent != "" {
 					label = "节点 · " + hit.parent + " 的子节点"
 				}
-				ui.Text(c, label).FontSize(11).TextColor(t.TextMuted).SingleLine()
+				display.Text(c, label, display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
 			default: // searchTags
-				ui.Text(c, "#"+hit.name).FontSize(14).Bold().MaxLines(2)
-				ui.Text(c, "标签").FontSize(11).TextColor(t.TextMuted).SingleLine()
+				display.Text(c, "#"+hit.name, display.TextProps{
+					Strong: true, FontSize: 14, Rows: 2,
+				})
+				display.Text(c, "标签", display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
 			}
 		})
-		if hit.count > 0 && hit.kind != searchUsers {
-			ui.Textf(c, "%d 个帖子", hit.count).FontSize(11).
-				TextColor(t.TextMuted).SingleLine().TextAlign(ui.End)
-		} else if hit.kind == searchUsers {
-			ui.Text(c, "查看资料").FontSize(10).TextColor(t.TextMuted).SingleLine()
-		} else if hit.url != "" {
-			ui.Text(c, "在浏览器打开").FontSize(10).TextColor(t.TextMuted).SingleLine()
+		switch {
+		case hit.count > 0 && hit.kind != searchUsers:
+			display.Text(c, fmt.Sprintf("%d 个帖子", hit.count), display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			}).TextAlign(ui.End)
+		case hit.kind == searchUsers:
+			display.Text(c, "查看资料", display.TextProps{
+				Type: display.TextSecondary, FontSize: 10, Rows: 1,
+			})
+		case hit.url != "":
+			display.Text(c, "在浏览器打开", display.TextProps{
+				Type: display.TextSecondary, FontSize: 10, Rows: 1,
+			})
 		}
 	})
 	if hit.kind == searchUsers {
