@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
 // 「评论开关」：作者关闭 / 重新开启自己帖子下的评论。端点逐字照抄
@@ -235,23 +236,20 @@ func (a *app) commentsStatusDialog(c *ui.Context, d *detailState) {
 		confirm = "确认开启评论"
 	}
 	open := true
-	dismissed := ui.Modal(c, &open, func() {
-		ui.Column(c).Width(420).Gap(10).Children(func() {
-			ui.Text(c, title).FontSize(16).Bold()
-			ui.Text(c, body).TextColor(t.TextMuted).MaxLines(3)
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Spacer(c).Grow(1)
-				if ui.Button(c, "取消").Clicked() {
-					d.comments.awaiting = false
-				}
-				if ui.PrimaryButton(c, confirm).Clicked() {
-					a.toggleTopicComments(d)
-				}
-			})
-		})
+	ok := feedback.Modal(c, &open, feedback.ModalProps{
+		Title:      title,
+		Width:      420,
+		OkText:     confirm,
+		CancelText: "取消",
+	}, func() {
+		ui.Text(c, body).TextColor(t.TextMuted).MaxLines(3)
 	})
-	// 点窗外或按 Esc：与「取消」同义。
-	if dismissed.Dismissed() {
+	// 点窗外、✕、Esc 与「取消」都与取消同义。
+	if !open {
 		d.comments.awaiting = false
+		return
+	}
+	if ok {
+		a.toggleTopicComments(d)
 	}
 }
