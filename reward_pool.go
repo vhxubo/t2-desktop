@@ -155,37 +155,47 @@ func rewardPoolWinningsTotal(amounts []int) int {
 	return total
 }
 
-// rewardPoolStateText 是金币池当前状态的一句话：结束与过期分开说，余额已知
-// 且为 0 时说明是领完了，其余都算还在发放。
+// rewardPoolHint 是金币池的统一说明。详情页只展示金币池状态与这一句，不再
+// 写「按概率发放、领到的人标在评论下面」这类额外描述。
+const rewardPoolHint = "金币会随着回复数量动态增加，首次回复有概率获得金币池中部分金币奖励。"
+
+// rewardPoolStateText 是金币池结束时的一行补充状态。结束与过期对用户来说都
+// 是「已结束」，归到同一句；进行中（含余额为 0）不再单独标注，直接展示金币
+// 数即可。
 func rewardPoolStateText(p *rewardPoolInfo) string {
-	switch {
-	case p == nil:
-		return ""
-	case p.Expired:
-		return "已过期"
-	case p.Finished:
-		return "已结束"
-	case p.CoinsKnown && p.CurrentCoins <= 0:
-		return "已领完"
+	if p != nil && (p.Finished || p.Expired) {
+		return "（已结束）"
 	}
-	return "进行中"
+	return ""
 }
 
-// rewardPoolSection 画正文末尾的金币池状态：池里还剩多少、现在是哪种状态。
-// 池子还在进行时右上角给一个「投入金币」入口，点开贴着按钮的气泡填金额；
-// 结束或过期的池子不再提供注资。
+// canFundRewardPool 报告能否给详情页的金币池注资：只有作者本人、且池子还在
+// 进行时才有入口。别人的帖子只能看状态，不给出「投入金币」。
+func (a *app) canFundRewardPool(d *detailState, p *rewardPoolInfo) bool {
+	return d != nil && d.topic != nil && a.isMine(d.topic.Author) &&
+		p != nil && !p.Finished && !p.Expired
+}
+
+// rewardPoolSection 画正文末尾的金币池：一行「💰 N 金币」，结束时补一行
+// 「（已结束）」并把金币归零，底下是统一说明。注资入口只给自己的帖子，池子
+// 结束或过期后不再提供。
 func (a *app) rewardPoolSection(c *ui.Context, d *detailState, p *rewardPoolInfo) {
 	if p == nil || !p.Known {
 		return
 	}
 	t := c.Theme()
+	ended := p.Finished || p.Expired
+	coins := 0
+	if !ended && p.CoinsKnown {
+		coins = p.CurrentCoins
+	}
 	ui.Divider(c)
 	ui.Column(c).FillWidth().Padding(12, 14).Gap(6).Radius(10).
 		Background(t.Surface).Border(1, t.Border).Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, "金币池").FontSize(commentFontSize).Bold()
+			ui.Text(c, fmt.Sprintf("💰 %d 金币", coins)).FontSize(commentFontSize).Bold()
 			ui.Spacer(c).Grow(1)
-			if d != nil && !p.Finished && !p.Expired {
+			if a.canFundRewardPool(d, p) {
 				btn := ui.Button(c, "投入金币").FontSize(11).Padding(2, 8).Shrink(0)
 				btn.Label("投入金币").Tooltip("给这个金币池补充金币（200～1000）")
 				if btn.Clicked() {
@@ -195,14 +205,11 @@ func (a *app) rewardPoolSection(c *ui.Context, d *detailState, p *rewardPoolInfo
 					a.rewardPoolPanel(c, d)
 				})
 			}
-			ui.Text(c, rewardPoolStateText(p)).FontSize(metaSmallFontSize).
-				TextColor(t.TextMuted)
 		})
-		line := "浏览这篇帖子时按概率发放，领到的人会标在各自的评论下面。"
-		if p.CoinsKnown {
-			line = fmt.Sprintf("池中还有 %d 金币。", p.CurrentCoins) + line
+		if ended {
+			ui.Text(c, rewardPoolStateText(p)).FontSize(metaSmallFontSize).TextColor(t.TextMuted)
 		}
-		ui.Text(c, line).FontSize(metaFontSize).TextColor(t.TextMuted).MaxLines(3)
+		ui.Text(c, rewardPoolHint).FontSize(metaFontSize).TextColor(t.TextMuted).MaxLines(3)
 	})
 }
 
@@ -322,6 +329,10 @@ func rewardPoolAmount(amount float64) int {
 // 让池子的余额以服务端为准。
 func (a *app) submitRewardPool(d *detailState) {
 	if d == nil || a.detail != d || d.pool.busy || d.topic == nil || d.topic.RewardPool == nil {
+		return
+	}
+	// 界面入口已经按作者过滤；这里再拦一道，防止直接调用绕过限制。
+	if !a.isMine(d.topic.Author) {
 		return
 	}
 	if !a.auth.loggedIn() {

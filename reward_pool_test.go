@@ -75,8 +75,8 @@ func TestDecodeTopicRewardPool(t *testing.T) {
 	if p.RewardPool == nil || p.RewardPool.CoinsKnown {
 		t.Fatalf("没给 current_coins 时不应把余额当成已知：%+v", p.RewardPool)
 	}
-	if got := rewardPoolStateText(p.RewardPool); got != "进行中" {
-		t.Errorf("余额未知时的状态 = %q，期望 %q", got, "进行中")
+	if got := rewardPoolStateText(p.RewardPool); got != "" {
+		t.Errorf("余额未知时的状态 = %q，期望空（不再标注进行中）", got)
 	}
 
 	// 异常余额夹到 0，不把负数展示出去。
@@ -119,11 +119,12 @@ func TestRewardPoolStateText(t *testing.T) {
 		pool *rewardPoolInfo
 		want string
 	}{
-		{&rewardPoolInfo{CurrentCoins: 320, CoinsKnown: true}, "进行中"},
-		{&rewardPoolInfo{CurrentCoins: 0, CoinsKnown: true}, "已领完"},
-		{&rewardPoolInfo{}, "进行中"},
-		{&rewardPoolInfo{CurrentCoins: 320, CoinsKnown: true, Finished: true}, "已结束"},
-		{&rewardPoolInfo{CurrentCoins: 320, CoinsKnown: true, Expired: true}, "已过期"},
+		{&rewardPoolInfo{CurrentCoins: 320, CoinsKnown: true}, ""},
+		{&rewardPoolInfo{CurrentCoins: 0, CoinsKnown: true}, ""},
+		{&rewardPoolInfo{}, ""},
+		{&rewardPoolInfo{CurrentCoins: 320, CoinsKnown: true, Finished: true}, "（已结束）"},
+		{&rewardPoolInfo{CurrentCoins: 320, CoinsKnown: true, Expired: true}, "（已结束）"},
+		{nil, ""},
 	}
 	for _, c := range cases {
 		if got := rewardPoolStateText(c.pool); got != c.want {
@@ -132,13 +133,17 @@ func TestRewardPoolStateText(t *testing.T) {
 	}
 }
 
-// 详情页正文末尾画出金币池状态；评论头部标出这条评论从池里领到的合计。
+// 详情页正文末尾画出自己的金币池：💰 + 余额、统一说明，以及注资入口；
+// 评论头部标出这条评论从池里领到的合计。
 func TestRewardPoolSectionAndReplyWinnings(t *testing.T) {
-	a := testApp(t)
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+
+	a := loginApp(t, srv) // 当前登录用户 reader
 	a.openDetail(Item{ShortID: "POOL01", URL: "https://2libra.com/post/work/POOL01"})
 	topic, err := decodeTopic([]byte(`{
 		"short_id":"POOL01","title":"有池子的帖子","content":"一段正文。",
-		"author":{"username":"jimmy"},"reward_pool":{"current_coins":320}
+		"author":{"username":"reader"},"reward_pool":{"current_coins":320}
 	}`), "POOL01")
 	if err != nil {
 		t.Fatal(err)
@@ -153,10 +158,75 @@ func TestRewardPoolSectionAndReplyWinnings(t *testing.T) {
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	for _, want := range []string{"金币池", "池中还有 320 金币", "进行中", "金币池 +74", "投入金币"} {
+	for _, want := range []string{
+		"💰 320 金币", "投入金币", "金币池 +74", rewardPoolHint,
+	} {
 		if !tt.HasText(want) {
 			t.Errorf("详情页缺少 %q：%q", want, tt.Texts())
 		}
+	}
+	// 不再画旧的「金币池」标题说明与「池中还有」文案。
+	for _, stale := range []string{"池中还有", "浏览这篇帖子时按概率发放", "进行中"} {
+		if tt.HasText(stale) {
+			t.Errorf("详情页不应再出现旧文案 %q：%q", stale, tt.Texts())
+		}
+	}
+}
+
+// 别人的帖子只读展示金币池状态，不给「投入金币」入口。
+func TestRewardPoolSectionOthersPostHasNoFundButton(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+
+	a := loginApp(t, srv) // 当前登录用户 reader
+	a.openDetail(Item{ShortID: "POOL02", URL: "https://2libra.com/post/work/POOL02"})
+	topic, err := decodeTopic([]byte(`{
+		"short_id":"POOL02","title":"别人的帖子","content":"一段正文。",
+		"author":{"username":"jimmy"},"reward_pool":{"current_coins":320}
+	}`), "POOL02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.detail.topic = &topic
+	a.detail.replyLoaded = true
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if !tt.HasText("💰 320 金币") {
+		t.Errorf("别人的帖子也应展示金币池状态：%q", tt.Texts())
+	}
+	if tt.HasText("投入金币") {
+		t.Errorf("别人的帖子不该给注资入口：%q", tt.Texts())
+	}
+}
+
+// 已结束的池子金币归零、补一行「（已结束）」，且不再给注资入口。
+func TestRewardPoolSectionFinished(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+
+	a := loginApp(t, srv) // 当前登录用户 reader
+	a.openDetail(Item{ShortID: "POOL03", URL: "https://2libra.com/post/work/POOL03"})
+	topic, err := decodeTopic([]byte(`{
+		"short_id":"POOL03","title":"已结束的池子","content":"一段正文。",
+		"author":{"username":"reader"},
+		"reward_pool":{"current_coins":414,"finished":true}
+	}`), "POOL03")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.detail.topic = &topic
+	a.detail.replyLoaded = true
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	for _, want := range []string{"💰 0 金币", "（已结束）", rewardPoolHint} {
+		if !tt.HasText(want) {
+			t.Errorf("已结束的金币池缺少 %q：%q", want, tt.Texts())
+		}
+	}
+	if tt.HasText("投入金币") {
+		t.Errorf("已结束的池子不该给注资入口：%q", tt.Texts())
 	}
 }
 
@@ -264,7 +334,7 @@ func TestRewardPoolFundingSubmits(t *testing.T) {
 	a.openDetail(Item{ShortID: "POOL01", URL: "https://2libra.com/post/work/POOL01"})
 	topic, err := decodeTopic([]byte(`{
 		"short_id":"POOL01","title":"有池子的帖子","content":"一段正文。",
-		"author":{"username":"jimmy"},"reward_pool":{"current_coins":320}
+		"author":{"username":"reader"},"reward_pool":{"current_coins":320}
 	}`), "POOL01")
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +380,7 @@ func TestRewardPoolFundingPanel(t *testing.T) {
 	a.openDetail(Item{ShortID: "POOL01", URL: "https://2libra.com/post/work/POOL01"})
 	topic, err := decodeTopic([]byte(`{
 		"short_id":"POOL01","title":"有池子的帖子","content":"一段正文。",
-		"author":{"username":"jimmy"},"reward_pool":{"current_coins":320}
+		"author":{"username":"reader"},"reward_pool":{"current_coins":320}
 	}`), "POOL01")
 	if err != nil {
 		t.Fatal(err)
