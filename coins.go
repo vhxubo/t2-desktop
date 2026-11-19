@@ -269,13 +269,13 @@ type coinState struct {
 	dailyItems   []coinDailyFlow
 	dailyErr     string
 
-	breakdownSeq       uint64
-	breakdownLoading   bool
-	breakdownLoaded    bool
-	breakdownType      string
-	breakdownRange     int
-	breakdownItems     []coinBreakdown
-	breakdownErr       string
+	breakdownSeq     uint64
+	breakdownLoading bool
+	breakdownLoaded  bool
+	breakdownType    string
+	breakdownRange   int
+	breakdownItems   []coinBreakdown
+	breakdownErr     string
 	// 注册日期（东八区 YYYY-MM-DD），「注册至今」的区间起点。优先复用「我的」
 	// 窗口的资料，没加载过才单独取一次 /v1/me；取不到时保留空串并给出提示。
 	registeredDate    string

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/egoist/mygo/ui"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 评论行 / 动态行的字号阶梯。评论没有标题，正文就是这一行的阅读主体：
@@ -94,9 +95,8 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 	// 读过这一条新评论，把评论标题也压灰会把新内容藏起来。
 	titleColor := postTitleColor(t, !comment && a.isPostRead(it.ShortID))
 
-	// 和普通帖子行一样是纯文本行：没有卡片底色、描边与圆角，行距靠上下
-	// 留白撑开；悬停只抬一档底色，说明整行可点。
-	row := ui.ButtonBase(c).FillWidth().Padding(22, 16).Radius(0).
+	// 悬停时抬一档底色给出「这一行可点」的反馈，圆角跟 Lobe token。
+	row := ui.ButtonBase(c).FillWidth().Padding(22, 14).Radius(lobetheme.TokensOf(c).BorderRadius).
 		Background(ui.Transparent)
 	if row.Hovered() {
 		row.Background(t.SurfaceHover)

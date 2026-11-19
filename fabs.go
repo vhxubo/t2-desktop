@@ -1,6 +1,10 @@
 package main
 
-import "github.com/egoist/mygo/ui"
+import (
+	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+)
 
 // 右下角的悬浮按钮（FAB）组：只用在主页列表上，画法与几何见这里。详情页
 // 的刷新、返回顶部与关闭走右上角的悬浮工具条（见 detailToolBar），收藏则在
@@ -30,34 +34,21 @@ func (a *app) fabStack(c *ui.Context, buttons ...func(*ui.Context)) {
 	})
 }
 
-// fabButton 画一个次级 FAB：无边框、无底色的图标按钮，悬停才浮出一层浅灰。
-// label 是它的可访问名（读屏与测试认的名字），tip 是悬停说明。loading 时
-// 换成转圈并禁用：请求还在路上，连点不该重复发。
+// fabButton 画一个 Lobe 风格的次级 FAB：ActionIcon 的 BlockSize 给方块尺寸，
+// 悬停由它自己处理。label 是可访问名，tip 是悬停说明；loading 时禁用按钮并
+// 在图标位转圈，请求还在路上，连点不该重复发。
 func (a *app) fabButton(c *ui.Context, icon *ui.SVG, label, tip string, loading bool, onClick func()) {
-	t := c.Theme()
-	b := ui.Box(c).Size(fabCircle, fabCircle).Radius(4).Center().
-		Background(ui.Transparent)
-	hovered := b.Hovered()
-	if hovered {
-		b.Background(t.SurfaceHover)
-	}
-	ink := t.TextMuted
-	if hovered && !loading {
-		ink = t.Text
-	}
-	b.Children(func() {
-		if loading {
-			ui.Spinner(c).Size(16, 16)
-			return
-		}
-		ui.Icon(c, icon).Size(17, 17).TextColor(ink)
-	})
-	b.Label(label).Tooltip(tip)
 	if loading {
-		b.Disabled(true)
+		// 请求在路上：禁用态方块里只放转圈，连点不会重复发。
+		b := ui.Box(c).Size(fabCircle, fabCircle).Center().Disabled(true)
+		b.Label(label).Tooltip(tip)
+		b.Children(func() {
+			feedback.Spin(c, feedback.SpinProps{CustomSize: 16}, nil)
+		})
 		return
 	}
-	b.OnClick(onClick)
+	b := action.ActionIcon(c, icon, action.ActionIconProps{BlockSize: fabCircle})
+	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
 
 // listFabs 是主页内容区右下角的一列悬浮按钮：发帖（主操作，强调色胶囊）、

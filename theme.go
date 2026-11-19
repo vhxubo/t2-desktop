@@ -7,6 +7,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 外观模式：默认跟随系统深浅色，也可以固定为浅色或深色。三者共用同一套
@@ -136,55 +137,32 @@ func (a *app) syncNativeAppearance() {
 	mygo.Theme.SetSource(themeSource(a.theme.Mode()))
 }
 
-// 深色外观的炭黑色板：整页只有一层底色，标题栏、侧边栏与正文同色，靠
-// 字号、字重与留白分层，不用卡片和描边。强调色只留一种低饱和的旧金色，
-// 用在选中项、未读与 focus 上；其余层级全是灰阶。
+// 品牌强调色：深色用旧金，浅色用蓝（见 lobeCfg）。
 const (
-	darkInkBackground = "#121417" // 底色：深哑光炭黑
-	darkInkSidebar    = "#0f1114" // 侧边栏：比正文再深一档，压出前后关系
-	darkInkText       = "#e6e8eb" // 正文：近白，不用纯白以免刺眼
-	darkInkMuted      = "#8b929c" // 元信息：压低一档的中性灰
-	darkInkHover      = "#171a1e" // 悬停时只抬一点亮度
-	darkInkPressed    = "#1d2126" // 选中行：仍是低对比的灰
-	darkInkAccent     = "#b0885a" // 唯一强调色：旧金色
+	darkInkBackground = "#121417"
+	darkInkAccent     = "#b0885a"
 )
 
-// sidebarSurface 是左侧导航栏的底色：深色下比正文再深一档，浅色下比纯白
-// 略灰。导航栏从窗口顶端贯到底，正文区靠这一层色差和 1 DIP 分隔线立住
-// 前后关系，不需要额外的描边。
-func sidebarSurface(t *ui.Theme) ui.Color {
-	if t.Dark {
-		return ui.Hex(darkInkSidebar)
-	}
-	return ui.Hex("#fafafa")
-}
+// lobeCfg 是全应用共用的 Lobe UI 主题配置。由它派生的主题会让
+// lobeTheme.TokensOf(c) 命中同一套 token，Lobe 组件与自绘部分因此配色一致。
+// 只覆写三处：浅色背景保持纯白（白色页面语义），两套 Primary 族换成应用
+// 原有的品牌强调色（浅色蓝、深色旧金），其余 token 全用 Lobe 默认。
+var lobeCfg = func() *lobetheme.Config {
+	light, dark := *lobetheme.Light(), *lobetheme.Dark()
+	light.BgLayout = ui.Hex("#ffffff")
 
-// homeTheme 返回全应用共用的主题：浅色是纯白内容区 + #fafafa 的左侧导航栏
-// + 指定边框色 oklab(0.21 0.00164224 -0.00577088 / 0.1)
-// （即 oklch(0.21 0.006 285.885) 的 10% 不透明版本）；深色是一整片哑光
-// 炭黑，导航栏再深一档，颜色见上面的炭黑色板常量。标题栏与内容同色，
-// 只有导航栏这一列被压深，不出现一条横贯窗口的深色带。
+	// 应用品牌强调色：浅色蓝 #2563eb、深色旧金 #b0885a。Lobe 默认 Primary
+	// 是中性灰，覆写成品牌色后，Lobe 的 Primary 按钮/选中态与自绘 t.Accent
+	// 落在同一颜色上，其他页面也保持原有观感。
+	light.Primary, light.PrimaryHover, light.PrimaryActive = ui.Hex("#2563eb"), ui.Hex("#1d4ed8"), ui.Hex("#1e40af")
+	light.PrimaryForeground = ui.Hex("#ffffff")
+	dark.Primary, dark.PrimaryHover, dark.PrimaryActive = ui.Hex(darkInkAccent), ui.Hex("#c39a6c"), ui.Hex("#9c774d")
+	dark.PrimaryForeground = ui.Hex(darkInkBackground)
+	return lobetheme.NewConfig(light, dark)
+}()
+
+// homeTheme 返回当前帧的 Lobe 主题。深浅由外观模式决定，主题实例直接取自
+// lobeCfg，这样 Lobe 组件能用 TokensOf(c) 取到匹配的深浅 token。
 func homeTheme(dark bool) *ui.Theme {
-	if dark {
-		th := ui.DarkTheme()
-		th.Background = ui.Hex(darkInkBackground)
-		th.Surface = ui.Hex(darkInkBackground)
-		th.SurfaceHover = ui.Hex(darkInkHover)
-		th.SurfacePressed = ui.Hex(darkInkPressed)
-		th.Border = ui.Hex("#ffffff").Alpha(0.06)
-		th.Text = ui.Hex(darkInkText)
-		th.TextMuted = ui.Hex(darkInkMuted)
-		th.Accent = ui.Hex(darkInkAccent)
-		th.AccentHover = ui.Hex("#c39a6c")
-		th.AccentPressed = ui.Hex("#9c774d")
-		th.AccentText = ui.Hex(darkInkBackground)
-		th.Selection = ui.Hex(darkInkAccent).Alpha(0.28)
-		th.Scrollbar = ui.Hex("#ffffff").Alpha(0.12)
-		return th
-	}
-	th := ui.LightTheme()
-	th.Background = ui.Hex("#ffffff")
-	th.Surface = ui.Hex("#ffffff")
-	th.Border = ui.Oklch(0.21, 0.006, 285.885).Alpha(0.1)
-	return th
+	return lobeCfg.Theme(dark)
 }

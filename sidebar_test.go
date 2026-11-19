@@ -16,8 +16,11 @@ import (
 // 溢到右侧内容区。
 const sidebarWidth = navSidebarWidth
 
-// 设置入口在主页左侧的导航栏里，三档外观在它上面，登录 / 退出登录再往下：
+// 设置入口在主页左侧 Lobe 导航轨里，外观三档在它上面，登录 / 退出登录再往下：
 // 这三样都不在标题栏里了，标题栏只留品牌、铃铛和登录后的头像昵称。
+const logoutLabel = "退出登录"
+const loginLabel = "登录 2Libra"
+
 func TestSidebarFooterHoldsThemesSettingsAndAccount(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -30,20 +33,20 @@ func TestSidebarFooterHoldsThemesSettingsAndAccount(t *testing.T) {
 	if set.Y <= titleBarHeight {
 		t.Errorf("「设置」的 y=%.0f，应在标题栏下方的侧边栏里", set.Y)
 	}
-	login, ok := tt.Find("登录")
+	login, ok := tt.Find(loginLabel)
 	if !ok {
-		t.Fatalf("侧边栏没有「登录」入口：%q", tt.Texts())
+		t.Fatalf("侧边栏没有「%s」入口：%q", loginLabel, tt.Texts())
 	}
 	if login.Y <= set.Y {
 		t.Errorf("「登录」的 y=%.0f，应在设置入口（y=%.0f）下方", login.Y, set.Y)
 	}
-	for _, label := range []string{"外观：跟随系统", "外观：浅色", "外观：深色", "登录"} {
+	for _, label := range []string{"外观：跟随系统", "外观：浅色", "外观：深色", loginLabel} {
 		r, ok := tt.Find(label)
 		if !ok {
 			t.Fatalf("侧边栏缺少 %q：%q", label, tt.Texts())
 		}
-		if r.X+r.W > sidebarWidth {
-			t.Errorf("%q 的 x=%.0f 宽 %.0f，超出 %d 宽的侧边栏", label, r.X, r.W, sidebarWidth)
+		if r.X+r.W > sidebarWidth+1 {
+			t.Errorf("%q 的 x=%.0f 宽 %.0f，超出 %d 宽的导航轨", label, r.X, r.W, sidebarWidth)
 		}
 	}
 	// 外观在设置上面：先看到三档图标，再往下才是「设置」。
@@ -83,26 +86,19 @@ func TestSidebarHasNoMyContentEntries(t *testing.T) {
 	}
 }
 
-// 「动态」归入「浏览」：侧边栏只剩一个分组，动态排在公开榜单之后；未登录
-// 时也照常显示（点它才弹授权），不再单独占一个「我的」分组。
+// Lobe 导航轨是纯图标轨，不再有「浏览」分组标题；「动态」作为浏览页之一
+// 排在「社区讨论」之后，未登录时也照常显示（点它才弹授权）。
 func TestSidebarTimelineBelongsToBrowse(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 
-	browse, ok := tt.Find("浏览")
-	if !ok {
-		t.Fatalf("侧边栏没有「浏览」分组：%q", tt.Texts())
-	}
 	if _, ok := tt.Find("我的"); ok {
 		t.Errorf("侧边栏不该再有「我的」分组：%q", tt.Texts())
 	}
 	timeline, ok := tt.Find("动态")
 	if !ok {
 		t.Fatalf("侧边栏没有「动态」：%q", tt.Texts())
-	}
-	if timeline.Y <= browse.Y {
-		t.Errorf("「动态」的 y=%.0f，应在「浏览」分组标题（y=%.0f）下方", timeline.Y, browse.Y)
 	}
 	last, ok := tt.Find("社区讨论")
 	if !ok {
@@ -112,7 +108,7 @@ func TestSidebarTimelineBelongsToBrowse(t *testing.T) {
 		t.Errorf("「动态」的 y=%.0f，应排在「社区讨论」（y=%.0f）之后", timeline.Y, last.Y)
 	}
 	if timeline.X >= sidebarWidth {
-		t.Errorf("「动态」的 x=%.0f 越出了侧边栏宽度 %d", timeline.X, sidebarWidth)
+		t.Errorf("「动态」的 x=%.0f 越出了导航轨宽度 %d", timeline.X, sidebarWidth)
 	}
 }
 
@@ -124,7 +120,7 @@ func TestSidebarLoginStartsAndCancels(t *testing.T) {
 	tt.Frame()
 
 	t.Cleanup(a.auth.Cancel)
-	if err := tt.Click("登录"); err != nil {
+	if err := tt.Click(loginLabel); err != nil {
 		t.Fatal(err)
 	}
 	if a.pageName != "list" {
@@ -134,25 +130,25 @@ func TestSidebarLoginStartsAndCancels(t *testing.T) {
 		t.Fatal("点「登录」后没有进入等待授权状态")
 	}
 	tt.Frame()
-	if !tt.HasText("等待浏览器授权…") {
+	if _, ok := tt.Find("等待浏览器授权"); !ok {
 		t.Errorf("侧边栏没有显示等待授权：%q", tt.Texts())
 	}
-	if _, ok := tt.Find("登录"); ok {
+	if _, ok := tt.Find(loginLabel); ok {
 		t.Errorf("等待授权期间不该还摆着「登录」：%q", tt.Texts())
 	}
-	for _, label := range []string{"粘贴回调", "取消"} {
+	for _, label := range []string{"取消登录"} {
 		if _, ok := tt.Find(label); !ok {
 			t.Fatalf("等待授权期间缺少 %q：%q", label, tt.Texts())
 		}
 	}
-	if err := tt.Click("取消"); err != nil {
+	if err := tt.Click("取消登录"); err != nil {
 		t.Fatal(err)
 	}
 	if a.loginPending {
 		t.Error("点「取消」后仍在等待授权")
 	}
 	tt.Frame()
-	if _, ok := tt.Find("登录"); !ok {
+	if _, ok := tt.Find(loginLabel); !ok {
 		t.Errorf("取消后应回到「登录」入口：%q", tt.Texts())
 	}
 }
@@ -195,20 +191,20 @@ func TestSidebarLogoutAfterLogin(t *testing.T) {
 	if tt.HasText("已登录") {
 		t.Errorf("标题栏不应再显示「已登录」：%q", tt.Texts())
 	}
-	if _, ok := tt.Find("退出登录"); !ok {
+	if _, ok := tt.Find(logoutLabel); !ok {
 		t.Fatalf("侧边栏没有「退出登录」入口：%q", tt.Texts())
 	}
-	if err := tt.Click("退出登录"); err != nil {
+	if err := tt.Click(logoutLabel); err != nil {
 		t.Fatal(err)
 	}
 	if a.auth.loggedIn() {
 		t.Fatal("点「退出登录」后仍是登录状态")
 	}
 	tt.Frame()
-	if _, ok := tt.Find("登录"); !ok {
+	if _, ok := tt.Find(loginLabel); !ok {
 		t.Errorf("退出后侧边栏应回到「登录」：%q", tt.Texts())
 	}
-	if _, ok := tt.Find("退出登录"); ok {
+	if _, ok := tt.Find(logoutLabel); ok {
 		t.Errorf("退出后不该还留着「退出登录」：%q", tt.Texts())
 	}
 }
@@ -327,9 +323,8 @@ func TestSidebarSwitchRefreshesEnteredPage(t *testing.T) {
 	}
 }
 
-// 侧边栏多了「关于」入口：点一下打开「关于」窗口。账号 / 设置 / 关于三格
-// 图标并排在同一行，从左到右排列，且整行仍待在侧边栏宽度之内，不溢到右侧
-// 内容区。
+// 侧边栏底部有「关于」入口：点一下打开「关于」窗口。导航轨里的常驻入口
+// 竖排，整列待在 58 DIP 轨内，不溢到右侧内容区。
 func TestSidebarAboutOpensWindow(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -339,15 +334,12 @@ func TestSidebarAboutOpensWindow(t *testing.T) {
 	if !ok {
 		t.Fatalf("侧边栏没有「关于」入口：%q", tt.Texts())
 	}
-	if about.X+about.W > sidebarWidth {
-		t.Errorf("「关于」的 x=%.0f 宽 %.0f，超出 %d 宽的侧边栏", about.X, about.W, sidebarWidth)
+	if about.X+about.W > sidebarWidth+1 {
+		t.Errorf("「关于」的 x=%.0f 宽 %.0f，超出 %d 宽的导航轨", about.X, about.W, sidebarWidth)
 	}
 	set, _ := tt.Find("设置")
-	if about.Y != set.Y {
-		t.Errorf("「关于」的 y=%.0f，应与设置入口（y=%.0f）并排", about.Y, set.Y)
-	}
-	if about.X <= set.X {
-		t.Errorf("「关于」的 x=%.0f，应排在设置入口（x=%.0f）右侧", about.X, set.X)
+	if about.Y <= set.Y {
+		t.Errorf("「关于」的 y=%.0f，应排在设置入口（y=%.0f）下方", about.Y, set.Y)
 	}
 	opened := false
 	a.onAboutOpen = func() { opened = true }

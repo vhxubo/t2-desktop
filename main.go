@@ -14,6 +14,12 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
 	"github.com/egoist/mygo/ui/markdown/parser"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 type tabState struct {
@@ -145,8 +151,12 @@ type app struct {
 	tab     int
 	lastTab int
 	navSel  string // 左侧导航栏选中项的 id（"t"+序号），与 tab 保持同步
-	tabs    []*tabState
-	reqSeq  uint64
+	// navWidth / navExpanded 是 Lobe DraggableSideNav 的持久状态：可拖拽调宽、
+	// 可折叠成图标轨。默认折叠，宽度 0 让组件用它的展开默认值。
+	navWidth    float32
+	navExpanded bool
+	tabs        []*tabState
+	reqSeq      uint64
 
 	pageName    string // list / detail / login
 	status      string
@@ -405,19 +415,8 @@ type app struct {
 	scoresWin *mygo.Window
 }
 
-// tabID / tabFromID 把 tab 序号与侧边栏条目的 id 互相映射。
+// tabID 把 tab 序号映射成导航项 id；导航轨的选中态由 selectTab 直接维护。
 func tabID(i int) string { return "t" + strconv.Itoa(i) }
-
-func tabFromID(id string) (int, bool) {
-	if len(id) < 2 || id[0] != 't' {
-		return 0, false
-	}
-	n, err := strconv.Atoi(id[1:])
-	if err != nil || n < 0 || n >= len(tabSpecs) {
-		return 0, false
-	}
-	return n, true
-}
 
 // appDeps 是进程级的共享依赖：一个进程一份，多个账号窗口共用。
 //
@@ -1093,130 +1092,201 @@ func (a *app) dialogs(c *ui.Context) {
 	a.closePromptDialog(c)
 }
 
-// navSidebarWidth 是左侧导航栏的宽度。窄栏只放文字，不放图标：184 DIP
-// 给 16 DIP 的左内边距和 13px 的导航文字留出余量，又不和 760 DIP 的正文栏
-// 抢视线。与正文栏之间只有一条 1 DIP 的分隔线。
-const navSidebarWidth = 184
-
 // feedMaxWidth 是正文栏的最大宽度：窗口再宽，一行文字也不超过 760 DIP，
 // 剩下的空间平均留白，阅读视线不必横向来回扫。
 const feedMaxWidth float32 = 760
 
-// sidebarFont 是侧边栏与元信息用的等宽字体：小字号下数字与时序排得整齐，
-// 和正文的无衬线字体形成两层质感，不需要再加图标或色块来分组。
+// navSidebarWidth 是正文居中计算用的导航轨折叠宽度。Lobe DraggableSideNav
+// 折叠后是 64 DIP（MinWidth），展开宽度由 navWidth 决定。
+const navSidebarWidth = 64
+const navRailWidth float32 = 64
+
+// sidebarFont 是元信息用的等宽字体：小字号下数字与时序排得整齐，
+// 和无衬线字体形成两层质感。
 const sidebarFont = "monospace"
 
-// sidebar 是左侧固定导航：只有文字，没有图标；字号小、行距松，整块用等宽
-// 字体。分组语义、键盘导航与读屏标签沿用 ui.Sidebar，只把每行改成方正的
-// 文本行——没有圆角胶囊，选中是一条通栏的浅底加左侧 2 DIP 的旧金色竖线。
-// 整栏从窗口顶端贯到底，比正文再深一档；应用名放在顶端与标题栏等高的那一行，
-// 右栏的标题栏因此只盖住内容区。
+// sidebar 是 Lobe 风格的可展开侧边栏：layout.DraggableSideNav 提供拖拽调宽
+// 与展开/折叠（通过 navExpanded），内容与 Lobe 的 display.List 配套——把
+// nav.Collapse / nav.RailWidth 交给 List，收起时行缩成图标方块，展开时显示
+// 文字。顶部是账号，中部是浏览页，底部是外观与账号入口。
 func (a *app) sidebar(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Width(navSidebarWidth).Shrink(0).FillHeight().
-		Background(sidebarSurface(t)).Font(sidebarFont).Children(func() {
-		// 顶端这一行放应用名，同时兼作窗口拖拽区：高度与右侧标题栏一致，
-		// 左右内边距与导航文字同为 16 DIP。
-		ui.Row(c).FillWidth().Height(titleBarHeightFor(c)).Shrink(0).
-			Padding(0, 16).AlignItems(ui.Center).DragWindow().Children(func() {
-			ui.Text(c, "T2 Desktop").FontSize(13).FontWeight(600).
-				LetterSpacing(0.2).TextColor(t.Text).SingleLine()
-		})
-		sb := ui.Sidebar(c, &a.navSel, func() {
-			// 侧边栏只有「浏览」一组：动态虽然要登录，但它也是浏览内容，
-			// 不再单独占一个「我的」分组。通知不在这里：它已经从页面改成
-			// 标题栏铃铛打开的弹窗。
-			//
-			// 分组标题不用 SidebarSection：它自带粗体与分组行高，整栏只有
-			// 一组时显得多余。改成一行 10px 的疏排小字，只负责把标题栏和
-			// 导航项分开，不参与点击。
-			ui.Row(c).FillWidth().Shrink(0).Padding(16, 16, 8, 16).Children(func() {
-				ui.Text(c, "浏览").FontSize(10).LetterSpacing(1.6).
-					TextColor(t.TextMuted).SingleLine()
-			})
-			for i, s := range tabSpecs {
-				if s.Kind == kindNotification {
-					continue
-				}
-				idx := i
-				// 再点一次已经在看的这一页就刷新：回到第一页重新拉一遍。
-				// 选中值没变时 Sidebar 不报 Changed，所以刷新挂在这一行
-				// 自己的点击上。
-				item := ui.SidebarItem(c, tabID(i), nil, a.followsTabLabel(i, s.Label)).
-					Padding(12, 16).Radius(0).FontSize(14).TextColor(t.TextMuted).
-					OnClick(func() { a.reclickTab(idx) })
-				// 选中项铺一层极浅的底，左侧再压一道旧金色竖线，文字提亮到
-				// 近白；其余项保持中性灰，悬停时由 Sidebar 自己抬一档底色。
-				// 键盘焦点环仍由 Sidebar 画。
-				if a.navSel == tabID(i) {
-					item.Background(t.SurfaceHover).TextColor(t.Text)
-					item.Draw(func(p *ui.Painter, r ui.Rect) {
-						p.Fill(ui.Rect{X: r.X, Y: r.Y, W: 2, H: r.H}, t.Accent, 0)
-					})
-				}
-			}
-		}).Grow(1).Padding(0, 0).Gap(1).Background(ui.Transparent)
-		// 侧边栏选中变化 → 同步到 a.tab（用于 body 加载逻辑）
-		if sb.Changed() {
-			if i, ok := tabFromID(a.navSel); ok && i != a.tab {
-				a.tab = i
-				// 点到需要登录的页面（动态）而没登录：统一弹授权窗，
-				// 登录成功后自动把这一页拉出来，不用再点一次。
-				if spec := tabSpecs[i]; spec.NeedsAuth && !a.auth.loggedIn() {
-					idx := i
-					a.requestLogin("「"+spec.Label+"」需要登录 2Libra 后才能查看。",
-						func() { a.load(idx, 1) })
-				} else {
-					// 进入这一页就刷新一次：显示过的页换成最新内容，
-					// 没显示过的页也由这一次请求当首屏加载。
-					a.refreshTab(i)
-				}
-			}
-		}
-		if a.tab != a.lastTab {
-			a.lastTab = a.tab
-			a.status = ""
-		}
-		// 底部固定区：三档外观、设置入口，以及账号入口。它与导航之间只隔
-		// 一条极淡的分隔线，不加底色。
-		ui.Divider(c)
-		a.sidebarFooter(c)
+	layout.DraggableSideNav(c, &a.navWidth, &a.navExpanded, layout.DraggableSideNavProps{
+		MinWidth:                navRailWidth,
+		MaxWidth:                280,
+		ShowHandleWhenCollapsed: true,
+		HighlightHandle:         true,
+		Header: func(nav layout.SideNavState) {
+			a.sidebarHeader(c, nav)
+		},
+		Footer: func(nav layout.SideNavState) {
+			a.sidebarFooterList(c, nav)
+		},
+	}, func(nav layout.SideNavState) {
+		a.sidebarNavList(c, nav)
 	})
 }
 
-// sidebarFooter 是主页侧边栏底部的固定区：从上到下是外观的三档小字、账号
-// 管理 · 设置 · 关于三个纯图标入口，以及账号入口（登录 / 退出登录）。放在
-// 滚动区之外，导航项再多也不会把这些常驻入口挤走；三个次级入口只留图标，
-// 说明写在提示里，侧边栏底部因此只有两行字和一行小图标。左右内边距与导航
-// 区同为 16 DIP，底部入口和上面的导航项对齐在同一条竖线上。
-func (a *app) sidebarFooter(c *ui.Context) {
-	ui.Column(c).FillWidth().Shrink(0).Padding(20, 16, 18, 16).Gap(16).Children(func() {
-		a.themeButtons(c)
-		// 账号面板是多账号的总入口：切换、添加、退出哪个账号都在那一个窗口里。
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			a.sidebarIconButton(c, accountsIcon, "账号", "账号管理：切换、添加或退出账号", a.showAccounts)
-			a.sidebarIconButton(c, settingsIcon, "设置", "打开设置窗口", a.showSettings)
-			a.sidebarIconButton(c, aboutIcon, "关于", "关于本应用", a.showAbout)
+// sidebarHeader 是可展开侧边栏的顶部：品牌标记 + 账号头像，折叠时只留头像
+// 图标，展开时并排显示应用名。点头像开账号面板。
+func (a *app) sidebarHeader(c *ui.Context, nav layout.SideNavState) {
+	ui.Column(c).Gap(6).Padding(10, 6, 6, 6).Children(func() {
+		b := ui.ButtonBase(c).Label("账号头像").Tooltip("打开账号面板").OnClick(a.showAccounts)
+		b.Row().Gap(10).AlignItems(ui.Center).Radius(lobetheme.TokensOf(c).BorderRadius).Padding(4, 6)
+		b.Children(func() {
+			if a.auth.loggedIn() {
+				avatarView(c, "", a.avatarBitmap(a.auth.avatarURL()), 24)
+			} else {
+				ui.Icon(c, lucide.UserRound()).FontSize(18)
+			}
+			if nav.Expanded {
+				ui.Text(c, "T2 Desktop").FontSize(13).FontWeight(600).SingleLine()
+			}
 		})
-		a.sidebarAccount(c)
 	})
 }
 
-// sidebarIconButton 是侧边栏底部的一格纯图标入口：无边框、无文字，悬停才
-// 浮出一层浅底。可访问名（label）供读屏与点击测试命中，提示说明点了之后
-// 会发生什么。
-func (a *app) sidebarIconButton(c *ui.Context, icon *ui.SVG, label, tip string, onClick func()) {
-	t := c.Theme()
-	b := ui.Row(c).Size(26, 28).Radius(0).AlignItems(ui.Center).Background(ui.Transparent)
-	ink := t.TextMuted
-	if b.Hovered() {
-		b.Background(t.SurfaceHover)
-		ink = t.Text
+// sidebarNavList 用 Lobe display.List 画浏览页导航。Collapse/RailWidth 让
+// 行随侧边栏一起收展；点击返回 tabID，交给 selectTab 切页或刷新。
+func (a *app) sidebarNavList(c *ui.Context, nav layout.SideNavState) {
+	items := make([]display.ListItem, 0, len(tabSpecs))
+	for i, s := range tabSpecs {
+		if s.Kind == kindNotification {
+			continue
+		}
+		icon := tabIcons[i]
+		if i >= len(tabIcons) || icon == nil {
+			icon = lucide.LayoutGrid()
+		}
+		items = append(items, display.ListItem{
+			Key:   tabID(i),
+			Label: a.followsTabLabel(i, s.Label),
+			Icon:  icon,
+		})
 	}
-	b.Children(func() {
-		ui.Icon(c, icon).Size(16, 16).TextColor(ink)
+	clicked := display.List(c, display.ListProps{
+		Items:     items,
+		Active:    a.navSel,
+		Compact:   true,
+		Collapse:  nav.Collapse,
+		RailWidth: nav.RailWidth,
 	})
-	b.Label(label).Tooltip(tip).OnClick(onClick)
+	if clicked != "" {
+		if idx, ok := tabIndexFromID(clicked); ok {
+			a.selectTab(idx)
+		}
+	}
+}
+
+// selectTab 是导航项一次点击的完整处理：点当前页再刷新一次，点别的页先切
+// 选中、再按登录要求决定弹授权还是直接拉首屏。
+func (a *app) selectTab(idx int) {
+	if idx < 0 || idx >= len(a.tabs) {
+		return
+	}
+	if idx == a.tab {
+		a.reclickTab(idx)
+		return
+	}
+	a.tab = idx
+	a.navSel = tabID(idx)
+	if spec := tabSpecs[idx]; spec.NeedsAuth && !a.auth.loggedIn() {
+		a.requestLogin("「"+spec.Label+"」需要登录 2Libra 后才能查看。",
+			func() { a.load(idx, 1) })
+	} else {
+		a.refreshTab(idx)
+	}
+	if a.tab != a.lastTab {
+		a.lastTab = a.tab
+		a.status = ""
+	}
+}
+
+// sidebarFooterList 用 Lobe display.List 画底部常驻入口：外观三档、账号/
+// 设置/关于、登录/退出。同样随侧边栏收展，折叠时收成图标方块。
+func (a *app) sidebarFooterList(c *ui.Context, nav layout.SideNavState) {
+	items := []display.ListItem{
+		{Key: "expand", Label: "展开侧边栏", Icon: lucide.PanelLeftOpen()},
+		{Key: "theme:system", Label: "外观：跟随系统", Icon: lucide.Monitor()},
+		{Key: "theme:light", Label: "外观：浅色", Icon: lucide.Sun()},
+		{Key: "theme:dark", Label: "外观：深色", Icon: lucide.Moon()},
+		{Key: "accounts", Label: "账号", Icon: lucide.UsersRound()},
+		{Key: "settings", Label: "设置", Icon: lucide.Settings()},
+		{Key: "about", Label: "关于", Icon: lucide.Info()},
+	}
+	// 折叠时把「展开」换成「折叠」，两种状态都有明确入口。
+	if a.navExpanded {
+		items[0].Label = "折叠侧边栏"
+		items[0].Icon = lucide.PanelLeftClose()
+	}
+	switch {
+	case a.loginPending:
+		items = append(items,
+			display.ListItem{Key: "wait", Label: "等待浏览器授权", Icon: lucide.LoaderCircle()},
+			display.ListItem{Key: "cancel", Label: "取消登录", Icon: lucide.X()},
+		)
+	case a.book != nil && a.book.pendingLogin() != nil:
+		items = append(items, display.ListItem{Key: "accounts-panel", Label: "账号面板", Icon: lucide.Users()})
+	case a.auth.loggedIn():
+		items = append(items, display.ListItem{Key: "logout", Label: "退出登录", Icon: lucide.LogOut()})
+	default:
+		items = append(items,
+			display.ListItem{Key: "login", Label: "登录 2Libra", Icon: lucide.LogIn()},
+			display.ListItem{Key: "signup", Label: "注册", Icon: lucide.UserRound()},
+		)
+	}
+	clicked := display.List(c, display.ListProps{
+		Items:     items,
+		Compact:   true,
+		Collapse:  nav.Collapse,
+		RailWidth: nav.RailWidth,
+	})
+	a.handleSidebarAction(c, clicked)
+}
+
+// handleSidebarAction 分发底部 List 的点击 key。
+func (a *app) handleSidebarAction(c *ui.Context, key string) {
+	switch key {
+	case "":
+		return
+	case "expand":
+		a.navExpanded = !a.navExpanded
+	case "theme:system":
+		a.setThemeMode(c, themeFollowSystem)
+	case "theme:light":
+		a.setThemeMode(c, themeLight)
+	case "theme:dark":
+		a.setThemeMode(c, themeDark)
+	case "accounts":
+		a.showAccounts()
+	case "settings":
+		a.showSettings()
+	case "about":
+		a.showAbout()
+	case "wait":
+		a.pageName = "login"
+	case "cancel":
+		a.cancelLogin()
+	case "accounts-panel":
+		a.showAccounts()
+	case "logout":
+		a.logoutAccount()
+	case "login":
+		a.startLogin()
+	case "signup":
+		a.openSignup()
+	}
+}
+
+// tabIndexFromID 把导航项 id（"t"+序号）映射回 tab 序号。
+func tabIndexFromID(id string) (int, bool) {
+	if len(id) < 2 || id[0] != 't' {
+		return 0, false
+	}
+	n, err := strconv.Atoi(id[1:])
+	if err != nil || n < 0 || n >= len(tabSpecs) {
+		return 0, false
+	}
+	return n, true
 }
 
 // showAccounts 打开账号面板。没有账号册（无头测试、旧的单窗口路径）时它
@@ -1226,55 +1296,6 @@ func (a *app) showAccounts() {
 		return
 	}
 	a.book.showPanel()
-}
-
-// sidebarAccount 是侧边栏底部的账号入口：未登录时是「登录」，点一下直接打开
-// 系统浏览器（不再先进登录页，那一步既多余，也容易让人以为要再点一次）；
-// 等待授权时显示进度，并给出「粘贴回调」与「取消」两个兜底动作；登录后是
-// 「退出登录」。标题栏不再放登录/退出：那里只留头像与昵称。
-func (a *app) sidebarAccount(c *ui.Context) {
-	t := c.Theme()
-	switch {
-	case a.loginPending:
-		waiting := "等待浏览器授权…"
-		if a.schemeWarn != "" {
-			// 系统没注册回调协议时不会有自动跳回，别让人干等。
-			waiting = "等待授权：系统未注册回调协议，请点「粘贴回调」"
-		}
-		ui.Text(c, waiting).FontSize(12).TextColor(t.TextMuted).MaxLines(3)
-		a.sidebarButton(c, "粘贴回调", nil, "在登录页粘贴回调链接", func() { a.pageName = "login" })
-		a.sidebarButton(c, "取消", nil, "取消这次登录", a.cancelLogin)
-	case a.book != nil && a.book.pendingLogin() != nil:
-		// 添加账号的授权挂在账号册上：等多久都不会有跳回，兜底动作都在账号
-		// 面板里（粘贴回调链接、取消）。
-		ui.Text(c, "等待浏览器授权…").FontSize(12).TextColor(t.TextMuted).MaxLines(3)
-		a.sidebarButton(c, "账号面板", nil, "打开账号面板查看授权进度", a.showAccounts)
-	case a.auth.loggedIn():
-		a.sidebarButton(c, "退出登录", logoutIcon, "退出这个账号（它的窗口会一起关闭）", a.logoutAccount)
-	default:
-		a.sidebarButton(c, "登录", loginIcon, "登录 2Libra（可以挂多个账号）", func() { a.startLogin() })
-		a.sidebarButton(c, "注册", signupIcon, "注册 2Libra 账号", a.openSignup)
-	}
-}
-
-// sidebarButton 是侧边栏底部的整行入口（设置、登录 / 退出登录）：图形与文案
-// 并排，悬停浅灰底，画法贴近 SidebarItem，但它是动作而不是页面，不参与导航
-// 选中。icon 为 nil 时只排文字（授权等待中的「粘贴回调」「取消」）。左边缘
-// 与导航文字对齐，悬停底色因此只从 16 DIP 这条线往右铺开。
-func (a *app) sidebarButton(c *ui.Context, label string, icon *ui.SVG, tip string, onClick func()) {
-	t := c.Theme()
-	b := ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Padding(6, 0).
-		Radius(0).Background(ui.Transparent)
-	if b.Hovered() {
-		b.Background(t.SurfaceHover)
-	}
-	b.Children(func() {
-		if icon != nil {
-			ui.Icon(c, icon).Size(16, 16).TextColor(t.TextMuted)
-		}
-		ui.Text(c, label).FontSize(13).TextColor(t.Text).SingleLine().Grow(1)
-	})
-	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
 
 // 自绘标题栏的尺寸。32 DIP 是 Windows 标题栏的常规高度，窗口按钮 46×32
@@ -1308,10 +1329,12 @@ func (a *app) titleBar(c *ui.Context) {
 	h := titleBarHeightFor(c)
 	ui.Row(c).Height(h).FillWidth().AlignItems(ui.Stretch).
 		Padding(0, 0, 0, bar.Left).Background(t.Background).DragWindow().Children(func() {
-		// 左段：搜索、通知铃铛，登录后再加上金币、盲盒与头像昵称，整体可随
-		// 标题栏拖动。外观、设置与登录 / 退出登录都在主页侧边栏底部。
+		// 左段：品牌名、搜索、通知铃铛，登录后再加上金币、盲盒与头像昵称，
+		// 整体可随标题栏拖动。外观、设置与登录 / 退出登录都在侧边栏底部。
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 16).Gap(10).
 			AlignItems(ui.Center).Children(func() {
+			// 品牌名对应 Lobe Header 的 Logo 位，占标题栏左端。
+			display.Text(c, "T2 Desktop", display.TextProps{Strong: true})
 			ui.Spacer(c).Grow(1)
 			// 搜索：任何页面都能用，不依赖登录，也不占侧边栏。窗口开着时
 			// 放大镜用强调色标出来。
@@ -1502,49 +1525,61 @@ func feedCountLabel(st *tabState) string {
 }
 
 func (a *app) body(c *ui.Context) {
-	t := c.Theme()
 	st := a.tabs[a.tab]
 	spec := tabSpecs[a.tab]
 
 	if spec.NeedsAuth && !a.auth.loggedIn() {
-		ui.Column(c).Grow(1).Center().Gap(12).Padding(24).Children(func() {
-			ui.Text(c, "「"+spec.Label+"」需要登录").FontSize(17).Bold()
-			ui.Text(c, "该端点要求 read:me / profile 权限，登录后才会发起请求。").TextColor(t.TextMuted)
-			if ui.PrimaryButton(c, "去登录").Clicked() {
-				idx := a.tab
-				a.requestLogin("「"+spec.Label+"」需要登录 2Libra 后才能查看。",
-					func() { a.load(idx, 1) })
-			}
+		ui.Column(c).Grow(1).Center().Padding(24).Children(func() {
+			display.Empty(c, display.EmptyProps{
+				Icon:        lucide.Lock(),
+				Title:       "「" + spec.Label + "」需要登录",
+				Description: "该端点要求 read:me / profile 权限，登录后才会发起请求。",
+				Action: func() {
+					if action.Button(c, "去登录", action.ButtonProps{Variant: action.Primary}).Clicked() {
+						idx := a.tab
+						a.requestLogin("「"+spec.Label+"」需要登录 2Libra 后才能查看。",
+							func() { a.load(idx, 1) })
+					}
+				},
+			})
 		})
 		return
 	}
 	if st.loading && len(st.items) == 0 {
-		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(28, 28)
-			ui.Text(c, "正在加载 "+spec.Label+"…").TextColor(t.TextMuted)
+		ui.Column(c).Grow(1).Center().Children(func() {
+			feedback.Spin(c, feedback.SpinProps{
+				Variant: feedback.SpinNetwork,
+				Size:    lobetheme.Large,
+				Tip:     "正在加载 " + spec.Label + "…",
+			}, nil)
 		})
 		return
 	}
 	if st.err != "" {
-		ui.Column(c).Grow(1).Center().Gap(12).Padding(24).Children(func() {
-			ui.Text(c, "加载失败").FontSize(16).Bold()
-			ui.Text(c, st.err).TextColor(t.Danger).MaxLines(4)
-			if ui.Button(c, "重试").Clicked() {
-				a.reloadCurrent()
-			}
-			if strings.Contains(st.err, "登录") || strings.Contains(st.err, "授权") {
-				if ui.Button(c, "去授权").Clicked() {
-					idx := a.tab
-					a.requestLogin("登录并授权后才能继续查看「"+spec.Label+"」。",
-						func() { a.load(idx, 1) })
-				}
-			}
+		ui.Column(c).Grow(1).Center().Padding(24).Children(func() {
+			display.Empty(c, display.EmptyProps{
+				Icon:        lucide.TriangleAlert(),
+				Title:       "加载失败",
+				Description: st.err,
+				Action: func() {
+					if action.Button(c, "重试", action.ButtonProps{}).Clicked() {
+						a.reloadCurrent()
+					}
+					if strings.Contains(st.err, "登录") || strings.Contains(st.err, "授权") {
+						if action.Button(c, "去授权", action.ButtonProps{}).Clicked() {
+							idx := a.tab
+							a.requestLogin("登录并授权后才能继续查看「"+spec.Label+"」。",
+								func() { a.load(idx, 1) })
+						}
+					}
+				},
+			})
 		})
 		return
 	}
 	if len(st.items) == 0 {
 		ui.Column(c).Grow(1).Center().Children(func() {
-			ui.Text(c, "暂无内容").TextColor(t.TextMuted)
+			display.Empty(c, display.EmptyProps{Title: "暂无内容"})
 		})
 		return
 	}
@@ -1616,9 +1651,8 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 	}
 	t := c.Theme()
 	titleColor := postTitleColor(t, a.isPostRead(it.ShortID))
-	// 行不是卡片：没有底色、描边和圆角，只用上下留白把条目分开。悬停时
-	// 只把底色抬一档，给出「这一行可点」的反馈，不画盒子。
-	row := ui.ButtonBase(c).FillWidth().Padding(24, 16).Radius(0).
+	// 悬停时抬一档底色给出「这一行可点」的反馈，圆角跟 Lobe token。
+	row := ui.ButtonBase(c).FillWidth().Padding(22, 14).Radius(lobetheme.TokensOf(c).BorderRadius).
 		Background(ui.Transparent)
 	if row.Hovered() {
 		row.Background(t.SurfaceHover)
@@ -1725,16 +1759,21 @@ func (a *app) latestReplyRow(c *ui.Context, it Item, open func(Item)) {
 // 回复数。数字只写值、不写「N 回复」，悬停提示负责说明它是什么；没有气泡
 // 图标，右端只剩一个安静的计数。
 func (a *app) postStatsBadge(c *ui.Context, it Item) {
-	t := c.Theme()
-	badge := ui.Row(c).Gap(10).Shrink(0).AlignSelf(ui.Start).AlignItems(ui.Center).
-		Padding(4, 0, 0, 0).Font(sidebarFont)
+	badge := ui.Row(c).Gap(8).Shrink(0).AlignSelf(ui.Start).AlignItems(ui.Center).
+		Padding(4, 0, 0, 0)
 	badge.Children(func() {
 		if it.Pinned {
-			ui.Text(c, "置顶").FontSize(10).Bold().TextColor(t.Accent).
-				SingleLine().Shrink(0)
+			// 置顶用 Lobe 的金色 Tag，和列表里其他角标同一套视觉。
+			display.Tag(c, "置顶", display.TagProps{
+				Color: display.TagGold,
+				Size:  lobetheme.Small,
+			})
 		}
-		ui.Textf(c, "%d", it.Stats.Replies).FontSize(14).
-			TextColor(t.TextMuted).SingleLine().Shrink(0)
+		// 回复数用无边框 Tag：只留一个安静的计数，和品牌视觉一致。
+		display.Tag(c, strconv.Itoa(it.Stats.Replies), display.TagProps{
+			Variant: display.TagBorderless,
+			Size:    lobetheme.Small,
+		})
 	})
 	badge.Tooltip(strconv.Itoa(it.Stats.Replies) + " 条回复")
 }
