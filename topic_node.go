@@ -99,7 +99,7 @@ func (a *app) watchPendingNode(d *detailState) {
 func (a *app) scheduleDetailNodeWatch(d *detailState, gen uint64, delay time.Duration) {
 	d.nodeWatchTimer = time.AfterFunc(delay, func() {
 		a.publish(func() {
-			if a.detail != d || d.nodeWatchGen != gen {
+			if !a.detailLive(d) || d.nodeWatchGen != gen {
 				return
 			}
 			d.nodeWatchTimer = nil
@@ -122,7 +122,7 @@ func (a *app) probeDetailNode(d *detailState, gen uint64) {
 		defer cancel()
 		topic, err := a.client.fetchTopic(ctx, shortID)
 		a.publish(func() {
-			if a.detail != d || d.nodeWatchGen != gen {
+			if !a.detailLive(d) || d.nodeWatchGen != gen {
 				return
 			}
 			if err != nil {
@@ -166,7 +166,7 @@ func (a *app) applyDetailNode(d *detailState, topic *topicDetail) {
 	}
 	a.updateReadingTopic(t.ShortID, t)
 	a.saveCachedDetail(d)
-	a.toast(toastMain, nodeAssignedText(t.NodeName, t.NodeSlug))
+	a.toast(a.detailToastFor(d), nodeAssignedText(t.NodeName, t.NodeSlug))
 }
 
 // nodeAssignedText 是节点分配完成的一句提示；名字缺失时退回 slug，都没有

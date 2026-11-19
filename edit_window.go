@@ -44,7 +44,9 @@ func (a *app) showTopicEdit(d *detailState) {
 		return
 	}
 	a.publish(func() {
-		a.openEditWindow(newTopicEditState(d.topic, a.md))
+		st := newTopicEditState(d.topic, a.md)
+		st.detail = d
+		a.openEditWindow(st)
 	})
 }
 
@@ -55,7 +57,9 @@ func (a *app) showReplyEdit(d *detailState, r replyItem) {
 		return
 	}
 	a.publish(func() {
-		a.openEditWindow(newReplyEditState(d.shortID, r, a.commentMd))
+		st := newReplyEditState(d.shortID, r, a.commentMd)
+		st.detail = d
+		a.openEditWindow(st)
 	})
 }
 
@@ -65,7 +69,9 @@ func (a *app) showPostscript(d *detailState) {
 		return
 	}
 	a.publish(func() {
-		a.openEditWindow(newPostscriptState(d.shortID, d.topic.Emojis, a.md))
+		st := newPostscriptState(d.shortID, d.topic.Emojis, a.md)
+		st.detail = d
+		a.openEditWindow(st)
 	})
 }
 

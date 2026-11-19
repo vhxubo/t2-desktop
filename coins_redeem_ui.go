@@ -226,5 +226,5 @@ func (a *app) openCoinRedeemPost(code redeemedCode) {
 	a.pageName = "list" // 从详情页的返回栈里出来，避免把列表页顶掉
 	a.detailStack = nil
 	a.openDetail(Item{ShortID: code.PostShortID, Title: code.PostTitle})
-	a.showMainWindow()
+	a.showMainWindowAfterDetail()
 }

@@ -360,7 +360,7 @@ func (a *app) openNotificationTarget(target, notifID string) {
 			a.detail.notifCommentID = it.CommentID
 		}
 	}
-	a.showMainWindow()
+	a.showMainWindowAfterDetail()
 }
 
 func (a *app) showNotices(notices []nativeNotice) {

@@ -305,7 +305,7 @@ func syncBets(d *detailState, t topicDetail) {
 // openBetPanel 打开 / 收起某个选项的投注面板。金额给一个默认值，避免用户
 // 一进来就是 0 再报错。
 func (a *app) openBetPanel(d *detailState, optionID string) {
-	if d == nil || a.detail != d || d.topic == nil || d.topic.Bet == nil {
+	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Bet == nil {
 		return
 	}
 	if betParticipationClosed(d.topic.Bet) {
@@ -327,7 +327,7 @@ func (a *app) openBetPanel(d *detailState, optionID string) {
 // 结果分布一样，这是用户主动发起的只读查询：失败只把原因留在竞猜块里可重
 // 试，不弹 toast。
 func (a *app) loadBets(d *detailState) {
-	if d == nil || a.detail != d || d.topic == nil || d.topic.Bet == nil || !a.autoLoad {
+	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Bet == nil || !a.autoLoad {
 		return
 	}
 	if d.bet.loading {
@@ -343,13 +343,13 @@ func (a *app) loadBets(d *detailState) {
 		defer cancel()
 		res, err := a.client.fetchTopicBets(ctx, shortID)
 		a.publish(func() {
-			if a.detail != d || d.bet.loadGen != gen {
+			if !a.detailLive(d) || d.bet.loadGen != gen {
 				return
 			}
 			d.bet.loading = false
 			if err != nil {
 				if a.handleAuthError(err, func() {
-					if a.detail == d {
+					if a.detailLive(d) {
 						a.loadBets(d)
 					}
 				}) {
@@ -378,11 +378,11 @@ func betDisplay(d *detailState) *betInfo {
 // submitBet 提交一笔投注。结果一律用主窗口 toast 报告，面板里只留「正在
 // 参与」的进度。成功后本地把金额记进选项，刷新标题栏与金币窗口的余额。
 func (a *app) submitBet(d *detailState, optionID string) {
-	if d == nil || a.detail != d || d.topic == nil || d.topic.Bet == nil || d.bet.busy {
+	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Bet == nil || d.bet.busy {
 		return
 	}
 	if betParticipationClosed(d.topic.Bet) {
-		a.toast(toastMain, "竞猜已经结束，不能再参与")
+		a.toast(a.detailToastFor(d), "竞猜已经结束，不能再参与")
 		return
 	}
 	// 选项 uuid 必须来自当前这一份详情，刷新后旧选项可能已经不在了。
@@ -394,13 +394,13 @@ func (a *app) submitBet(d *detailState, optionID string) {
 		}
 	}
 	if !valid {
-		a.toast(toastMain, "选项已变化，请重新选择")
+		a.toast(a.detailToastFor(d), "选项已变化，请重新选择")
 		return
 	}
 	coins := betCoinsValue(d.bet.amount)
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能参与竞猜。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				a.submitBet(d, optionID)
 			}
 		})
@@ -424,7 +424,7 @@ func (a *app) submitBet(d *detailState, optionID string) {
 		defer cancel()
 		err := a.client.participateBet(ctx, key, d.shortID, optionID, coins)
 		a.publish(func() {
-			if a.detail != d || d.bet.gen != gen {
+			if !a.detailLive(d) || d.bet.gen != gen {
 				return
 			}
 			d.bet.busy = false
@@ -437,7 +437,7 @@ func (a *app) submitBet(d *detailState, optionID string) {
 					return
 				}
 				d.bet.err = friendlyError(err)
-				a.toast(toastMain, friendlyError(err))
+				a.toast(a.detailToastFor(d), friendlyError(err))
 				return
 			}
 			// 成功才记账：失败时界面停在原样，不假装投过。
@@ -447,7 +447,7 @@ func (a *app) submitBet(d *detailState, optionID string) {
 			d.bet.selected = ""
 			d.bet.info = nil // 本地这份已过期，下次「我的参与」重新读
 			applyBet(d, optionID, coins, actor)
-			a.toast(toastMain, fmt.Sprintf("已投入 %d 金币", coins))
+			a.toast(a.detailToastFor(d), fmt.Sprintf("已投入 %d 金币", coins))
 			a.coinsChanged(coinEventBet)
 		})
 	}()

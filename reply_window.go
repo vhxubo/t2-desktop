@@ -156,6 +156,11 @@ func (a *app) replyWindowView(c *ui.Context) {
 	t := c.Theme()
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
+	// 这一帧的详情游标拨到写评论窗口绑定的那篇：正文上传、发送结果里的
+	// toast 与身份气泡都要落在这篇帖子上，而不是上一条画过的详情窗口。
+	if d := a.replyWinFor; d != nil {
+		a.detail = d
+	}
 	// 本窗口里发送失败 / 成功的提示弹在这里；窗口不在了就退回主窗口。
 	a.drainToasts(c, a.claimsToasts(toastReply))
 	c.OnShortcut(0, ui.KeyEscape, a.closeReplyWindow)

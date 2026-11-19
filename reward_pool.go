@@ -224,12 +224,12 @@ func (a *app) rewardPoolSection(c *ui.Context, d *detailState, p *rewardPoolInfo
 // 自己处理（点锚点切换、点窗外与 Esc 关闭），这里只负责未登录时先走授权，
 // 并在授权回来后打开气泡；金额为空或越界时先夹到合法区间。
 func (a *app) openRewardPoolPopup(d *detailState) {
-	if d == nil || a.detail != d {
+	if d == nil || !a.detailLive(d) {
 		return
 	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能给金币池注资。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				d.pool.open = true
 				a.prepareRewardPoolAmount(d)
 			}
@@ -337,7 +337,7 @@ func rewardPoolAmount(amount float64) int {
 // 重放复用同一个幂等键；金额变了才换新键。成功后收起气泡、刷新余额并重读详情，
 // 让池子的余额以服务端为准。
 func (a *app) submitRewardPool(d *detailState) {
-	if d == nil || a.detail != d || d.pool.busy || d.topic == nil || d.topic.RewardPool == nil {
+	if d == nil || !a.detailLive(d) || d.pool.busy || d.topic == nil || d.topic.RewardPool == nil {
 		return
 	}
 	// 界面入口已经按作者过滤；这里再拦一道，防止直接调用绕过限制。
@@ -346,7 +346,7 @@ func (a *app) submitRewardPool(d *detailState) {
 	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能给金币池注资。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				a.submitRewardPool(d)
 			}
 		})
@@ -369,7 +369,7 @@ func (a *app) submitRewardPool(d *detailState) {
 		defer cancel()
 		err := a.client.fundRewardPool(ctx, d.shortID, key, amount)
 		a.publish(func() {
-			if a.detail != d || d.pool.gen != gen {
+			if !a.detailLive(d) || d.pool.gen != gen {
 				return
 			}
 			d.pool.busy = false
@@ -391,7 +391,7 @@ func (a *app) submitRewardPool(d *detailState) {
 			if p := d.topic.RewardPool; p != nil && p.CoinsKnown {
 				p.CurrentCoins += amount
 			}
-			a.toast(toastMain, fmt.Sprintf("已向金币池投入 %d 金币", amount))
+			a.toast(a.detailToastFor(d), fmt.Sprintf("已向金币池投入 %d 金币", amount))
 			a.coinsChanged(coinEventRewardPool)
 			a.loadTopic()
 		})

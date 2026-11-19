@@ -23,8 +23,12 @@ import (
 
 // detailState is per-post UI state. Background work only publishes results
 // through app.publish; no element or context is ever retained here.
+// host 指向承载这篇帖子的详情窗口（老的内联路径为 nil）；dead 在窗口关闭、
+// 标签关闭或合并搬走后置位，后台结果据此丢弃。
 type detailState struct {
 	shortID, focusID, fallbackURL string
+	host                          *detailWindow
+	dead                          bool
 	topic                         *topicDetail
 	topicLoading                  bool
 	topicErr                      string
@@ -235,7 +239,7 @@ func newMarkdownOptions(a *app, st mdTextStyle) *markdown.Options {
 // previous post stays on a small back stack. Self-links are ignored.
 func (a *app) handleLink(raw string) {
 	if it, ok := parseInAppTopicLink(raw); ok {
-		if a.pageName == "detail" && a.detail != nil && it.ShortID == a.detail.shortID {
+		if a.detail != nil && it.ShortID == a.detail.shortID {
 			return
 		}
 		a.openDetail(it)
@@ -306,10 +310,75 @@ func (a *app) ensureAvatar() {
 	a.prefetchAvatars(a.auth.avatarURL())
 }
 
+// openDetail 是打开一篇帖子的统一入口：有主窗口时开独立的详情窗口（同一篇
+// 已开则只带前台），无头测试与最后一个窗口关闭后的兜底仍走内联页。
 func (a *app) openDetail(it Item) {
 	if it.ShortID == "" {
 		return
 	}
+	if a.win != nil || len(a.detailWindows) > 0 {
+		a.openDetailWindow(it)
+		return
+	}
+	a.openDetailInline(it)
+}
+
+// newDetailState 只造状态，不加载：详情窗口先建好标签再填内容，避免两张
+// 窗口同时打开时把结果发到错的游标上。
+func (a *app) newDetailState(it Item) *detailState {
+	return &detailState{
+		mdEditor:     newMDEditor(),
+		winPreview:   true,
+		shortID:      it.ShortID,
+		focusID:      it.CommentID,
+		focusPending: it.CommentID != "",
+		fallbackURL:  it.URL,
+		replyPage:    1,
+		flat:         it.CommentID != "",
+		// bodyCollapsed 与 bodyWidth 都不继承：每次进来都是双栏、正文展开。
+		// 默认正文宽度在 view 里按窗口宽度取 55%，这样不同窗口下初始比例一致。
+	}
+}
+
+// loadDetail 摆首屏缓存并发请求。所有网络回调都只认 d 本身（detailLive），
+// 因此几篇帖子同时在加载也不会互相顶掉。
+func (a *app) loadDetail(d *detailState, it Item) {
+	// 先摆上缓存里的正文和第一页评论：网络慢或断开时第一帧就有内容。
+	a.preloadDetailCache(d)
+	// 加载评论楼层视图的本地记忆：折叠、停留位置与新评论基线，都按帖子记。
+	// 从评论列表点进来要定位某条评论时不恢复折叠（展开全部便于定位）。
+	if mem, ok := a.loadReplyView(it.ShortID); ok {
+		d.viewMem = &mem
+		d.readBase = mem.ReadAt
+		d.stayIdx = mem.ScrollIdx
+		d.stayID = mem.ReadToID
+		if it.CommentID == "" && len(mem.Collapsed) > 0 {
+			d.collapsed = make(map[string]bool, len(mem.Collapsed))
+			for _, id := range mem.Collapsed {
+				d.collapsed[id] = true
+			}
+		}
+	}
+	// 视图模式是账号级偏好，不跟帖子走。
+	if it.CommentID == "" {
+		if flat, ok := a.loadReplyViewMode(); ok {
+			d.flat = flat
+		}
+	}
+	// 本地已读：点开即算读过，回到列表时这一行标题置灰。
+	a.markPostRead(it.ShortID)
+	a.recordReading(it, d.topic)
+	a.status = ""
+	// load* are no-ops when autoLoad is off, so headless UI tests never
+	// touch the network.
+	a.loadTopicFor(d)
+	a.loadRepliesFor(d, 1)
+	a.ensureEmojis()
+}
+
+// openDetailInline 是老的内联路径：主窗口页面切成 detail，保留 20 层返回栈。
+// 无头测试、以及已经没有任何原生窗口时的兜底走这里。
+func (a *app) openDetailInline(it Item) {
 	// 换帖子就把独立写评论窗口收起来：它绑的是上一份 detailState 的草稿，
 	// 留着会让人以为写的是刚打开的这一篇。
 	a.closeReplyWindow()
@@ -329,57 +398,17 @@ func (a *app) openDetail(it Item) {
 	} else {
 		a.detailStack = nil
 	}
-	a.detail = &detailState{
-		mdEditor:     newMDEditor(),
-		winPreview:   true,
-		shortID:      it.ShortID,
-		focusID:      it.CommentID,
-		focusPending: it.CommentID != "",
-		fallbackURL:  it.URL,
-		replyPage:    1,
-		flat:         it.CommentID != "", // 从评论列表进来用扁平序，更容易找到那层楼
-		// bodyCollapsed 与 bodyWidth 都不继承：每次进来都是双栏、正文展开。
-		// 默认正文宽度在 view 里按窗口宽度取 55%，这样不同窗口下初始比例一致。
-	}
-	// 先摆上缓存里的正文和第一页评论：网络慢或断开时第一帧就有内容。
-	a.preloadDetailCache(a.detail)
-	// 加载评论楼层视图的本地记忆：折叠、停留位置与新评论基线，都按帖子记。
-	// 从评论列表点进来要定位某条评论时不恢复折叠（展开全部便于定位）。
-	if mem, ok := a.loadReplyView(it.ShortID); ok {
-		a.detail.viewMem = &mem
-		a.detail.readBase = mem.ReadAt
-		a.detail.stayIdx = mem.ScrollIdx
-		a.detail.stayID = mem.ReadToID
-		if it.CommentID == "" && len(mem.Collapsed) > 0 {
-			a.detail.collapsed = make(map[string]bool, len(mem.Collapsed))
-			for _, id := range mem.Collapsed {
-				a.detail.collapsed[id] = true
-			}
-		}
-	}
-	// 视图模式是账号级偏好，不跟帖子走：上次切到扁平，打开别的帖子也还是
-	// 扁平（见 reply_view.go 的 loadReplyViewMode）。从评论列表点进来要定位
-	// 某层楼时仍强制扁平，但不改动这个偏好。
-	if it.CommentID == "" {
-		if flat, ok := a.loadReplyViewMode(); ok {
-			a.detail.flat = flat
-		}
-	}
-	// 本地已读：点开即算读过，回到列表时这一行标题置灰（见 post_read.go）。
-	// 正文没加载出来也算读过，用户已经打开过它了。
-	a.markPostRead(it.ShortID)
-	// 阅读记录用缓存里的标题补全打开时缺的字段。
-	a.recordReading(it, a.detail.topic)
+	a.detail = a.newDetailState(it)
+	a.loadDetail(a.detail, it)
 	a.pageName = "detail"
-	a.status = ""
-	// load* are no-ops when autoLoad is off, so headless UI tests never
-	// touch the network.
-	a.loadTopic()
-	a.loadReplies(1)
-	a.ensureEmojis()
 }
 
 func (a *app) closeDetail() {
+	if h := a.detailHostOf(a.detail); h != nil {
+		// 独立窗口里「关闭」只作用于当前标签：还有别的帖子时窗口留着。
+		a.closeDetailTab(h, h.active)
+		return
+	}
 	a.status = ""
 	// 离开评论区时独立写评论窗口也一起收起：草稿还留在那个 detailState
 	// 里，回到这篇帖子时会原样出现。
@@ -406,8 +435,9 @@ func (a *app) closeDetail() {
 	a.pageName = "list"
 }
 
-func (a *app) loadTopic() {
-	d := a.detail
+func (a *app) loadTopic() { a.loadTopicFor(a.detail) }
+
+func (a *app) loadTopicFor(d *detailState) {
 	if d == nil || d.topicLoading || !a.autoLoad {
 		return
 	}
@@ -421,14 +451,14 @@ func (a *app) loadTopic() {
 		defer cancel()
 		topic, err := a.client.fetchTopic(ctx, d.shortID)
 		a.publish(func() {
-			if a.detail != d || d.topicGen != gen {
+			if !a.detailLive(d) || d.topicGen != gen {
 				return
 			}
 			d.topicLoading = false
 			if err != nil {
 				a.handleAuthError(err, func() {
-					if a.detail == d {
-						a.loadTopic()
+					if a.detailLive(d) {
+						a.loadTopicFor(d)
 					}
 				})
 				// 已有缓存正文时不要把整页换成错误：继续显示缓存，只在顶部
@@ -482,8 +512,9 @@ func (a *app) loadTopic() {
 	}()
 }
 
-func (a *app) loadReplies(page int) {
-	d := a.detail
+func (a *app) loadReplies(page int) { a.loadRepliesFor(a.detail, page) }
+
+func (a *app) loadRepliesFor(d *detailState, page int) {
 	if d == nil || d.replyLoading || page < 1 || !a.autoLoad {
 		return
 	}
@@ -500,7 +531,7 @@ func (a *app) loadReplies(page int) {
 		defer cancel()
 		res, err := a.client.fetchReplies(ctx, d.shortID, page, flat)
 		a.publish(func() {
-			if a.detail != d || d.replyGen != gen {
+			if !a.detailLive(d) || d.replyGen != gen {
 				return
 			}
 			d.replyLoading = false
@@ -508,8 +539,8 @@ func (a *app) loadReplies(page int) {
 				// 缺权限时不只把错误画在页面上：全局授权弹窗会带用户去补权限，
 				// 回调成功后重发这一页。
 				a.handleAuthError(err, func() {
-					if a.detail == d {
-						a.loadReplies(page)
+					if a.detailLive(d) {
+						a.loadRepliesFor(d, page)
 					}
 				})
 				if page > 1 && len(d.replyList) > 0 {
@@ -640,24 +671,35 @@ func (a *app) ensureEmojis() {
 	}()
 }
 
-func (a *app) detailView(c *ui.Context) {
-	// 主题已由 view 按外观模式设好，这里直接取用，避免重复解析。
-	t := c.Theme()
-	tk := lobetheme.TokensOf(c)
-	// Esc 与右上角关闭同义：内联浏览时先退一层，再回到列表。
-	c.OnShortcut(0, ui.KeyEscape, func() { a.closeDetail() })
-	a.titleBar(c)
-	ui.Divider(c)
+// detailView 是详情页的顶层画法。inline=true 时还画主窗口标题栏与 Esc 返回
+// 列表；详情窗口传 false，标题栏、Esc 与标签栏由窗口自己管。
+func (a *app) detailView(c *ui.Context, inline bool) {
+	if inline {
+		// Esc 与右上角关闭同义：内联浏览时先退一层，再回到列表。
+		c.OnShortcut(0, ui.KeyEscape, func() { a.closeDetail() })
+		a.titleBar(c)
+		ui.Divider(c)
+	}
 	d := a.detail
 	if d == nil {
 		ui.Column(c).Fill().Center().Gap(12).Children(func() {
-			ui.Text(c, "没有打开的帖子").TextColor(t.TextMuted)
+			ui.Text(c, "没有打开的帖子").TextColor(c.Theme().TextMuted)
 			if ui.Button(c, "← 返回列表").Clicked() {
 				a.pageName = "list"
 			}
 		})
 		return
 	}
+	a.detailContent(c, d)
+	a.flushSeenNotifications()
+}
+
+// detailContent 是详情页真正的内容：左正文、右评论，底部来源与悬浮工具条。
+// 显式收 d，让两扇详情窗口各画各的那篇，不靠游标在帧与帧之间保持一致。
+func (a *app) detailContent(c *ui.Context, d *detailState) {
+	// 主题已由窗口的 view 按外观模式设好，这里直接取用，避免重复解析。
+	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	ui.Column(c).Grow(1).FillWidth().Children(func() {
 		// 正文栏是 Lobe 的可拖拽面板：贴左，接缝正好落在两栏中间。拖接缝左右
 		// 调整宽度，接缝正中的按钮收起 / 展开正文（见 layout.DraggablePanel）。
@@ -720,9 +762,6 @@ func (a *app) detailView(c *ui.Context) {
 	})
 	// 表态、打赏与明细都是贴着各自入口的气泡（见 interact.go），在互动区
 	// 构建时已经就地挂好，这里不需要再叠一层弹窗。
-	// 从通知点进来的评论已经露出来：等这一帧画完再提交已读，见
-	// flushSeenNotifications。
-	a.flushSeenNotifications()
 }
 
 // detailReplySurface 是评论区卡片的底色：页面底色与文字色按很小比例混合，
@@ -819,7 +858,7 @@ func (a *app) detailCopyButton(c *ui.Context, href, label, tip string) {
 	})
 	b.Label(label).Tooltip(tip)
 	if b.Clicked() {
-		a.copyToClipboard(c, href, toastMain, "已复制链接")
+		a.copyToClipboard(c, href, a.detailToast(), "已复制链接")
 	}
 }
 
@@ -1121,7 +1160,7 @@ func (a *app) submitVoteMulti(d *detailState, v *voteBlock) {
 		}
 	}
 	if len(ids) == 0 {
-		a.toast(toastMain, "请先选择投票选项")
+		a.toast(a.detailToastFor(d), "请先选择投票选项")
 		return
 	}
 	max := v.MaxChoice
@@ -1129,7 +1168,7 @@ func (a *app) submitVoteMulti(d *detailState, v *voteBlock) {
 		max = voteOptionMax
 	}
 	if len(ids) > max {
-		a.toast(toastMain, fmt.Sprintf("最多选 %d 项", max))
+		a.toast(a.detailToastFor(d), fmt.Sprintf("最多选 %d 项", max))
 		return
 	}
 	a.submitVote(d, ids, true)
@@ -1375,7 +1414,7 @@ func (a *app) flushSeenNotifications() {
 	}
 	ids := append([]string(nil), a.seenNotifications...)
 	a.seenNotifications = nil
-	a.markNotificationsRead(toastMain, ids)
+	a.markNotificationsRead(a.detailToast(), ids)
 }
 
 // replyHeader 是评论卡片顶部固定的一行：「评论」标题、评论数（点一下回到
@@ -1806,7 +1845,7 @@ func (a *app) replyCopyEntry(c *ui.Context, d *detailState, r replyItem) {
 	})
 	b.Label("复制评论链接").Tooltip("把这条评论的链接复制到剪贴板")
 	if b.Clicked() {
-		a.copyToClipboard(c, href, toastMain, "已复制评论链接")
+		a.copyToClipboard(c, href, a.detailToastFor(d), "已复制评论链接")
 	}
 }
 
@@ -2266,7 +2305,7 @@ func (a *app) replyFieldActions(c *ui.Context, d *detailState) ui.Element {
 				var replay func()
 				if strings.TrimSpace(d.draft) != "" {
 					replay = func() {
-						if a.detail == d {
+						if a.detailLive(d) {
 							a.submitReply()
 						}
 					}
@@ -2327,7 +2366,7 @@ func (a *app) replyAuthTarget() toastTarget {
 	if a.replyWindowOpen() {
 		return toastReply
 	}
-	return toastMain
+	return a.detailToast()
 }
 
 // replyToast 把评论输入相关的结果弹在「正在写」的那个窗口里：草稿在独立
@@ -2338,7 +2377,7 @@ func (a *app) replyToast(text string) {
 		a.toast(toastReply, text)
 		return
 	}
-	a.toast(toastMain, text)
+	a.toast(a.detailToast(), text)
 }
 
 // submitReply posts the draft through the Client. On success it clears the
@@ -2412,7 +2451,7 @@ func (a *app) submitReply() {
 		defer cancel()
 		created, err := client.createReply(ctx, d.shortID, content, target)
 		a.publish(func() {
-			if a.detail != d {
+			if !a.detailLive(d) {
 				return // navigated away; drop the stale result
 			}
 			d.posting = false
@@ -2431,7 +2470,7 @@ func (a *app) submitReply() {
 					// 缺 write:comment 时先补授权，回调成功后按同样的内容与父
 					// 评论重发一次，用户不用重新输入。
 					a.handleAuthErrorFor(a.replyAuthTarget(), err, func() {
-						if a.detail == d {
+						if a.detailLive(d) {
 							a.submitReply()
 						}
 					})

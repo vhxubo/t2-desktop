@@ -85,7 +85,7 @@ func (a *app) canToggleComments(d *detailState) bool {
 // askToggleComments 展开确认框。关闭评论会影响其他读者的回复，重新开启又有冷却
 // 时间，所以不点一下就发生。
 func (a *app) askToggleComments(d *detailState) {
-	if d == nil || a.detail != d || d.topic == nil || d.comments.busy || !a.canToggleComments(d) {
+	if d == nil || !a.detailLive(d) || d.topic == nil || d.comments.busy || !a.canToggleComments(d) {
 		return
 	}
 	d.comments.awaiting = true
@@ -95,7 +95,7 @@ func (a *app) askToggleComments(d *detailState) {
 // 状态（副标题的「评论已关闭」与底部输入框跟着变），结果用主窗口的 toast 报告；
 // 失败原因同样只用 toast，页面保持原样。
 func (a *app) toggleTopicComments(d *detailState) {
-	if d == nil || a.detail != d || d.topic == nil || d.comments.busy || !a.canToggleComments(d) {
+	if d == nil || !a.detailLive(d) || d.topic == nil || d.comments.busy || !a.canToggleComments(d) {
 		return
 	}
 	desired := !d.topic.CommentsClosed
@@ -109,26 +109,26 @@ func (a *app) toggleTopicComments(d *detailState) {
 		defer cancel()
 		res, err := a.client.setTopicCommentsClosed(ctx, shortID, desired)
 		a.publish(func() {
-			if a.detail != d || d.comments.gen != gen {
+			if !a.detailLive(d) || d.comments.gen != gen {
 				return // 已经换了帖子或又提交过一次：这次结果不再改页面
 			}
 			d.comments.busy = false
 			if err != nil {
 				// 「需开通」是应用级限制，重新授权解决不了：直接说明，不弹授权。
 				if a.commentsStatusUngranted(err) {
-					a.toast(toastMain, "2Libra 还没有给本应用开通「关闭评论」：需要在应用申请页说明用途、由平台开通后才能用。")
+					a.toast(a.detailToastFor(d), "2Libra 还没有给本应用开通「关闭评论」：需要在应用申请页说明用途、由平台开通后才能用。")
 					return
 				}
 				// 缺 write:topic 时先补授权，回调成功后按同样的目标重发一次；
 				// 授权链路已经接手这次失败，不再另外弹一条错误提示。
 				if a.handleAuthError(err, func() {
-					if a.detail == d {
+					if a.detailLive(d) {
 						a.toggleTopicComments(d)
 					}
 				}) {
 					return
 				}
-				a.toast(toastMain, friendlyError(err))
+				a.toast(a.detailToastFor(d), friendlyError(err))
 				return
 			}
 			closed := desired
@@ -150,9 +150,9 @@ func (a *app) applyCommentsClosed(d *detailState, closed bool) {
 		// 关闭之后「正在回复某条评论」挂在一个发不出去的输入框上，收掉这条引用；
 		// 草稿正文留着，重新开启时还能接着写。
 		d.replyTo = replyTarget{}
-		a.toast(toastMain, "评论已关闭，其他读者不能再回复")
+		a.toast(a.detailToastFor(d), "评论已关闭，其他读者不能再回复")
 	} else {
-		a.toast(toastMain, "评论已开启，其他读者可以继续回复")
+		a.toast(a.detailToastFor(d), "评论已开启，其他读者可以继续回复")
 	}
 	a.saveCachedDetail(d)
 }

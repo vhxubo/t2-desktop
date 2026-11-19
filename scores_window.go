@@ -481,5 +481,5 @@ func (a *app) openScorePost(e scoreEntry) {
 		return
 	}
 	a.openDetail(Item{ShortID: e.ShortID, URL: topicURL(e.ShortID, e.NodeSlug)})
-	a.showMainWindow()
+	a.showMainWindowAfterDetail()
 }

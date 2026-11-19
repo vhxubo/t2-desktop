@@ -233,7 +233,7 @@ type collectionState struct {
 // ensureCollections 在气泡第一次打开时读一次合集列表。失败不清 loaded，
 // 下次打开会再试。
 func (a *app) ensureCollections(d *detailState) {
-	if d == nil || a.detail != d || !a.autoLoad || !a.auth.loggedIn() {
+	if d == nil || !a.detailLive(d) || !a.autoLoad || !a.auth.loggedIn() {
 		return
 	}
 	if d.coll.loaded || d.coll.loading {
@@ -249,7 +249,7 @@ func (a *app) ensureCollections(d *detailState) {
 		defer cancel()
 		items, err := a.client.fetchMyCollections(ctx)
 		a.publish(func() {
-			if a.detail != d || d.coll.gen != gen {
+			if !a.detailLive(d) || d.coll.gen != gen {
 				return
 			}
 			d.coll.loading = false
@@ -259,7 +259,7 @@ func (a *app) ensureCollections(d *detailState) {
 				}
 				d.coll.err = friendlyError(err)
 				a.handleAuthError(err, func() {
-					if a.detail == d {
+					if a.detailLive(d) {
 						a.ensureCollections(d)
 					}
 				})
@@ -282,7 +282,7 @@ func (a *app) canCollectTopic(d *detailState) bool {
 // toggleCollectionPicker 开 / 关合集气泡。打开时顺手读一次列表，第一帧里
 // 就能看到自己的合集。
 func (a *app) toggleCollectionPicker(d *detailState) {
-	if d == nil || a.detail != d || !a.canCollectTopic(d) {
+	if d == nil || !a.detailLive(d) || !a.canCollectTopic(d) {
 		return
 	}
 	d.coll.open = !d.coll.open
@@ -295,19 +295,19 @@ func (a *app) toggleCollectionPicker(d *detailState) {
 // 成功后把状态写回详情，页面里的按钮与气泡都跟着变；「我的 - 合集」的
 // 帖子数已经过期，清掉缓存。
 func (a *app) assignTopicCollection(d *detailState, item collectionItem, add bool) {
-	if d == nil || a.detail != d || d.topic == nil || d.coll.busy || !a.canCollectTopic(d) {
+	if d == nil || !a.detailLive(d) || d.topic == nil || d.coll.busy || !a.canCollectTopic(d) {
 		return
 	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能管理合集。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				a.assignTopicCollection(d, item, add)
 			}
 		})
 		return
 	}
 	if d.shortID == "" {
-		a.toast(toastMain, "缺少帖子标识，暂时无法归入合集")
+		a.toast(a.detailToastFor(d), "缺少帖子标识，暂时无法归入合集")
 		return
 	}
 	d.coll.busy = true
@@ -321,7 +321,7 @@ func (a *app) assignTopicCollection(d *detailState, item collectionItem, add boo
 		defer cancel()
 		err := a.client.assignTopicCollection(ctx, shortID, target)
 		a.publish(func() {
-			if a.detail != d {
+			if !a.detailLive(d) {
 				return
 			}
 			d.coll.busy = false
@@ -334,18 +334,18 @@ func (a *app) assignTopicCollection(d *detailState, item collectionItem, add boo
 				}) {
 					return
 				}
-				a.toast(toastMain, friendlyError(err))
+				a.toast(a.detailToastFor(d), friendlyError(err))
 				return
 			}
 			d.topic.CollectionKnown = true
 			if add {
 				d.topic.CollectionID = item.ID
 				d.topic.CollectionName = item.Name
-				a.toast(toastMain, "已加入合集「"+item.Name+"」")
+				a.toast(a.detailToastFor(d), "已加入合集「"+item.Name+"」")
 			} else {
 				d.topic.CollectionID = ""
 				d.topic.CollectionName = ""
-				a.toast(toastMain, "已移出合集")
+				a.toast(a.detailToastFor(d), "已移出合集")
 			}
 			a.invalidateCollections()
 		})
@@ -355,21 +355,21 @@ func (a *app) assignTopicCollection(d *detailState, item collectionItem, add boo
 // createCollectionForTopic 新建一个合集并立刻把当前帖子归进去：用户点
 // 「新建」时想的是「把这帖放进这个新合集」，分两步做会多一次点击。
 func (a *app) createCollectionForTopic(d *detailState) {
-	if d == nil || a.detail != d || d.coll.creating || d.coll.busy || !a.canCollectTopic(d) {
+	if d == nil || !a.detailLive(d) || d.coll.creating || d.coll.busy || !a.canCollectTopic(d) {
 		return
 	}
 	name := strings.TrimSpace(d.coll.draft)
 	if name == "" {
-		a.toast(toastMain, "请先填写合集名称")
+		a.toast(a.detailToastFor(d), "请先填写合集名称")
 		return
 	}
 	if utf8.RuneCountInString(name) > collectionNameMax {
-		a.toast(toastMain, fmt.Sprintf("合集名称最多 %d 个字", collectionNameMax))
+		a.toast(a.detailToastFor(d), fmt.Sprintf("合集名称最多 %d 个字", collectionNameMax))
 		return
 	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能新建合集。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				a.createCollectionForTopic(d)
 			}
 		})
@@ -382,7 +382,7 @@ func (a *app) createCollectionForTopic(d *detailState) {
 		defer cancel()
 		item, err := a.client.createCollection(ctx, name)
 		a.publish(func() {
-			if a.detail != d {
+			if !a.detailLive(d) {
 				return
 			}
 			d.coll.creating = false
@@ -393,7 +393,7 @@ func (a *app) createCollectionForTopic(d *detailState) {
 				if a.handleAuthError(err, func() { a.createCollectionForTopic(d) }) {
 					return
 				}
-				a.toast(toastMain, friendlyError(err))
+				a.toast(a.detailToastFor(d), friendlyError(err))
 				return
 			}
 			d.coll.draft = ""
@@ -402,7 +402,7 @@ func (a *app) createCollectionForTopic(d *detailState) {
 				// 服务端没回创建结果：重新读一次列表，让新合集出现在气泡里。
 				d.coll.loaded = false
 				a.ensureCollections(d)
-				a.toast(toastMain, "已新建合集「"+item.Name+"」")
+				a.toast(a.detailToastFor(d), "已新建合集「"+item.Name+"」")
 				return
 			}
 			// 本地先记上，避免等待重读列表；随后直接归入这个新合集。
@@ -490,7 +490,7 @@ func (a *app) collectionButton(c *ui.Context, d *detailState) {
 		b.OnClick(func() {
 			if !a.auth.loggedIn() {
 				a.requestLogin("登录后才能管理合集。", func() {
-					if a.detail == d {
+					if a.detailLive(d) {
 						a.toggleCollectionPicker(d)
 					}
 				})

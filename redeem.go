@@ -255,21 +255,21 @@ type redeemUIState struct {
 // submitRedeemCode 提交一次领取。结果（成功、失败、服务端拒绝的原因）一律用
 // 主窗口 toast 报告，块里只留「正在领取」的进度。
 func (a *app) submitRedeemCode(d *detailState) {
-	if d == nil || a.detail != d || d.topic == nil || d.topic.Redeem == nil || d.redeem.busy {
+	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Redeem == nil || d.redeem.busy {
 		return
 	}
 	code := strings.TrimSpace(d.redeem.code)
 	if code == "" {
-		a.toast(toastMain, "请先输入兑换码")
+		a.toast(a.detailToastFor(d), "请先输入兑换码")
 		return
 	}
 	if n := utf8.RuneCountInString(code); n > redeemCodeMax {
-		a.toast(toastMain, fmt.Sprintf("兑换码最多 %d 字，当前 %d 字", redeemCodeMax, n))
+		a.toast(a.detailToastFor(d), fmt.Sprintf("兑换码最多 %d 字，当前 %d 字", redeemCodeMax, n))
 		return
 	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能领取兑换码。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				a.submitRedeemCode(d)
 			}
 		})
@@ -291,7 +291,7 @@ func (a *app) submitRedeemCode(d *detailState) {
 		defer cancel()
 		res, err := a.client.redeemCode(ctx, key, code)
 		a.publish(func() {
-			if a.detail != d || d.redeem.gen != gen {
+			if !a.detailLive(d) || d.redeem.gen != gen {
 				return
 			}
 			d.redeem.busy = false
@@ -301,13 +301,13 @@ func (a *app) submitRedeemCode(d *detailState) {
 			}
 			if err != nil {
 				if a.handleAuthError(err, func() {
-					if a.detail == d {
+					if a.detailLive(d) {
 						a.submitRedeemCode(d)
 					}
 				}) {
 					return
 				}
-				a.toast(toastMain, redeemErrorText(err))
+				a.toast(a.detailToastFor(d), redeemErrorText(err))
 				return
 			}
 			d.redeem.key = ""
@@ -319,7 +319,7 @@ func (a *app) submitRedeemCode(d *detailState) {
 			}
 			d.redeem.addClaimed(full)
 			markRedeemClaimed(d.topic.Redeem, full)
-			a.toast(toastMain, redeemSuccessText(res))
+			a.toast(a.detailToastFor(d), redeemSuccessText(res))
 			a.coinsChanged(coinEventRedeem)
 		})
 	}()

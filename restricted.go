@@ -469,7 +469,7 @@ func restrictedUnlocked(d *detailState) bool {
 // 403 insufficient_scope 不弹授权弹窗（手动点按钮时才走完整授权链路）。
 // 失败原因留在对应块里，可单独重试。
 func (a *app) autoLoadRestricted(d *detailState) {
-	if d == nil || a.detail != d || d.topic == nil || d.topic.Restricted == nil || !a.autoLoad {
+	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Restricted == nil || !a.autoLoad {
 		return
 	}
 	if d.restricted.auto {
@@ -485,7 +485,7 @@ func (a *app) autoLoadRestricted(d *detailState) {
 // 后的静默自动拉取：未登录跳过、缺 scope 不弹授权；手动点击时为 false，沿用
 // 登录 / 授权链路。读取失败的原因留在对应块里并可重试，不弹 toast。
 func (a *app) loadRestricted(d *detailState, kind string, auto bool) {
-	if d == nil || a.detail != d || d.topic == nil || d.topic.Restricted == nil || !a.autoLoad {
+	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Restricted == nil || !a.autoLoad {
 		return
 	}
 	st := d.restricted.load(kind)
@@ -498,7 +498,7 @@ func (a *app) loadRestricted(d *detailState, kind string, auto bool) {
 			return
 		}
 		a.requestLogin("登录后才能查看受限内容。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				a.loadRestricted(d, kind, false)
 			}
 		})
@@ -526,7 +526,7 @@ func (a *app) loadRestricted(d *detailState, kind string, auto bool) {
 			bids, err = a.client.fetchRestrictedBids(ctx, shortID)
 		}
 		a.publish(func() {
-			if a.detail != d || st.gen != gen {
+			if !a.detailLive(d) || st.gen != gen {
 				return
 			}
 			st.loading = false
@@ -538,7 +538,7 @@ func (a *app) loadRestricted(d *detailState, kind string, auto bool) {
 				// 自动拉取遇到缺 scope 只是「未开通」，不弹授权打断阅读；
 				// 手动点按钮时才交给授权链路补权限并重试。
 				if !auto && a.handleAuthError(err, func() {
-					if a.detail == d {
+					if a.detailLive(d) {
 						a.loadRestricted(d, kind, false)
 					}
 				}) {
@@ -565,7 +565,7 @@ func (a *app) loadRestricted(d *detailState, kind string, auto bool) {
 // submitRestrictedUnlock 提交一次解锁。terms.md 要求在扣币前让用户明确
 // 确认操作与金额，所以没有先展开确认面板时这里直接拒绝，不发出请求。
 func (a *app) submitRestrictedUnlock(d *detailState) {
-	if d == nil || a.detail != d || d.topic == nil || d.topic.Restricted == nil {
+	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Restricted == nil {
 		return
 	}
 	if !d.restricted.confirm || d.restricted.busy {
@@ -573,16 +573,16 @@ func (a *app) submitRestrictedUnlock(d *detailState) {
 	}
 	gate := d.topic.Restricted
 	if !gate.CoinsKnown || gate.Coins <= 0 {
-		a.toast(toastMain, "服务端没有给出解锁价格，请到原文查看")
+		a.toast(a.detailToastFor(d), "服务端没有给出解锁价格，请到原文查看")
 		return
 	}
 	if restrictedUnlocked(d) {
-		a.toast(toastMain, "这篇内容已经解锁")
+		a.toast(a.detailToastFor(d), "这篇内容已经解锁")
 		return
 	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能解锁受限内容。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				a.submitRestrictedUnlock(d)
 			}
 		})
@@ -606,7 +606,7 @@ func (a *app) submitRestrictedUnlock(d *detailState) {
 		defer cancel()
 		res, err := a.client.unlockRestricted(ctx, key, d.shortID)
 		a.publish(func() {
-			if a.detail != d || d.restricted.gen != gen {
+			if !a.detailLive(d) || d.restricted.gen != gen {
 				return
 			}
 			d.restricted.busy = false
@@ -616,13 +616,13 @@ func (a *app) submitRestrictedUnlock(d *detailState) {
 			if err != nil {
 				// 授权后重放还是这一笔，confirm 与 key 都留着。
 				if a.handleAuthError(err, func() {
-					if a.detail == d {
+					if a.detailLive(d) {
 						a.submitRestrictedUnlock(d)
 					}
 				}) {
 					return
 				}
-				a.toast(toastMain, friendlyError(err))
+				a.toast(a.detailToastFor(d), friendlyError(err))
 				return
 			}
 			d.restricted.key = ""
@@ -637,7 +637,7 @@ func (a *app) submitRestrictedUnlock(d *detailState) {
 				local.Unlocked, local.UnlockKnown = true, true
 				d.restricted.info = &local
 			}
-			a.toast(toastMain, fmt.Sprintf("已花 %d 金币解锁", price))
+			a.toast(a.detailToastFor(d), fmt.Sprintf("已花 %d 金币解锁", price))
 			a.coinsChanged(coinEventRestricted)
 		})
 	}()

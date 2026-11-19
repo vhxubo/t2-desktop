@@ -177,6 +177,9 @@ type editState struct {
 	kind    editKind
 	shortID string // 帖子 short_id：编辑帖子与追加附言用
 	replyID string // 评论 uuid：编辑评论用
+	// detail 是发起这次编辑的那篇详情状态：改完就地更新它，不靠全局游标
+	// 猜该改哪一篇（同时开多扇详情窗口时游标可能已经被别的窗口拨走）。
+	detail *detailState
 
 	title string // 只有编辑帖子时有
 	body  string
@@ -500,7 +503,10 @@ func (a *app) canEditReply(r replyItem) bool {
 // 不去重发一次详情请求（那次请求还可能拿到 CDN 上的旧副本）。同一篇帖子已经
 // 不在页面上时只提示，不动别的状态。
 func (a *app) applyEdit(st *editState) {
-	d := a.detail
+	d := st.detail
+	if d == nil {
+		d = a.detail
+	}
 	if d == nil || d.shortID != st.shortID {
 		return
 	}

@@ -45,6 +45,10 @@ type toastNote struct {
 // toastWindow 返回提示对应的窗口；主窗口之外的窗口没打开时返回 nil，由
 // mainClaimsToasts 让主窗口接手。只在 UI 线程调用。
 func (a *app) toastWindow(target toastTarget) *mygo.Window {
+	// 详情窗口一个窗口一个动态编号，关掉之后这条提示退回主窗口。
+	if win := a.toastDetailWindow(target); win != nil {
+		return win
+	}
 	switch target {
 	case toastNotifications:
 		return a.notifWin

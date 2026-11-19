@@ -33,6 +33,12 @@ func (a *app) windowStateKey() string {
 // openMainWindow 建这个窗口的主窗口并接上关闭钩子。只在应用就绪后的主线程
 // 调用：无头测试不经过这里，它们直接渲染 view。
 func (a *app) openMainWindow() {
+	if a.mainClosed {
+		// 详情窗口还开着时主窗口曾被顶上来当排队的窗口；现在真要重开主窗口，
+		// 先把这个引用让出来，详情窗口自己照旧活着。
+		a.win = nil
+		a.mainClosed = false
+	}
 	if a.win != nil {
 		a.raiseMainWindow()
 		return
@@ -103,10 +109,12 @@ func (a *app) afterMainWindowOpen() {
 	}()
 }
 
-// onMainWindowClosed 是主窗口真的关掉之后：这个账号的附属窗口一并关掉、
-// 后台监听停掉，界面状态交给账号册丢掉（账号本身还挂在账号册里）。
+// onMainWindowClosed 是主窗口真的关掉之后：附属窗口照旧收掉，但详情窗口
+// 留着——它们是独立的 mygo 窗口，关主窗口不该把正在读的几篇帖子一起关了。
+// 还有详情窗口时只把其中一扇顶上来当排队的窗口，等最后一扇详情窗口关掉
+// 再收这个账号的界面状态（见 afterDetailWindowRemoved）。
 func (a *app) onMainWindowClosed() {
-	a.win = nil
+	a.mainClosed = true
 	a.stopCoinTagWatch()
 	a.stopNotificationWatch()
 	a.closeNotificationWindow()
@@ -123,6 +131,33 @@ func (a *app) onMainWindowClosed() {
 	a.closeFollowsWindow()
 	a.closeUserCardWindow()
 	a.closeViewerWindow()
+	if len(a.detailWindows) > 0 {
+		// 主窗口没了，但详情窗口还活着：留一扇做 publish / toast 的出口。
+		if a.win == nil {
+			for _, h := range a.detailWindows {
+				if !h.removed && h.win != nil {
+					a.win = h.win
+					break
+				}
+			}
+		}
+		if a.detail == nil {
+			for _, h := range a.detailWindows {
+				if !h.removed {
+					a.detail = h.current()
+					break
+				}
+			}
+		}
+		return
+	}
+	a.finalizeAccountWindow()
+}
+
+// finalizeAccountWindow 是这个账号所有窗口都没了之后的收尾：通知长连接、
+// 界面状态都交回账号册（账号本身仍挂在账号册里）。
+func (a *app) finalizeAccountWindow() {
+	a.win = nil
 	if a.book == nil {
 		return
 	}
@@ -153,6 +188,7 @@ func (a *app) closeAllWindows() {
 	a.closeFollowsWindow()
 	a.closeUserCardWindow()
 	a.closeViewerWindow()
+	a.closeAllDetailWindows()
 	win := a.win
 	a.win = nil
 	if win != nil {

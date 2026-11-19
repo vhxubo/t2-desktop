@@ -14,6 +14,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/layout"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
@@ -362,12 +363,12 @@ func findReply(list []replyItem, id string) (replyItem, bool) {
 // toggleFavorite 收藏或取消收藏当前帖子。未登录先走全局授权弹窗，授权成功
 // 后同一次操作自动重跑；缺 scope 的 403 也一样。界面先乐观更新，失败回滚。
 func (a *app) toggleFavorite(d *detailState) {
-	if d == nil || a.detail != d || d.topic == nil {
+	if d == nil || !a.detailLive(d) || d.topic == nil {
 		return
 	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能收藏帖子。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				a.toggleFavorite(d)
 			}
 		})
@@ -404,7 +405,7 @@ func (a *app) toggleFavorite(d *detailState) {
 		defer cancel()
 		err := a.client.setTopicFavorite(ctx, shortID, desired)
 		a.publish(func() {
-			if a.detail != d || d.fav.gen != gen {
+			if !a.detailLive(d) || d.fav.gen != gen {
 				return
 			}
 			d.fav.busy = false
@@ -424,14 +425,14 @@ func (a *app) toggleFavorite(d *detailState) {
 					a.notifyInteractDone(err)
 					return
 				}
-				a.toast(toastMain, friendlyError(err))
+				a.toast(a.detailToastFor(d), friendlyError(err))
 				a.notifyInteractDone(err)
 				return
 			}
 			if desired {
-				a.toast(toastMain, "已收藏")
+				a.toast(a.detailToastFor(d), "已收藏")
 			} else {
-				a.toast(toastMain, "已取消收藏")
+				a.toast(a.detailToastFor(d), "已取消收藏")
 			}
 			// 「我的」窗口里的收藏列表已经过期：清掉缓存，下次打开时重新拉。
 			a.invalidateFavorites()
@@ -464,43 +465,54 @@ func (a *app) invalidateFavorites() {
    表态
 -------------------------------------------------------------- */
 
-// openReactionPopup 打开表态气泡（笑脸入口）。未登录先走授权弹窗，授权成功
-// 后再打开，少一次「登录完再点一下」。同一时刻只会开一个气泡。
+// openReactionPopup 打开表态气泡。点笑脸入口时走 prepareReactionPopup，让
+// Lobe 的 Popover 自己切换锚点；这里供登录回调与显式打开用，直接把气泡打开。
 func (a *app) openReactionPopup(d *detailState, target string) {
-	if d == nil || a.detail != d {
+	if d == nil || !a.detailLive(d) {
 		return
 	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能添加表情。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				a.openReactionPopup(d, target)
 			}
 		})
 		return
 	}
-	d.react.rewardOpen = false
-	d.react.detailsOpen = false
-	d.react.reactFor = target
+	a.prepareReactionPopup(d, target)
 	d.react.reactOpen = true
 }
 
-// openRewardPopup 打开打赏气泡（金币入口）。
+// prepareReactionPopup 把表态目标设为 target，并关掉同屏的其它气泡。
+func (a *app) prepareReactionPopup(d *detailState, target string) {
+	d.react.rewardOpen = false
+	d.react.detailsOpen = false
+	d.react.reactFor = target
+}
+
+// openRewardPopup 打开打赏气泡（金币入口）。点金币入口时走 prepareRewardPopup
+// 让 Lobe Popover 切换；这里供登录回调与显式打开用。
 func (a *app) openRewardPopup(d *detailState, target string) {
-	if d == nil || a.detail != d {
+	if d == nil || !a.detailLive(d) {
 		return
 	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能打赏。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				a.openRewardPopup(d, target)
 			}
 		})
 		return
 	}
+	a.prepareRewardPopup(d, target)
+	d.react.rewardOpen = true
+}
+
+// prepareRewardPopup 记下打赏目标、排掉别的气泡，并把金额与错误复位。
+func (a *app) prepareRewardPopup(d *detailState, target string) {
 	d.react.reactOpen = false
 	d.react.detailsOpen = false
 	d.react.rewardFor = target
-	d.react.rewardOpen = true
 	d.react.rewardErr = ""
 	if d.react.amount < rewardAmountLo {
 		d.react.amount = 5
@@ -508,15 +520,20 @@ func (a *app) openRewardPopup(d *detailState, target string) {
 }
 
 // openReactionDetails 打开表态明细气泡（点摘要胶囊）。明细只读展示也能看，
-// 不要求登录。
+// 不要求登录。点胶囊时走 prepareReactionDetails，开合交给 Lobe Popover。
 func (a *app) openReactionDetails(d *detailState, target string) {
-	if d == nil || a.detail != d {
+	if d == nil || !a.detailLive(d) {
 		return
 	}
+	a.prepareReactionDetails(d, target)
+	d.react.detailsOpen = true
+}
+
+// prepareReactionDetails 记下明细目标并排掉别的气泡，开合交给 Lobe Popover。
+func (a *app) prepareReactionDetails(d *detailState, target string) {
 	d.react.reactOpen = false
 	d.react.rewardOpen = false
 	d.react.detailsFor = target
-	d.react.detailsOpen = true
 }
 
 // isOwnReply 报告这条评论是不是当前登录用户自己写的。表态与打赏都要通知
@@ -568,12 +585,12 @@ func reactionEmojisOf(d *detailState, target string) []string {
 // 界面乐观更新，失败回滚并说明原因。服务端是 toggle 语义，所以请求体里
 // 不带「要加还是取消」，本地状态就是唯一的依据。
 func (a *app) toggleReaction(d *detailState, target, emoji string) {
-	if d == nil || a.detail != d || d.topic == nil || emoji == "" || d.react.busy {
+	if d == nil || !a.detailLive(d) || d.topic == nil || emoji == "" || d.react.busy {
 		return
 	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能添加表情。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				a.toggleReaction(d, target, emoji)
 			}
 		})
@@ -584,16 +601,16 @@ func (a *app) toggleReaction(d *detailState, target, emoji string) {
 	if target != reactionTopic {
 		r, ok := findReply(d.replyList, target)
 		if !ok {
-			a.toast(toastMain, "这条评论已经不在列表里，请刷新后再表态")
+			a.toast(a.detailToastFor(d), "这条评论已经不在列表里，请刷新后再表态")
 			return
 		}
 		reply = r
 		if _, ok := replyReactionNeed(topic, reply, emoji); !ok {
-			a.toast(toastMain, "缺少表态所需的信息，请刷新后重试")
+			a.toast(a.detailToastFor(d), "缺少表态所需的信息，请刷新后重试")
 			return
 		}
 	} else if _, ok := topicReactionNeed(topic, emoji); !ok {
-		a.toast(toastMain, "缺少表态所需的信息，请刷新后重试")
+		a.toast(a.detailToastFor(d), "缺少表态所需的信息，请刷新后重试")
 		return
 	}
 
@@ -626,7 +643,7 @@ func (a *app) toggleReaction(d *detailState, target, emoji string) {
 			err = a.client.sendReplyReaction(ctx, target, replyBody)
 		}
 		a.publish(func() {
-			if a.detail != d || d.react.gen != gen {
+			if !a.detailLive(d) || d.react.gen != gen {
 				return
 			}
 			d.react.busy = false
@@ -639,14 +656,14 @@ func (a *app) toggleReaction(d *detailState, target, emoji string) {
 					a.notifyInteractDone(err)
 					return
 				}
-				a.toast(toastMain, friendlyError(err))
+				a.toast(a.detailToastFor(d), friendlyError(err))
 				a.notifyInteractDone(err)
 				return
 			}
 			if mine {
-				a.toast(toastMain, "已添加表情 "+emoji)
+				a.toast(a.detailToastFor(d), "已添加表情 "+emoji)
 			} else {
-				a.toast(toastMain, "已取消表情 "+emoji)
+				a.toast(a.detailToastFor(d), "已取消表情 "+emoji)
 			}
 			// 表态会改变金币：发送表情扣币，撤销也可能有返还。统一走全局
 			// 金币刷新事件，标题栏与金币窗口一起跟上。
@@ -813,11 +830,18 @@ func (a *app) reactionSummaryInfo(c *ui.Context, d *detailState, target string, 
 			}
 			ui.Textf(c, "%d", total).FontSize(metaSmallFontSize).TextColor(t.TextMuted)
 		})
-		chip.OnClick(func() { a.openReactionDetails(d, target) })
-		if d.react.detailsFor == target {
-			ui.Popover(c, chip, &d.react.detailsOpen, func() {
+		// 明细只读，不用登录。气泡关着时每个摘要都把 Popover 建出来，
+		// 这样点哪一条都能被 Lobe 接住；开着时只留目标那一条，免得几条
+		// 摘要同时弹面板。开合由 Popover 管，这里只记下是给谁看的。
+		if !d.react.detailsOpen || d.react.detailsFor == target {
+			lobeoverlay.Popover(c, chip, &d.react.detailsOpen, lobeoverlay.PopoverProps{
+				Placement: lobeoverlay.Bottom,
+			}, func() {
 				a.detailsPanel(c, d, target)
 			})
+		}
+		if chip.Clicked() {
+			a.prepareReactionDetails(d, target)
 		}
 	}
 	if rewards.Total > 0 {
@@ -924,15 +948,27 @@ func (a *app) reactionEntry(c *ui.Context, d *detailState, target string, style 
 		ui.Icon(c, reactionIcon).Size(style.icon, style.icon).TextColor(ink)
 	})
 	b.Label("表情").Tooltip("添加一个表情")
-	if b.Clicked() {
-		a.openReactionPopup(d, target)
-	}
-	// 只有当前目标的入口持有气泡：同一个界面里有多个目标时，别让别的行
-	// 也跟着弹出面板。
-	if d.react.reactFor == target {
-		ui.Popover(c, b, &d.react.reactOpen, func() {
+	// 气泡关着时每个入口都把 Popover 建出来，让这一帧的点击能传进去；
+	// 开着时只留目标那一个。开合交给 Lobe，这里只挑目标与做登录检查。
+	if !d.react.reactOpen || d.react.reactFor == target {
+		lobeoverlay.Popover(c, b, &d.react.reactOpen, lobeoverlay.PopoverProps{
+			Placement: lobeoverlay.Bottom,
+		}, func() {
 			a.reactionPanel(c, d, target)
 		})
+	}
+	if b.Clicked() {
+		if !a.auth.loggedIn() {
+			// Popover 已经把气泡打开了：未登录时撤销，先走全局授权弹窗。
+			d.react.reactOpen = false
+			a.requestLogin("登录后才能添加表情。", func() {
+				if a.detailLive(d) {
+					a.openReactionPopup(d, target)
+				}
+			})
+			return
+		}
+		a.prepareReactionPopup(d, target)
 	}
 }
 
@@ -958,13 +994,24 @@ func (a *app) rewardEntry(c *ui.Context, d *detailState, target string, style in
 		ui.Icon(c, rewardIcon).Size(style.icon, style.icon).TextColor(ink)
 	})
 	b.Label("打赏").Tooltip("打赏作者金币")
-	if b.Clicked() {
-		a.openRewardPopup(d, target)
-	}
-	if d.react.rewardFor == target {
-		ui.Popover(c, b, &d.react.rewardOpen, func() {
+	if !d.react.rewardOpen || d.react.rewardFor == target {
+		lobeoverlay.Popover(c, b, &d.react.rewardOpen, lobeoverlay.PopoverProps{
+			Placement: lobeoverlay.Bottom,
+		}, func() {
 			a.rewardPanel(c, d, target)
 		})
+	}
+	if b.Clicked() {
+		if !a.auth.loggedIn() {
+			d.react.rewardOpen = false
+			a.requestLogin("登录后才能打赏。", func() {
+				if a.detailLive(d) {
+					a.openRewardPopup(d, target)
+				}
+			})
+			return
+		}
+		a.prepareRewardPopup(d, target)
 	}
 }
 
@@ -1127,7 +1174,7 @@ func (a *app) loginHintFor(c *ui.Context, owner toastTarget, message string) {
 
 // loginHint 是主窗口气泡里的登录提示。
 func (a *app) loginHint(c *ui.Context, message string) {
-	a.loginHintFor(c, toastMain, message)
+	a.loginHintFor(c, a.detailToast(), message)
 }
 
 // rewardBadge 是打赏汇总胶囊：只显示金币合计，悬停给出次数与打赏者。
@@ -1206,12 +1253,12 @@ func rewardNeed(d *detailState, target string) (rewardBody, bool) {
 // submitReward 提交一笔打赏。同一笔打赏的重试（超时、授权后重放）复用同一个
 // 幂等键；金额或目标变了才换新键。成功后本地先记账，并刷新标题栏余额。
 func (a *app) submitReward(d *detailState, target string) {
-	if d == nil || a.detail != d || d.react.rewardBusy || d.react.busy {
+	if d == nil || !a.detailLive(d) || d.react.rewardBusy || d.react.busy {
 		return
 	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能打赏。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				a.submitReward(d, target)
 			}
 		})
@@ -1219,7 +1266,7 @@ func (a *app) submitReward(d *detailState, target string) {
 	}
 	body, ok := rewardNeed(d, target)
 	if !ok {
-		a.toast(toastMain, "缺少打赏所需的信息，请刷新后重试")
+		a.toast(a.detailToastFor(d), "缺少打赏所需的信息，请刷新后重试")
 		return
 	}
 	amount := rewardAmount(d.react.amount)
@@ -1240,7 +1287,7 @@ func (a *app) submitReward(d *detailState, target string) {
 		defer cancel()
 		err := a.client.sendReward(ctx, key, body)
 		a.publish(func() {
-			if a.detail != d || d.react.rewardGen != gen {
+			if !a.detailLive(d) || d.react.rewardGen != gen {
 				return
 			}
 			d.react.rewardBusy = false
@@ -1260,7 +1307,7 @@ func (a *app) submitReward(d *detailState, target string) {
 			d.react.rewardKey = ""
 			d.react.rewardSig = ""
 			a.applyReward(d, target, amount, actor)
-			a.toast(toastMain, fmt.Sprintf("已打赏 %d 金币", amount))
+			a.toast(a.detailToastFor(d), fmt.Sprintf("已打赏 %d 金币", amount))
 			// 收起打赏气泡，让用户看到刚记上的总数。
 			d.react.rewardOpen = false
 			d.react.rewardErr = ""

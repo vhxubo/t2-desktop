@@ -192,7 +192,7 @@ func voteIsMulti(v *voteBlock) bool {
 // 切帖子之前的迟到结果。失败只把原因留在投票块里（可重试），不弹 toast：
 // 这是一个用户主动点开的只读查询。
 func (a *app) loadVoteResult(d *detailState) {
-	if d == nil || a.detail != d || d.topic == nil || d.topic.Vote == nil || !a.autoLoad {
+	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Vote == nil || !a.autoLoad {
 		return
 	}
 	v := d.topic.Vote
@@ -209,13 +209,13 @@ func (a *app) loadVoteResult(d *detailState) {
 		defer cancel()
 		res, err := a.client.fetchVoteResult(ctx, shortID, voteID)
 		a.publish(func() {
-			if a.detail != d || d.vote.resultGen != gen {
+			if !a.detailLive(d) || d.vote.resultGen != gen {
 				return
 			}
 			d.vote.resultLoading = false
 			if err != nil {
 				if a.handleAuthError(err, func() {
-					if a.detail == d {
+					if a.detailLive(d) {
 						a.loadVoteResult(d)
 					}
 				}) {
@@ -231,7 +231,7 @@ func (a *app) loadVoteResult(d *detailState) {
 
 // toggleVoteResult 展开 / 收起结果分布。第一次展开时读一次端点。
 func (a *app) toggleVoteResult(d *detailState) {
-	if d == nil || a.detail != d {
+	if d == nil || !a.detailLive(d) {
 		return
 	}
 	d.vote.resultOpen = !d.vote.resultOpen
@@ -254,7 +254,7 @@ func (a *app) showVoteResult(d *detailState) {
 // 只留「正在提交」的进度。成功后重新拉详情，把服务端算出的票数显示出来，
 // 并把结果分布直接展开。
 func (a *app) submitVote(d *detailState, optionIDs []string, multi bool) {
-	if d == nil || a.detail != d || d.topic == nil || d.topic.Vote == nil {
+	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Vote == nil {
 		return
 	}
 	v := d.topic.Vote
@@ -262,7 +262,7 @@ func (a *app) submitVote(d *detailState, optionIDs []string, multi bool) {
 		return
 	}
 	if v.ID == "" || len(optionIDs) == 0 {
-		a.toast(toastMain, "投票信息不完整，请刷新帖子后重试")
+		a.toast(a.detailToastFor(d), "投票信息不完整，请刷新帖子后重试")
 		return
 	}
 	// 选项 uuid 必须来自当前这一份详情：详情刷新后旧选项可能已经不在了。
@@ -272,13 +272,13 @@ func (a *app) submitVote(d *detailState, optionIDs []string, multi bool) {
 	}
 	for _, id := range optionIDs {
 		if !valid[id] {
-			a.toast(toastMain, "选项已变化，请重新选择")
+			a.toast(a.detailToastFor(d), "选项已变化，请重新选择")
 			return
 		}
 	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能参与投票。", func() {
-			if a.detail == d {
+			if a.detailLive(d) {
 				a.submitVote(d, optionIDs, multi)
 			}
 		})
@@ -294,7 +294,7 @@ func (a *app) submitVote(d *detailState, optionIDs []string, multi bool) {
 		defer cancel()
 		err := a.client.sendTopicVote(ctx, shortID, voteID, optionIDs, multi)
 		a.publish(func() {
-			if a.detail != d || d.vote.gen != gen {
+			if !a.detailLive(d) || d.vote.gen != gen {
 				return
 			}
 			d.vote.busy = false
@@ -309,27 +309,27 @@ func (a *app) submitVote(d *detailState, optionIDs []string, multi bool) {
 					// 409：多半是在网页或别的客户端已经投过，按已投处理，
 					// 并拉一次详情把票数显示对。
 					d.vote.voted = true
-					a.toast(toastMain, "你已经投过票了")
+					a.toast(a.detailToastFor(d), "你已经投过票了")
 					a.showVoteResult(d)
 					a.loadTopic()
 					a.notifyInteractDone(nil)
 					return
 				}
 				if a.handleAuthError(err, func() {
-					if a.detail == d {
+					if a.detailLive(d) {
 						a.submitVote(d, optionIDs, multi)
 					}
 				}) {
 					a.notifyInteractDone(err)
 					return
 				}
-				a.toast(toastMain, friendlyError(err))
+				a.toast(a.detailToastFor(d), friendlyError(err))
 				a.notifyInteractDone(err)
 				return
 			}
 			d.vote.voted = true
 			d.vote.checks = make([]bool, len(d.vote.checks))
-			a.toast(toastMain, "已投票")
+			a.toast(a.detailToastFor(d), "已投票")
 			a.showVoteResult(d)
 			a.loadTopic()
 			a.notifyInteractDone(nil)

@@ -804,7 +804,7 @@ func (a *app) openProfileDetail(it Item) {
 	a.pageName = "list" // 从详情页的返回栈里出来，避免把列表页顶掉
 	a.detailStack = nil
 	a.openDetail(it)
-	a.showMainWindow()
+	a.showMainWindowAfterDetail()
 }
 
 /* ------------------------------------------------------------------
