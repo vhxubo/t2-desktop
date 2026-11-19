@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
 // authDialogFor 是授权弹窗：列表页、详情页、登录回退页与各个附属窗口共用
@@ -21,9 +22,15 @@ func (a *app) authDialogFor(c *ui.Context, owner toastTarget) {
 	if len(need.Scopes) > 0 {
 		title = "需要授权"
 	}
-	dismissed := ui.Modal(c, &a.authGate.open, func() {
-		ui.Column(c).Width(460).Gap(10).Children(func() {
-			ui.Text(c, title).FontSize(16).Bold()
+	// Lobe 的 Modal：标题栏与 ✕、取消/前往授权按钮由组件提供；点窗外、Esc
+	// 与「取消」都由 Modal 关窗，下面统一按取消处理，丢掉待重跑调用。
+	ok := feedback.Modal(c, &a.authGate.open, feedback.ModalProps{
+		Title:      title,
+		Width:      460,
+		OkText:     "前往授权",
+		CancelText: "取消",
+	}, func() {
+		ui.Column(c).FillWidth().Gap(10).Children(func() {
 			ui.Text(c, need.Message).TextColor(t.TextMuted).MaxLines(3)
 			if len(need.Scopes) > 0 {
 				ui.Text(c, "缺少的权限范围："+strings.Join(need.Scopes, "、")).
@@ -34,20 +41,14 @@ func (a *app) authDialogFor(c *ui.Context, owner toastTarget) {
 			ui.Text(c, "这次授权会重新申请："+strings.Join(a.auth.requestedScopePreview(need.Scopes), "、")+
 				"。授权页上要整体同意；如果之后仍缺某项，去 2Libra 的「授权应用」页确认它没被单独关掉。").
 				FontSize(11).TextColor(t.TextMuted).MaxLines(3)
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Spacer(c).Grow(1)
-				if ui.Button(c, "取消").Clicked() {
-					a.cancelAuthGate("已取消授权")
-				}
-				if ui.PrimaryButton(c, "前往授权").Clicked() {
-					a.authorizeGate()
-				}
-			})
 		})
 	})
-	// 点窗外或按 Esc 关闭：和「取消」同义，一并丢弃待重跑调用，否则它们会
-	// 在以后某次无关的登录成功后突然执行。
-	if dismissed.Dismissed() {
+	if ok {
+		// authorizeGate 自己会关掉弹窗并保留待重跑调用，等回调送达后重跑。
+		a.authorizeGate()
+		return
+	}
+	if !a.authGate.open {
 		a.cancelAuthGate("已取消授权")
 	}
 }
