@@ -14,6 +14,9 @@ func init() {
 	// 同时给 en 与 zh-Hans 两份：窗口用哪种 locale，接缝按钮都说项目自己的
 	// 中文名，不受系统语言影响（Lobe 自带 en 文案是英文，必须覆盖）。
 	msgs := []byte(`{
+  "lobe.close": "关闭",
+  "lobe.ok": "确定",
+  "lobe.cancel": "取消",
   "lobe.panelCollapse": "收起正文",
   "lobe.panelExpand": "展开正文",
   "lobe.panelResize": "调整宽度"

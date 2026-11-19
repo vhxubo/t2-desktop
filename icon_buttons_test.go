@@ -124,8 +124,8 @@ func assertIconAction(t *testing.T, tt *ui.Tester, name string) ui.AccessInfo {
 // + 一圈焦点环，再多就说明里面塞了文字。
 const iconActionMaxWidth float32 = 36
 
-// 组件设置弹窗的关闭是叉号图标：名字与窗口标题栏的「关闭」区分开，点了收起
-// 弹窗，填过的内容仍留在草稿里。
+// 组件设置弹窗用 Lobe 的 Modal：✕ 关闭按钮由组件提供，中文名由 lobe 文案
+// 覆盖成「关闭」。窗口标题栏也有一个「关闭」，按位置区分弹窗里的那个。
 func TestComposeModuleDialogCloseIsIconButton(t *testing.T) {
 	a := testApp(t)
 	st := composeReady(a)
@@ -133,13 +133,22 @@ func TestComposeModuleDialogCloseIsIconButton(t *testing.T) {
 	st.moduleOpen = true
 	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	tt.Frame()
-	assertIconAction(t, tt, "关闭设置")
-	if err := tt.Click("关闭设置"); err != nil {
-		t.Fatalf("点关闭图标失败：%v：%q", err, tt.Texts())
+	// 标题栏的关闭在最上面，弹窗的关闭在居中的面板里，按纵坐标区分。
+	var close ui.AccessInfo
+	found := false
+	for _, info := range tt.AccessAll() {
+		if info.Role == ui.RoleButton && info.Name == "关闭" && info.Bounds.Y > titleBarHeight {
+			close, found = info, true
+			break
+		}
 	}
+	if !found {
+		t.Fatalf("弹窗里没有关闭按钮：%q", tt.Texts())
+	}
+	tt.ClickAt(close.Bounds.X+close.Bounds.W/2, close.Bounds.Y+close.Bounds.H/2)
 	tt.Frame()
 	if st.moduleOpen {
-		t.Errorf("点关闭图标后设置弹窗还开着：%+v", st)
+		t.Errorf("点关闭按钮后设置弹窗还开着：%+v", st)
 	}
 }
 

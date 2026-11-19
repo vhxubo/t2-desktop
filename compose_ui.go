@@ -10,6 +10,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
 // 「发帖」窗口：点主页右下角的悬浮按钮（FAB）打开，写标题与正文（Markdown，
@@ -30,19 +31,14 @@ const (
 	composeWindowHeight = 760
 	composeWinMinWidth  = 600
 	composeWinMinHeight = 520
-	// 右侧常驻的附加组件栏与它的编辑弹窗：弹窗里的字段可以滚动，窗口缩到
-	// 最小尺寸时也不会长出屏幕。
-	composeSidebarWidth       = 200
-	composeModuleDialogWidth  = 520
-	composeModuleDialogHeight = 380
-	// 弹窗里滚动区以外的部分（标题、说明、两条分隔线、按钮行、间距与
-	// 内边距）约 210 DIP：窗口矮时按这个差把滚动区压小，底部按钮不会被
-	// 挤出屏幕。
-	composeModuleDialogChrome = 210
-	composeModuleDialogMin    = 220
-	composeEditorLines        = 10
-	composeEditorMaxLine      = 30
-	composePreviewHeight      = 320
+	// 右侧常驻的附加组件栏与它的编辑弹窗。Lobe 的 Modal 自带标题、关闭、
+	// 取消/确认按钮与「内容区可滚动、页脚常驻」的布局，窗口缩到最小尺寸时
+	// 字段也不会长出屏幕，这里只给面板宽度。
+	composeSidebarWidth      = 200
+	composeModuleDialogWidth = 520
+	composeEditorLines       = 10
+	composeEditorMaxLine     = 30
+	composePreviewHeight     = 320
 	// composeFabInset 是 FAB 占用的右侧宽度（按钮 + 边距）。列表底部的
 	// 「加载更多 / 重试」那一行据此让出这一段，免得被浮在上面的按钮盖住；
 	// FAB 本身不占布局高度，只是浮在内容区右下角。
@@ -681,63 +677,50 @@ func (a *app) composeSidebar(c *ui.Context, st *composeState) {
 }
 
 // composeModuleDialog 是点侧栏某一行之后弹出的编辑窗。字段和以前折叠面板里
-// 的一模一样，只是搬进了弹窗：启不启用由底部的按钮决定，编辑中的内容一直
-// 留在草稿里，关掉弹窗再点进来还在。移除不在这里做——侧栏对应行的行尾
-// 直接有「移除」。点窗外或按 Esc 只关弹窗，不关窗口。
+// 的一模一样，只是搬进了弹窗：启不启用由 Lobe Modal 的确认按钮决定，编辑中
+// 的内容一直留在草稿里，关掉弹窗再点进来还在。移除不在这里做——侧栏对应行
+// 的行尾直接有「移除」。点窗外或按 Esc 只关弹窗，不关窗口。
 func (a *app) composeModuleDialog(c *ui.Context, st *composeState) {
 	if !st.moduleOpen || st.moduleIndex < 0 || st.moduleIndex >= len(composeModuleSpecs) {
 		return
 	}
 	m := composeModuleSpecs[st.moduleIndex]
 	t := c.Theme()
-	ui.Modal(c, &st.moduleOpen, func() {
-		ui.Column(c).Width(composeModuleDialogWidth).Gap(8).Children(func() {
-			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-				ui.Text(c, m.name).FontSize(16).Bold().TextColor(t.Text).Grow(1)
-				// 关闭是图标按钮：标题行里再放一个「关闭」文字会把名字挤窄，
-				// 叉号是通行画法，点了做什么由 Tooltip 说明。名字带「设置」是
-				// 为了和窗口标题栏的「关闭」区分开，读屏不会念出两个一样的按钮。
-				if iconActionButton(c, closeIcon, "关闭设置",
-					"关闭这个组件的设置窗口，填过的内容仍留在草稿里").Clicked() {
-					st.moduleOpen = false
-				}
-			})
+	on := *m.flag(st)
+	label := "添加此组件"
+	if on {
+		label = "完成"
+	}
+	// 标题栏、✕ 关闭、取消/确认按钮与「内容可滚动、页脚常驻」都由 Lobe 的
+	// Modal 提供，和主页、详情页用的是同一套 token 与动画。这里只画这块
+	// 组件自己的字段和启用状态；确认返回 true 时再落账并关窗。
+	ok := feedback.Modal(c, &st.moduleOpen, feedback.ModalProps{
+		Title:      m.name,
+		Width:      composeModuleDialogWidth,
+		OkText:     label,
+		CancelText: "取消",
+	}, func() {
+		ui.Column(c).FillWidth().Gap(8).Children(func() {
+			state := "未添加：不会随帖发送"
+			if on {
+				state = "已添加：会随帖一起发送；移除在右侧栏这一行的行尾。"
+			}
+			ui.Text(c, state).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+			ui.Divider(c)
 			ui.Text(c, m.hint).FontSize(12).TextColor(t.TextMuted).MaxLines(3)
 			ui.Divider(c)
-			_, windowHeight := c.Size()
-			scrollHeight := windowHeight - composeModuleDialogChrome
-			scrollHeight = max(composeModuleDialogMin,
-				min(scrollHeight, composeModuleDialogHeight))
-			ui.Scroll(c).FillWidth().MaxHeight(scrollHeight).Children(func() {
-				ui.Column(c).FillWidth().Padding(2, 2).Children(func() {
-					m.body(a, c, st)
-					// 最后一行不要紧贴滚动区下沿：看起来像被截断。
-					ui.Spacer(c).Height(8)
-				})
-			})
-			ui.Divider(c)
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				on := *m.flag(st)
-				state := "未添加：不会随帖发送"
-				if on {
-					state = "已添加：会随帖一起发送；移除在右侧栏这一行的行尾。"
-				}
-				ui.Text(c, state).FontSize(11).TextColor(t.TextMuted).
-					MaxLines(2).Grow(1)
-				label := "添加此组件"
-				if on {
-					label = "完成"
-				}
-				if ui.PrimaryButton(c, label).Clicked() {
-					if !on {
-						*m.flag(st) = true
-						a.toast(toastCompose, "已添加"+m.name)
-					}
-					st.moduleOpen = false
-				}
-			})
+			m.body(a, c, st)
+			// 最后一行不要紧贴滚动区下沿：看起来像被截断。
+			ui.Spacer(c).Height(8)
 		})
 	})
+	if ok {
+		if !on {
+			*m.flag(st) = true
+			a.toast(toastCompose, "已添加"+m.name)
+		}
+		st.moduleOpen = false
+	}
 }
 
 // composeOptionList 是所有「可以有多个选项」的地方共用的编辑区。操作行放在
