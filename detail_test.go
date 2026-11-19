@@ -2029,7 +2029,7 @@ func TestCommentFocusMissingStops(t *testing.T) {
 }
 
 // 正文可以向左收起：收起后左栏整张卡片不画，评论区占满整行；再点一次
-// 展开，双栏回到原来的 55 / 45。收起状态不落盘，重新进入详情时是展开的。
+// 展开，双栏回到原来的 40 / 60。收起状态不落盘，重新进入详情时是展开的。
 func TestDetailBodyCollapsesLeft(t *testing.T) {
 	a := detailAppWithReplies(t)
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -2042,12 +2042,19 @@ func TestDetailBodyCollapsesLeft(t *testing.T) {
 	if !ok {
 		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
 	}
-	// 收起入口由 Lobe 的 DraggablePanel 提供，落在两栏接缝正中，而不是
-	// 正文右上角：水平方向位于正文右半边、紧贴评论区左缘，垂直方向居中，
-	// 明显低于标题。
+	// 收起入口落在两栏接缝正中，而不是正文右上角：水平方向位于正文右半边、
+	// 紧贴评论区左缘，垂直方向居中，明显低于标题。它与「收起评论」并排，
+	// 左半边收正文、右半边收评论，两枚同宽、紧贴，连成接缝上的一对。
 	toggle, ok := tt.Find("收起正文")
 	if !ok {
 		t.Fatalf("找不到收起正文的开关：%q", tt.Texts())
+	}
+	other, ok := tt.Find("收起评论")
+	if !ok {
+		t.Fatalf("找不到收起评论的开关：%q", tt.Texts())
+	}
+	if other.X != toggle.X+toggle.W || other.W != toggle.W {
+		t.Errorf("两个收起入口应等宽并紧贴接缝两侧：收起正文 %+v / 收起评论 %+v", toggle, other)
 	}
 	if toggle.X <= title.X+title.W/2 {
 		t.Errorf("收起入口应落在正文右半边的接缝上：入口 %+v / 标题 %+v", toggle, title)
@@ -2122,6 +2129,129 @@ func TestDetailBodyCollapsesLeft(t *testing.T) {
 	}
 	if d := back.X - title.X; d > 1 || d < -1 {
 		t.Errorf("展开后正文没有回到原位：%+v / 原来 %+v", back, title)
+	}
+}
+
+// 评论也能向右收起：接缝右侧的「收起评论」把右栏滑出，正文占满整行；
+// 右边缘的「展开评论」再把双栏拉回来。它与左收起是镜像，且两者互斥。
+func TestDetailReplyCollapsesRight(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+
+	title, ok := tt.Find("正文与评论的测试帖")
+	if !ok {
+		t.Fatalf("找不到正文标题：%q", tt.Texts())
+	}
+	comment, ok := tt.Find("评论")
+	if !ok {
+		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
+	}
+	// 收起评论与 Lobe 自带的收起正文并排在接缝两侧：前者在右、后者在左，
+	// 垂直都居中，读屏名字各自独立。
+	collapseBody, ok := tt.Find("收起正文")
+	if !ok {
+		t.Fatalf("找不到收起正文的开关：%q", tt.Texts())
+	}
+	collapseReply, ok := tt.Find("收起评论")
+	if !ok {
+		t.Fatalf("找不到收起评论的开关：%q", tt.Texts())
+	}
+	if collapseReply.X < collapseBody.X+collapseBody.W-1 {
+		t.Errorf("收起评论应在收起正文右侧：收起评论 %+v / 收起正文 %+v", collapseReply, collapseBody)
+	}
+	if collapseReply.X+collapseReply.W > comment.X+40 {
+		t.Errorf("收起评论应紧贴接缝右侧：收起评论 %+v / 评论 %+v", collapseReply, comment)
+	}
+	if d := collapseReply.Y - collapseBody.Y; d > 2 || d < -2 {
+		t.Errorf("两个收起入口应同一高度：收起评论 %+v / 收起正文 %+v", collapseReply, collapseBody)
+	}
+
+	if err := tt.Click("收起评论"); err != nil {
+		t.Fatalf("点收起评论失败：%v", err)
+	}
+	tt.Frame()
+	if !a.detail.replyCollapsed {
+		t.Fatalf("点了一下评论没有收起")
+	}
+	if a.detail.bodyCollapsed {
+		t.Fatalf("收起评论不该同时收起正文")
+	}
+	if _, ok := tt.Find("评论"); ok {
+		t.Errorf("评论收起后右栏不该还在：%q", tt.Texts())
+	}
+	full, ok := tt.Find("正文与评论的测试帖")
+	if !ok || full.W < 900 {
+		t.Fatalf("评论收起后正文没有占满整行：%+v / 原来 %+v", full, title)
+	}
+	if d := full.X - title.X; d > 1 || d < -1 {
+		t.Errorf("评论收起后正文起点不该移动：%+v / 原来 %+v", full, title)
+	}
+
+	// 展开入口贴在右边缘，垂直高度与收起入口一致。
+	expand, ok := tt.Find("展开评论")
+	if !ok {
+		t.Fatalf("评论收起后找不到展开图标：%q", tt.Texts())
+	}
+	if expand.X < 1000 {
+		t.Errorf("展开评论应停在右边缘的窄栏上：%+v", expand)
+	}
+	if d := expand.Y - collapseReply.Y; d > 2 || d < -2 {
+		t.Errorf("展开评论应停在收起前的高度：%+v / 收起前 %+v", expand, collapseReply)
+	}
+	if _, ok := tt.Find("收起正文"); ok {
+		t.Errorf("评论收起后不该再画收起正文，避免两边同时收起：%q", tt.Texts())
+	}
+
+	if err := tt.Click("展开评论"); err != nil {
+		t.Fatalf("点展开评论失败：%v", err)
+	}
+	tt.Frame()
+	if a.detail.replyCollapsed {
+		t.Fatalf("点了一下评论没有展开")
+	}
+	back, ok := tt.Find("正文与评论的测试帖")
+	if !ok || back.W > title.W+1 || back.W < title.W-1 {
+		t.Fatalf("展开后正文没有回到原来的宽度：%+v / 原来 %+v", back, title)
+	}
+	restored, ok := tt.Find("评论")
+	if !ok {
+		t.Fatalf("展开后找不到评论卡片标题：%q", tt.Texts())
+	}
+	if d := restored.X - comment.X; d > 1 || d < -1 {
+		t.Errorf("展开后评论区没有回到原来的位置：%+v / 原来 %+v", restored, comment)
+	}
+}
+
+// 两个方向不能叠加：正文收起后不再画「收起评论」，评论收起后也不再画
+// 「收起正文」；否则两边一起收起会留下一个谁也看不到的空页面。
+func TestDetailCollapseDirectionsAreExclusive(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+
+	if err := tt.Click("收起正文"); err != nil {
+		t.Fatalf("点收起正文失败：%v", err)
+	}
+	tt.Advance(500 * time.Millisecond)
+	if !a.detail.bodyCollapsed {
+		t.Fatalf("点了一下正文没有收起")
+	}
+	if _, ok := tt.Find("收起评论"); ok {
+		t.Errorf("正文收起后不该还能收起评论：%q", tt.Texts())
+	}
+	if err := tt.Click("展开正文"); err != nil {
+		t.Fatalf("点展开正文失败：%v", err)
+	}
+	tt.Advance(500 * time.Millisecond)
+
+	if err := tt.Click("收起评论"); err != nil {
+		t.Fatalf("点收起评论失败：%v", err)
+	}
+	tt.Frame()
+	if !a.detail.replyCollapsed {
+		t.Fatalf("点了一下评论没有收起")
+	}
+	if _, ok := tt.Find("收起正文"); ok {
+		t.Errorf("评论收起后不该还能收起正文：%q", tt.Texts())
 	}
 }
 
@@ -2207,7 +2337,7 @@ func TestDetailBodyResizesByDrag(t *testing.T) {
 }
 
 // 收起状态只在这一次浏览里有效：回到列表再进来（或退回上一篇内联帖）时
-// 正文都是展开的。
+// 两个方向都是展开的。
 func TestDetailBodyCollapseResetsOnEntry(t *testing.T) {
 	a := detailAppWithReplies(t)
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -2220,15 +2350,22 @@ func TestDetailBodyCollapseResetsOnEntry(t *testing.T) {
 		t.Fatalf("点了一下正文没有收起")
 	}
 
-	// 关掉详情再打开同一帖：新的一份 detailState，正文展开。
+	// 关掉详情再打开同一帖：新的一份 detailState，双栏展开。
 	a.closeDetail()
 	a.openDetail(Item{ShortID: "JBYGf2A", URL: "https://2libra.com/post/work/JBYGf2A"})
 	tt.Frame()
-	if a.detail.bodyCollapsed {
-		t.Errorf("重新进入详情时正文还是收起的")
+	if a.detail.bodyCollapsed || a.detail.replyCollapsed {
+		t.Errorf("重新进入详情时还留着收起状态：%+v", a.detail)
 	}
 	if _, ok := tt.Find("收起正文"); !ok {
 		t.Errorf("重新进入后没有收起入口：%q", tt.Texts())
+	}
+	if err := tt.Click("收起评论"); err != nil {
+		t.Fatalf("点收起评论失败：%v", err)
+	}
+	tt.Frame()
+	if !a.detail.replyCollapsed {
+		t.Fatalf("点了一下评论没有收起")
 	}
 
 	// 内联跳转后退回上一篇：同样重置成展开。
@@ -2236,12 +2373,13 @@ func TestDetailBodyCollapseResetsOnEntry(t *testing.T) {
 	a.detail.replyList = nil
 	a.openDetail(Item{ShortID: "SECOND", URL: "https://2libra.com/post/work/SECOND"})
 	a.detail.bodyCollapsed = true
+	a.detail.replyCollapsed = true
 	a.closeDetail()
 	if a.detail == nil || a.detail.shortID != "JBYGf2A" {
 		t.Fatalf("没有退回上一篇：%+v", a.detail)
 	}
-	if a.detail.bodyCollapsed {
-		t.Errorf("退回上一篇时正文还是收起的")
+	if a.detail.bodyCollapsed || a.detail.replyCollapsed {
+		t.Errorf("退回上一篇时还留着收起状态：%+v", a.detail)
 	}
 }
 

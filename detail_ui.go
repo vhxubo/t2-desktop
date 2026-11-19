@@ -76,11 +76,14 @@ type detailState struct {
 	// bodyScroll 是左栏正文的滚动偏移：TrackScroll 记下来，供「返回顶部」
 	// 判断正文是不是已经滚离顶部、以及把它直接写回 0 回顶。
 	bodyScroll ui.ScrollState
-	// bodyCollapsed 表示左栏正文已向左收起，评论区占满整行。它只是界面
-	// 状态，不落盘：每次进入详情都重置成展开（见 openDetail 与 closeDetail
-	// 的弹栈分支），下次打开不会继承上一次的收起。唯一例外是从通知跳到
-	// 具体评论时默认收起（见 openNotificationTarget），便于直接看到那层楼。
-	bodyCollapsed bool
+	// bodyCollapsed 表示左栏正文已向左收起，评论区占满整行；replyCollapsed
+	// 表示右栏评论区已向右收起，正文占满整行。两者互斥：收起一边后另一边
+	// 已经铺满整行，再收就没有意义了。它们只是界面状态，不落盘：每次进入
+	// 详情都重置成双栏展开（见 newDetailState 与 closeDetail 的弹栈分支），
+	// 下次打开不会继承上一次的收起。唯一例外是从通知跳到具体评论时默认
+	// 收起正文（见 openNotificationTarget），便于直接看到那层楼。
+	bodyCollapsed  bool
+	replyCollapsed bool
 	// bodyWidth 是正文栏在展开时的宽度（DIP），由 Lobe 的 DraggablePanel
 	// 在拖动接缝时改写。和 bodyCollapsed 一样只在这一次浏览里有效，不落盘：
 	// 每次进入详情都用默认值（见 openDetail）。
@@ -335,8 +338,8 @@ func (a *app) newDetailState(it Item) *detailState {
 		fallbackURL:  it.URL,
 		replyPage:    1,
 		flat:         it.CommentID != "",
-		// bodyCollapsed 与 bodyWidth 都不继承：每次进来都是双栏、正文展开。
-		// 默认正文宽度在 view 里按窗口宽度取 55%，这样不同窗口下初始比例一致。
+		// 收起状态与 bodyWidth 都不继承：每次进来都是双栏展开。
+		// 默认正文宽度在 view 里按窗口宽度取 40%，这样不同窗口下初始比例一致。
 	}
 }
 
@@ -424,8 +427,9 @@ func (a *app) closeDetail() {
 		a.detailStack = a.detailStack[:n-1]
 		// 返回的这一页可能还在等 AI 分配节点：重新开始轮询（离开时停掉了）。
 		a.watchPendingNode(a.detail)
-		// 退回上一篇同样是「进入详情」：正文重新展开，收起状态不跨页面保留。
+		// 退回上一篇同样是「进入详情」：双栏重新展开，收起状态不跨页面保留。
 		a.detail.bodyCollapsed = false
+		a.detail.replyCollapsed = false
 		// 临时回复身份也不跨页面：返回栈里那一页就算上次换过账号，回来时
 		// 也要先按窗口自己的账号算（压栈时已经清过一次，这里再兜一层）。
 		a.resetReplyIdentity(a.detail)
@@ -701,14 +705,6 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 	t := c.Theme()
 	tk := lobetheme.TokensOf(c)
 	ui.Column(c).Grow(1).FillWidth().Children(func() {
-		// 正文栏是 Lobe 的可拖拽面板：贴左，接缝正好落在两栏中间。拖接缝左右
-		// 调整宽度，接缝正中的按钮收起 / 展开正文（见 layout.DraggablePanel）。
-		// 评论区占满面板以外的宽度，正文收起时它接管整行。
-		//
-		// bodyCollapsed 是页面其它地方（工具条回顶、通知定位）共用的状态；面板
-		// 要的是 *expanded，这里用局部变量转接，构建后同步回去，外部对
-		// bodyCollapsed 的写入（如通知定位默认收起）仍然生效。
-		expanded := !d.bodyCollapsed
 		if d.bodyWidth <= 0 {
 			// 首次进入按窗口宽度给一个 40% 的初始宽度：正文读起来是窄栏，
 			// 评论区拿剩下的 60% 展开评论树；小于这个阈值只可能是拖动到
@@ -725,34 +721,68 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 				d.bodyWidth = w * 0.8
 			}
 		}
+		// 正文可滚动（Grow(1) 吃满面板剩余高度，MinHeight(0) 让它收缩到比
+		// 内容更矮，正文在框内滚动）；作者信息收在标题下方，底部固定的是
+		// 表态 / 打赏互动栏。面板内部铺一层 Lobe 表面，靠背景色与评论区
+		// 区分，不再画一圈描边。收起哪一边都复用同一份正文。
+		buildBody := func() ui.Element {
+			return ui.Column(c).FillWidth().FillHeight().MinHeight(0).
+				Radius(tk.BorderRadiusLG).Background(tk.BgContainer).Children(func() {
+				ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Padding(20, 28).Gap(14).
+					TrackScroll(&d.bodyScroll).Children(func() {
+					a.topicBody(c, d)
+				})
+				a.topicInteractionBar(c, d)
+			})
+		}
+		// 评论区用一块底色和白色正文面板分出层次；收起正文时它吃掉整行。
+		// 浅色下做成平角的阅读面板，深色沿用原来的圆角卡片。
+		replyRadius, replyBg := detailReplyStyle(t, tk)
 		ui.Row(c).Grow(1).FillWidth().MinHeight(0).Children(func() {
-			// 正文可滚动（Grow(1) 吃满面板剩余高度，MinHeight(0) 让它收缩到比
-			// 内容更矮，正文在框内滚动）；作者信息收在标题下方，底部固定的是
-			// 表态 / 打赏互动栏。面板内部铺一层 Lobe 表面，靠背景色与评论区
-			// 区分，不再画一圈描边。
+			if d.replyCollapsed {
+				// 右栏已收起：正文占满整行，右边缘留一条窄栏把评论区拉回来。
+				ui.Column(c).Grow(1).MinWidth(0).Children(func() { buildBody() })
+				detailExpandToggle(c, tk, true, "展开评论", "展开评论区，恢复双栏", chevronLeftIcon,
+					func() { d.replyCollapsed = false })
+				return
+			}
+			if d.bodyCollapsed {
+				// 左栏已收起：评论区占满整行，左边缘的窄栏把正文拉回来。
+				replyCol := ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).
+					Radius(replyRadius).Background(replyBg)
+				replyCol.Children(func() { a.replyPane(c, d) })
+				detailExpandToggle(c, tk, false, "展开正文", "展开正文，恢复双栏", chevronRightIcon,
+					func() { d.bodyCollapsed = false })
+				return
+			}
+			// 双栏展开：正文仍是 Lobe 的可拖拽面板，接缝留在两栏之间，拖动照旧
+			// 调宽。收起入口不用 Lobe 自带那一枚（挂在面板一侧、只跟着正文
+			// 显隐）；这里自己画对称的一对，都以接缝为中心，悬浮任意一栏两枚
+			// 一起出现，左右都好点。
+			expanded := true
+			var bodyHost ui.Element
 			layout.DraggablePanel(c, &d.bodyWidth, &expanded, layout.DraggablePanelProps{
 				Placement:         layout.Left,
 				MinSize:           200,
 				CollapseThreshold: 120,
-			}, func() {
-				ui.Column(c).FillWidth().FillHeight().MinHeight(0).
-					Radius(tk.BorderRadiusLG).Background(tk.BgContainer).Children(func() {
-					ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Padding(20, 28).Gap(14).
-						TrackScroll(&d.bodyScroll).Children(func() {
-						a.topicBody(c, d)
-					})
-					a.topicInteractionBar(c, d)
-				})
-			})
-			// 评论区用一块底色和白色正文面板分出层次；收起正文时它吃掉整行。
-			// 浅色下做成平角的阅读面板，深色沿用原来的圆角卡片。
-			replyRadius, replyBg := detailReplyStyle(t, tk)
-			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).
-				Radius(replyRadius).Background(replyBg).Children(func() {
-				a.replyPane(c, d)
+				NoToggle:          true,
+			}, func() { bodyHost = buildBody() })
+			// 拖到阈值以下 Lobe 会自己收起面板，这里同步回页面状态。
+			if !expanded {
+				d.bodyCollapsed = true
+			}
+
+			replyCol := ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).
+				Radius(replyRadius).Background(replyBg)
+			replyCol.Children(func() { a.replyPane(c, d) })
+			// 收起按钮放在跨接缝的定位盒里：两枚各占接缝左右半边，都落在盒子
+			// 的可点击范围内。ZIndex 抬高到可拖拽面板之上，免得被它盖住。
+			seam := ui.Box(c).Absolute().Left(d.bodyWidth-20).TopPercent(50).
+				TranslatePercent(0, -50).Size(40, 40).ZIndex(2)
+			seam.Children(func() {
+				detailSplitToggles(c, d, tk, bodyHost, replyCol, seam)
 			})
 		})
-		d.bodyCollapsed = !expanded
 		// 数据来源声明 + 可点击的原文链接占满整个窗口底部，放在最底部。
 		// 进入详情就画出来：正文加载完成后高度不变，卡片区域不会跳。
 		a.topicSourceFooter(c, d)
@@ -764,6 +794,65 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 	})
 	// 表态、打赏与明细都是贴着各自入口的气泡（见 interact.go），在互动区
 	// 构建时已经就地挂好，这里不需要再叠一层弹窗。
+}
+
+var detailSeamFade = ui.Animation{Duration: 160 * time.Millisecond, Ease: motion.EaseOut}
+
+// detailSplitToggles 在两栏接缝上画对称的一对收起按钮：左半边收起正文、
+// 右半边收起评论，两枚都以接缝为中心。悬浮任意一栏或按钮时两枚一起淡入，
+// 不会藏掉其中一边让人找不到。
+func detailSplitToggles(c *ui.Context, d *detailState, tk *lobetheme.Tokens, bodyHost, replyHost, seam ui.Element) {
+	shown := float32(0)
+	left := ui.ButtonBase(c).Label("收起正文").Tooltip("收起正文，评论区占满整行").
+		Absolute().Left(0).Top(0).Size(20, 40).Cursor(ui.CursorPointer).
+		Background(tk.BgContainer).Border(1, tk.BorderSecondary)
+	right := ui.ButtonBase(c).Label("收起评论").Tooltip("收起评论区，正文占满整行").
+		Absolute().Left(20).Top(0).Size(20, 40).Cursor(ui.CursorPointer).
+		Background(tk.BgContainer).Border(1, tk.BorderSecondary)
+	if bodyHost.Hovered() || replyHost.Hovered() || seam.Hovered() ||
+		left.Hovered() || right.Hovered() || left.FocusVisible() || right.FocusVisible() {
+		shown = 1
+	}
+	left.Opacity(left.AnimateTo("shown", shown, detailSeamFade))
+	right.Opacity(right.AnimateTo("shown", shown, detailSeamFade))
+	leftInk, rightInk := tk.TextTertiary, tk.TextTertiary
+	if left.Hovered() {
+		leftInk = tk.TextSecondary
+	}
+	if right.Hovered() {
+		rightInk = tk.TextSecondary
+	}
+	left.Children(func() { ui.Icon(c, chevronLeftIcon).FontSize(12).TextColor(leftInk) })
+	right.Children(func() { ui.Icon(c, chevronRightIcon).FontSize(12).TextColor(rightInk) })
+	if left.Clicked() {
+		d.bodyCollapsed = true
+	}
+	if right.Clicked() {
+		d.replyCollapsed = true
+	}
+}
+
+// detailExpandToggle 在一栏收起后，于内容区对应边缘留一条窄栏放展开按钮：
+// atRight 为真贴右边缘（展开评论），否则贴左边缘（展开正文）。restore 由调用
+// 方决定清掉哪一份收起状态。
+func detailExpandToggle(c *ui.Context, tk *lobetheme.Tokens, atRight bool, label, tip string, icon *ui.SVG, restore func()) {
+	b := ui.ButtonBase(c).Label(label).Tooltip(tip).
+		Absolute().TopPercent(50).TranslatePercent(0, -50).
+		Size(16, 40).Radius(8).Cursor(ui.CursorPointer).
+		Background(tk.BgContainer).Border(1, tk.BorderSecondary)
+	if atRight {
+		b.Right(0)
+	} else {
+		b.Left(0)
+	}
+	glyph := tk.TextTertiary
+	if b.Hovered() {
+		glyph = tk.TextSecondary
+	}
+	b.Children(func() { ui.Icon(c, icon).FontSize(12).TextColor(glyph) })
+	if b.Clicked() {
+		restore()
+	}
 }
 
 // detailReplyStyle 返回评论区面板的圆角与底色。

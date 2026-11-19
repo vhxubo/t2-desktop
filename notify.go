@@ -354,7 +354,9 @@ func (a *app) openNotificationTarget(target, notifID string) {
 	a.openDetail(it)
 	if it.CommentID != "" && a.detail != nil {
 		// 从通知跳到具体评论：默认收起正文，评论区占满整行，进来即见目标楼层。
+		// 同时清掉右栏的收起，避免两边都收起后什么也看不到。
 		a.detail.bodyCollapsed = true
+		a.detail.replyCollapsed = false
 		if notifID != "" {
 			a.detail.notifID = notifID
 			a.detail.notifCommentID = it.CommentID
