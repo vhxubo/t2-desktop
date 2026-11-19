@@ -140,6 +140,9 @@ func (a *app) resetReplyIdentity(d *detailState) {
 	d.replyAsID = ""
 	d.identityOpen = false
 	d.identityHost = ""
+	// 提及气泡也跟着收起：名单按「帖子 + 身份」缓存，离开时关掉面板，
+	// 回来仍是同一份名单，但不会留着上一页没关的气泡。
+	d.mentions.open = false
 }
 
 // applyReplyIdentity 采用选中的账号（id 为空表示窗口自己的账号），关掉气泡

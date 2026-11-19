@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -147,6 +148,32 @@ func TestDetailMergedTabCloseKeepsWindowAndOtherTabs(t *testing.T) {
 	}
 	if !a.detailLive(second) {
 		t.Fatal("留下的标签应该还活着")
+	}
+}
+
+// 详情窗口尺寸变化时，正文宽度跟着窗口等比缩放，和内联详情页共用同一份
+// 比例逻辑；窗口里的每篇帖子各自记宽度，互不影响。
+func TestDetailWindowSplitFollowsResize(t *testing.T) {
+	a := detailWindowsApp(t)
+	a.openDetailWindow(itemForWindow("POST001"))
+	h := a.detailWindows[0]
+	d := h.states[0]
+	topic, _ := decodeTopic([]byte(detailTopicJSON), "POST001")
+	d.topic = &topic
+	pg := decodeReplies([]byte(detailRepliesJSON))
+	d.replyList = flattenReplies(pg)
+	d.replyLoaded = true
+
+	tt := ui.NewTester(func(c *ui.Context) { a.detailWindowView(h, c) }, detailWindowWidth, detailWindowHeight)
+	tt.Frame()
+	initial := d.bodyWidth
+
+	const wide = 1400
+	tt.SetSize(wide, detailWindowHeight)
+	tt.Advance(500 * time.Millisecond)
+	want := initial * wide / detailWindowWidth
+	if got := d.bodyWidth; got < want-2 || got > want+2 {
+		t.Errorf("详情窗口拉大后正文宽度应约 %.0f，实际 %.0f", want, got)
 	}
 }
 

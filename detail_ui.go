@@ -88,6 +88,10 @@ type detailState struct {
 	// 在拖动接缝时改写。和 bodyCollapsed 一样只在这一次浏览里有效，不落盘：
 	// 每次进入详情都用默认值（见 openDetail）。
 	bodyWidth float32
+	// layoutWidth 是上一次构建看到的窗口内容宽度（DIP）。详情窗口被拉大
+	// 或缩小时按新旧宽度比缩放 bodyWidth，正文与评论的分栏比例跟着窗口
+	// 走；拖动接缝时宽度没变，不会覆盖用户调好的比例。
+	layoutWidth float32
 
 	// 从评论列表点进来时要定位到具体某条评论。目标常常不落在第 1 页
 	// （扁平序按 flat_floor 排），所以首屏没找到时自动续拉后面的页，
@@ -155,6 +159,9 @@ type detailState struct {
 	// 窗口：气泡只在点开它的那扇窗口里画，主窗口与独立写评论窗口不会同时弹。
 	identityOpen bool
 	identityHost replySurface
+	// mentions 是 @ 提及的两份名单（守护者 / 本帖参与人）与气泡状态。名单
+	// 按「帖子 + 回复身份」缓存，只在这里存运行态，不落盘（见 mentions.go）。
+	mentions mentionState
 }
 
 func (d *detailState) originURL() string {
@@ -698,6 +705,10 @@ func (a *app) detailView(c *ui.Context, inline bool) {
 	a.flushSeenNotifications()
 }
 
+// detailBodyMinWidth 是正文栏缩放后保留的最小宽度（DIP），与 DraggablePanel
+// 的 MinSize 共用，免得窗口缩小时接缝被挤进正文里。
+const detailBodyMinWidth float32 = 200
+
 // detailContent 是详情页真正的内容：左正文、右评论，底部来源与悬浮工具条。
 // 显式收 d，让两扇详情窗口各画各的那篇，不靠游标在帧与帧之间保持一致。
 func (a *app) detailContent(c *ui.Context, d *detailState) {
@@ -705,21 +716,33 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 	t := c.Theme()
 	tk := lobetheme.TokensOf(c)
 	ui.Column(c).Grow(1).FillWidth().Children(func() {
-		if d.bodyWidth <= 0 {
-			// 首次进入按窗口宽度给一个 40% 的初始宽度：正文读起来是窄栏，
-			// 评论区拿剩下的 60% 展开评论树；小于这个阈值只可能是拖动到
-			// 最小，DraggablePanel 会保留最小值，不会误判成未初始化。
-			if w, _ := c.Size(); w > 0 {
+		w, _ := c.Size()
+		if w > 0 {
+			switch {
+			case d.layoutWidth <= 0:
+				// 首次进入按窗口宽度给一个 40% 的初始宽度：正文读起来是窄栏，
+				// 评论区拿剩下的 60% 展开评论树。
 				d.bodyWidth = (w - 40) * 0.40
-			} else {
-				d.bodyWidth = 420
+				d.layoutWidth = w
+			case w != d.layoutWidth:
+				// 窗口尺寸变了（拉边框、最大化、缩放或合窗）：按前后宽度比
+				// 缩放正文，正文和评论的分栏比例跟着窗口走，用户拖过接缝
+				// 定下的比例也一样保留。一帧可能重建多次，记下新宽度后
+				// 后续重建拿到同一个 w，不会重复缩放。
+				d.bodyWidth *= w / d.layoutWidth
+				d.layoutWidth = w
 			}
-		}
-		if w, _ := c.Size(); w > 0 {
-			// 正文最多占 80% 宽度，给评论区至少留一条能读的列。
-			if d.bodyWidth > w*0.8 {
-				d.bodyWidth = w * 0.8
+			// 正文最多占 80% 宽度，给评论区至少留一条能读的列；同时保住
+			// 接缝能继续拖动的最小宽度。
+			if maxW := w * 0.8; d.bodyWidth > maxW {
+				d.bodyWidth = maxW
 			}
+			if d.bodyWidth < detailBodyMinWidth && w*0.8 >= detailBodyMinWidth {
+				d.bodyWidth = detailBodyMinWidth
+			}
+		} else if d.bodyWidth <= 0 {
+			// 还没有窗口尺寸时给个兜底，拿到尺寸后再按 40% 重算。
+			d.bodyWidth = 420
 		}
 		// 正文可滚动（Grow(1) 吃满面板剩余高度，MinHeight(0) 让它收缩到比
 		// 内容更矮，正文在框内滚动）；作者信息收在标题下方，底部固定的是
@@ -768,7 +791,7 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 			var bodyHost ui.Element
 			layout.DraggablePanel(c, &d.bodyWidth, &expanded, layout.DraggablePanelProps{
 				Placement:         layout.Left,
-				MinSize:           200,
+				MinSize:           detailBodyMinWidth,
 				CollapseThreshold: 120,
 				NoToggle:          true,
 			}, func() { bodyHost = buildBody() })
@@ -2402,7 +2425,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 		// 输入框铺满整条：发送按钮不在行尾占一格，而是浮在评论框右下角
 		// （下面用 Absolute 摆位），输入栏整行都归输入。
 		ui.Row(c).FillWidth().Children(func() {
-			area := a.replyTextArea(c, d, replyFieldInline, expanded)
+			area := a.replyTextArea(c, d, replySurfaceDetail, replyFieldInline, expanded)
 			// Ctrl+Enter 发送评论：绑在输入框自己的 handle 上，只有焦点在
 			// 评论框里才生效，免得在正文或评论列表里按组合键也误发一条。
 			// 草稿搬到独立窗口时这里不构建输入框，快捷键也随之消失，
@@ -2414,6 +2437,8 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 			pad := t.Space(1.5)
 			padX := t.Space(2.5)
 			area.Padding(pad, padX+replySendFloatReserve, pad, padX)
+			// @ 候选面板在插入符处展开，没有工具栏入口（见 mentions_ui.go）。
+			a.mentionPopover(c, d, replySurfaceDetail, padX, pad)
 		})
 		// 发送 / 登录后评论浮在右下角：不参与上面那一行的排版，评论框因此
 		// 不再被发送按钮切掉右侧一截。Absolute 按父节点（评论框）的边框内
@@ -2451,7 +2476,7 @@ func (a *app) replyDetachedHint(c *ui.Context, d *detailState) {
 // replyTextArea 画输入框本身。页面里的评论框与独立窗口共用它，只是行数与
 // 占位文案不同；窗口里它占满左栏高度，页面里随内容长到 10 行。页面里的发送
 // 按钮浮在评论框右下角（见 replyInput），输入框因此可以占满整条宽度。
-func (a *app) replyTextArea(c *ui.Context, d *detailState, mode replyFieldMode, expanded bool) ui.Element {
+func (a *app) replyTextArea(c *ui.Context, d *detailState, host replySurface, mode replyFieldMode, expanded bool) ui.Element {
 	t := c.Theme()
 	// 多行文本区即 Markdown 编辑器：透明背景、去边框，融入外层输入框。
 	// 三个模式都 Grow(1)：输入框占满整条，不再给行尾的动作让位。
@@ -2474,7 +2499,26 @@ func (a *app) replyTextArea(c *ui.Context, d *detailState, mode replyFieldMode, 
 	default:
 		area.Grow(1).Lines(1, 8).Placeholder("写评论…")
 	}
+	// 写完的 @名字 在编辑区里上色加粗成一块（mygo 的 TextRange 正是以
+	// mentions 为例设计的）；提交给服务端的仍是纯文本 "@名字 "。
+	var ranges []ui.TextRange
+	for _, b := range mentionBlocks(d.draft) {
+		ranges = append(ranges, ui.TextRange{
+			Start: b.Start, End: b.End, Color: t.Accent, Weight: 600,
+		})
+	}
+	if len(ranges) > 0 {
+		area.TextRanges(ranges...)
+	}
 	d.syncSelection(area)
+	// 键入 @ 时自动弹出候选：OnChange 在输入落到正文后、重建前运行，这里
+	// 的 element 仍有效，能读到真实光标位置。OnTextKey 则在帧间运行，只用
+	// 状态与 k.SetText 处理上下键 / 回车 / Escape（见 mentions_ui.go）。
+	area.OnChange(func() {
+		_, caret := area.TextSelection()
+		a.onMentionInput(d, host, caret)
+	})
+	area.OnTextKey(func(k ui.TextKey) bool { return a.mentionTextKey(d, k) })
 	return area
 }
 

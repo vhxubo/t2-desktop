@@ -120,6 +120,20 @@ func (e *mdEditor) insertText(body *string, text string) {
 	e.selStart, e.selEnd = at, at
 }
 
+// replaceMentionToken 把正文里 [start,end) 的 @前缀 整段换成 text（例如
+// 选完候选后的 "@名字 "），并把光标放到替换后的末尾。选区直接记在状态里，
+// 下一帧由输入框的 syncSelection 还回去；这里不碰任何 ui.Element。
+func (e *mdEditor) replaceMentionToken(body *string, start, end int, text string) {
+	rs := []rune(*body)
+	if start < 0 || end > len(rs) || start > end {
+		return
+	}
+	*body = string(rs[:start]) + text + string(rs[end:])
+	at := start + utf8.RuneCountInString(text)
+	e.pendingSel = composeSelection{ok: true, start: at, end: at}
+	e.selStart, e.selEnd = at, at
+}
+
 // insertMany 一次插入多段文字（例如拖进来的几张图），每段接在前一段之后。
 // 它不走 pendingSel：同一个构建帧里连续插入时，选区必须就地推进，否则
 // 后面的图片会全部叠在第一个位置。

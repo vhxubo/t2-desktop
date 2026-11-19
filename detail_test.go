@@ -2341,6 +2341,72 @@ func TestDetailBodyResizesByDrag(t *testing.T) {
 	}
 }
 
+// 详情窗口被拉大/缩小时，正文按窗口宽度的变化等比缩放，评论跟着接缝移动；
+// 用户先拖接缝定下的比例在缩放后也保留，不会被重置回默认的 40%。
+func TestDetailBodyRatioFollowsWindowResize(t *testing.T) {
+	const width = 1100
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, width, 760)
+	tt.Frame()
+
+	initial := a.detail.bodyWidth
+	comment, ok := tt.Find("评论")
+	if !ok {
+		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
+	}
+
+	// 窗口拉大：正文等比变宽，评论区右移。
+	const wide = 1600
+	tt.SetSize(wide, 760)
+	tt.Advance(500 * time.Millisecond)
+	wantWide := initial * wide / width
+	if got := a.detail.bodyWidth; got < wantWide-2 || got > wantWide+2 {
+		t.Errorf("窗口拉大后正文宽度应约 %.0f（40%% 比例不变），实际 %.0f", wantWide, got)
+	}
+	wideComment, ok := tt.Find("评论")
+	if !ok {
+		t.Fatalf("拉大后找不到评论卡片标题：%q", tt.Texts())
+	}
+	if wideComment.X <= comment.X+100 {
+		t.Errorf("窗口拉大后评论区没有右移：%+v / 原来 %+v", wideComment, comment)
+	}
+
+	// 窗口缩回：正文等比缩回，评论区左移回来。
+	tt.SetSize(width, 760)
+	tt.Advance(500 * time.Millisecond)
+	if got := a.detail.bodyWidth; got < initial-2 || got > initial+2 {
+		t.Errorf("窗口缩回后正文宽度应回到 %.0f，实际 %.0f", initial, got)
+	}
+	backComment, ok := tt.Find("评论")
+	if !ok {
+		t.Fatalf("缩回后找不到评论卡片标题：%q", tt.Texts())
+	}
+	if backComment.X >= wideComment.X-100 {
+		t.Errorf("窗口缩回后评论区没有左移：%+v / 拉大时 %+v", backComment, wideComment)
+	}
+
+	// 先拖动接缝改比例，再缩放窗口：新比例同样跟着窗口走。
+	handle, ok := tt.Find("调整宽度")
+	if !ok {
+		t.Fatalf("找不到调整宽度的接缝：%q", tt.Texts())
+	}
+	x, y := handle.X+handle.W/2, handle.Y+80
+	tt.Press(x, y)
+	tt.Move(x+120, y)
+	tt.Release(x+120, y)
+	tt.Advance(500 * time.Millisecond)
+	dragged := a.detail.bodyWidth
+	if dragged <= initial+100 {
+		t.Fatalf("拖动接缝没有改宽：拖动前 %.0f / 拖动后 %.0f", initial, dragged)
+	}
+	tt.SetSize(wide, 760)
+	tt.Advance(500 * time.Millisecond)
+	wantDragged := dragged * wide / width
+	if got := a.detail.bodyWidth; got < wantDragged-2 || got > wantDragged+2 {
+		t.Errorf("缩放后没有保留拖动比例，正文应约 %.0f，实际 %.0f", wantDragged, got)
+	}
+}
+
 // 收起状态只在这一次浏览里有效：回到列表再进来（或退回上一篇内联帖）时
 // 两个方向都是展开的。
 func TestDetailBodyCollapseResetsOnEntry(t *testing.T) {

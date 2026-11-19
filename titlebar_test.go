@@ -100,10 +100,43 @@ func TestTitleBarKeepsForcedLightUnderDarkSystem(t *testing.T) {
 	}
 }
 
+// 品牌名的位置换成了带输入框的搜索：输入框贴在标题栏里，输入即同步到搜索
+// 状态，搜索窗口据此出结果（见 search_ui.go）。
+func TestTitleBarSearchInput(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+
+	box, ok := tt.Find("搜索关键词")
+	if !ok {
+		t.Fatalf("标题栏里没有搜索输入框：%q", tt.Texts())
+	}
+	if box.Y < 0 || box.Y+box.H > titleBarHeight {
+		t.Errorf("搜索框不在标题栏里：%+v", box)
+	}
+	if box.W < 120 || box.W > 400 {
+		t.Errorf("标题栏搜索框宽度 = %.0f，期望是个正常的输入框宽度", box.W)
+	}
+	// 标题栏不再画品牌名；应用名仍留在侧边栏（展开时可见，见 sidebar_test.go）。
+	if r, ok := tt.Find("T2 Desktop"); ok && r.Y >= 0 && r.Y < titleBarHeight {
+		t.Errorf("标题栏还留着品牌名：%+v", r)
+	}
+
+	// 点进去打字，文字留在标题栏自己的状态里（回车才交给搜索窗口）。
+	if err := tt.Click("搜索关键词"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("职场")
+	tt.Frame()
+	if a.palette.text != "职场" {
+		t.Fatalf("标题栏搜索框没有收到关键词：%q", a.palette.text)
+	}
+}
+
 // The window buttons are drawn with vector lines inside their buttons. They
 // used to be font characters, which render tiny and, for the restore glyph,
 // can be missing altogether; a coordinate mistake in Draw also painted them
-// over the brand text.
+// over the search box.
 func TestTitleBarWindowButtonsPaintTheirGlyphs(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1080, 720)
@@ -151,15 +184,19 @@ func TestTitleBarWindowButtonsPaintTheirGlyphs(t *testing.T) {
 		t.Error("关闭图标的中心没有画出叉")
 	}
 
-	// 图标必须落在各自的按钮里：品牌与标题栏右侧的控件（通知铃铛、账号区）
-	// 之间不能出现窗口图标的墨迹。文字与图标本身当然会有墨迹，所以边界取
-	// 最左侧那个控件的左边，而不是写死 700。
+	// 图标必须落在各自的按钮里：搜索框与标题栏右侧的控件（通知铃铛、账号区）
+	// 之间不能出现窗口图标的墨迹。文字与输入框本身当然会有墨迹，所以扫描范围
+	// 从搜索框右缘之后开始，右边界取最左侧那个控件的左边，而不是写死 700。
+	start := 200
+	if r, ok := tt.Find("搜索关键词"); ok && int(r.X+r.W)+4 > start {
+		start = int(r.X+r.W) + 4
+	}
 	limit := 700
 	if r, ok := tt.Find("通知"); ok && int(r.X)-6 < limit {
 		limit = int(r.X) - 6
 	}
 	for y := 0; y < titleBarHeight; y++ {
-		for x := 200; x < limit; x++ {
+		for x := start; x < limit; x++ {
 			if darkAt(im, x, y) {
 				t.Fatalf("标题栏 (%d,%d) 有多余墨迹：窗口图标画到了按钮外面", x, y)
 			}

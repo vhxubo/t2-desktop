@@ -607,7 +607,7 @@ func TestAccountWindowViewBuildsWithBook(t *testing.T) {
 
 	tt := ui.NewTester(app.view, 1080, 720)
 	tt.Frame()
-	for _, want := range []string{"T2 Desktop", "jimmy", "账号", "设置", "关于"} {
+	for _, want := range []string{"搜索关键词", "jimmy", "账号", "设置", "关于"} {
 		if !tt.HasText(want) {
 			t.Errorf("账号窗口缺少 %q：%q", want, tt.Texts())
 		}
@@ -633,7 +633,7 @@ func TestGuestWindowViewBuildsWithBook(t *testing.T) {
 
 	tt := ui.NewTester(app.view, 1080, 720)
 	tt.Frame()
-	for _, want := range []string{"T2 Desktop", "登录", "注册", "账号"} {
+	for _, want := range []string{"搜索关键词", "登录", "注册", "账号"} {
 		if !tt.HasText(want) {
 			t.Errorf("未登录窗口缺少 %q：%q", want, tt.Texts())
 		}

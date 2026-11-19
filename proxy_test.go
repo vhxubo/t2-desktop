@@ -80,6 +80,38 @@ func TestManualProxyRoutesRequests(t *testing.T) {
 	}
 }
 
+// 提及的两个新出口也必须走配置的代理：守护者与参与人名单都从 getJSON 出去，
+// 不能因为「只是编辑器用的一点元数据」就直连。
+func TestMentionsUseConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var hits atomic.Int32
+	var paths atomic.Value
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		paths.Store(r.URL.Path)
+		_, _ = fmt.Fprint(w, `{"c":0,"m":"请求成功","d":{"items":[{"id":"g1","username":"jimmy"}],"total":1},"t":1730000000000}`)
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{Proxy: p, Base: "http://upstream.invalid/api"}
+	if _, err := c.fetchGuardians(context.Background()); err != nil {
+		t.Fatalf("守护者名单经代理失败：%v", err)
+	}
+	if _, err := c.fetchParticipants(context.Background(), "JBYGf2A"); err != nil {
+		t.Fatalf("参与人名单经代理失败：%v", err)
+	}
+	if hits.Load() != 2 {
+		t.Errorf("代理收到 %d 个请求，期望 2", hits.Load())
+	}
+	if got := paths.Load(); got != "/api/v1/topics/JBYGf2A/participants" {
+		t.Errorf("代理看到的最后一个路径 = %v", got)
+	}
+}
+
 func TestFollowSystemUsesAllProxyFallback(t *testing.T) {
 	clearProxyEnv(t)
 	var hits atomic.Int32

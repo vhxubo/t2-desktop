@@ -356,8 +356,12 @@ type app struct {
 	followUnreadGen uint64
 	// searchWin 是搜索窗口：入口是标题栏的放大镜。search 是它的输入、结果与
 	// 防抖状态，界面与请求在 search.go / search_ui.go。都只在主线程读写。
+	// 标题栏输入框与它共用 search.q：点输入框默认是命令面板（见 command_palette.go），
+	// 切到「搜索」模式才把 q 带进搜索窗口。
 	searchWin *mygo.Window
 	search    *searchState
+	// palette 是标题栏搜索框的命令面板状态（开合与高亮项）。
+	palette paletteState
 	// tray 是系统托盘图标（见 tray.go）：应用就绪后创建，退出前销毁；
 	// 无头测试保持 nil，不会碰到原生托盘。只在主线程读写。
 	tray *mygo.Tray
@@ -1375,6 +1379,9 @@ func (a *app) showAccounts() {
 const (
 	titleBarHeight   = 32
 	titleButtonWidth = 46
+	// titleSearchWidth 是标题栏里搜索框的宽度：占品牌名原来的位置，够放提示
+	// 文字，又不挤到右边的通知铃铛与账号区。
+	titleSearchWidth = 260
 )
 
 // titleBarHeightFor 是本帧标题栏的实际高度：系统按钮占位更高时跟着它走，
@@ -1387,12 +1394,12 @@ func titleBarHeightFor(c *ui.Context) float32 {
 	return h
 }
 
-// titleBar 是完全自绘的顶部标题栏：可拖拽移动窗口（双击最大化），右端是
-// 搜索、通知与最小化 / 最大化·还原 / 关闭按钮；系统标题栏与系统按钮已由
-// TitleBarHidden + HideWindowButtons 隐藏。
+// titleBar 是完全自绘的顶部标题栏：可拖拽移动窗口（双击最大化），左端是带
+// 输入框的搜索，右端是放大镜、通知与最小化 / 最大化·还原 / 关闭按钮；系统
+// 标题栏与系统按钮已由 TitleBarHidden + HideWindowButtons 隐藏。
 //
-// 标题栏只盖住内容区，底色与页面一致；应用名在左侧导航栏顶端（见 sidebar），
-// 左栏因此从窗口顶端贯到底，顶边不再压着一条深色横带。
+// 标题栏只盖住内容区，底色与页面一致；应用名留在左侧导航栏顶端，展开侧边栏
+// 才显示（见 sidebar），左栏因此从窗口顶端贯到底，顶边不再压着一条深色横带。
 func (a *app) titleBar(c *ui.Context) {
 	t := c.Theme()
 	// bar 是系统窗口按钮占用的区域，HideWindowButtons 下为零。保留这段
@@ -1401,18 +1408,65 @@ func (a *app) titleBar(c *ui.Context) {
 	h := titleBarHeightFor(c)
 	ui.Row(c).Height(h).FillWidth().AlignItems(ui.Stretch).
 		Padding(0, 0, 0, bar.Left).Background(t.Background).DragWindow().Children(func() {
-		// 左段：品牌名、搜索、通知铃铛，登录后再加上账号标识，整体可随
+		// 左段：搜索框、放大镜、通知铃铛，登录后再加上账号标识，整体可随
 		// 标题栏拖动。金币、盲盒、「我的」与退出登录都收在账号标识的气泡里；
 		// 设置与未登录时的登录 / 注册留在侧边栏底部。
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 16).Gap(10).
 			AlignItems(ui.Center).Children(func() {
-			// 品牌名对应 Lobe Header 的 Logo 位，占标题栏左端。
-			display.Text(c, "T2 Desktop", display.TextProps{Strong: true})
+			// 品牌名的位置换成输入框：点一下就展开命令面板（默认「命令」模式），
+			// 切到「搜索」才是搜索窗口入口。SearchField 自带一键清空按钮。
+			if a.search == nil {
+				a.search = newSearchState()
+			}
+			q := a.palette.text
+			ui.Column(c).Width(titleSearchWidth).Shrink(0).AlignItems(ui.Stretch).Children(func() {
+				tk := lobetheme.TokensOf(c)
+				in := ui.SearchField(c, &a.palette.text).
+					Label("搜索关键词").
+					Placeholder("输入命令关键词，或切到搜索").
+					Width(titleSearchWidth).Height(titleBarHeight).
+					Background(tk.FillTertiary).Border(1, ui.Transparent).
+					Radius(tk.BorderRadiusSM)
+				in.Bind(&a.palette.input)
+				// 点输入框或聚焦时展开面板；焦点离开（切窗口、Tab 到别的控件）
+				// 或点到面板外时收起。FocusLeft / PressedOutside 都把挂在输入框
+				// 上的面板算作「还在里面」，点面板里的模式按钮/命令不会误关。
+				// 面板关闭时 mygo 会把焦点还给锚点，那不是用户重新点进来，靠
+				// suppressOpen 忽略这一次，避免「关了又立刻弹回来」。
+				focused := in.Focused()
+				if in.PressedInside() {
+					a.palette.open = true
+					a.palette.suppressOpen = false
+				}
+				if focused && !a.palette.wasFocused && !a.palette.suppressOpen {
+					a.palette.open = true
+				}
+				if in.FocusLeft() || in.PressedOutside() {
+					a.palette.open = false
+					a.palette.suppressOpen = true
+				}
+				a.palette.wasFocused = focused
+				// 输入一变回到第一项，清空则回到默认命令模式。
+				in.OnChange(func() {
+					a.palette.selected = 0
+					if a.palette.text == "" {
+						a.palette.mode = paletteModeCommands
+					}
+				})
+				in.OnShortcut(0, ui.KeyDown, func() { a.paletteMove(q, 1) })
+				in.OnShortcut(0, ui.KeyUp, func() { a.paletteMove(q, -1) })
+				// Esc 由 SearchField 自身处理：有内容时清空输入，OnChange 据此回到
+				// 默认命令模式；面板继续留着，点窗外才收起。
+				in.OnSubmit(func() { a.paletteRun(q) })
+				if a.palette.open {
+					a.commandPalette(c, in, q)
+				}
+			})
 			ui.Spacer(c).Grow(1)
 			// 搜索：任何页面都能用，不依赖登录，也不占侧边栏。窗口开着时
 			// 放大镜用强调色标出来。
 			a.titleIconButton(c, searchIcon, a.searchWindowVisible(),
-				"搜索", "搜索帖子、用户、节点与标签", a.showSearch)
+				"搜索窗口", "搜索帖子、用户、节点与标签", a.commitTitleFromTitle)
 			// 通知铃铛：未读数叠在铃铛右下角，点开独立窗口（不再是侧边栏页面）。
 			a.notificationBell(c)
 			if a.auth.loggedIn() {

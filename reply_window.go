@@ -261,7 +261,8 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 				Padding(4, 8).Radius(10).Border(1, t.Border).
 				Background(t.Background).Children(func() {
 				c.Key("reply-window-field")
-				a.replyTextArea(c, d, replyFieldWindow, true)
+				a.replyTextArea(c, d, replySurfaceWindow, replyFieldWindow, true)
+				a.mentionPopover(c, d, replySurfaceWindow, 0, 0)
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 					// 窄窗口只留手势说明：两栏一分，页脚放不下整句
 					// 「支持 Markdown 与 :短码: 表情」，截成省略号更难看。
