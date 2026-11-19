@@ -134,8 +134,8 @@ func (a *app) redrawProfileWindow() {
 }
 
 // profileTag 是标题栏右侧的账号标识：头像 + 昵称。它只作账号菜单的锚点，
-// 点一下弹出气泡，金币、潘多拉与「我的」三个入口都收在气泡里。只显示昵称，
-// 不再写「已登录」：头像和昵称本身就说明身份，那几个字只会挤占标题栏宽度。
+// 点一下弹出气泡，签到、金币、潘多拉、「我的」与退出登录都收在气泡里。只显示
+// 昵称，不再写「已登录」：头像和昵称本身就说明身份，那几个字只会挤占标题栏宽度。
 // 昵称还没读到时只画头像，仍然是账号菜单的入口。
 func (a *app) profileTag(c *ui.Context, name string) {
 	tk := lobetheme.TokensOf(c)
@@ -146,7 +146,7 @@ func (a *app) profileTag(c *ui.Context, name string) {
 	tag.Children(func() {
 		a.profileTagIdentity(c, name)
 	})
-	tag.Label("我的").Tooltip("打开账号菜单：签到、金币、潘多拉与「我的」")
+	tag.Label("我的").Tooltip("打开账号菜单：签到、金币、潘多拉、「我的」与退出登录")
 	// Lobe 的 Popover 点锚点开合、点窗外与 Esc 关闭；气泡挂在账号标识下方。
 	// 锚点本身不再挂 OnClick：点它只开合气泡，进哪个页面在气泡里选。
 	lobeoverlay.Popover(c, tag, &a.profileMenuOpen, lobeoverlay.PopoverProps{
@@ -176,14 +176,16 @@ func (a *app) profileTagIdentity(c *ui.Context, name string) {
 }
 
 // profileMenuPanel 是账号菜单气泡的内容：签到、金币、潘多拉与「我的」四个
-// 入口。金币行带余额，签到行带今日状态，潘多拉行沿用动态名字与「可抽」角标；
-// 点任一行都先收起气泡再进对应页面。
+// 入口，末尾用一条分隔线隔开退出登录。金币行带余额，签到行带今日状态，潘多拉
+// 行沿用动态名字与「可抽」角标；点任一行都先收起气泡再进对应页面。
 func (a *app) profileMenuPanel(c *ui.Context) {
 	ui.Column(c).Width(236).Gap(2).Children(func() {
 		a.profileMenuSignRow(c)
 		a.profileMenuCoinsRow(c)
 		a.profileMenuPandoraRow(c)
 		a.profileMenuMineRow(c)
+		layout.Divider(c, layout.DividerProps{})
+		a.profileMenuLogoutRow(c)
 	})
 }
 
@@ -273,6 +275,15 @@ func (a *app) profileMenuMineRow(c *ui.Context) {
 	// 点击测试才分得清锚点和气泡里的入口。
 	a.profileMenuRow(c, lucide.UserRound(), "我的", "打开我的窗口", "打开「我的」窗口", nil, func() {
 		a.showProfile()
+	})
+}
+
+// profileMenuLogoutRow 是账号菜单末尾的退出登录入口：原来它占着侧边栏底部
+// 一行，现在和其余账号操作一起收在气泡里。退出实际走 a.logoutAccount，多账号
+// 时摘掉这个账号并关掉它的窗口，单账号时就是普通退出。
+func (a *app) profileMenuLogoutRow(c *ui.Context) {
+	a.profileMenuRow(c, logoutIcon, "退出登录", "", "退出当前账号并关闭它的窗口", nil, func() {
+		a.logoutAccount()
 	})
 }
 

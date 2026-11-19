@@ -463,8 +463,8 @@ func TestHeaderAvatarOpensProfile(t *testing.T) {
 	}
 }
 
-// 账号菜单收着签到、金币、潘多拉与「我的」四个入口，点任一行都先收起气泡
-// 再进对应页面。
+// 账号菜单收着签到、金币、潘多拉与「我的」四个页面入口，末尾还隔着分隔线
+// 放了退出登录（见 TestAccountMenuLogout）。点任一行都先收起气泡再进对应页面。
 func TestAccountMenuRoutesToFourPages(t *testing.T) {
 	freezePandoraNow(t)
 	a := profileWindowApp(t)
@@ -521,6 +521,41 @@ func TestAccountMenuRoutesToFourPages(t *testing.T) {
 	tt.Frame()
 	if calls != 4 || a.profileMenuOpen {
 		t.Errorf("点「我的」应打开窗口并收起气泡：calls=%d, open=%v", calls, a.profileMenuOpen)
+	}
+}
+
+// 退出登录从侧边栏挪到了标题栏账号菜单：收起的气泡里看不到它，展开后点一下
+// 退出当前账号，气泡随之收起，侧边栏回到未登录的「登录 / 注册」入口。
+func TestAccountMenuLogout(t *testing.T) {
+	a := profileWindowApp(t)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	if _, ok := tt.Find("退出登录"); ok {
+		t.Fatalf("退出登录不该明摆在侧边栏：%q", tt.Texts())
+	}
+	openAccountMenu(t, tt)
+	row, ok := tt.Access("退出登录")
+	if !ok {
+		t.Fatalf("账号菜单里没有「退出登录」：%q", tt.Texts())
+	}
+	if row.Description != "退出当前账号并关闭它的窗口" {
+		t.Errorf("退出登录的悬浮说明 = %q，期望写明点了会退出哪个账号", row.Description)
+	}
+	if err := tt.Click("退出登录"); err != nil {
+		t.Fatalf("点账号菜单的退出登录失败：%v", err)
+	}
+	if a.auth.loggedIn() {
+		t.Fatal("点「退出登录」后仍是登录状态")
+	}
+	if a.profileMenuOpen {
+		t.Error("退出登录后账号菜单应收起")
+	}
+	tt.Frame()
+	if !tt.HasText("登录 2Libra") {
+		t.Errorf("退出后侧边栏应回到登录入口：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("退出登录"); ok {
+		t.Errorf("退出后不该还留着「退出登录」：%q", tt.Texts())
 	}
 }
 

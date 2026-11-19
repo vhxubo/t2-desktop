@@ -17,8 +17,9 @@ import (
 // 内容区。
 const sidebarWidth = navSidebarWidth
 
-// 设置入口在主页左侧 Lobe 导航轨里，登录 / 退出登录再往下：这些都不在标题栏
-// 里了，标题栏只留品牌、铃铛和登录后的头像昵称。外观三档已收进设置窗口。
+// 设置入口在主页左侧 Lobe 导航轨里，登录 / 注册再往下；退出登录已收进标题栏
+// 账号菜单的气泡。标题栏只留搜索、铃铛和登录后的头像昵称。外观三档已收进设置
+// 窗口。
 const logoutLabel = "退出登录"
 const loginLabel = "登录 2Libra"
 
@@ -171,9 +172,10 @@ func TestSidebarOffersSignupWhenSignedOut(t *testing.T) {
 	}
 }
 
-// 登录后侧边栏的账号入口变成「退出登录」，点一下就退出，入口回到「登录」；
-// 标题栏只显示头像与昵称，不写「已登录」。
-func TestSidebarLogoutAfterLogin(t *testing.T) {
+// 登录后侧边栏不再占一行放「退出登录」：它和金币、签到一样收进标题栏账号
+// 菜单的气泡里（见 profile_test.go 的 TestAccountMenuLogout）。标题栏只显示
+// 头像与昵称，不写「已登录」。
+func TestSidebarHasNoLogoutAfterLogin(t *testing.T) {
 	a := testApp(t)
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", Username: "jimmy", TokenType: "Bearer"}); err != nil {
 		t.Fatal(err)
@@ -188,21 +190,11 @@ func TestSidebarLogoutAfterLogin(t *testing.T) {
 	if tt.HasText("已登录") {
 		t.Errorf("标题栏不应再显示「已登录」：%q", tt.Texts())
 	}
-	if _, ok := tt.Find(logoutLabel); !ok {
-		t.Fatalf("侧边栏没有「退出登录」入口：%q", tt.Texts())
-	}
-	if err := tt.Click(logoutLabel); err != nil {
-		t.Fatal(err)
-	}
-	if a.auth.loggedIn() {
-		t.Fatal("点「退出登录」后仍是登录状态")
-	}
-	tt.Frame()
-	if _, ok := tt.Find(loginLabel); !ok {
-		t.Errorf("退出后侧边栏应回到「登录」：%q", tt.Texts())
-	}
 	if _, ok := tt.Find(logoutLabel); ok {
-		t.Errorf("退出后不该还留着「退出登录」：%q", tt.Texts())
+		t.Errorf("退出登录不该再占侧边栏一行：%q", tt.Texts())
+	}
+	if _, ok := tt.Find(loginLabel); ok {
+		t.Errorf("登录后侧边栏不该还摆着「登录」：%q", tt.Texts())
 	}
 }
 

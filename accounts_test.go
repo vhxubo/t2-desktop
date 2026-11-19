@@ -597,8 +597,8 @@ func TestNativeNoticeClickOpensTheRightAccount(t *testing.T) {
 }
 
 // 一个账号窗口真的能画出来：标题栏带账号名（任务栏、Alt+Tab 靠它区分），
-// 侧边栏底部有「账号」入口与「退出登录」。说明这个窗口确实挂在账号册上，
-// 而不是一个没人管的孤立窗口。
+// 侧边栏底部有「账号」入口，标题栏账号菜单里有「退出登录」。说明这个窗口确实
+// 挂在账号册上，而不是一个没人管的孤立窗口。
 func TestAccountWindowViewBuildsWithBook(t *testing.T) {
 	b := testBook(t)
 	acc := addTestAccount(t, b, "jimmy")
@@ -607,10 +607,14 @@ func TestAccountWindowViewBuildsWithBook(t *testing.T) {
 
 	tt := ui.NewTester(app.view, 1080, 720)
 	tt.Frame()
-	for _, want := range []string{"T2 Desktop", "jimmy", "账号", "设置", "关于", "退出登录"} {
+	for _, want := range []string{"T2 Desktop", "jimmy", "账号", "设置", "关于"} {
 		if !tt.HasText(want) {
 			t.Errorf("账号窗口缺少 %q：%q", want, tt.Texts())
 		}
+	}
+	openAccountMenu(t, tt)
+	if !tt.HasText("退出登录") {
+		t.Errorf("账号窗口的账号菜单缺少「退出登录」：%q", tt.Texts())
 	}
 	if got, want := app.windowTitle(), "T2 Desktop · jimmy"; got != want {
 		t.Errorf("窗口标题 = %q，期望 %q", got, want)

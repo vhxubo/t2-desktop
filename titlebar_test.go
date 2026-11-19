@@ -202,8 +202,9 @@ func TestTitleBarButtonHover(t *testing.T) {
 	}
 }
 
-// The window buttons are reachable controls rather than plain drawings. 登录、
-// 退出登录与设置都不在这里：它们在主页侧边栏的底部（见 sidebar_test.go）。
+// The window buttons are reachable controls rather than plain drawings. 登录与
+// 设置都不在这里：它们在主页侧边栏的底部（见 sidebar_test.go）。退出登录也不
+// 直接摆在标题栏里，它收在登录后的账号菜单气泡中（见 profile_test.go）。
 func TestTitleBarWindowButtonsClick(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1080, 720)

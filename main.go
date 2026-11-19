@@ -1280,8 +1280,9 @@ func (a *app) selectTab(idx int) {
 	}
 }
 
-// sidebarFooterItems 是底部常驻入口的数据：账号/设置/关于、登录/退出。外观
-// 三档已经收进设置窗口的「外观」页，侧边栏不再单独占三行。
+// sidebarFooterItems 是底部常驻入口的数据：账号/设置/关于，未登录时再加登录
+// 与注册。退出登录已收进标题栏账号菜单的气泡里，外观三档也在设置窗口的
+// 「外观」页，侧边栏不再单独占这些行。
 func (a *app) sidebarFooterItems() []display.ListItem {
 	items := []display.ListItem{
 		{Key: "accounts", Label: "账号", Icon: lucide.UsersRound()},
@@ -1296,9 +1297,7 @@ func (a *app) sidebarFooterItems() []display.ListItem {
 		)
 	case a.book != nil && a.book.pendingLogin() != nil:
 		items = append(items, display.ListItem{Key: "accounts-panel", Label: "账号面板", Icon: lucide.Users()})
-	case a.auth.loggedIn():
-		items = append(items, display.ListItem{Key: "logout", Label: "退出登录", Icon: lucide.LogOut()})
-	default:
+	case !a.auth.loggedIn():
 		items = append(items,
 			display.ListItem{Key: "login", Label: "登录 2Libra", Icon: lucide.LogIn()},
 			display.ListItem{Key: "signup", Label: "注册", Icon: lucide.UserRound()},
@@ -1343,8 +1342,6 @@ func (a *app) handleSidebarAction(key string) {
 		a.cancelLogin()
 	case "accounts-panel":
 		a.showAccounts()
-	case "logout":
-		a.logoutAccount()
 	case "login":
 		a.startLogin()
 	case "signup":
@@ -1405,8 +1402,8 @@ func (a *app) titleBar(c *ui.Context) {
 	ui.Row(c).Height(h).FillWidth().AlignItems(ui.Stretch).
 		Padding(0, 0, 0, bar.Left).Background(t.Background).DragWindow().Children(func() {
 		// 左段：品牌名、搜索、通知铃铛，登录后再加上账号标识，整体可随
-		// 标题栏拖动。金币、盲盒与「我的」都收在账号标识的气泡里；设置与
-		// 登录 / 退出登录都在侧边栏底部。
+		// 标题栏拖动。金币、盲盒、「我的」与退出登录都收在账号标识的气泡里；
+		// 设置与未登录时的登录 / 注册留在侧边栏底部。
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 16).Gap(10).
 			AlignItems(ui.Center).Children(func() {
 			// 品牌名对应 Lobe Header 的 Logo 位，占标题栏左端。
@@ -1419,9 +1416,9 @@ func (a *app) titleBar(c *ui.Context) {
 			// 通知铃铛：未读数叠在铃铛右下角，点开独立窗口（不再是侧边栏页面）。
 			a.notificationBell(c)
 			if a.auth.loggedIn() {
-				// 头像 + 昵称是账号菜单的锚点：点一下弹出气泡，金币、潘多拉
-				// 与「我的」三个入口都在气泡里选。标题栏不写「已登录」，也不放
-				// 退出按钮：那几个字和按钮都挪到了侧边栏底部。
+				// 头像 + 昵称是账号菜单的锚点：点一下弹出气泡，签到、金币、
+				// 潘多拉、「我的」与退出登录都在气泡里选。标题栏不写「已登录」，
+				// 也不放退出按钮：登录后才有的账号操作都由这颗锚点带出来。
 				a.profileTag(c, a.auth.username())
 			}
 		})
