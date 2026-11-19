@@ -5,6 +5,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
 // 账号面板（「账号」窗口）
@@ -318,26 +319,24 @@ func (b *accountBook) panelLogoutDialog(c *ui.Context) {
 		name = acc.name()
 	}
 	open := true
-	dismissed := ui.Modal(c, &open, func() {
-		ui.Column(c).Width(420).Gap(10).Children(func() {
-			ui.Text(c, "退出账号？").FontSize(16).Bold()
-			ui.Text(c, "退出「"+name+"」会关掉它的窗口，并删掉本机保存的令牌；"+
-				"下次要用它需要重新在浏览器里授权。别的账号不受影响。").
-				TextColor(t.TextMuted).MaxLines(3)
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Spacer(c).Grow(1)
-				if ui.Button(c, "取消").Clicked() {
-					b.confirmOut = ""
-				}
-				if ui.PrimaryButton(c, "确认退出").Clicked() {
-					b.confirmOut = ""
-					b.logoutAccount(id)
-				}
-			})
-		})
+	ok := feedback.Modal(c, &open, feedback.ModalProps{
+		Title:      "退出账号？",
+		Width:      420,
+		OkText:     "确认退出",
+		CancelText: "取消",
+	}, func() {
+		ui.Text(c, "退出「"+name+"」会关掉它的窗口，并删掉本机保存的令牌；"+
+			"下次要用它需要重新在浏览器里授权。别的账号不受影响。").
+			TextColor(t.TextMuted).MaxLines(3)
 	})
-	if dismissed.Dismissed() {
+	// 取消、✕、Esc 与点窗外都只是放弃退出。
+	if !open {
 		b.confirmOut = ""
+		return
+	}
+	if ok {
+		b.confirmOut = ""
+		b.logoutAccount(id)
 	}
 }
 
