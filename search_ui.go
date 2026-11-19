@@ -17,8 +17,8 @@ import (
 )
 
 // 搜索窗口：和通知 / 设置 / 我的 / 金币一样是一个独立的 mygo 窗口。入口是主
-// 窗口标题栏的放大镜（见 titleBar）。数据与请求在 search.go，这里只负责窗口
-// 开关与界面。
+// 窗口标题栏搜索框的命令面板（见 titleBar / command_palette.go）。数据与请求在
+// search.go，这里只负责窗口开关与界面。
 //
 // 为什么不放进侧边栏：搜索是「随时用一下就走」的动作，不是一页常驻内容；
 // 独立窗口还能让主窗口的列表保持原来的滚动位置。
@@ -77,9 +77,6 @@ func (a *app) showSearchWindow() {
 		a.authGateWindowClosed(toastSearch)
 		a.accountWindowClosed(win)
 	})
-	if a.win != nil {
-		a.win.Invalidate() // 标题栏的放大镜高亮跟着窗口状态走
-	}
 }
 
 // closeSearchWindow 关掉搜索窗口：退出登录、收进托盘与退出前调用。
@@ -89,9 +86,6 @@ func (a *app) closeSearchWindow() {
 	a.searchWin = nil
 	if win != nil {
 		win.Close()
-	}
-	if a.win != nil {
-		a.win.Invalidate()
 	}
 }
 
@@ -115,9 +109,6 @@ func (a *app) stopSearchTimer() {
 	}
 }
 
-// searchWindowVisible 报告搜索窗口此刻是否存在：标题栏的放大镜据此高亮。
-func (a *app) searchWindowVisible() bool { return a.searchWin != nil }
-
 /* ------------------------------------------------------------------
    界面
 -------------------------------------------------------------- */
@@ -129,7 +120,7 @@ func (a *app) searchWindowView(c *ui.Context) {
 	c.Root().Background(tk.BgLayout)
 	// 本窗口里发起的操作结果以 toast 显示在这里，不退回主窗口。
 	a.drainToasts(c, a.claimsToasts(toastSearch))
-	// Esc 关闭窗口：随时可以从标题栏的放大镜再打开。
+	// Esc 关闭窗口：随时可以从标题栏搜索框的命令面板再打开。
 	c.OnShortcut(0, ui.KeyEscape, a.closeSearchWindow)
 
 	st := a.search

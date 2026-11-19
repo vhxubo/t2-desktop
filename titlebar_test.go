@@ -46,18 +46,20 @@ func TestTitleBarSharesTheWhitePageTheme(t *testing.T) {
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
 	im := tt.Image()
+	// 取标题栏中段的一处空白底色。搜索框宽窗口时会居中（见
+	// TestTitleBarSearchFollowsWindowWidth），x=400 落在框内，不能拿来量底色。
 	for _, p := range [][2]int{
-		{400, 1},
-		{400, titleBarHeight / 2},
-		{400, titleBarHeight - 1},
-		{400, titleBarHeight + 4}, // 分隔线下的页面
+		{700, 1},
+		{700, titleBarHeight / 2},
+		{700, titleBarHeight - 1},
+		{700, titleBarHeight + 4}, // 分隔线下的页面
 	} {
 		if got := lum(im, p[0], p[1]); got < 250 {
 			t.Errorf("(%d,%d) 的亮度 %.0f，标题栏与页面应同为白色", p[0], p[1], got)
 		}
 	}
 	// 底边是一条分隔线，而不是把灰带和页面隔开的白线。
-	c := im.RGBAAt(400, titleBarHeight)
+	c := im.RGBAAt(700, titleBarHeight)
 	if c.R == 0xff && c.G == 0xff && c.B == 0xff {
 		t.Errorf("标题栏底边没有分隔线：%v", c)
 	}
@@ -73,7 +75,7 @@ func TestTitleBarFollowsDarkSystemByDefault(t *testing.T) {
 		tt.Frame()
 		im := tt.Image()
 		for _, y := range []int{titleBarHeight / 2, titleBarHeight + 10} {
-			if got := lum(im, 400, y); got > 80 {
+			if got := lum(im, 700, y); got > 80 {
 				t.Errorf("深色系统主题下 %s 页 y=%d 亮度 %.0f，标题栏与页面应同为深色", page, y, got)
 			}
 		}
@@ -93,7 +95,7 @@ func TestTitleBarKeepsForcedLightUnderDarkSystem(t *testing.T) {
 		tt.Frame()
 		im := tt.Image()
 		for _, y := range []int{titleBarHeight / 2, titleBarHeight + 10} {
-			if got := lum(im, 400, y); got < 250 {
+			if got := lum(im, 700, y); got < 250 {
 				t.Errorf("固定浅色时 %s 页 y=%d 亮度 %.0f，应仍为白色", page, y, got)
 			}
 		}
@@ -130,6 +132,65 @@ func TestTitleBarSearchInput(t *testing.T) {
 	tt.Frame()
 	if a.palette.text != "职场" {
 		t.Fatalf("标题栏搜索框没有收到关键词：%q", a.palette.text)
+	}
+}
+
+// 搜索框的横向位置随窗口宽度切换：窄窗口贴着内容区左缘排，横向足够宽时
+// 落在内容区左缘与通知铃铛的中间——前面补一段伸缩空白，与它后面那段平分
+// 剩余空间（见 titleBar）。铃铛右边的账号气泡不影响这个居中参照。
+func TestTitleBarSearchFollowsWindowWidth(t *testing.T) {
+	a := testApp(t)
+
+	narrow := ui.NewTester(a.view, titleSearchCenterMinWidth-1, 720)
+	narrow.Frame()
+	ns, ok := narrow.Find("搜索关键词")
+	if !ok {
+		t.Fatalf("窄窗口里没有搜索框：%q", narrow.Texts())
+	}
+	nb, ok := narrow.Find("通知")
+	if !ok {
+		t.Fatalf("窄窗口里没有通知铃铛：%q", narrow.Texts())
+	}
+	// 贴左：搜索框左缘就在内容区的左内边距处，离右端的铃铛还远。
+	if ns.X > 100 {
+		t.Errorf("窄窗口搜索框没有贴左：x=%.0f", ns.X)
+	}
+	if ns.X+ns.W >= nb.X {
+		t.Errorf("窄窗口搜索框和通知铃铛挤在一起：search=%+v bell=%+v", ns, nb)
+	}
+	if want := titleSearchWidthFor(titleSearchCenterMinWidth - 1); ns.W < want-2 || ns.W > want+2 {
+		t.Errorf("窄窗口搜索框宽度 = %.0f，按窗口比例应约为 %.0f", ns.W, want)
+	}
+
+	wide := ui.NewTester(a.view, titleSearchCenterMinWidth+240, 720)
+	wide.Frame()
+	ws, ok := wide.Find("搜索关键词")
+	if !ok {
+		t.Fatalf("宽窗口里没有搜索框：%q", wide.Texts())
+	}
+	wb, ok := wide.Find("通知")
+	if !ok {
+		t.Fatalf("宽窗口里没有通知铃铛：%q", wide.Texts())
+	}
+	// 窄窗口里的搜索框左缘就是内容区左缘（贴左时的位置）。宽窗口时它
+	// 的中心应落在这条左缘与铃铛之间；留几个 DIP 的间隙误差。
+	mid := (ns.X + wb.X) / 2
+	if got := ws.X + ws.W/2; got < mid-12 || got > mid+12 {
+		t.Errorf("宽窗口搜索框没有居中在左缘与铃铛之间：中心=%.0f 期望≈%.0f（search=%+v bell=%+v）",
+			got, mid, ws, wb)
+	}
+	if ws.X <= ns.X+80 {
+		t.Errorf("宽窗口搜索框没有从贴左位置移开：窄窗口 x=%.0f 宽窗口 x=%.0f", ns.X, ws.X)
+	}
+	// 宽度也按比例跟着窗口走：宽窗口的框明显更长，但仍在上限内。
+	if want := titleSearchWidthFor(titleSearchCenterMinWidth + 240); ws.W < want-2 || ws.W > want+2 {
+		t.Errorf("宽窗口搜索框宽度 = %.0f，按窗口比例应约为 %.0f", ws.W, want)
+	}
+	if ws.W <= ns.W+40 {
+		t.Errorf("搜索框宽度没有随窗口变宽：窄 %.0f 宽 %.0f", ns.W, ws.W)
+	}
+	if ws.W > titleSearchWidthMax {
+		t.Errorf("搜索框宽度 %.0f 超过上限 %d", ws.W, titleSearchWidthMax)
 	}
 }
 

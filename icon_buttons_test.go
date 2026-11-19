@@ -46,7 +46,7 @@ func iconGlyphCenter(t *testing.T, tt *ui.Tester, name string) (float32, float32
 }
 
 // 图标按钮的悬停底色铺满整框，图标必须与底色同心，偏在一侧看着就是悬浮高亮
-// 错位。这里把四种图标按钮都锁住：iconActionButton 曾因漏清 ui.Button 默认的
+// 错位。这里把各种图标按钮都锁住：iconActionButton 曾因漏清 ui.Button 默认的
 // Padding(6,14)，固定 28×28 的框把图标挤到内容盒左沿、整枚偏右 8px。
 func TestIconButtonsGlyphCenteredOnHover(t *testing.T) {
 	a := &app{}
@@ -60,9 +60,6 @@ func TestIconButtonsGlyphCenteredOnHover(t *testing.T) {
 		}},
 		{"editorIconButton", "居中乙", func(c *ui.Context) {
 			a.editorIconButton(c, closeIcon, "居中乙", "提示")
-		}},
-		{"titleIconButton", "居中丙", func(c *ui.Context) {
-			a.titleIconButton(c, closeIcon, false, "居中丙", "提示", func() {})
 		}},
 		{"detailToolButton", "居中丁", func(c *ui.Context) {
 			a.detailToolButton(c, closeIcon, "居中丁", "提示", func() {})

@@ -30,6 +30,8 @@ var (
 	commentBubbleIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`))
 	// 关闭评论：气泡上划一道斜线，与「开启评论」用的气泡区分开。
 	commentsOffIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M5 3l14 14"/></svg>`))
+	// 抽奖：礼物盒，详情页作者工具条里发起 / 查看抽奖的图标。
+	lotteryIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="18" height="12" rx="1"/><path d="M12 9v12"/><path d="M3 13h18"/><path d="M12 9C9 9 7 8 7 6a2 2 0 0 1 2-2c2 0 3 5 3 5z"/><path d="M12 9c3 0 5-1 5-3a2 2 0 0 0-2-2c-2 0-3 5-3 5z"/></svg>`))
 	// 楼层视图：带楼层分隔的楼体，表示「切到楼层视图」（将要切到的目标）。
 	floorViewIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="1"/><path d="M4 9h16M4 15h16M12 3v18"/></svg>`))
 	// 扁平时间序：三条等长横线，表示「切到扁平时间序」（将要切到的目标）。
@@ -59,8 +61,6 @@ var (
 	refreshIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>`))
 	// 返回顶部：向上箭头，点了回到页面开头（主页 FAB 与详情页页头共用）。
 	backTopIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>`))
-	// 搜索：标题栏入口与搜索窗口共用（放大镜）。
-	searchIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>`))
 	// 级联选择触发框的向下箭头：点开两列选择面板。
 	chevronDownIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>`))
 	// 级联选择第一列里表示「这个分类可以展开」的右箭头。

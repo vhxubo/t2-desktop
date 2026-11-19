@@ -205,11 +205,6 @@ func (a *app) commitTitleSearch(q string) {
 	a.showSearch()
 }
 
-// commitTitleFromTitle 是放大镜按钮的入口：有输入就带过去，没有就打开搜索首页。
-func (a *app) commitTitleFromTitle() {
-	a.commitTitleSearch(a.palette.text)
-}
-
 // commandPalette 把下拉面板挂在搜索框下方。面板开合由 palette.open 驱动：点输入
 // 框展开，执行命令、失焦或点窗外关闭。
 func (a *app) commandPalette(c *ui.Context, anchor ui.Element, q string) {

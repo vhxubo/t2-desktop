@@ -77,6 +77,9 @@ type topicDetail struct {
 	// RewardPool 是随帖的金币池状态。线上写在详情顶层 d.reward_pool，
 	// 早期文档写在 d.extra.reward_pool：两处都认，见 decodeTopicRewardPool。
 	RewardPool *rewardPoolInfo
+	// Lottery 是开奖结果（extra.lottery）。出现它表示这篇帖子已经开过奖，
+	// 同一帖只能开一次；触发与轮询见 lottery.go。
+	Lottery *lotteryInfo
 	// 收藏状态：favorited 只在带令牌时有意义。字段缺失时 FavoriteKnown 为
 	// false，按钮按未收藏展示，点一下以服务端结果为准。
 	Favorited     bool
@@ -393,6 +396,8 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 	t.Redeem = decodeTopicRedeem(o)
 	// 金币池：线上在顶层 d.reward_pool，早期文档在 d.extra.reward_pool。
 	t.RewardPool = decodeTopicRewardPool(o)
+	// 开奖结果：api-write.md「抽奖」一节写在 extra.lottery，顶层也认。
+	t.Lottery = decodeTopicLottery(o)
 	return t, nil
 }
 

@@ -354,8 +354,8 @@ type app struct {
 	// followUnreadGen 丢弃过期的未读数请求。都只在主线程读写。
 	followUnread    int
 	followUnreadGen uint64
-	// searchWin 是搜索窗口：入口是标题栏的放大镜。search 是它的输入、结果与
-	// 防抖状态，界面与请求在 search.go / search_ui.go。都只在主线程读写。
+	// searchWin 是搜索窗口：入口是标题栏搜索框的命令面板。search 是它的输入、
+	// 结果与防抖状态，界面与请求在 search.go / search_ui.go。都只在主线程读写。
 	// 标题栏输入框与它共用 search.q：点输入框默认是命令面板（见 command_palette.go），
 	// 切到「搜索」模式才把 q 带进搜索窗口。
 	searchWin *mygo.Window
@@ -1176,7 +1176,7 @@ func (a *app) sidebarHeader(c *ui.Context, nav layout.SideNavState) {
 	}
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(10, 16, 6, 16).Children(func() {
 		b := action.StyleActionIcon(c, ui.ButtonBase(c), icon, action.ActionIconProps{
-			BlockSize: 32, GlyphSize: 18,
+			BlockSize: 32, GlyphSize: 16,
 		})
 		b.Label(name).Tooltip(name)
 		if b.Clicked() {
@@ -1379,10 +1379,30 @@ func (a *app) showAccounts() {
 const (
 	titleBarHeight   = 32
 	titleButtonWidth = 46
-	// titleSearchWidth 是标题栏里搜索框的宽度：占品牌名原来的位置，够放提示
-	// 文字，又不挤到右边的通知铃铛与账号区。
-	titleSearchWidth = 260
+	// titleSearchWidthRatio 是标题栏搜索框宽度占窗口宽度的比例：窗口越宽，
+	// 输入框越长，既不在窄窗口里挤到通知铃铛，也不在大窗口里显得局促。
+	titleSearchWidthRatio = 0.24
+	// 宽度的上下限：再窄放不下「输入命令关键词」这个提示，再宽会占满
+	// 左端与铃铛之间的一整条空白，都不合适。
+	titleSearchWidthMin = 180
+	titleSearchWidthMax = 420
+	// titleSearchCenterMinWidth 是搜索框由「贴左」改为「在左端与通知铃铛之间
+	// 居中」的窗口宽度下限。窄窗口里居中会在左边留一大块空，先贴左；只有
+	// 横向足够宽时才把它放到左端与通知铃铛的中间。
+	titleSearchCenterMinWidth = 960
 )
+
+// titleSearchWidthFor 按窗口宽度算出本帧搜索框的宽度，上下限之间线性缩放。
+func titleSearchWidthFor(winW float32) float32 {
+	w := winW * titleSearchWidthRatio
+	if w < titleSearchWidthMin {
+		return titleSearchWidthMin
+	}
+	if w > titleSearchWidthMax {
+		return titleSearchWidthMax
+	}
+	return w
+}
 
 // titleBarHeightFor 是本帧标题栏的实际高度：系统按钮占位更高时跟着它走，
 // 至少 32 DIP。左侧导航栏顶端那一行要与它等高，左右两栏的分隔线才对得上。
@@ -1395,8 +1415,8 @@ func titleBarHeightFor(c *ui.Context) float32 {
 }
 
 // titleBar 是完全自绘的顶部标题栏：可拖拽移动窗口（双击最大化），左端是带
-// 输入框的搜索，右端是放大镜、通知与最小化 / 最大化·还原 / 关闭按钮；系统
-// 标题栏与系统按钮已由 TitleBarHidden + HideWindowButtons 隐藏。
+// 输入框的搜索与通知铃铛，右端是最小化 / 最大化·还原 / 关闭按钮；系统标题栏
+// 与系统按钮已由 TitleBarHidden + HideWindowButtons 隐藏。
 //
 // 标题栏只盖住内容区，底色与页面一致；应用名留在左侧导航栏顶端，展开侧边栏
 // 才显示（见 sidebar），左栏因此从窗口顶端贯到底，顶边不再压着一条深色横带。
@@ -1406,25 +1426,34 @@ func (a *app) titleBar(c *ui.Context) {
 	// 计算，将来若改回系统按钮，标题栏仍然给它们让出位置。
 	bar := c.TitleBar()
 	h := titleBarHeightFor(c)
+	winW, _ := c.Size()
+	centerSearch := winW >= titleSearchCenterMinWidth
+	searchW := titleSearchWidthFor(winW)
 	ui.Row(c).Height(h).FillWidth().AlignItems(ui.Stretch).
 		Padding(0, 0, 0, bar.Left).Background(t.Background).DragWindow().Children(func() {
-		// 左段：搜索框、放大镜、通知铃铛，登录后再加上账号标识，整体可随
-		// 标题栏拖动。金币、盲盒、「我的」与退出登录都收在账号标识的气泡里；
-		// 设置与未登录时的登录 / 注册留在侧边栏底部。
+		// 左段：搜索框、通知铃铛，登录后再加上账号标识，整体可随标题栏拖动。
+		// 金币、盲盒、「我的」与退出登录都收在账号标识的气泡里；设置与未登录时
+		// 的登录 / 注册留在侧边栏底部。
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 16).Gap(10).
 			AlignItems(ui.Center).Children(func() {
+			// 宽窗口时搜索框前面再加一段可伸缩空白，与它后面的那段对半分，
+			// 于是搜索框落在「左端」与「通知铃铛」的中间；窄窗口省掉这段，
+			// 搜索框贴着左内边距排，不浪费本就有限的横向空间。
+			if centerSearch {
+				ui.Spacer(c).Grow(1)
+			}
 			// 品牌名的位置换成输入框：点一下就展开命令面板（默认「命令」模式），
 			// 切到「搜索」才是搜索窗口入口。SearchField 自带一键清空按钮。
 			if a.search == nil {
 				a.search = newSearchState()
 			}
 			q := a.palette.text
-			ui.Column(c).Width(titleSearchWidth).Shrink(0).AlignItems(ui.Stretch).Children(func() {
+			ui.Column(c).Width(searchW).Shrink(0).AlignItems(ui.Stretch).Children(func() {
 				tk := lobetheme.TokensOf(c)
 				in := ui.SearchField(c, &a.palette.text).
 					Label("搜索关键词").
 					Placeholder("输入命令关键词，或切到搜索").
-					Width(titleSearchWidth).Height(titleBarHeight).
+					Width(searchW).Height(titleBarHeight).
 					Background(tk.FillTertiary).Border(1, ui.Transparent).
 					Radius(tk.BorderRadiusSM)
 				in.Bind(&a.palette.input)
@@ -1463,10 +1492,6 @@ func (a *app) titleBar(c *ui.Context) {
 				}
 			})
 			ui.Spacer(c).Grow(1)
-			// 搜索：任何页面都能用，不依赖登录，也不占侧边栏。窗口开着时
-			// 放大镜用强调色标出来。
-			a.titleIconButton(c, searchIcon, a.searchWindowVisible(),
-				"搜索窗口", "搜索帖子、用户、节点与标签", a.commitTitleFromTitle)
 			// 通知铃铛：未读数叠在铃铛右下角，点开独立窗口（不再是侧边栏页面）。
 			a.notificationBell(c)
 			if a.auth.loggedIn() {
@@ -1555,28 +1580,6 @@ func titleMaximizeButton(c *ui.Context, win *mygo.Window) {
 			win.ToggleMaximize()
 		}
 	})
-}
-
-// titleIconButton 是标题栏里的纯图标按钮（外观）：图形本身是装饰，可访问名
-// 与提示由 label / tip 提供；selected 为真时用强调色标出当前档。图标用
-// 24×24 的矢量线，不占文字宽度，标题栏因此不会被挤满。
-func (a *app) titleIconButton(c *ui.Context, icon *ui.SVG, selected bool, label, tip string, onClick func()) {
-	t := c.Theme()
-	b := ui.Box(c).Padding(4, 6).Radius(6).Center().Background(ui.Transparent)
-	if selected || b.Hovered() {
-		b.Background(t.SurfaceHover)
-	}
-	ink := t.TextMuted
-	switch {
-	case selected:
-		ink = t.Accent
-	case b.Hovered():
-		ink = t.Text
-	}
-	b.Children(func() {
-		ui.Icon(c, icon).Size(16, 16).TextColor(ink)
-	})
-	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
 
 // listRowTransition 让列表行底色的出现与消失走 Lobe 的 150ms 缓动，和

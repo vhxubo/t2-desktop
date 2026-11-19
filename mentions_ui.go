@@ -91,8 +91,9 @@ func (a *app) mentionPopover(c *ui.Context, d *detailState, host replySurface, p
 	})
 }
 
-// mentionPanel 只放可操作的项：两个拼串按钮、搜索框、参与人列表；加载用
-// 转圈，失败给重试按钮。没有任何说明性文案。
+// mentionPanel 只放可操作的项：三个快捷拼串行与参与人列表共用同一份滚动
+// 列表（快捷行固定排在最前面三行），上面留加载转圈与失败重试。没有任何
+// 说明性文案；各项的写法放在 tooltip 里，不占面板版面。
 func (a *app) mentionPanel(c *ui.Context, d *detailState, host replySurface) {
 	st := &d.mentions
 	data := a.mentionData(d, d.draft)
@@ -104,20 +105,8 @@ func (a *app) mentionPanel(c *ui.Context, d *detailState, host replySurface) {
 			random = pickRandomMention(data.Guardians, exclude)
 		}
 		all := buildMentions(data.Participants, exclude, data.Slots)
-		if random != "" || (all != "" && data.Total <= mentionNotifyLimit) {
-			ui.Row(c).FillWidth().Gap(4).Wrap().KeepFocus().Children(func() {
-				if all != "" && data.Total <= mentionNotifyLimit {
-					if action.Button(c, "@所有人", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
-						a.insertMention(d, all)
-					}
-				}
-				if random != "" {
-					if action.Button(c, "@随机守护者", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
-						a.insertMention(d, mentionAt(random))
-					}
-				}
-			})
-		}
+		quick := a.mentionQuickEntries(d, data, all, random)
+
 		if data.PeopleBusy && !st.participantsLoaded {
 			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
 		}
@@ -137,25 +126,88 @@ func (a *app) mentionPanel(c *ui.Context, d *detailState, host replySurface) {
 			}
 		}
 
-		if len(data.Participants) == 0 {
-			return
-		}
-		filtered := mentionFiltered(data.Participants, st.query)
-		if len(filtered) == 0 {
-			return
-		}
-		shown := filtered
+		shown := mentionFiltered(data.Participants, st.query)
 		if len(shown) > mentionPanelShown {
 			shown = shown[:mentionPanelShown]
 		}
+		if len(quick) == 0 && len(shown) == 0 {
+			return
+		}
 		ui.Scroll(c).Height(180).Children(func() {
 			ui.Column(c).FillWidth().Gap(2).Children(func() {
+				// 快捷行不受搜索词过滤：它们是固定动作，排在用户列表最前面。
+				for _, q := range quick {
+					a.mentionQuickRow(c, d, host, q)
+				}
 				for _, p := range shown {
 					a.mentionPersonRow(c, d, host, p)
 				}
 			})
 		})
 	})
+}
+
+// mentionQuickEntry 是列表最前面的快捷拼串行：@所有人、@随机守护者、抽奖
+// 助手。图标只作装饰，无障碍名与 tooltip 挂在整行上，点击按无障碍名命中。
+type mentionQuickEntry struct {
+	Label string
+	Tip   string
+	Text  string
+	Icon  *ui.SVG
+}
+
+// mentionQuickEntries 按固定顺序生成当前可用的快捷行。名单还没回来或名额
+// 已满时对应项不出现，不摆一个点了没反应的入口。抽奖助手只在自己的帖子里
+// 出现：服务端只认帖主发的一级评论，换账号回复或别人的帖子写了也不开奖，
+// 所以入口与工具条用同一套作者判断（见 canLottery）。抽奖助手是系统账号，
+// 不在两份名单里，默认补全「抽 1 个」，改正文里的数字就能改中奖人数。
+func (a *app) mentionQuickEntries(d *detailState, data mentionResult, all, random string) []mentionQuickEntry {
+	out := make([]mentionQuickEntry, 0, 3)
+	if all != "" && data.Total <= mentionNotifyLimit {
+		out = append(out, mentionQuickEntry{
+			Label: "@所有人", Tip: "把参与人拼成 @ 列表，排掉自己",
+			Text: all, Icon: accountsIcon,
+		})
+	}
+	if random != "" {
+		out = append(out, mentionQuickEntry{
+			Label: "@随机守护者", Tip: "随机挑一位守护者 @ 一下",
+			Text: mentionAt(random), Icon: profileIcon,
+		})
+	}
+	if data.Slots > 0 && a.canLottery(d) &&
+		!a.replyIdentityFor(d).Switched {
+		out = append(out, mentionQuickEntry{
+			Label: "@" + lotteryName, Tip: "插入抽奖指令，默认抽 1 个；把正文里的数字改掉即可改人数",
+			Text: lotteryCommand(lotteryDefaultWinners) + " ", Icon: lotteryIcon,
+		})
+	}
+	return out
+}
+
+// mentionQuickRow 与参与人行走同一套按钮样式：左侧 22 高的图标槽与头像对齐，
+// 右侧名称，点一下把拼好的串插进光标处。
+func (a *app) mentionQuickRow(c *ui.Context, d *detailState, host replySurface, q mentionQuickEntry) {
+	t := c.Theme()
+	row := ui.ButtonBase(c).FillWidth().Padding(4, 8).Radius(8).Gap(8).
+		AlignItems(ui.Center).KeepFocus()
+	row.Background(ui.Transparent)
+	if row.Hovered() {
+		row.Background(t.SurfaceHover)
+	}
+	row.Children(func() {
+		ui.Box(c).Size(22, 22).Center().Children(func() {
+			ui.Icon(c, q.Icon).Size(14, 14).TextColor(t.TextMuted)
+		})
+		ui.Text(c, q.Label).FontSize(12).TextColor(t.Text).
+			SingleLine().Grow(1).MinWidth(0)
+	})
+	row.Label(q.Label).Tooltip(q.Tip)
+	if row.Clicked() {
+		st := &d.mentions
+		st.host = host
+		a.insertMention(d, q.Text)
+	}
 }
 
 // mentionFiltered 按用户名筛选名单，忽略大小写；空词返回全部。

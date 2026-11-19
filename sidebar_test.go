@@ -522,6 +522,64 @@ func TestSidebarIconsAlignAcrossExpandStates(t *testing.T) {
 	}
 }
 
+// glyphInkSize 量一个按钮里图标墨迹的宽高。无障碍矩形是整块 32 的按钮，
+// 拿不到图标本身；从中心区域按亮度取墨迹范围，避开 1px 边框。不同图标的
+// 墨迹形状不同，但同一 glyph size 下面板与齿轮二者的墨迹都应落在 14 上下。
+func glyphInkSize(im *image.RGBA, b ui.Rect) (w, h int) {
+	minX, minY, maxX, maxY := 999, 999, -1, -1
+	for y := int(b.Y) + 4; y < int(b.Y+b.H)-4; y++ {
+		for x := int(b.X) + 4; x < int(b.X+b.W)-4; x++ {
+			if lum(im, x, y) < 180 {
+				if x < minX {
+					minX = x
+				}
+				if x > maxX {
+					maxX = x
+				}
+				if y < minY {
+					minY = y
+				}
+				if y > maxY {
+					maxY = y
+				}
+			}
+		}
+	}
+	if maxX < 0 {
+		return 0, 0
+	}
+	return maxX - minX + 1, maxY - minY + 1
+}
+
+// 顶部折叠开关和下面图标轨的图标必须一样大。曾经开关用 GlyphSize 18、
+// 轨里用 16，面板图标比齿轮/账号图标高出一圈，看着很突兀；现在统一 16。
+func TestSidebarToggleGlyphSizeMatchesRail(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	im := tt.Image()
+
+	toggle, ok := tt.Access("展开侧边栏")
+	if !ok {
+		t.Fatalf("找不到顶部折叠开关：%q", tt.Texts())
+	}
+	rail, ok := tt.Access("设置")
+	if !ok {
+		t.Fatalf("找不到底部「设置」图标：%q", tt.Texts())
+	}
+	tw, th := glyphInkSize(im, toggle.Bounds)
+	rw, rh := glyphInkSize(im, rail.Bounds)
+	if tw == 0 || rw == 0 {
+		t.Fatalf("量不到图标墨迹：开关 %dx%d，设置 %dx%d", tw, th, rw, rh)
+	}
+	if d := th - rh; d > 1 || d < -1 {
+		t.Errorf("折叠开关图标高 %d，与图标轨的「设置」高 %d 不一致", th, rh)
+	}
+	if d := tw - rw; d > 1 || d < -1 {
+		t.Errorf("折叠开关图标宽 %d，与图标轨的「设置」宽 %d 不一致", tw, rw)
+	}
+}
+
 // 展开后图标不能贴着侧边栏左缘：列表行整体往右让出一段留白，和折叠后
 // 图标轨的居中位置对齐；文字标签也跟着一起右移。
 func TestSidebarExpandedRowsHaveLeftInset(t *testing.T) {

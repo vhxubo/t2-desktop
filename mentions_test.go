@@ -211,6 +211,27 @@ func TestMentionPanelInsertText(t *testing.T) {
 	if _, ok := tt.Find("@随机守护者"); !ok {
 		t.Fatalf("气泡没有列出 @随机守护者：%q", tt.Texts())
 	}
+	quickRect, ok := tt.Find("@抽奖助手")
+	if !ok {
+		t.Fatalf("气泡没有列出 @抽奖助手：%q", tt.Texts())
+	}
+	// 三个快捷项连成列表最前面三行（顺序固定），用户行排在它们后面。
+	allRect, ok := tt.Find("@所有人")
+	if !ok {
+		t.Fatalf("列表里找不到 @所有人：%q", tt.Texts())
+	}
+	guardianRect, ok := tt.Find("@随机守护者")
+	if !ok {
+		t.Fatalf("列表里找不到 @随机守护者：%q", tt.Texts())
+	}
+	aliceRect, ok := tt.Find("@alice")
+	if !ok {
+		t.Fatalf("列表里找不到 @alice：%q", tt.Texts())
+	}
+	if !(allRect.Y < guardianRect.Y && guardianRect.Y < quickRect.Y && quickRect.Y < aliceRect.Y) {
+		t.Errorf("快捷行没有排在用户列表最前面：%v / %v / %v / %v",
+			allRect, guardianRect, quickRect, aliceRect)
+	}
 	_, aliceShown := tt.Find("@alice")
 	_, aliasShown := tt.Find("@小号")
 	if !aliceShown || !aliasShown {
@@ -247,9 +268,48 @@ func TestMentionPanelInsertText(t *testing.T) {
 	if a.detail.draft != "@守护姐姐 " {
 		t.Errorf("随机守护者拼串 = %q，期望 @守护姐姐 ", a.detail.draft)
 	}
+
+	// @抽奖助手：默认补全「抽 1 个」，使用者在正文里改数字就能改人数。
+	clearMentionDraft(t, a, tt)
+	openAt()
+	tt.Frame()
+	if err := tt.Click("@抽奖助手"); err != nil {
+		t.Fatalf("点不到 @抽奖助手：%v", err)
+	}
+	if a.detail.draft != "@抽奖助手 抽 1 个 " {
+		t.Errorf("抽奖助手拼串 = %q，期望 @抽奖助手 抽 1 个 ", a.detail.draft)
+	}
 	// 名单全程只取一次：反复开关气泡、插入都没有重复请求。
 	if n := calls.Load(); n != 2 {
 		t.Errorf("名单请求次数 = %d，期望两个端点各一次", n)
+	}
+}
+
+// 抽奖助手快捷行只给自己的帖子：服务端只认帖主发的一级评论，别人的帖子和
+// 匿名帖写了也不开奖，不该摆一个点了没反应的入口。其它快捷行不受影响。
+func TestLotteryQuickEntryOnlyForOwnPost(t *testing.T) {
+	var calls atomic.Int32
+	srv := mentionTestServer(t,
+		`{"items":[{"id":"g2","username":"守护姐姐"}],"total":1}`,
+		`{"items":[{"id":"u1","username":"jimmy"},{"id":"u2","username":"alice"}],"total":2}`, &calls)
+	defer srv.Close()
+	a, tt := mentionUIApp(t, srv)
+	typeAt(t, tt)
+	waitMentionLoaded(t, a)
+	tt.Frame()
+	if !tt.HasText("@抽奖助手") {
+		t.Fatalf("自己的帖子没有抽奖助手快捷行：%q", tt.Texts())
+	}
+
+	for _, author := range []string{"alice", "匿名"} {
+		a.detail.topic.Author = author
+		tt.Frame()
+		if tt.HasText("@抽奖助手") {
+			t.Errorf("作者为 %q 时不该出现抽奖助手快捷行：%q", author, tt.Texts())
+		}
+		if !tt.HasText("@所有人") || !tt.HasText("@随机守护者") {
+			t.Errorf("作者不是自己时其它快捷行应保留：%q", tt.Texts())
+		}
 	}
 }
 
