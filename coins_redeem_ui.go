@@ -2,10 +2,17 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 金币窗口的「兑换」页：我兑换过的兑换码（GET /v1/me/redeem-codes）。
@@ -13,6 +20,7 @@ import (
 // 码、红包备注、来自哪篇帖子。数据在 redeem_history.go。
 //
 // 与「历史」页一样是页码分页：滚到底自动续拉，续拉失败只在列表底部提示。
+// 界面走 Lobe UI：标题、转圈、错误提示与空状态都用 lobe-mygo 组件，文案保持不变。
 
 func (a *app) ensureCoinRedeem() {
 	cs := a.coins
@@ -112,13 +120,16 @@ func (a *app) reloadCoinRedeem() {
 
 // coinRedeemView 是「兑换」页：标题行 + 记录列表。
 func (a *app) coinRedeemView(c *ui.Context, cs *coinState) {
-	t := c.Theme()
 	ui.Row(c).FillWidth().Padding(8, 14, 6, 14).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "我兑换过的兑换码").FontSize(14).Bold()
-		ui.Text(c, "按兑换时间倒序").FontSize(11).TextColor(t.TextMuted)
+		display.Text(c, "我兑换过的兑换码", display.TextProps{Strong: true, FontSize: 14, Rows: 1})
+		display.Text(c, "按兑换时间倒序", display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 1,
+		})
 		ui.Spacer(c).Grow(1)
 		if cs.redeemTotal > 0 {
-			ui.Textf(c, "共 %d 条", cs.redeemTotal).FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, fmt.Sprintf("共 %d 条", cs.redeemTotal), display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		}
 		a.smallAction(c, "刷新", cs.redeemLoading, func() { a.reloadCoinRedeem() })
 	})
@@ -127,21 +138,25 @@ func (a *app) coinRedeemView(c *ui.Context, cs *coinState) {
 	case cs.redeemLoading && len(cs.redeemItems) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
 			ui.Spinner(c).Size(24, 24)
-			ui.Text(c, "正在加载兑换记录…").TextColor(t.TextMuted)
+			display.Text(c, "正在加载兑换记录…", display.TextProps{
+				Type: display.TextSecondary, Rows: 1,
+			})
 		})
 		return
 	case cs.redeemErr != "":
 		ui.Column(c).Grow(1).Center().Gap(12).Padding(24).Children(func() {
-			ui.Text(c, "兑换记录加载失败").FontSize(15).Bold()
-			ui.Text(c, cs.redeemErr).TextColor(t.Danger).MaxLines(4)
-			if ui.Button(c, "重试").Clicked() {
+			feedback.Alert(c, "兑换记录加载失败", feedback.AlertProps{
+				Type: feedback.Error, Variant: feedback.Soft,
+				Description: cs.redeemErr, Selectable: true,
+			})
+			if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
 				a.reloadCoinRedeem()
 			}
 		})
 		return
 	case len(cs.redeemItems) == 0:
-		ui.Column(c).Grow(1).Center().Padding(24).Children(func() {
-			ui.Text(c, "还没有兑换过兑换码。").TextColor(t.TextMuted)
+		ui.Column(c).Grow(1).Center().Children(func() {
+			display.Empty(c, display.EmptyProps{Icon: lucide.Ticket(), Title: "还没有兑换过兑换码。"})
 		})
 		return
 	}
@@ -171,20 +186,19 @@ func (a *app) coinRedeemView(c *ui.Context, cs *coinState) {
 // coinRedeemedRow 是一条兑换记录：兑换码是主信息，下面一行是码描述 / 红包
 // 备注 / 来源帖与兑换时间。原帖还在时整行可点，打开主窗口的正文。
 func (a *app) coinRedeemedRow(c *ui.Context, code redeemedCode) {
-	t := c.Theme()
 	openable := code.PostShortID != "" && !code.PostDeleted
-	row := ui.ButtonBase(c).FillWidth().Padding(10, 12).Radius(10).
-		Background(t.Background).Border(1, t.Border)
-	if row.Hovered() && openable {
-		row.Background(t.SurfaceHover)
-	}
+	row := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockOutlined}).
+		FillWidth().Padding(10, 12)
 	row.Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, code.Code).FontSize(13).Bold().SingleLine().
-					Shrink(1).MinWidth(0).Ellipsis("…")
+				display.Text(c, code.Code, display.TextProps{
+					Strong: true, FontSize: 13, Rows: 1,
+				}).Shrink(1).MinWidth(0).Ellipsis("…")
 				if code.Note != "" {
-					ui.Text(c, code.Note).FontSize(11).TextColor(t.Success).Shrink(0)
+					display.Text(c, code.Note, display.TextProps{
+						Type: display.TextSuccess, FontSize: 11, Rows: 1,
+					}).Shrink(0)
 				}
 			})
 			parts := make([]string, 0, 4)
@@ -204,8 +218,9 @@ func (a *app) coinRedeemedRow(c *ui.Context, code redeemedCode) {
 				parts = append(parts, when+"兑换")
 			}
 			if len(parts) > 0 {
-				ui.Text(c, strings.Join(parts, " · ")).FontSize(11).
-					TextColor(t.TextMuted).MaxLines(2)
+				display.Text(c, strings.Join(parts, " · "), display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 2,
+				})
 			}
 		})
 	})

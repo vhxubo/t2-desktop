@@ -9,13 +9,26 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/field"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 金币窗口的界面：标题栏下面是余额 / 今日获得 / 签到状态，再按「今日、历史、
-// 统计、排行」切换。窗口本身在 coins_window.go；这里只画窗口里的内容。
+// 统计、排行、兑换」切换。窗口本身在 coins_window.go；这里只画窗口里的内容。
 // 金币窗口里的写操作只有签到（POST /v1/me/sign）：余额卡片里有一颗签到
 // 按钮，结果以 toast 报告。发帖、回复、表态与打赏在各自的页面里，成功后发出
 // 金币变动事件（见 coin_events.go），本页已经加载过的块会一起刷新。
+//
+// 整套界面走 Lobe UI：分段、按钮、卡片、标签、提示与空状态都用 lobe-mygo 的
+// 组件，颜色取 TokensOf(c)，与通知 / 设置 / 我的等窗口同一套设计语言。转圈沿用
+// mygo 原生 Spinner：Lobe 的 Spin 会一直请求动画帧，在签到后那次刷新仍在进行、
+// 无头 tester 复建窗口时会把 toast 的淡入帧挤掉。文案与动作保持不变，只换观感；
+// 无障碍名与工具提示照旧供读屏和点击测试命中。
 
 const (
 	coinViewToday = iota
@@ -38,7 +51,9 @@ func (a *app) coinsBody(c *ui.Context) {
 	// 只放视图切换、签到状态与刷新。
 	ui.Column(c).Fill().MinHeight(0).Children(func() {
 		ui.Row(c).FillWidth().Padding(10, 14, 8, 14).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Segmented(c, &cs.view, coinViewLabels...).Label("金币视图")
+			action.Segmented(c, &cs.view, coinViewLabels, action.SegmentedProps{
+				Size: lobetheme.Small,
+			}).Label("金币视图")
 			ui.Spacer(c).Grow(1)
 			a.coinSignLine(c, cs)
 			busy := cs.baseLoading || cs.todayLoading || cs.historyLoading ||
@@ -46,7 +61,7 @@ func (a *app) coinsBody(c *ui.Context) {
 				cs.redeemLoading || cs.signBusy
 			a.smallAction(c, "刷新", busy, func() { a.reloadCoins() })
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 		a.coinBalanceCard(c, cs)
 		a.coinCoreError(c, cs)
 		switch cs.view {
@@ -67,70 +82,100 @@ func (a *app) coinsBody(c *ui.Context) {
 // coinSignLine 是分段栏右侧的一行签到状态：只说明今天签没签，按钮放在下面
 // 的余额卡片里，避免一行里塞两个入口。
 func (a *app) coinSignLine(c *ui.Context, cs *coinState) {
-	t := c.Theme()
 	switch {
 	case cs.signErr != "":
-		ui.Text(c, "签到状态暂不可用").FontSize(11).TextColor(t.TextMuted).SingleLine()
+		display.Text(c, "签到状态暂不可用", display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 1,
+		})
 	case cs.sign.Known && cs.sign.Signed:
 		text := "今日已签到"
 		if cs.sign.Streak > 0 {
 			text = fmt.Sprintf("今日已签到 · 连续 %d 天", cs.sign.Streak)
 		}
-		ui.Text(c, text).FontSize(11).TextColor(t.Success).SingleLine()
+		display.Text(c, text, display.TextProps{
+			Type: display.TextSuccess, FontSize: 11, Rows: 1,
+		})
 	case cs.sign.Known:
-		ui.Text(c, "今日未签到").FontSize(11).TextColor(t.TextMuted).SingleLine()
+		display.Text(c, "今日未签到", display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 1,
+		})
 	case cs.baseLoaded:
-		ui.Text(c, "签到状态未知").FontSize(11).TextColor(t.TextMuted).SingleLine()
+		display.Text(c, "签到状态未知", display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 1,
+		})
 	default:
-		ui.Text(c, "签到状态加载中…").FontSize(11).TextColor(t.TextMuted).SingleLine()
+		display.Text(c, "签到状态加载中…", display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 1,
+		})
 	}
 }
 
 func (a *app) coinBalanceCard(c *ui.Context, cs *coinState) {
-	t := c.Theme()
-	ui.Box(c).FillWidth().Padding(12, 14).Radius(10).Background(t.Background).Border(1, t.Border).Children(func() {
+	card := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
+		FillWidth().Padding(12, 14)
+	card.Children(func() {
 		ui.Row(c).FillWidth().Gap(20).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-				ui.Text(c, "当前余额").FontSize(11).TextColor(t.TextMuted)
+				display.Text(c, "当前余额", display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
 				if cs.baseLoading && !cs.balanceOK {
 					ui.Spinner(c).Size(20, 20)
 				} else if cs.balanceOK {
-					ui.Text(c, coinThousands(cs.balance)+" 金币").FontSize(26).Bold().SingleLine()
+					display.Text(c, coinThousands(cs.balance)+" 金币", display.TextProps{
+						Strong: true, FontSize: 26, Rows: 1,
+					})
 				} else {
-					ui.Text(c, "—").FontSize(26).Bold()
+					display.Text(c, "—", display.TextProps{Strong: true, FontSize: 26, Rows: 1})
 				}
 				if cs.rankOK {
-					ui.Textf(c, "站内排名 第 %d 名", cs.rank).FontSize(11).TextColor(t.TextMuted)
+					display.Text(c, fmt.Sprintf("站内排名 第 %d 名", cs.rank), display.TextProps{
+						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+					})
 				}
 			})
 
 			ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-				ui.Text(c, "今日获得").FontSize(11).TextColor(t.TextMuted)
+				display.Text(c, "今日获得", display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
 				switch {
 				case cs.todayLoading && !cs.todayLoaded:
 					ui.Spinner(c).Size(18, 18)
 				case cs.todayErr != "":
-					ui.Text(c, "—").FontSize(20).Bold().TextColor(t.TextMuted)
+					display.Text(c, "—", display.TextProps{
+						Type: display.TextSecondary, Strong: true, FontSize: 20, Rows: 1,
+					})
 				default:
-					ui.Text(c, "+"+coinAmountText(cs.todayIncome)+" 金币").FontSize(20).Bold().TextColor(t.Success).SingleLine()
-					ui.Textf(c, "支出 %s · 净变化 %s", coinExpenseText(cs.todayExpense), coinSignedText(cs.todayNet)).
-						FontSize(11).TextColor(t.TextMuted).SingleLine()
+					display.Text(c, "+"+coinAmountText(cs.todayIncome)+" 金币", display.TextProps{
+						Type: display.TextSuccess, Strong: true, FontSize: 20, Rows: 1,
+					})
+					display.Text(c, fmt.Sprintf("支出 %s · 净变化 %s",
+						coinExpenseText(cs.todayExpense), coinSignedText(cs.todayNet)), display.TextProps{
+						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+					})
 				}
 			})
 
 			ui.Column(c).Shrink(0).Gap(4).Children(func() {
-				ui.Text(c, "今日签到").FontSize(11).TextColor(t.TextMuted)
+				display.Text(c, "今日签到", display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
 				switch {
 				case cs.sign.Known && cs.sign.Signed:
 					text := "已签到"
 					if cs.sign.Streak > 0 {
 						text = fmt.Sprintf("已签到 · %d 天", cs.sign.Streak)
 					}
-					ui.Text(c, text).FontSize(12).Bold().TextColor(t.Success)
+					display.Text(c, text, display.TextProps{
+						Type: display.TextSuccess, Strong: true, FontSize: 12, Rows: 1,
+					})
 				case cs.signBusy:
 					ui.Spinner(c).Size(16, 16)
 				case !cs.sign.Known && !cs.baseLoaded:
-					ui.Text(c, "加载中…").FontSize(12).TextColor(t.TextMuted)
+					display.Text(c, "加载中…", display.TextProps{
+						Type: display.TextSecondary, FontSize: 12, Rows: 1,
+					})
 				default:
 					a.coinSignButton(c, cs)
 				}
@@ -142,7 +187,6 @@ func (a *app) coinBalanceCard(c *ui.Context, cs *coinState) {
 // coinSignButton 是余额卡片里的签到按钮：只在今天还没签到时出现。签到会
 // 改变金币，结果一律交给 toast（见 signInNow），按钮本身不写结果文字。
 func (a *app) coinSignButton(c *ui.Context, cs *coinState) {
-	b := ui.PrimaryButton(c, "签到")
 	tip := "签到领金币"
 	if cs.signErr != "" {
 		// 读签到状态失败不影响提交：一次签到也可能把缺的权限补出来。
@@ -150,6 +194,9 @@ func (a *app) coinSignButton(c *ui.Context, cs *coinState) {
 	}
 	// 可访问名与可见文字分开：流水行里的「签到」也是同一个词，读屏与测试
 	// 需要能准确指到这颗按钮。
+	b := action.Button(c, "签到", action.ButtonProps{
+		Size: lobetheme.Small, Variant: action.Primary,
+	})
 	b.Label("立即签到").Tooltip(tip)
 	if b.Clicked() {
 		a.signInNow()
@@ -234,77 +281,97 @@ func (a *app) signInNow() {
 // coinCoreError 展示余额 / 今日 / 流水等核心端点的普通错误。缺权限的失败
 // 已经由全局授权弹窗接管（authWait），这里不再重复报错。
 func (a *app) coinCoreError(c *ui.Context, cs *coinState) {
-	t := c.Theme()
 	if cs.balanceErr != "" {
 		a.coinInlineError(c, cs.balanceErr, func() { a.reloadCoinBase() })
 	}
 	if cs.todayNote != "" {
-		ui.Text(c, cs.todayNote).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+		display.Text(c, cs.todayNote, display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 2,
+		})
 	}
 	switch {
 	case cs.todayErr != "":
 		a.coinInlineError(c, cs.todayErr, func() { a.reloadCoinToday() })
 	case cs.todayWait:
-		ui.Text(c, "今日金币明细在等待授权后继续加载。").FontSize(11).TextColor(t.TextMuted)
+		display.Text(c, "今日金币明细在等待授权后继续加载。", display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 1,
+		})
 	}
 }
 
 func (a *app) coinInlineError(c *ui.Context, text string, retry func()) {
-	t := c.Theme()
 	ui.Row(c).FillWidth().Padding(0, 14, 6, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, text).FontSize(11).TextColor(t.Danger).MaxLines(2).Grow(1)
+		display.Text(c, text, display.TextProps{
+			Type: display.TextDanger, FontSize: 11, Rows: 2,
+		}).Grow(1)
 		a.smallAction(c, "重试", false, retry)
 	})
 }
 
 func (a *app) coinTodayView(c *ui.Context, cs *coinState) {
-	t := c.Theme()
-	ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Padding(8, 14).Gap(10).Children(func() {
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "今日明细").FontSize(14).Bold()
-			ui.Textf(c, "共 %d 条", len(cs.todayItems)).FontSize(11).TextColor(t.TextMuted)
-			ui.Spacer(c).Grow(1)
-			if cs.todayFrom == "transactions" {
-				ui.Text(c, "来自金币流水").FontSize(10).TextColor(t.TextMuted)
+	list := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
+		ui.Column(c).FillWidth().Padding(8, 14).Gap(10).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				display.Text(c, "今日明细", display.TextProps{Strong: true, FontSize: 14, Rows: 1})
+				display.Text(c, fmt.Sprintf("共 %d 条", len(cs.todayItems)), display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
+				ui.Spacer(c).Grow(1)
+				if cs.todayFrom == "transactions" {
+					display.Text(c, "来自金币流水", display.TextProps{
+						Type: display.TextSecondary, FontSize: 10, Rows: 1,
+					})
+				}
+			})
+
+			switch {
+			case cs.todayLoading && len(cs.todayItems) == 0:
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Spinner(c).Size(18, 18)
+					display.Text(c, "正在加载今日金币明细…", display.TextProps{
+						Type: display.TextSecondary, FontSize: 12, Rows: 1,
+					})
+				})
+			case cs.todayErr != "":
+				feedback.Alert(c, "今日明细暂时无法加载", feedback.AlertProps{
+					Type: feedback.Error, Variant: feedback.Soft, Description: cs.todayErr,
+				})
+				if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+					a.reloadCoinToday()
+				}
+			case len(cs.todayItems) == 0:
+				display.Empty(c, display.EmptyProps{
+					Icon: lucide.Inbox(), Title: "今天还没有金币变动。",
+				})
+			default:
+				for _, tx := range cs.todayItems {
+					a.coinTransactionRow(c, tx, true)
+				}
+			}
+
+			if cs.pandoraSeen {
+				a.coinPandoraLine(c, cs)
 			}
 		})
-
-		switch {
-		case cs.todayLoading && len(cs.todayItems) == 0:
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Spinner(c).Size(18, 18)
-				ui.Text(c, "正在加载今日金币明细…").FontSize(12).TextColor(t.TextMuted)
-			})
-		case cs.todayErr != "":
-			ui.Text(c, "今日明细暂时无法加载").FontSize(13).Bold()
-			ui.Text(c, cs.todayErr).FontSize(11).TextColor(t.Danger).MaxLines(3)
-			if ui.Button(c, "重试").Clicked() {
-				a.reloadCoinToday()
-			}
-		case len(cs.todayItems) == 0:
-			ui.Text(c, "今天还没有金币变动。").FontSize(12).TextColor(t.TextMuted)
-		default:
-			for _, tx := range cs.todayItems {
-				a.coinTransactionRow(c, tx, true)
-			}
-		}
-
-		if cs.pandoraSeen {
-			a.coinPandoraLine(c, cs)
-		}
 	})
+	list.Grow(1).FillWidth().MinHeight(0)
 }
 
 func (a *app) coinHistoryView(c *ui.Context, cs *coinState) {
-	t := c.Theme()
 	ui.Row(c).FillWidth().Padding(8, 14, 6, 14).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "金币流水").FontSize(14).Bold()
-		if ui.Segmented(c, &cs.historyRange, coinRangeLabels...).Label("时间范围").Changed() {
-			a.setCoinHistoryRange(cs.historyRange)
+		display.Text(c, "金币流水", display.TextProps{Strong: true, FontSize: 14, Rows: 1})
+		rangeSel := cs.historyRange
+		action.Segmented(c, &rangeSel, coinRangeLabels, action.SegmentedProps{
+			Size: lobetheme.Small,
+		}).Label("时间范围")
+		if rangeSel != cs.historyRange {
+			a.setCoinHistoryRange(rangeSel)
 		}
 		ui.Spacer(c).Grow(1)
 		if cs.historyTotal > 0 {
-			ui.Textf(c, "共 %d 条记录", cs.historyTotal).FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, fmt.Sprintf("共 %d 条记录", cs.historyTotal), display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		}
 	})
 	a.coinHistoryReasonRow(c, cs)
@@ -313,25 +380,29 @@ func (a *app) coinHistoryView(c *ui.Context, cs *coinState) {
 	case cs.historyLoading && len(cs.historyItems) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
 			ui.Spinner(c).Size(24, 24)
-			ui.Text(c, "正在加载金币流水…").TextColor(t.TextMuted)
+			display.Text(c, "正在加载金币流水…", display.TextProps{
+				Type: display.TextSecondary, Rows: 1,
+			})
 		})
 		return
 	case cs.historyErr != "":
 		ui.Column(c).Grow(1).Center().Gap(12).Padding(24).Children(func() {
-			ui.Text(c, "金币流水加载失败").FontSize(15).Bold()
-			ui.Text(c, cs.historyErr).TextColor(t.Danger).MaxLines(4)
-			if ui.Button(c, "重试").Clicked() {
+			feedback.Alert(c, "金币流水加载失败", feedback.AlertProps{
+				Type: feedback.Error, Variant: feedback.Soft,
+				Description: cs.historyErr, Selectable: true,
+			})
+			if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
 				a.reloadCoinHistory()
 			}
 		})
 		return
 	case len(cs.historyItems) == 0:
+		text := "这个时间范围没有金币记录。"
+		if code := coinReasonCode(cs.historyReason); code != "" {
+			text = "这个时间范围没有「" + cs.historyReason + "」的金币记录。"
+		}
 		ui.Column(c).Grow(1).Center().Children(func() {
-			text := "这个时间范围没有金币记录。"
-			if code := coinReasonCode(cs.historyReason); code != "" {
-				text = "这个时间范围没有「" + cs.historyReason + "」的金币记录。"
-			}
-			ui.Text(c, text).TextColor(t.TextMuted)
+			display.Empty(c, display.EmptyProps{Icon: lucide.Inbox(), Title: text})
 		})
 		return
 	}
@@ -361,11 +432,14 @@ func (a *app) coinHistoryView(c *ui.Context, cs *coinState) {
 // coinHistoryReasonRow 是流水页的类型过滤：选中即从第一页重拉，不需要再点
 // 「筛选」。下拉列的是全部已知 reason，第一项「全部类型」不筛。
 func (a *app) coinHistoryReasonRow(c *ui.Context, cs *coinState) {
-	t := c.Theme()
 	ui.Row(c).FillWidth().Padding(0, 14, 6, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "类型").FontSize(11).TextColor(t.TextMuted)
-		filter := ui.Select(c, &cs.historyReason, coinReasonOptions).Label("金币类型").
-			Tooltip("只看某一类金币变动").Width(150)
+		display.Text(c, "类型", display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 1,
+		})
+		filter := field.Select(c, &cs.historyReason, field.SelectProps{
+			Options: selectOptions(coinReasonOptions), Size: lobetheme.Small,
+		})
+		filter.Label("金币类型").Tooltip("只看某一类金币变动").Width(150)
 		if filter.Changed() {
 			a.setCoinHistoryReason(cs.historyReason)
 		}
@@ -377,60 +451,77 @@ func (a *app) coinHistoryReasonRow(c *ui.Context, cs *coinState) {
 }
 
 func (a *app) coinStatsView(c *ui.Context, cs *coinState) {
-	ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Padding(8, 14).Gap(12).Children(func() {
-		a.coinDailyCard(c, cs)
-		a.coinBreakdownCard(c, cs)
+	list := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
+		ui.Column(c).FillWidth().Padding(8, 14).Gap(12).Children(func() {
+			a.coinDailyCard(c, cs)
+			a.coinBreakdownCard(c, cs)
+		})
 	})
+	list.Grow(1).FillWidth().MinHeight(0)
 }
 
 func (a *app) coinDailyCard(c *ui.Context, cs *coinState) {
-	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "近 30 天收支").FontSize(14).Bold()
-			ui.Text(c, "按日聚合").FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, "近 30 天收支", display.TextProps{Strong: true, FontSize: 14, Rows: 1})
+			display.Text(c, "按日聚合", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 			ui.Spacer(c).Grow(1)
 			a.smallAction(c, "刷新", cs.dailyLoading, func() { a.reloadCoinDaily() })
 		})
 		switch {
 		case cs.dailyErr != "":
-			ui.Text(c, cs.dailyErr).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+			display.Text(c, cs.dailyErr, display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 2,
+			})
 		case cs.dailyLoading && len(cs.dailyItems) == 0:
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Spinner(c).Size(16, 16)
-				ui.Text(c, "正在加载按日收支…").FontSize(11).TextColor(t.TextMuted)
+				display.Text(c, "正在加载按日收支…", display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
 			})
 		case len(cs.dailyItems) == 0:
-			ui.Text(c, "暂无可展示的按日数据。").FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, "暂无可展示的按日数据。", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		default:
 			for _, day := range cs.dailyItems {
 				a.coinDailyRow(c, day)
 			}
 		}
 	})
-	ui.Divider(c)
+	layout.Divider(c, layout.DividerProps{})
 }
 
 func (a *app) coinDailyRow(c *ui.Context, day coinDailyFlow) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, day.Date).FontSize(11).TextColor(t.TextMuted).Width(96)
-		ui.Text(c, "+"+coinAmountText(day.Income)).FontSize(11).TextColor(t.Success).Width(90).TextAlign(ui.End)
-		ui.Text(c, coinExpenseText(day.Expense)).FontSize(11).TextColor(t.Danger).Width(90).TextAlign(ui.End)
+		display.Text(c, day.Date, display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 1,
+		}).Width(96)
+		display.Text(c, "+"+coinAmountText(day.Income), display.TextProps{
+			Type: display.TextSuccess, FontSize: 11, Rows: 1,
+		}).Width(90).TextAlign(ui.End)
+		display.Text(c, coinExpenseText(day.Expense), display.TextProps{
+			Type: display.TextDanger, FontSize: 11, Rows: 1,
+		}).Width(90).TextAlign(ui.End)
 		ui.Spacer(c).Grow(1)
-		ui.Text(c, coinSignedText(day.Net)).FontSize(12).Bold().TextColor(coinAmountColor(t, day.Net)).TextAlign(ui.End)
+		display.Text(c, coinSignedText(day.Net), display.TextProps{
+			Strong: true, FontSize: 12, Rows: 1,
+		}).TextColor(coinAmountColor(tk, day.Net)).TextAlign(ui.End)
 	})
 }
 
 func (a *app) coinBreakdownCard(c *ui.Context, cs *coinState) {
-	t := c.Theme()
 	title := "收入构成"
 	if cs.breakdownType == "expense" {
 		title = "支出构成"
 	}
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, title).FontSize(14).Bold()
+			display.Text(c, title, display.TextProps{Strong: true, FontSize: 14, Rows: 1})
 			ui.Spacer(c).Grow(1)
 			a.coinToggleChip(c, "收入", "按收入分类看构成", cs.breakdownType != "expense", func() { a.setCoinBreakdownType("income") })
 			a.coinToggleChip(c, "支出", "按支出分类看构成", cs.breakdownType == "expense", func() { a.setCoinBreakdownType("expense") })
@@ -443,19 +534,27 @@ func (a *app) coinBreakdownCard(c *ui.Context, cs *coinState) {
 			}
 			ui.Spacer(c).Grow(1)
 			if start, end := coinBreakdownDates(cs.breakdownRange, cs.registeredDate); start != "" {
-				ui.Text(c, start+" ~ "+end).FontSize(10).TextColor(t.TextMuted).SingleLine()
+				display.Text(c, start+" ~ "+end, display.TextProps{
+					Type: display.TextSecondary, FontSize: 10, Rows: 1,
+				})
 			}
 		})
 		switch {
 		case cs.breakdownErr != "":
-			ui.Text(c, cs.breakdownErr).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+			display.Text(c, cs.breakdownErr, display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 2,
+			})
 		case cs.breakdownLoading && len(cs.breakdownItems) == 0:
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Spinner(c).Size(16, 16)
-				ui.Text(c, "正在加载分类数据…").FontSize(11).TextColor(t.TextMuted)
+				display.Text(c, "正在加载分类数据…", display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
 			})
 		case len(cs.breakdownItems) == 0:
-			ui.Text(c, coinBreakdownRangeLabels[cs.breakdownRange]+"暂无"+title+"数据。").FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, coinBreakdownRangeLabels[cs.breakdownRange]+"暂无"+title+"数据。", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		default:
 			total := 0.0
 			for _, b := range cs.breakdownItems {
@@ -480,7 +579,7 @@ func coinBreakdownRangeTip(r int) string {
 }
 
 func (a *app) coinBreakdownRow(c *ui.Context, b coinBreakdown, total float64) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	ratio := b.Ratio
 	if ratio <= 0 && total > 0 {
 		ratio = b.Amount / total
@@ -490,35 +589,42 @@ func (a *app) coinBreakdownRow(c *ui.Context, b coinBreakdown, total float64) {
 	}
 	ui.Column(c).FillWidth().Gap(3).Children(func() {
 		ui.Row(c).FillWidth().Gap(8).Children(func() {
-			ui.Text(c, coinReasonLabel(b.Reason)).FontSize(11).Grow(1).SingleLine()
-			ui.Text(c, coinAmountText(b.Amount)).FontSize(11).TextColor(t.TextMuted)
-			ui.Textf(c, "%.1f%%", ratio*100).FontSize(10).TextColor(t.TextMuted).Width(46).TextAlign(ui.End)
+			display.Text(c, coinReasonLabel(b.Reason), display.TextProps{FontSize: 11, Rows: 1}).Grow(1)
+			display.Text(c, coinAmountText(b.Amount), display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
+			display.Text(c, fmt.Sprintf("%.1f%%", ratio*100), display.TextProps{
+				Type: display.TextSecondary, FontSize: 10, Rows: 1,
+			}).Width(46).TextAlign(ui.End)
 		})
-		bar := ui.Box(c).FillWidth().Height(5).Radius(3).Background(t.SurfaceHover)
+		bar := ui.Box(c).FillWidth().Height(5).Radius(3).Background(tk.FillTertiary)
 		bar.Children(func() {
 			width := float32(ratio * 100)
 			if width > 100 {
 				width = 100
 			}
-			ui.Box(c).WidthPercent(width).Height(5).Radius(3).Background(t.Accent)
+			ui.Box(c).WidthPercent(width).Height(5).Radius(3).Background(tk.Primary)
 		})
 	})
 }
 
 func (a *app) coinRankingView(c *ui.Context, cs *coinState) {
-	t := c.Theme()
 	ui.Row(c).FillWidth().Padding(8, 14, 6, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "金币排行榜").FontSize(14).Bold()
-		ui.Textf(c, "前 %d 名", coinRankingLimit).FontSize(11).TextColor(t.TextMuted)
+		display.Text(c, "金币排行榜", display.TextProps{Strong: true, FontSize: 14, Rows: 1})
+		display.Text(c, fmt.Sprintf("前 %d 名", coinRankingLimit), display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 1,
+		})
 		ui.Spacer(c).Grow(1)
 		a.smallAction(c, "刷新", cs.rankingLoading, func() { a.reloadCoinRanking() })
 	})
 	switch {
 	case cs.rankingErr != "":
 		ui.Column(c).Grow(1).Center().Gap(12).Padding(24).Children(func() {
-			ui.Text(c, "排行榜暂时无法加载").FontSize(15).Bold()
-			ui.Text(c, cs.rankingErr).FontSize(11).TextColor(t.TextMuted).MaxLines(3)
-			if ui.Button(c, "重试").Clicked() {
+			feedback.Alert(c, "排行榜暂时无法加载", feedback.AlertProps{
+				Type: feedback.Error, Variant: feedback.Soft,
+				Description: cs.rankingErr, Selectable: true,
+			})
+			if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
 				a.reloadCoinRanking()
 			}
 		})
@@ -526,12 +632,14 @@ func (a *app) coinRankingView(c *ui.Context, cs *coinState) {
 	case cs.rankingLoading && len(cs.rankingItems) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
 			ui.Spinner(c).Size(24, 24)
-			ui.Text(c, "正在加载排行榜…").TextColor(t.TextMuted)
+			display.Text(c, "正在加载排行榜…", display.TextProps{
+				Type: display.TextSecondary, Rows: 1,
+			})
 		})
 		return
 	case len(cs.rankingItems) == 0:
 		ui.Column(c).Grow(1).Center().Children(func() {
-			ui.Text(c, "暂无排行数据。").TextColor(t.TextMuted)
+			display.Empty(c, display.EmptyProps{Icon: lucide.Trophy(), Title: "暂无排行数据。"})
 		})
 		return
 	}
@@ -549,15 +657,13 @@ func (a *app) coinRankingView(c *ui.Context, cs *coinState) {
 }
 
 func (a *app) coinRankRow(c *ui.Context, e coinRankEntry) {
-	t := c.Theme()
-	row := ui.ButtonBase(c).FillWidth().Padding(10, 14).Radius(8).
-		Background(t.Background).Border(1, t.Border)
-	if row.Hovered() {
-		row.Background(t.SurfaceHover)
-	}
+	tk := lobetheme.TokensOf(c)
+	row := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockOutlined}).
+		FillWidth().Padding(10, 14)
 	row.Children(func() {
-		ui.Textf(c, "%d", e.Rank).Width(36).FontSize(14).Bold().
-			TextColor(coinRankColor(t, e.Rank))
+		display.Text(c, fmt.Sprintf("%d", e.Rank), display.TextProps{
+			Strong: true, FontSize: 14, Rows: 1,
+		}).Width(36).TextColor(coinRankColor(tk, e.Rank))
 		// 排行榜用户名同样走统一用户标识：13px 昵称配 19.5px 头像。
 		a.userTag(c, userTagSpec{
 			Name:   e.Username,
@@ -567,13 +673,19 @@ func (a *app) coinRankRow(c *ui.Context, e coinRankEntry) {
 			Badges: e.Badges,
 		})
 		if e.IsPro {
-			ui.Text(c, "PRO").FontSize(9).TextColor(t.Accent)
+			display.Tag(c, "PRO", display.TagProps{
+				Size: lobetheme.Small, Color: display.TagGold, Variant: display.TagFilled,
+			})
 		}
 		if name := a.auth.username(); name != "" && strings.EqualFold(name, e.Username) {
-			ui.Text(c, "（我）").FontSize(10).TextColor(t.TextMuted)
+			display.Text(c, "（我）", display.TextProps{
+				Type: display.TextSecondary, FontSize: 10, Rows: 1,
+			})
 		}
 		ui.Spacer(c).Grow(1)
-		ui.Text(c, coinThousands(e.Balance)+" 金币").FontSize(12).TextColor(t.TextMuted).SingleLine()
+		display.Text(c, coinThousands(e.Balance)+" 金币", display.TextProps{
+			Type: display.TextSecondary, FontSize: 12, Rows: 1,
+		})
 	})
 	if e.Username != "" {
 		row.Tooltip("查看用户主页")
@@ -584,7 +696,7 @@ func (a *app) coinRankRow(c *ui.Context, e coinRankEntry) {
 }
 
 func (a *app) coinPandoraLine(c *ui.Context, cs *coinState) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	status := "今日盲盒：暂无"
 	switch {
 	case cs.pandora.OpenedToday:
@@ -594,74 +706,86 @@ func (a *app) coinPandoraLine(c *ui.Context, cs *coinState) {
 	case cs.pandora.HasBox:
 		status = "今日盲盒：已领取"
 	}
-	row := ui.Row(c).FillWidth().Padding(8, 10).Radius(8).Gap(8).
-		AlignItems(ui.Center).Background(t.Surface)
-	if row.Hovered() {
-		row.Background(t.SurfaceHover)
-	}
+	row := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockFilled}).
+		FillWidth().Padding(8, 10).Gap(8)
 	row.Children(func() {
-		ui.Icon(c, pandoraIcon).Size(14, 14).TextColor(t.Accent)
-		ui.Text(c, status).FontSize(11).TextColor(t.Text).SingleLine()
+		display.Icon(c, lucide.Gift(), display.IconProps{Size: display.IconSmall}).
+			TextColor(tk.Primary)
+		display.Text(c, status, display.TextProps{FontSize: 11, Rows: 1})
 		if cs.pandora.EventTitle != "" {
-			ui.Text(c, "· "+cs.pandora.EventTitle).FontSize(11).
-				TextColor(t.TextMuted).SingleLine()
+			display.Text(c, "· "+cs.pandora.EventTitle, display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		}
 		ui.Spacer(c).Grow(1)
-		ui.Text(c, "打开潘多拉").FontSize(10).TextColor(t.Accent).SingleLine()
+		display.Text(c, "打开潘多拉", display.TextProps{
+			Type: display.TextInfo, FontSize: 10, Rows: 1,
+		})
 	})
 	row.Label("潘多拉盲盒").Tooltip("打开潘多拉窗口，开启盲盒或再抽一次").
 		OnClick(a.showPandora)
 }
 
 func (a *app) coinTransactionRow(c *ui.Context, tx coinTransaction, today bool) {
-	t := c.Theme()
-	row := ui.ButtonBase(c).FillWidth().Padding(10, 12).Radius(8).
-		Background(t.Background).Border(1, t.Border)
-	if row.Hovered() {
-		row.Background(t.SurfaceHover)
-	}
+	tk := lobetheme.TokensOf(c)
+	row := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockOutlined}).
+		FillWidth().Padding(10, 12)
 	row.Children(func() {
 		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, coinReasonLabel(tx.Reason)).FontSize(12).Bold().SingleLine()
+					display.Text(c, coinReasonLabel(tx.Reason), display.TextProps{
+						Strong: true, FontSize: 12, Rows: 1,
+					})
 					if tx.IsAlias {
-						ui.Text(c, "分身").FontSize(10).TextColor(t.TextMuted)
+						display.Text(c, "分身", display.TextProps{
+							Type: display.TextSecondary, FontSize: 10, Rows: 1,
+						})
 					}
-					ui.Text(c, coinWhen(tx.CreatedAt, today)).FontSize(10).TextColor(t.TextMuted).SingleLine()
+					display.Text(c, coinWhen(tx.CreatedAt, today), display.TextProps{
+						Type: display.TextSecondary, FontSize: 10, Rows: 1,
+					})
 				})
 				if detail := coinTransactionDetail(tx); detail != "" {
 					// 「收到打赏 @某人」里的用户名单独交给统一用户标识，
 					// 头像跟着 12px 的详情字号走。
 					before, user, after := coinTransactionDetailParts(tx)
 					if user == "" {
-						ui.Text(c, detail).FontSize(12).TextColor(t.TextMuted).MaxLines(2)
+						display.Text(c, detail, display.TextProps{
+							Type: display.TextSecondary, FontSize: 12, Rows: 2,
+						})
 					} else {
 						ui.Row(c).Gap(4).AlignItems(ui.Center).Wrap().Children(func() {
 							if before != "" {
-								ui.Text(c, before).FontSize(12).TextColor(t.TextMuted)
+								display.Text(c, before, display.TextProps{
+									Type: display.TextSecondary, FontSize: 12, Rows: 1,
+								})
 							}
 							a.userTag(c, userTagSpec{
 								Name:   user,
 								Avatar: tx.FromAvatar,
 								Label:  "@" + user,
 								Size:   12,
-								Color:  t.TextMuted,
+								Color:  tk.TextSecondary,
 								Badges: tx.FromBadges,
 							})
 							if after != "" {
-								ui.Text(c, after).FontSize(12).TextColor(t.TextMuted)
+								display.Text(c, after, display.TextProps{
+									Type: display.TextSecondary, FontSize: 12, Rows: 1,
+								})
 							}
 						})
 					}
 				}
 			})
 			ui.Column(c).Shrink(0).Gap(1).Children(func() {
-				ui.Text(c, coinSignedText(tx.Amount)).FontSize(15).Bold().
-					TextColor(coinAmountColor(t, tx.Amount)).TextAlign(ui.End)
+				display.Text(c, coinSignedText(tx.Amount), display.TextProps{
+					Strong: true, FontSize: 15, Rows: 1,
+				}).TextColor(coinAmountColor(tk, tx.Amount)).TextAlign(ui.End)
 				if tx.HasDiscount {
-					ui.Text(c, "原价 "+coinAmountText(tx.BaseAmount)).FontSize(9).
-						TextColor(t.TextMuted).TextAlign(ui.End)
+					display.Text(c, "原价 "+coinAmountText(tx.BaseAmount), display.TextProps{
+						Type: display.TextSecondary, FontSize: 9, Rows: 1,
+					}).TextAlign(ui.End)
 				}
 			})
 		})
@@ -785,39 +909,40 @@ func coinWhen(s string, today bool) string {
 	return relativeTime(s)
 }
 
-func coinAmountColor(t *ui.Theme, v float64) ui.Color {
+func coinAmountColor(tk *lobetheme.Tokens, v float64) ui.Color {
 	switch {
 	case v > 0:
-		return t.Success
+		return tk.Success
 	case v < 0:
-		return t.Danger
+		return tk.Error
 	default:
-		return t.TextMuted
+		return tk.TextSecondary
 	}
 }
 
-func coinRankColor(t *ui.Theme, rank int) ui.Color {
+func coinRankColor(tk *lobetheme.Tokens, rank int) ui.Color {
 	switch rank {
 	case 1:
-		return t.Warning
+		return tk.Warning
 	case 2:
-		return t.Accent
+		return tk.Primary
 	case 3:
-		return t.Success
+		return tk.Success
 	default:
-		return t.TextMuted
+		return tk.TextSecondary
 	}
 }
 
+// coinToggleChip 是一枚 Lobe 芯片：选中用 Primary 实心，未选中用透明文字按钮，
+// 无障碍名与工具提示照旧，读屏和点击测试靠它们命中。
 func (a *app) coinToggleChip(c *ui.Context, label, tip string, active bool, onClick func()) {
-	t := c.Theme()
-	chip := ui.Button(c, label).FontSize(11).Padding(2, 9).Radius(999).Label(label).Tooltip(tip)
+	variant := action.Text
 	if active {
-		chip.Background(t.Accent).TextColor(t.AccentText)
-	} else {
-		chip.Background(t.Surface).TextColor(t.TextMuted).Border(1, t.Border)
+		variant = action.Primary
 	}
-	if chip.Clicked() {
+	b := action.Button(c, label, action.ButtonProps{Size: lobetheme.Small, Variant: variant})
+	b.Radius(999).Label(label).Tooltip(tip)
+	if b.Clicked() {
 		onClick()
 	}
 }

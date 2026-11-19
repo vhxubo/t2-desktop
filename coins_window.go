@@ -7,6 +7,10 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 金币窗口：余额、今日明细、流水、统计与排行从「我的」窗口里独立出来，成为
@@ -132,7 +136,7 @@ func (a *app) redrawCoinWindow() {
 // coinTag 是主窗口标题栏上登录账号左侧的金币数：💰 + 千分位余额。只有登录
 // 用户才出现；余额还没读到时显示破折号，入口本身不隐藏。点它打开金币窗口。
 func (a *app) coinTag(c *ui.Context) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	cs := a.coins
 	amount, known := "—", false
 	if cs != nil && cs.balanceOK {
@@ -142,19 +146,22 @@ func (a *app) coinTag(c *ui.Context) {
 		Background(ui.Transparent)
 	open := a.coinWindowVisible()
 	if open || b.Hovered() {
-		b.Background(t.SurfaceHover)
+		b.Background(tk.FillSecondary)
 	}
-	ink := t.TextMuted
+	ink := tk.TextSecondary
 	switch {
 	case open:
-		ink = t.Accent
+		ink = tk.Primary
 	case b.Hovered():
-		ink = t.Text
+		ink = tk.Text
 	}
 	b.Children(func() {
 		// 图标放在数字左边；数字用千分位隔开，和金币窗口里的写法一致。
-		ui.Text(c, "💰").FontSize(12)
-		ui.Text(c, amount).FontSize(12).Bold().SingleLine().TextColor(ink)
+		// 文案沿用 💰 字形，标题栏各入口的文案与无障碍名都不变。
+		display.Text(c, "💰", display.TextProps{FontSize: 12, Rows: 1})
+		display.Text(c, amount, display.TextProps{
+			Strong: true, FontSize: 12, Rows: 1,
+		}).TextColor(ink)
 	})
 	hint := "查看金币余额、今日明细与流水"
 	if known {
@@ -276,10 +283,10 @@ func (a *app) refreshCoinTagBalance() {
 // 需要遮罩，也不占主窗口的位置。
 func (a *app) coinWindowView(c *ui.Context) {
 	a.applyTheme(c)
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// 排行榜里的用户标识可能把链接交给系统浏览器，服务取本窗口自己的那份。
 	a.srv = c.Services()
-	c.Root().Background(t.Background)
+	c.Root().Background(tk.BgLayout)
 	// 签到的结果以 toast 显示在这个窗口里；窗口不在了就退回主窗口。
 	a.drainToasts(c, a.claimsToasts(toastCoins))
 	// Esc 关闭窗口：随时可以从标题栏的金币数再打开。
@@ -291,15 +298,18 @@ func (a *app) coinWindowView(c *ui.Context) {
 	}
 	ui.Column(c).Fill().Children(func() {
 		// 自绘标题栏：拖动窗口、右上角最小化与关闭，画法与主窗口一致。
+		// 图标换 Lucide 金币，文字走 display.Text，配色取 Lobe token。
 		ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
-			Background(t.Surface).DragWindow().Children(func() {
+			Background(tk.BgLayout).DragWindow().Children(func() {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "💰").FontSize(13)
-				ui.Text(c, "金币").FontSize(13).Bold().SingleLine().TextColor(t.Text)
+				display.Icon(c, lucide.Coins(), display.IconProps{Size: display.IconSmall}).
+					TextColor(tk.Primary)
+				display.Text(c, "金币", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
 				if cs.balanceOK {
-					ui.Text(c, coinThousands(cs.balance)+" 金币").FontSize(11).
-						TextColor(t.TextMuted).SingleLine()
+					display.Text(c, coinThousands(cs.balance)+" 金币", display.TextProps{
+						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+					})
 				}
 				a.accountWindowTag(c)
 			})
@@ -310,7 +320,7 @@ func (a *app) coinWindowView(c *ui.Context) {
 			})
 			titleBarButton(c, titleClose, "关闭", a.closeCoinWindow)
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
 		// 金币页自己也带内边距，放在这里时不再套一层。
 		ui.Column(c).Grow(1).MinHeight(0).Children(func() {
