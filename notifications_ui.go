@@ -7,6 +7,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 通知窗口：通知不再是主窗口里的页面或弹窗，而是一个独立的小窗口。标题栏
@@ -536,15 +537,18 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 		return
 	}
 	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	v := notificationViewOf(n)
 	unread := !n.IsRead
 	st := a.tabs[notificationTabIndex()]
 	reading := st != nil && st.reading[n.ID]
 
-	card := ui.ButtonBase(c).FillWidth().Padding(10, 12).Radius(10).
-		Background(t.Background).Border(1, t.Border)
+	// 通知卡片沿用 Lobe 的描边容器：容器底色 + 次级描边，悬停铺 FillTertiary，
+	// 圆角取主题；与主页列表行同一套视觉语言。
+	card := ui.ButtonBase(c).FillWidth().Padding(12, 16).Radius(tk.BorderRadius).
+		Background(tk.BgContainer).Border(1, tk.BorderSecondary).Transition(listRowTransition)
 	if card.Hovered() {
-		card.Background(t.SurfaceHover)
+		card.Background(tk.FillTertiary)
 	}
 	card.Children(func() {
 		ui.Column(c).FillWidth().Gap(4).Children(func() {
@@ -561,14 +565,14 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 					}
 				}
 				if unread {
-					ui.Text(c, "●").FontSize(9).TextColor(t.Accent)
+					ui.Text(c, "●").FontSize(9).TextColor(tk.Primary)
 				}
-				ui.Text(c, v.TypeLabel).FontSize(11).Bold().TextColor(notificationToneColor(t, v.Tone))
+				ui.Text(c, v.TypeLabel).FontSize(tk.FontSizeSM).Bold().TextColor(notificationToneColor(t, v.Tone))
 				if v.ActorIsAlias {
-					ui.Text(c, "匿名").FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, "匿名").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 				}
 				if when := relativeTime(n.CreatedAt); when != "" {
-					ui.Text(c, when).FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, when).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 				}
 				ui.Spacer(c).Grow(1)
 				if unread {
@@ -600,16 +604,16 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 				ui.Text(c, action).FontSize(13).Bold().MaxLines(2)
 			}
 			if v.TargetTitle != "" {
-				ui.Text(c, "《"+v.TargetTitle+"》").FontSize(12).TextColor(t.Text).SingleLine()
+				ui.Text(c, "《"+v.TargetTitle+"》").FontSize(tk.FontSize).TextColor(tk.Text).SingleLine()
 			}
 			if v.Excerpt != "" {
-				ui.Text(c, v.Excerpt).FontSize(12).TextColor(t.Text).MaxLines(3)
+				ui.Text(c, v.Excerpt).FontSize(tk.FontSize).TextColor(tk.Text).MaxLines(3)
 			}
 			if v.Detail != "" {
-				ui.Text(c, v.Detail).FontSize(12).TextColor(notificationToneColor(t, v.DetailTone)).MaxLines(2)
+				ui.Text(c, v.Detail).FontSize(tk.FontSize).TextColor(notificationToneColor(t, v.DetailTone)).MaxLines(2)
 			}
 			if len(v.Meta) > 0 {
-				ui.Text(c, strings.Join(v.Meta, " · ")).FontSize(11).TextColor(t.TextMuted).MaxLines(2)
+				ui.Text(c, strings.Join(v.Meta, " · ")).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription).MaxLines(2)
 			}
 		})
 	})

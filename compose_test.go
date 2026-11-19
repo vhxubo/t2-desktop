@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -675,9 +676,11 @@ func TestComposeFabPaintsAboveList(t *testing.T) {
 // FAB 固定在内容区右下角，不随列表滚动；窗口很窄时也不会被挤出可视区域。
 func TestComposeFabStaysBottomRight(t *testing.T) {
 	a := testApp(t)
+	// key 必须唯一（ui.List 会检测重复）：30 行若只用 26 个字母，收紧行高后
+	// 一屏内出现两个 "a"，就会触发 duplicate-key panic。用行号保证唯一。
 	a.tabs[0].items = make([]Item, 30)
 	for i := range a.tabs[0].items {
-		a.tabs[0].items[i] = Item{Key: string(rune('a' + i%26)), Title: "列表项"}
+		a.tabs[0].items[i] = Item{Key: strconv.Itoa(i), Title: "列表项"}
 	}
 	a.tabs[0].loaded = true
 	a.tabs[0].total = 30

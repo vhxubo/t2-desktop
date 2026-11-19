@@ -40,16 +40,16 @@ func (a *app) foldRowView(c *ui.Context, row foldRow) {
 // 挂在组首条评论的下方、左对齐。它不再单独占一张卡片：首条评论已经写明了
 // 是谁、在哪篇帖子下，这里只需要说清「下面还收着几条」和点一下会怎样。
 func (a *app) commentGroupToggle(c *ui.Context, g commentGroup, total int, open bool, toggle func()) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	author := commentItemAuthor(g.members[0])
 	posts := commentGroupPosts(g.members)
-	b := ui.ButtonBase(c).AlignSelf(ui.Start).Padding(4, 6).Radius(6)
+	b := ui.ButtonBase(c).AlignSelf(ui.Start).Padding(4, 6).Radius(tk.BorderRadius).Transition(listRowTransition)
 	// 按钮不带外观，悬停底色自己给：点一下才展开，平时只是一行说明文字。
 	b.Background(ui.Transparent)
-	ink := t.TextMuted
+	ink := tk.TextDescription
 	if b.Hovered() {
-		b.Background(t.SurfaceHover)
-		ink = t.Accent
+		b.Background(tk.FillTertiary)
+		ink = tk.Primary
 	}
 	b.Children(func() {
 		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
@@ -66,7 +66,7 @@ func (a *app) commentGroupToggle(c *ui.Context, g commentGroup, total int, open 
 			// 同一帖子下连着刷时不必再说地点：首条评论的底行已经挂着原帖。
 			if posts > 1 {
 				ui.Textf(c, "· 横跨 %d 个帖子", posts).FontSize(richMetaFontSize).
-					TextColor(t.TextMuted)
+					TextColor(tk.TextDescription)
 			}
 		})
 	})
@@ -85,7 +85,7 @@ func (a *app) commentGroupToggle(c *ui.Context, g commentGroup, total int, open 
 // 的归一结果，普通榜单行不会走到这里。open 决定点击后怎么打开这一行
 // （「我的」窗口会先收起自己）。
 func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	x := it.Extra
 	if x == nil {
 		return
@@ -93,16 +93,16 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 	comment := it.CommentID != ""
 	// 帖子行跟着本地已读状态把标题置灰；评论行不跟着变——读过帖子不等于
 	// 读过这一条新评论，把评论标题也压灰会把新内容藏起来。
-	titleColor := postTitleColor(t, !comment && a.isPostRead(it.ShortID))
-
-	// 悬停时抬一档底色给出「这一行可点」的反馈，圆角跟 Lobe token。
-	row := ui.ButtonBase(c).FillWidth().Padding(22, 14).Radius(lobetheme.TokensOf(c).BorderRadius).
-		Background(ui.Transparent)
-	if row.Hovered() {
-		row.Background(t.SurfaceHover)
+	titleColor := tk.Text
+	if !comment && a.isPostRead(it.ShortID) {
+		titleColor = tk.TextSecondary
 	}
+
+	// 统一的 Lobe 行表面：悬停 FillTertiary、圆角与过渡取主题；纵向 padding
+	// 收紧到 Lobe 节奏，和主页帖子行保持一致。
+	row := feedRowSurface(c).PaddingY(10).PaddingX(12)
 	row.Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(8).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 			// 第一行：谁做了什么 · 时间 · 楼层。整行等宽，和标题分层。
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Font(sidebarFont).Children(func() {
 				author := x.Author
@@ -121,7 +121,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 				}
 				if comment && x.ReplyTo != "" {
 					// 没有作者段时，这一行读起来是「回复 @某人」。
-					ui.Text(c, "回复").FontSize(richAuthorFontSize).TextColor(t.TextMuted)
+					ui.Text(c, "回复").FontSize(richAuthorFontSize).TextColor(tk.TextDescription)
 					a.userTag(c, userTagSpec{
 						Name:   x.ReplyTo,
 						Avatar: x.ReplyToAvatar,
@@ -131,23 +131,23 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 						Badges: x.ReplyToBadges,
 					})
 				} else if comment {
-					ui.Text(c, "评论了帖子").FontSize(richAuthorFontSize).TextColor(t.TextMuted)
+					ui.Text(c, "评论了帖子").FontSize(richAuthorFontSize).TextColor(tk.TextDescription)
 				} else if x.NodeLabel != "" {
-					ui.Text(c, x.NodeLabel).FontSize(richMetaFontSize).TextColor(t.TextMuted)
+					ui.Text(c, x.NodeLabel).FontSize(richMetaFontSize).TextColor(tk.TextDescription)
 				}
 				ui.Spacer(c).Grow(1)
 				if x.When != "" {
-					ui.Text(c, x.When).FontSize(richMetaFontSize).TextColor(t.TextMuted)
+					ui.Text(c, x.When).FontSize(richMetaFontSize).TextColor(tk.TextDescription)
 				}
 				if comment && x.Floor > 0 {
-					ui.Textf(c, "#%d", x.Floor).FontSize(richMetaFontSize).TextColor(t.TextMuted)
+					ui.Textf(c, "#%d", x.Floor).FontSize(richMetaFontSize).TextColor(tk.TextDescription)
 				}
 			})
 
 			// 帖子行保留标题；评论行的正文在下面作为摘要展示。标题字号比
 			// 作者、节点等辅助信息大一档，和主列表行保持一致。
 			if !comment && it.Title != "" {
-				ui.Text(c, it.Title).FontSize(17).Bold().MaxLines(2).TextColor(titleColor)
+				ui.Text(c, it.Title).FontSize(tk.FontSizeLG).Bold().MaxLines(2).TextColor(titleColor)
 			}
 			body := x.Excerpt
 			if body == "" && comment {
@@ -161,11 +161,11 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 					size = richCommentFontSize
 				}
 				ui.Text(c, body).FontSize(size).LineHeight(1.55).
-					MaxLines(3).TextColor(t.Text)
+					MaxLines(3).TextColor(tk.Text)
 			}
 			// 被引用的父评论：嵌套回复里这是理解上下文的关键。
 			if x.Quote != "" {
-				ui.Text(c, "↳ "+x.Quote).FontSize(richMetaFontSize).TextColor(t.TextMuted).MaxLines(2)
+				ui.Text(c, "↳ "+x.Quote).FontSize(richMetaFontSize).TextColor(tk.TextDescription).MaxLines(2)
 			}
 
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Font(sidebarFont).Children(func() {
@@ -173,14 +173,14 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 				// 空间里省略，而不是把旁边的短标签挤成两行。
 				if comment && x.NodeLabel != "" {
 					ui.Text(c, x.NodeLabel).FontSize(richMetaFontSize).
-						TextColor(t.TextMuted).SingleLine().Shrink(0)
+						TextColor(tk.TextDescription).SingleLine().Shrink(0)
 				}
 				if comment && x.PostTitle != "" {
 					a.postLink(c, it, x.PostTitle, open)
 				}
 				if comment && x.ReplyCount > 0 {
 					ui.Textf(c, "%d 评论", x.ReplyCount).FontSize(richMetaFontSize).
-						TextColor(t.TextMuted).SingleLine().Shrink(0)
+						TextColor(tk.TextDescription).SingleLine().Shrink(0)
 				}
 				ui.Spacer(c).Grow(1)
 				social := x.Reactions
@@ -191,7 +191,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 					social += fmt.Sprintf("💰 %d", x.RewardTotal)
 				}
 				if social != "" {
-					ui.Text(c, social).FontSize(richMetaFontSize).TextColor(t.TextMuted).Shrink(0)
+					ui.Text(c, social).FontSize(richMetaFontSize).TextColor(tk.TextDescription).Shrink(0)
 				}
 			})
 		})
@@ -208,7 +208,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 // 它挂在行内的 Row 上而不是外层的 ButtonBase 上——最内层的可点元素会吃掉
 // 这次点击，所以点「原帖」不会连带触发整行的「打开这条评论」。
 func (a *app) postLink(c *ui.Context, it Item, title string, open func(Item)) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	link := ui.Row(c).Shrink(1).MinWidth(0).Cursor(ui.CursorPointer)
 	link.Children(func() {
 		text := ui.Text(c, "原帖：「"+title+"」").FontSize(richMetaFontSize).
@@ -216,9 +216,9 @@ func (a *app) postLink(c *ui.Context, it Item, title string, open func(Item)) {
 		// 这一行其余文字都不可点，只有这里能点：悬停时换成强调色加下划线，
 		// 否则它看起来和旁边的节点名一样是纯说明。
 		if link.Hovered() {
-			text.TextColor(t.Accent).Underline()
+			text.TextColor(tk.Primary).Underline()
 		} else {
-			text.TextColor(t.TextMuted)
+			text.TextColor(tk.TextDescription)
 		}
 	})
 	// 清掉 CommentID 就是「只看这篇帖子」：openDetail 不再定位楼层，也不再

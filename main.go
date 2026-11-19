@@ -19,6 +19,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	"github.com/lobehub/lobe-mygo/pkg/motion"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
@@ -1449,6 +1450,26 @@ func (a *app) titleIconButton(c *ui.Context, icon *ui.SVG, selected bool, label,
 	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
 
+// listRowTransition 让列表行底色的出现与消失走 Lobe 的 150ms 缓动，和
+// display.List 的行过渡保持同一节奏；只过渡颜色，不动几何尺寸。
+var listRowTransition = ui.ElementTransition{
+	Duration: 150 * time.Millisecond, Ease: motion.EaseOut, Colors: true,
+}
+
+// feedRowSurface 给主页列表行铺一层统一的 Lobe 表面：静止时透明，悬停时
+// 铺 FillTertiary（与 display.List 行悬停同一 token），圆角取主题，颜色带
+// 过渡。调用方只管往里填内容、设内边距并挂点击；这样帖子行、评论行与通知
+// 行在同一套视觉语言里，不必各写一套 hover 配色。
+func feedRowSurface(c *ui.Context) ui.Element {
+	tk := lobetheme.TokensOf(c)
+	row := ui.ButtonBase(c).FillWidth().Radius(tk.BorderRadius).Transition(listRowTransition)
+	row.Background(ui.Transparent)
+	if row.Hovered() {
+		row.Background(tk.FillTertiary)
+	}
+	return row
+}
+
 // feedInset 是正文栏两侧的留白：内容区宽于 feedMaxWidth 时把多余空间等分
 // 到两边，让文字栏居中；窗口本身更窄时退回 24 DIP 的最小边距。
 func feedInset(c *ui.Context) float32 {
@@ -1462,24 +1483,24 @@ func feedInset(c *ui.Context) float32 {
 }
 
 // feedHeader 是正文栏顶部的页头：上面一行是日期小字，下面是页面名的
-// 大标题，右端是条目数。整块靠 40 DIP 的上留白、字号差与字距分层，不画
-// 底纹和方框；它给一屏文字一个明确的起点，首页因此不至于一上来就是密排的行。
+// 大标题，右端是条目数。整块靠留白、字号差与字距分层，不画底纹和方框；
+// 配色走 Lobe token，让页头与下方列表行的层次一致。
 func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	now := c.Now()
 	ui.Column(c).FillWidth().Shrink(0).
-		Padding(40, feedInset(c)+16, 22, feedInset(c)+16).Children(func() {
+		Padding(24, feedInset(c)+16, 14, feedInset(c)+16).Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.End).Gap(16).Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).Gap(10).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 				ui.Text(c, now.Format("2006.01.02")+" · "+weekdayCN(now.Weekday())).
-					FontSize(10).Font(sidebarFont).LetterSpacing(1.6).
-					TextColor(t.TextMuted).SingleLine()
-				ui.Text(c, spec.Label).FontSize(30).FontWeight(600).
-					LetterSpacing(-0.4).TextColor(t.Text).SingleLine()
+					FontSize(tk.FontSizeSM).Font(sidebarFont).LetterSpacing(1.6).
+					TextColor(tk.TextDescription).SingleLine()
+				ui.Text(c, spec.Label).FontSize(tk.FontSizeHeading4).FontWeight(600).
+					LetterSpacing(-0.4).TextColor(tk.TextHeading).SingleLine()
 			})
 			if count := feedCountLabel(st); count != "" {
-				ui.Text(c, count).FontSize(11).Font(sidebarFont).
-					TextColor(t.TextMuted).SingleLine().Shrink(0)
+				ui.Text(c, count).FontSize(tk.FontSizeSM).Font(sidebarFont).
+					TextColor(tk.TextDescription).SingleLine().Shrink(0)
 			}
 		})
 	})
@@ -1623,18 +1644,18 @@ func (a *app) loadMoreFooter(c *ui.Context, errText string, loading bool, retry 
 	if errText == "" && !loading {
 		return
 	}
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	ui.Row(c).FillWidth().Padding(8, composeFabInset, 8, feedInset(c)).Gap(8).AlignItems(ui.Center).Children(func() {
 		if errText != "" {
-			ui.Text(c, "加载更多失败："+errText).FontSize(metaSmallFontSize).
-				TextColor(t.Danger).MaxLines(2).Grow(1)
-			if ui.Button(c, "重试").Clicked() {
+			ui.Text(c, "加载更多失败："+errText).FontSize(tk.FontSizeSM).
+				TextColor(tk.Error).MaxLines(2).Grow(1)
+			if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
 				retry()
 			}
 			return
 		}
-		ui.Spinner(c).Size(14, 14)
-		ui.Text(c, "正在加载更多…").FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+		feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+		ui.Text(c, "正在加载更多…").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 	})
 }
 
@@ -1649,19 +1670,20 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 		a.richRow(c, it, open)
 		return
 	}
-	t := c.Theme()
-	titleColor := postTitleColor(t, a.isPostRead(it.ShortID))
-	// 悬停时抬一档底色给出「这一行可点」的反馈，圆角跟 Lobe token。
-	row := ui.ButtonBase(c).FillWidth().Padding(22, 14).Radius(lobetheme.TokensOf(c).BorderRadius).
-		Background(ui.Transparent)
-	if row.Hovered() {
-		row.Background(t.SurfaceHover)
+	tk := lobetheme.TokensOf(c)
+	titleColor := tk.Text
+	if a.isPostRead(it.ShortID) {
+		titleColor = tk.TextSecondary
 	}
+	// 统一的 Lobe 行表面：静止透明、悬停 FillTertiary、圆角与过渡取主题。
+	// 纵向 padding 收紧到 Lobe 节奏（内容行略高于导航行的 6），横向 12 对齐 token。
+	row := feedRowSurface(c).PaddingY(10).PaddingX(12)
 	row.Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(8).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 			// 标题是这一行里唯一的重心：字号明显大于副标题和时效信息，
-			// 并保持 700 粗体，扫一眼就能把标题与下方文案分开。
-			ui.Text(c, it.Title).FontSize(19).Bold().MaxLines(2).TextColor(titleColor)
+			// 并保持 700 粗体，扫一眼就能把标题与下方文案分开。字号用 Lobe
+			// 的 LG（16），比原先的 19 收一档，贴近 Lobe 列表的密度。
+			ui.Text(c, it.Title).FontSize(tk.FontSizeLG).Bold().MaxLines(2).TextColor(titleColor)
 			// 副标题里的作者用统一用户标识渲染：头像跟着 11px 的昵称走，
 			// 同时保留「节点 · 昵称 · 发帖时间」的原有顺序；节点名或时间太长时
 			// 允许折行，不把右侧的元信息挤出去。Author 为空说明接口没给发帖人
@@ -1673,26 +1695,26 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 				ui.Row(c).MinWidth(0).AlignItems(ui.Center).Wrap().Font(sidebarFont).
 					Children(func() {
 						if it.SubtitlePrefix != "" {
-							ui.Text(c, it.SubtitlePrefix).FontSize(11).
-								TextColor(t.TextMuted).SingleLine()
+							ui.Text(c, it.SubtitlePrefix).FontSize(tk.FontSizeSM).
+								TextColor(tk.TextDescription).SingleLine()
 						}
 						a.userTag(c, userTagSpec{
 							Name:   it.Author,
 							Avatar: it.AuthorAvatar,
-							Size:   11,
-							Color:  t.TextMuted,
+							Size:   tk.FontSizeSM - 1,
+							Color:  tk.TextDescription,
 							Badges: it.AuthorBadges,
 						})
 						// 有节点前缀时后缀自带「 · 」；没有前缀时昵称就是这一段的
 						// 开头，得自己补上分隔符，别让「·」落在最前面。
 						if suffix := strings.TrimPrefix(it.SubtitleSuffix, " · "); suffix != "" {
-							ui.Text(c, " · "+suffix).FontSize(11).
-								TextColor(t.TextMuted).SingleLine()
+							ui.Text(c, " · "+suffix).FontSize(tk.FontSizeSM).
+								TextColor(tk.TextDescription).SingleLine()
 						}
 					})
 			case it.Subtitle != "":
-				ui.Text(c, it.Subtitle).FontSize(11).Font(sidebarFont).
-					TextColor(t.TextMuted).SingleLine()
+				ui.Text(c, it.Subtitle).FontSize(tk.FontSizeSM).Font(sidebarFont).
+					TextColor(tk.TextDescription).SingleLine()
 			}
 			// 帖子行多一行时效信息：最后回复人、更新时间与最高楼层。没人
 			// 回复时没有这一行，右侧的回复数仍显示 0。
@@ -1703,7 +1725,7 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 		if it.Stats != nil {
 			a.postStatsBadge(c, it)
 		} else if it.Meta != "" {
-			ui.Text(c, it.Meta).FontSize(11).Font(sidebarFont).TextColor(t.TextMuted).
+			ui.Text(c, it.Meta).FontSize(tk.FontSizeSM).Font(sidebarFont).TextColor(tk.TextDescription).
 				SingleLine().Width(190).TextAlign(ui.End)
 		}
 	})
@@ -1723,28 +1745,28 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 // 点这行不会连带触发外层整行的点击。id 未知时退回纯文本，不可点。
 func (a *app) latestReplyRow(c *ui.Context, it Item, open func(Item)) {
 	st := it.Stats
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	link := ui.Row(c).MinWidth(0).Gap(6).AlignItems(ui.Center).Font(sidebarFont)
-	ink := t.TextMuted
+	ink := tk.TextDescription
 	if st.LastCommentID != "" && link.Hovered() {
-		ink = t.Accent
+		ink = tk.Primary
 	}
 	link.Children(func() {
-		label := ui.Text(c, "最后回复").FontSize(11).TextColor(ink).SingleLine().Shrink(0)
-		name := ui.Text(c, st.Replier).FontSize(11).Bold().TextColor(ink).
+		label := ui.Text(c, "最后回复").FontSize(tk.FontSizeSM).TextColor(ink).SingleLine().Shrink(0)
+		name := ui.Text(c, st.Replier).FontSize(tk.FontSizeSM).Bold().TextColor(ink).
 			SingleLine().Shrink(1).Ellipsis("…")
 		if st.LastCommentID != "" && link.Hovered() {
 			label.Underline()
 			name.Underline()
 		}
 		if st.Updated != "" {
-			ui.Text(c, "·").FontSize(11).TextColor(t.TextMuted).Shrink(0)
-			ui.Text(c, st.Updated).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(0)
+			ui.Text(c, "·").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription).Shrink(0)
+			ui.Text(c, st.Updated).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription).SingleLine().Shrink(0)
 		}
 		if st.MaxFloor > 0 {
-			ui.Text(c, "·").FontSize(11).TextColor(t.TextMuted).Shrink(0)
-			ui.Textf(c, "%d 楼", st.MaxFloor).FontSize(11).
-				TextColor(t.TextMuted).SingleLine().Shrink(0)
+			ui.Text(c, "·").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription).Shrink(0)
+			ui.Textf(c, "%d 楼", st.MaxFloor).FontSize(tk.FontSizeSM).
+				TextColor(tk.TextDescription).SingleLine().Shrink(0)
 		}
 	})
 	if st.LastCommentID != "" {
