@@ -20,6 +20,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	"github.com/lobehub/lobe-mygo/pkg/motion"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
@@ -1112,6 +1113,15 @@ const feedMaxWidth float32 = 760
 const navSidebarWidth = 64
 const navRailWidth float32 = 64
 
+// navListInset 是展开态列表在 Compact 行内边距之外再留的左侧空白：图标不再
+// 贴着侧边栏左缘，与折叠后图标轨的居中位置对齐。
+const navListInset float32 = 8
+
+// sidebarListInset 随折叠进度收回展开态的额外左留白，让行滑进图标轨时不错位。
+func sidebarListInset(nav layout.SideNavState) float32 {
+	return (1 - min(max(nav.Collapse, 0), 1)) * navListInset
+}
+
 // sidebarFont 是元信息用的等宽字体：小字号下数字与时序排得整齐，
 // 和无衬线字体形成两层质感。
 const sidebarFont = "monospace"
@@ -1157,9 +1167,9 @@ func (a *app) sidebarHeader(c *ui.Context, nav layout.SideNavState) {
 	})
 }
 
-// sidebarNavList 用 Lobe display.List 画浏览页导航。Collapse/RailWidth 让
-// 行随侧边栏一起收展；点击返回 tabID，交给 selectTab 切页或刷新。
-func (a *app) sidebarNavList(c *ui.Context, nav layout.SideNavState) {
+// sidebarNavItems 是浏览页导航的列表数据，展开态交给 display.List，折叠态
+// 交给 sidebarRail 的 ActionIcon。
+func (a *app) sidebarNavItems() []display.ListItem {
 	items := make([]display.ListItem, 0, len(tabSpecs))
 	for i, s := range tabSpecs {
 		if s.Kind == kindNotification {
@@ -1175,18 +1185,58 @@ func (a *app) sidebarNavList(c *ui.Context, nav layout.SideNavState) {
 			Icon:  icon,
 		})
 	}
-	clicked := display.List(c, display.ListProps{
-		Items:     items,
-		Active:    a.navSel,
-		Compact:   true,
-		Collapse:  nav.Collapse,
-		RailWidth: nav.RailWidth,
-	})
-	if clicked != "" {
-		if idx, ok := tabIndexFromID(clicked); ok {
-			a.selectTab(idx)
-		}
+	return items
+}
+
+// sidebarNavList 展开时用 Lobe display.List 画带文字的导航行，左侧留出
+// navListInset；折叠时换成 sidebarRail 的图标轨，指针停留有 tooltip。
+func (a *app) sidebarNavList(c *ui.Context, nav layout.SideNavState) {
+	items := a.sidebarNavItems()
+	if !nav.Expanded {
+		sidebarRail(c, items, a.navSel, func(key string) {
+			if idx, ok := tabIndexFromID(key); ok {
+				a.selectTab(idx)
+			}
+		})
+		return
 	}
+	ui.Column(c).Padding(0, 0, 0, sidebarListInset(nav)).Children(func() {
+		clicked := display.List(c, display.ListProps{
+			Items:     items,
+			Active:    a.navSel,
+			Compact:   true,
+			Collapse:  nav.Collapse,
+			RailWidth: nav.RailWidth,
+		})
+		if clicked != "" {
+			if idx, ok := tabIndexFromID(clicked); ok {
+				a.selectTab(idx)
+			}
+		}
+	})
+}
+
+// sidebarRail 把折叠态的导航画成 Lobe ActionIcon 图标轨：保留 ActionIcon 的
+// 外观与状态，再用 Lobe 的 overlay.Tooltip 把名字浮在图标右侧，指针停留或
+// 键盘聚焦都能看到，无障碍描述也是同一个名字。
+func sidebarRail(c *ui.Context, items []display.ListItem, active string, onSelect func(string)) {
+	ui.Column(c).Gap(2).AlignItems(ui.Center).AlignSelf(ui.Stretch).Children(func() {
+		for _, it := range items {
+			if it.Divider {
+				continue
+			}
+			b := action.StyleActionIcon(c, ui.ButtonBase(c), it.Icon, action.ActionIconProps{
+				Active:    it.Key == active,
+				BlockSize: 32,
+				GlyphSize: 16,
+			})
+			b.Label(it.Label)
+			lobeoverlay.Tooltip(c, b, it.Label, lobeoverlay.TooltipProps{Placement: lobeoverlay.Right})
+			if b.Clicked() {
+				onSelect(it.Key)
+			}
+		}
+	})
 }
 
 // selectTab 是导航项一次点击的完整处理：点当前页再刷新一次，点别的页先切
@@ -1213,9 +1263,8 @@ func (a *app) selectTab(idx int) {
 	}
 }
 
-// sidebarFooterList 用 Lobe display.List 画底部常驻入口：外观三档、账号/
-// 设置/关于、登录/退出。同样随侧边栏收展，折叠时收成图标方块。
-func (a *app) sidebarFooterList(c *ui.Context, nav layout.SideNavState) {
+// sidebarFooterItems 是底部常驻入口的数据：外观三档、账号/设置/关于、登录/退出。
+func (a *app) sidebarFooterItems() []display.ListItem {
 	items := []display.ListItem{
 		{Key: "expand", Label: "展开侧边栏", Icon: lucide.PanelLeftOpen()},
 		{Key: "theme:system", Label: "外观：跟随系统", Icon: lucide.Monitor()},
@@ -1246,13 +1295,26 @@ func (a *app) sidebarFooterList(c *ui.Context, nav layout.SideNavState) {
 			display.ListItem{Key: "signup", Label: "注册", Icon: lucide.UserRound()},
 		)
 	}
-	clicked := display.List(c, display.ListProps{
-		Items:     items,
-		Compact:   true,
-		Collapse:  nav.Collapse,
-		RailWidth: nav.RailWidth,
+	return items
+}
+
+// sidebarFooterList 展开时用 display.List 画底部入口并留出左侧空白；折叠时
+// 换成带 tooltip 的 ActionIcon 图标轨，点击仍走同一处 handleSidebarAction。
+func (a *app) sidebarFooterList(c *ui.Context, nav layout.SideNavState) {
+	items := a.sidebarFooterItems()
+	if !nav.Expanded {
+		sidebarRail(c, items, "", func(key string) { a.handleSidebarAction(c, key) })
+		return
+	}
+	ui.Column(c).Padding(0, 0, 0, sidebarListInset(nav)).Children(func() {
+		clicked := display.List(c, display.ListProps{
+			Items:     items,
+			Compact:   true,
+			Collapse:  nav.Collapse,
+			RailWidth: nav.RailWidth,
+		})
+		a.handleSidebarAction(c, clicked)
 	})
-	a.handleSidebarAction(c, clicked)
 }
 
 // handleSidebarAction 分发底部 List 的点击 key。

@@ -462,3 +462,59 @@ func TestSidebarHasSingleCollapseToggle(t *testing.T) {
 	only("展开侧边栏")
 	noSeamHandle()
 }
+
+// 展开后图标不能贴着侧边栏左缘：列表行整体往右让出一段留白，和折叠后
+// 图标轨的居中位置对齐；文字标签也跟着一起右移。
+func TestSidebarExpandedRowsHaveLeftInset(t *testing.T) {
+	a := testApp(t)
+	a.navExpanded = true
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	for _, name := range []string{"首页", "设置", "外观：跟随系统"} {
+		row, ok := tt.Access(name)
+		if !ok {
+			t.Fatalf("展开态缺少 %q：%q", name, tt.Texts())
+		}
+		if row.Bounds.X < navListInset {
+			t.Errorf("%q 的行左边距 %.1f，展开态应至少留出 %.1f", name, row.Bounds.X, navListInset)
+		}
+	}
+}
+
+// 折叠后的图标轨用 Lobe ActionIcon：每一项的无障碍描述就是它的名字，
+// 指针停在上面时由 Lobe 的 tooltip 把名字显示出来。
+func TestSidebarCollapsedIconsShowTooltips(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	if a.navExpanded {
+		t.Fatal("前置条件：默认应是折叠态")
+	}
+	for _, name := range []string{"首页", "设置", "外观：跟随系统", "展开侧边栏"} {
+		info, ok := tt.Access(name)
+		if !ok {
+			t.Fatalf("折叠态缺少 %q：%q", name, tt.Texts())
+		}
+		if info.Description != name {
+			t.Errorf("%q 的悬浮说明 = %q，期望同名 tooltip", name, info.Description)
+		}
+	}
+
+	// 指针停在「首页」上：tooltip 浮层出现，文字与行同名。
+	home, ok := tt.Access("首页")
+	if !ok {
+		t.Fatal("找不到「首页」图标")
+	}
+	tt.Move(home.Bounds.X+home.Bounds.W/2, home.Bounds.Y+home.Bounds.H/2)
+	tt.Advance(800 * time.Millisecond)
+	tip, ok := tt.AccessByRole(ui.RoleTooltip, "首页")
+	if !ok {
+		t.Fatalf("悬浮「首页」没有出现 tooltip：%q", tt.Texts())
+	}
+	if tip.Bounds.X < home.Bounds.X+home.Bounds.W {
+		t.Errorf("tooltip 应浮在图标右侧：tooltip x=%.1f，图标右缘 %.1f",
+			tip.Bounds.X, home.Bounds.X+home.Bounds.W)
+	}
+}
