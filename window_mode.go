@@ -7,6 +7,8 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
 // 关闭主窗口时的行为：默认每次询问，用户可以选「关闭窗口」「收进托盘」或
@@ -199,15 +201,19 @@ func (a *app) hideMainWindowToTray() {
 }
 
 // closePromptDialog 是关闭主窗口时的询问框。放在主窗口里而不是另开一个
-// 窗口：它只在这次关闭时用一下，开新窗口反而会挡住主窗口的样子。
+// 窗口：它只在这次关闭时用一下，开新窗口反而会挡住主窗口的样子。三个选项
+// 并列，Lobe Modal 自带的两按钮页脚放不下，所以用 NoFooter 自己排一行按钮。
 func (a *app) closePromptDialog(c *ui.Context) {
 	if !a.closePromptOpen {
 		return
 	}
 	t := c.Theme()
-	ui.Modal(c, &a.closePromptOpen, func() {
-		ui.Column(c).Width(430).Gap(10).Children(func() {
-			ui.Text(c, "关闭主窗口").FontSize(16).Bold()
+	feedback.Modal(c, &a.closePromptOpen, feedback.ModalProps{
+		Title:    "关闭主窗口",
+		Width:    430,
+		NoFooter: true,
+	}, func() {
+		ui.Column(c).FillWidth().Gap(10).Children(func() {
 			ui.Text(c, "只关这个窗口的话，账号会挂回账号面板，未读角标与登录状态照常；"+
 				"收进托盘则应用继续在后台接收通知，点托盘图标就能回到窗口；"+
 				"退出应用会关掉所有账号的窗口。").
@@ -215,13 +221,15 @@ func (a *app) closePromptDialog(c *ui.Context) {
 			ui.Checkbox(c, &a.closeRemember, "记住我的选择，可在设置里修改")
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Spacer(c).Grow(1)
-				if ui.Button(c, "只关窗口").Clicked() {
+				if action.Button(c, "只关窗口", action.ButtonProps{}).Clicked() {
 					a.chooseCloseMode(closeWindow)
 				}
-				if ui.Button(c, "退出应用").Clicked() {
+				if action.Button(c, "退出应用", action.ButtonProps{}).Clicked() {
 					a.chooseCloseMode(closeApp)
 				}
-				if ui.PrimaryButton(c, "收进托盘").Clicked() {
+				if action.Button(c, "收进托盘", action.ButtonProps{
+					Variant: action.Primary,
+				}).Clicked() {
 					a.chooseCloseMode(closeToTray)
 				}
 			})
