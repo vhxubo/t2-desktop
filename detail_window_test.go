@@ -219,6 +219,36 @@ func TestDetailWindowLoneToolActionInTitleBar(t *testing.T) {
 	}
 }
 
+// 详情窗口标题栏把窗口按钮套在一层居中、没定高的 Row 里：titleBarButton 过去
+// 只设宽度、靠父行 Stretch 撑高，落到这里就塌成 0 高，关闭 / 最小化点不动。
+// 按钮自己带高度后，必须真的占满标题栏并且能点到。
+func TestDetailWindowTitleButtonsAreClickable(t *testing.T) {
+	a := detailWindowsApp(t)
+	a.openDetailWindow(itemForWindow("POST001"))
+	h := a.detailWindows[0]
+	h.states[0].topic = &topicDetail{Title: "窗口里的帖子"}
+
+	tt := ui.NewTester(func(c *ui.Context) { a.detailWindowView(h, c) }, detailWindowWidth, detailWindowHeight)
+	tt.Frame()
+	for _, name := range []string{"最小化", "关闭"} {
+		info, ok := tt.Access(name)
+		if !ok {
+			t.Fatalf("标题栏缺少 %q 按钮：%q", name, tt.Texts())
+		}
+		if info.Bounds.H <= 0 || info.Bounds.Y < 0 || info.Bounds.Y+info.Bounds.H > titleBarHeight {
+			t.Errorf("%q 按钮没有占满标题栏，实际 %+v", name, info.Bounds)
+		}
+	}
+	// 点「关闭」应真的关掉这扇窗口；按钮塌成 0 高时这里点不到。
+	if err := tt.Click("关闭"); err != nil {
+		t.Fatalf("点不到标题栏的「关闭」按钮：%v", err)
+	}
+	tt.Frame()
+	if !h.removed || a.detailWindowCount() != 0 {
+		t.Fatal("点「关闭」后详情窗口应被关掉")
+	}
+}
+
 func TestDetailWindowsSurviveMainWindowClose(t *testing.T) {
 	a := detailWindowsApp(t)
 	a.openDetailWindow(itemForWindow("POST001"))
