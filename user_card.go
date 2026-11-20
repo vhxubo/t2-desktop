@@ -42,6 +42,9 @@ const (
 
 	// userCardPageSize 是两个列表每页的条数：两个端点都默认 50、上限 50。
 	userCardPageSize = 50
+	// userCardTopicCollAll 是主题页合集下拉的「全部合集」哨兵，选中它等于
+	// 不筛选。合集名最长 30 字，不会和真实名字撞上。
+	userCardTopicCollAll = "全部合集"
 	// userCardAvatar 是资料头里头像的边长。资料头不再用整条横幅，头像稍小
 	// 一号，和「我的」窗口的 48、列表行的 18 处在同一档，头部更紧凑。
 	userCardAvatar = 56
@@ -107,10 +110,32 @@ func userCardSpec(name string, kind userCardListKind, page int) tabSpec {
 			Kind:    kindCollection,
 		}
 	}
+	return userCardTopicsSpec(name, page)
+}
+
+// userCardTopicsSpec 是某人发布的主题的未筛选端点：GET /v1/users/:name/topics，
+// 分页、列表字段 posts。编辑器「插入帖子」用的 /v1/me/topics 只有 20 条、
+// 没有回复数，不是这里的列表端点（见 me_topics.go）。
+func userCardTopicsSpec(name string, page int) tabSpec {
 	return tabSpec{
 		Label:   userCardTabLabels[userCardTabTopics],
 		Path:    "/v1/users/" + url.PathEscape(name) + "/topics",
 		Query:   "page=" + strconv.Itoa(page) + "&limit=" + strconv.Itoa(userCardPageSize),
+		ListKey: "posts",
+		Paging:  pagingPages,
+		Kind:    kindTopic,
+	}
+}
+
+// userCardTopicCollSpec 是按合集名筛选某人主题的端点。筛选参数 collection
+// 只在公开用户主题端点上有；未筛选的列表也用它（userCardTopicsSpec）。
+// 用户名走路径转义，合集名进 query 用 QueryEscape，带空格 / 中文 / & 的
+// 名字不能改变参数边界。
+func userCardTopicCollSpec(name, collection string, page int) tabSpec {
+	return tabSpec{
+		Label:   "按合集筛选的帖子",
+		Path:    "/v1/users/" + url.PathEscape(name) + "/topics",
+		Query:   "page=" + strconv.Itoa(page) + "&limit=" + strconv.Itoa(userCardPageSize) + "&collection=" + url.QueryEscape(collection),
 		ListKey: "posts",
 		Paging:  pagingPages,
 		Kind:    kindTopic,
@@ -330,6 +355,14 @@ type userCardState struct {
 	tab     int
 	topics  userCardList
 	replies userCardList
+	// 主题页上方的合集下拉：选项从 GET /v1/users/:name/collections 读，
+	// topicColl 是已生效的合集名（空 = 不筛选），与未筛选的 topics 各用
+	// 一份列表状态；清掉筛选就回到原列表。topicCollDraft 是下拉当前值，
+	// 分开存是为了「全部合集」哨兵在框里有可显示的值。
+	topicColl      string
+	topicCollDraft string
+	topicCollSt    userCardList
+	collNames      collNamesState
 	// collections 是这个人的公开合集；只有切到「他的合集」才拉一次。
 	collections userCardList
 	// badges 是这个人的完整徽章墙；只有切到「他的徽章」才拉。
@@ -393,9 +426,14 @@ func (a *app) ensureUserCardLoaded() {
 	// 切标签也不用等。合集是另一条端点（GET /v1/users/:name/collections），
 	// 只有切到那个标签页才发请求。
 	for _, kind := range []userCardListKind{userCardTopics, userCardReplies} {
-		if l := cs.list(kind); !l.loaded && !l.loading {
-			a.loadUserCardList(kind, 1)
+		l, _ := userCardActiveList(cs, kind)
+		if !l.loaded && !l.loading {
+			a.loadUserCardActiveList(kind, 1)
 		}
+	}
+	// 主题页的合集下拉选项与主题列表一起拉；失败按退避重试。
+	if cs.tab == userCardTabTopics {
+		a.ensureUserCardCollNames()
 	}
 	if cs.tab == userCardTabCollections {
 		if l := cs.collections; !l.loaded && !l.loading {
@@ -405,6 +443,201 @@ func (a *app) ensureUserCardLoaded() {
 	if cs.tab == userCardTabBadges && !cs.badges.loaded && !cs.badges.loading {
 		a.loadUserCardBadges()
 	}
+}
+
+// userCardActiveList 返回主题页当前该显示的列表与端点：应用了合集筛选就用
+// 筛选结果那份状态和带 collection 的 spec，否则用未筛选的 topics。
+func userCardActiveList(cs *userCardState, kind userCardListKind) (*userCardList, tabSpec) {
+	if kind == userCardTopics && cs.topicColl != "" {
+		return &cs.topicCollSt, userCardTopicCollSpec(cs.username, cs.topicColl, 1)
+	}
+	return cs.list(kind), userCardSpec(cs.username, kind, 1)
+}
+
+// loadUserCardActiveList 把加载派给当前该用的那份列表：续拉、重试与刷新都
+// 走它，筛选状态下不会误拉回未筛选的 /v1/users/:name/topics。
+func (a *app) loadUserCardActiveList(kind userCardListKind, page int) {
+	cs := a.userCard
+	if cs == nil {
+		return
+	}
+	if kind == userCardTopics && cs.topicColl != "" {
+		a.loadUserCardTopicColl(page)
+		return
+	}
+	a.loadUserCardList(kind, page)
+}
+
+// ensureUserCardCollNames 在主题页确保合集下拉的选项已加载。可每帧调用：
+// 未到重试时间的失败由 collNamesDue 挡掉，成功一次后不再请求。
+func (a *app) ensureUserCardCollNames() {
+	cs := a.userCard
+	if cs == nil || !a.autoLoad || cs.username == "" {
+		return
+	}
+	st := &cs.collNames
+	if !st.collNamesDue(time.Now()) {
+		return
+	}
+	st.loading = true
+	st.triedAt = time.Now()
+	st.seq++
+	seq := st.seq
+	name := cs.username
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	go func() {
+		defer cancel()
+		items, err := a.client.fetchUserCollections(ctx, name)
+		a.publish(func() {
+			if a.userCard != cs || cs.username != name || st.seq != seq {
+				return
+			}
+			st.loading = false
+			if err != nil {
+				st.failures++
+				st.triedAt = time.Now()
+				a.handleAuthErrorFor(toastUserCard, err, func() {
+					st.triedAt = time.Time{}
+					a.ensureUserCardCollNames()
+				})
+				return
+			}
+			st.failures = 0
+			st.loaded = true
+			st.names = make([]string, 0, len(items))
+			for _, it := range items {
+				if it.Name != "" {
+					st.names = append(st.names, it.Name)
+				}
+			}
+			// 选中的合集已经改名或删掉：清掉筛选，别留一个搜不到结果的名字。
+			if cs.topicColl != "" && !containsString(st.names, cs.topicColl) {
+				a.applyUserCardTopicColl(userCardTopicCollAll)
+			}
+		})
+	}()
+}
+
+// loadUserCardTopicColl 拉按合集筛选结果的第 page 页，规则与
+// loadUserCardList 一致：首页重建、续拉按 ID 去重、失败只记 moreErr。
+func (a *app) loadUserCardTopicColl(page int) {
+	cs := a.userCard
+	if cs == nil || cs.username == "" || cs.topicColl == "" || page < 1 {
+		return
+	}
+	l := &cs.topicCollSt
+	if l.loading {
+		return
+	}
+	if page == 1 {
+		l.seq++
+		l.loaded = false
+		l.items = nil
+		l.noMore = false
+		l.err = ""
+		l.moreErr = ""
+		l.list.ScrollTo(0, ui.Start)
+	}
+	seq := l.seq
+	l.loading = true
+	l.page = page
+	name, collection := cs.username, cs.topicColl
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	go func() {
+		defer cancel()
+		res, err := a.client.fetch(ctx, userCardTopicCollSpec(name, collection, page), page)
+		a.publish(func() {
+			if a.userCard != cs || cs.username != name || cs.topicColl != collection || l.seq != seq {
+				return
+			}
+			l.loading = false
+			l.loaded = true
+			if err != nil {
+				if page == 1 {
+					l.err = friendlyError(err)
+				} else {
+					l.moreErr = friendlyError(err)
+				}
+				return
+			}
+			if page == 1 {
+				l.items = res.Items
+			} else {
+				seen := make(map[string]bool, len(l.items))
+				for _, it := range l.items {
+					seen[it.Key] = true
+				}
+				added := 0
+				for _, it := range res.Items {
+					if !seen[it.Key] {
+						l.items = append(l.items, it)
+						seen[it.Key] = true
+						added++
+					}
+				}
+				if added == 0 {
+					l.noMore = true
+				}
+			}
+			l.page = page
+			l.total = res.Total
+			if len(res.Items) == 0 || (res.TotalPages > 0 && page >= res.TotalPages) {
+				l.noMore = true
+			}
+			l.err = ""
+			l.moreErr = ""
+			a.prefetchItemAvatars(res.Items)
+		})
+	}()
+}
+
+// applyUserCardTopicColl 应用或清除合集筛选：换了名字就丢掉旧结果从第 1 页
+// 重拉；选「全部合集」只清状态、不发请求，原来的主题列表还在。
+func (a *app) applyUserCardTopicColl(collection string) {
+	collection = strings.TrimSpace(collection)
+	if collection == userCardTopicCollAll {
+		collection = ""
+	}
+	cs := a.userCard
+	if cs == nil || collection == cs.topicColl {
+		return
+	}
+	cs.topicColl = collection
+	if collection == "" {
+		cs.topicCollDraft = userCardTopicCollAll
+	} else {
+		cs.topicCollDraft = collection
+	}
+	l := &cs.topicCollSt
+	l.seq++
+	l.loaded = false
+	l.items = nil
+	l.loading = false
+	l.noMore = false
+	l.err = ""
+	l.moreErr = ""
+	l.page = 1
+	l.list.ScrollTo(0, ui.Start)
+	if collection != "" {
+		a.loadUserCardTopicColl(1)
+	}
+}
+
+// reloadUserCardTopicColl 是筛选结果上的「刷新」：保留合集名，回到第 1 页。
+func (a *app) reloadUserCardTopicColl() {
+	cs := a.userCard
+	if cs == nil || cs.topicColl == "" || cs.topicCollSt.loading {
+		return
+	}
+	l := &cs.topicCollSt
+	l.seq++
+	l.loaded = false
+	l.items = nil
+	l.err = ""
+	l.moreErr = ""
+	l.noMore = false
+	l.list.ScrollTo(0, ui.Start)
+	a.loadUserCardTopicColl(1)
 }
 
 func (a *app) loadUserCardProfile() {

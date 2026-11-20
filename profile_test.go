@@ -21,28 +21,37 @@ import (
 func TestProfileEndpointsMatchContract(t *testing.T) {
 	cases := []struct {
 		kind int
+		spec tabSpec
 		want string
 	}{
-		{profileContentTopics, "https://2libra.com/api/v1/me/topics"},
-		{profileContentFavorites, "https://2libra.com/api/v1/me/favorites?page=1&limit=50"},
-		{profileContentBookmarks, "https://2libra.com/api/v1/me/bookmarks?page=1&limit=100"},
-		{profileContentCollections, "https://2libra.com/api/v1/me/collections"},
+		{profileContentTopics, profileTopicsSpec("jimmy", 1),
+			"https://2libra.com/api/v1/users/jimmy/topics?page=1&limit=50"},
+		{profileContentFavorites, profileContentSpecs[profileContentFavorites],
+			"https://2libra.com/api/v1/me/favorites?page=1&limit=50"},
+		{profileContentBookmarks, profileContentSpecs[profileContentBookmarks],
+			"https://2libra.com/api/v1/me/bookmarks?page=1&limit=100"},
+		{profileContentCollections, profileContentSpecs[profileContentCollections],
+			"https://2libra.com/api/v1/me/collections"},
 	}
 	for _, c := range cases {
-		if got := endpoint(apiBaseURL, profileContentSpecs[c.kind], 1); got != c.want {
+		if got := endpoint(apiBaseURL, c.spec, 1); got != c.want {
 			t.Errorf("%s URL = %s，期望 %s", profileContentLabels[c.kind], got, c.want)
 		}
 	}
-	// 收藏 / 书签按页；帖子 / 合集整页返回。
+	// 帖子 / 收藏 / 书签按页；合集整页返回。
 	for _, c := range cases {
-		spec := profileContentSpecs[c.kind]
 		wantPaging := pagingPages
-		if c.kind == profileContentTopics || c.kind == profileContentCollections {
+		if c.kind == profileContentCollections {
 			wantPaging = pagingOff
 		}
-		if spec.Paging != wantPaging || !spec.NeedsAuth {
-			t.Errorf("%s 的分页 / 登录约定不对：%+v", c.want, spec)
+		if c.spec.Paging != wantPaging || !c.spec.NeedsAuth {
+			t.Errorf("%s 的分页 / 登录约定不对：%+v", c.want, c.spec)
 		}
+	}
+	// 帖子列表的用户名要转义，第 2 页只换 page。
+	if got, want := endpoint(apiBaseURL, profileTopicsSpec("a/b", 2), 2),
+		"https://2libra.com/api/v1/users/a%2Fb/topics?limit=50&page=2"; got != want {
+		t.Errorf("我的帖子第 2 页 URL = %s，期望 %s", got, want)
 	}
 	if got, want := endpoint(apiBaseURL, profileRepliesSpec("jimmy", 1), 1),
 		"https://2libra.com/api/v1/users/jimmy/replies?page=1&limit=50"; got != want {

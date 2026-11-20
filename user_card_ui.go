@@ -3,12 +3,14 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/field"
 	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	"github.com/lobehub/lobe-mygo/pkg/nav"
@@ -210,6 +212,7 @@ func (a *app) userCardWindowView(c *ui.Context) {
 			case userCardTabCollections:
 				a.userCardCollectionsBody(c, cs)
 			default:
+				a.userCardTopicCollRow(c, cs)
 				a.userCardListBody(c, cs, userCardTopics)
 			}
 		})
@@ -472,11 +475,45 @@ func (a *app) userCardCollectionsBody(c *ui.Context, cs *userCardState) {
 	a.userCardListBody(c, cs, userCardCollections)
 }
 
+// userCardTopicCollRow 是「他发布的主题」上方的合集下拉。选项从
+// GET /v1/users/:name/collections 读，不让人手输合集名；选中即按那个名字
+// 筛主题，走 /v1/users/:name/topics?collection=，选回「全部合集」立刻回到
+// 未筛选列表且不再发请求。
+func (a *app) userCardTopicCollRow(c *ui.Context, cs *userCardState) {
+	st := &cs.collNames
+	names := make([]string, 0, len(st.names)+1)
+	names = append(names, userCardTopicCollAll)
+	names = append(names, st.names...)
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Grow(1).MinWidth(0).Children(func() {
+			filter := field.Select(c, &cs.topicCollDraft, field.SelectProps{
+				Options:     selectOptions(names),
+				Size:        lobetheme.Small,
+				Placeholder: "选择合集筛选帖子",
+			})
+			filter.Label("按合集名筛选帖子")
+			if filter.Changed() {
+				a.applyUserCardTopicColl(cs.topicCollDraft)
+			}
+		})
+		if st.loading {
+			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
+		} else if !st.loaded {
+			a.smallAction(c, "重试", false, func() {
+				// 手动重试跳过退避：用户点了就是要现在再试一次。
+				cs.collNames.triedAt = time.Time{}
+				a.ensureUserCardCollNames()
+			})
+		}
+	})
+}
+
 // userCardListBody 画一个标签页的列表：加载中、失败、空与正常四种状态，
 // 正常时每行可以点开正文。四种状态分别用 Lobe 的 Spin、Result、Empty 与
-// Block，文案与入口保持原样。
+// Block，文案与入口保持原样。主题页应用了合集筛选时，画的是筛选结果那份
+// 列表与端点。
 func (a *app) userCardListBody(c *ui.Context, cs *userCardState, kind userCardListKind) {
-	l := cs.list(kind)
+	l, spec := userCardActiveList(cs, kind)
 	switch {
 	case l.loading && len(l.items) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
@@ -494,7 +531,7 @@ func (a *app) userCardListBody(c *ui.Context, cs *userCardState, kind userCardLi
 				SubTitle: l.err,
 				Extra: func() {
 					if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
-						a.loadUserCardList(kind, 1)
+						a.loadUserCardActiveList(kind, 1)
 					}
 				},
 			})
@@ -512,6 +549,9 @@ func (a *app) userCardListBody(c *ui.Context, cs *userCardState, kind userCardLi
 		default:
 			empty.Title = "这位用户还没有发布过主题。"
 			empty.Icon = lucide.FileText()
+			if cs.topicColl != "" {
+				empty.Title = "这个合集里没有帖子。"
+			}
 		}
 		ui.Column(c).Grow(1).MinHeight(0).Center().Children(func() {
 			display.Empty(c, empty)
@@ -530,7 +570,7 @@ func (a *app) userCardListBody(c *ui.Context, cs *userCardState, kind userCardLi
 		a.userCardRow(c, items[i], kind)
 	}).Grow(1).MinHeight(0).Gap(8)
 	// 公开合集整页返回，没有下一页，别给一颗点了只会拿到空页的按钮。
-	if userCardSpec(cs.username, kind, 1).Paging == pagingPages {
+	if spec.Paging == pagingPages {
 		a.userCardMore(c, cs, kind)
 	}
 }
@@ -539,14 +579,14 @@ func (a *app) userCardListBody(c *ui.Context, cs *userCardState, kind userCardLi
 // 并可重试，已有内容保持不动。
 func (a *app) userCardMore(c *ui.Context, cs *userCardState, kind userCardListKind) {
 	tk := lobetheme.TokensOf(c)
-	l := cs.list(kind)
+	l, _ := userCardActiveList(cs, kind)
 	switch {
 	case l.moreErr != "":
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			display.Text(c, "加载更多失败："+l.moreErr, display.TextProps{
 				Type: display.TextDanger, FontSize: 11, Rows: 2,
 			}).Grow(1).MinWidth(0)
-			a.smallAction(c, "重试", false, func() { a.loadUserCardList(kind, l.page) })
+			a.smallAction(c, "重试", false, func() { a.loadUserCardActiveList(kind, l.page) })
 		})
 	case l.loading:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -562,7 +602,7 @@ func (a *app) userCardMore(c *ui.Context, cs *userCardState, kind userCardListKi
 			})
 			b.TextColor(tk.Primary)
 			if b.Clicked() {
-				a.loadUserCardList(kind, l.page+1)
+				a.loadUserCardActiveList(kind, l.page+1)
 			}
 			ui.Spacer(c).Grow(1)
 		})

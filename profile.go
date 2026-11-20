@@ -19,7 +19,7 @@ import (
 // 五个标签页对应这几组端点：
 //
 //	概览        GET /v1/users/:userName（最近统计与六维属性）
-//	我的内容    GET /v1/me/topics、/v1/me/favorites、/v1/me/bookmarks、/v1/me/collections
+//	我的内容    GET /v1/users/:userName/topics、/v1/me/favorites、/v1/me/bookmarks、/v1/me/collections
 //	我的回复    GET /v1/users/:userName/replies
 //	徽章        GET /v1/me/badges、/v1/me/badges/equipped；佩戴 / 取消佩戴（见 badges.go）
 //	权限与账号  GET /v1/users/:userName + 令牌里的 scope
@@ -47,6 +47,12 @@ const (
 
 	// profileReplyPageSize 是「我的回复」每页条数：该端点默认 50、上限 50。
 	profileReplyPageSize = 50
+	// profileTopicCollLimit 是按合集名筛选「我的帖子」时每页条数：这条端点
+	// 与用户主题的其它列表一致，默认 50、上限 50。
+	profileTopicCollLimit = 50
+	// profileTopicCollAll 是下拉框里的「全部合集」哨兵：选中它等于不筛选。
+	// 合集名本身 ≤30 字，这个值不会和真实合集撞上。
+	profileTopicCollAll = "全部合集"
 )
 
 // 弹窗里的标签页。金币页不在这个窗口里，去独立的金币窗口看。
@@ -73,14 +79,42 @@ const (
 // 用在错误提示里（「需要登录后才能查看「我的收藏」」）。
 var profileContentLabels = []string{"帖子", "收藏", "书签", "合集"}
 
-// profileContentSpecs 是「我的内容」四个分段的端点。字段名与分页方式沿用
-// 接口文档：帖子与合集整页返回，收藏与书签按页返回。
+// profileContentSpecs 是「我的内容」四个分段里三个固定端点。帖子分段要拼
+// 当前账号的用户名、还支持按合集名筛选，走 profileTopicsSpec /
+// profileTopicCollSpec，由 profileSpecFor 按当前状态选用。
 var profileContentSpecs = []tabSpec{
-	{Label: "我的帖子", Path: "/v1/me/topics", ListKey: "auto", NeedsAuth: true, Paging: pagingOff, Kind: kindTopic},
+	{}, // profileContentTopics：动态端点，见 profileTopicsSpec
 	{Label: "我的收藏", Path: "/v1/me/favorites", Query: "page=1&limit=50", ListKey: "posts", NeedsAuth: true, Paging: pagingPages, Kind: kindTopic},
 	// 书签接口上限已放宽到 100；收藏仍是 50。
 	{Label: "我的书签", Path: "/v1/me/bookmarks", Query: "page=1&limit=100", ListKey: "items", NeedsAuth: true, Paging: pagingPages, Kind: kindComment},
 	{Label: "我的合集", Path: "/v1/me/collections", NeedsAuth: true, Paging: pagingOff, Kind: kindCollection},
+}
+
+// profileTopicsSpec 是「我的帖子」的端点契约：走公开用户主题列表
+// GET /v1/users/:userName/topics，分页、列表字段 posts，带完整字段
+// （comment_count / latest_commented_at / is_user_pinned）。
+// 编辑器「插入帖子」选择器用的 /v1/me/topics 只有 20 条、没有回复数，
+// 不是这里的列表端点（见 me_topics.go）。用户名走路径转义。
+func profileTopicsSpec(name string, page int) tabSpec {
+	return tabSpec{
+		Label:     "我的帖子",
+		Path:      "/v1/users/" + url.PathEscape(name) + "/topics",
+		Query:     "page=" + strconv.Itoa(page) + "&limit=" + strconv.Itoa(profileTopicCollLimit),
+		ListKey:   "posts",
+		NeedsAuth: true,
+		Paging:    pagingPages,
+		Kind:      kindTopic,
+	}
+}
+
+// profileSpecFor 返回「我的内容」某个分段在给定状态下真正该用的端点。
+// 帖子一旦应用了合集筛选，就换成 profileTopicCollSpec（由调用方处理），
+// 这里给出的是未筛选的列表端点。
+func (a *app) profileSpecFor(ps *profileState, kind, page int) tabSpec {
+	if kind == profileContentTopics {
+		return profileTopicsSpec(a.topicCollName(ps), page)
+	}
+	return profileContentSpecs[kind]
 }
 
 // profileNow 单独提出来给测试替换：注册天数按本地时间算。
@@ -162,6 +196,17 @@ type profileState struct {
 	contentKind int
 	content     [profileContentCount]tabState
 
+	// 帖子分段上方的合集下拉：选项从 GET /v1/me/collections 读，不手输。
+	// collNames 存选项与加载状态（失败退避）；topicColl 是已经生效的合集名
+	// （空 = 不筛选），与未筛选的 content[profileContentTopics] 各用一份状态，
+	// 清掉筛选就回到原列表。topicCollDraft 是下拉当前选中的值（哨兵或合集名）：
+	// 两者分开是为了让「全部合集」在下拉里有可显示的值，同时筛选状态仍用
+	// 空串表示「不过滤」。
+	topicColl      string
+	topicCollDraft string
+	topicCollSt    tabState
+	collNames      collNamesState
+
 	// 我的回复
 	replySeq     uint64
 	replyLoading bool
@@ -203,6 +248,41 @@ func newProfileState() *profileState {
 	return &profileState{}
 }
 
+// collNamesState 是合集下拉选项的加载状态。选项由视图每帧调用的 ensure 拉起，
+// 所以失败必须退避：不然接口一挂，每帧都会重发注定失败的请求。
+type collNamesState struct {
+	loaded   bool
+	loading  bool
+	triedAt  time.Time
+	failures int
+	seq      uint64
+	names    []string
+}
+
+// collNamesRetryAfter 是第 failures 次失败后的退避：10s / 20s / 40s，封顶 1 分钟。
+func collNamesRetryAfter(failures int) time.Duration {
+	delay := 10 * time.Second
+	for i := 1; i < failures && delay < time.Minute; i++ {
+		delay *= 2
+	}
+	if delay > time.Minute {
+		delay = time.Minute
+	}
+	return delay
+}
+
+// collNamesDue 报告现在能不能发起加载。成功后 loaded 为真就不再拉；失败后
+// 在退避窗口内跳过，超时才重试。
+func (st *collNamesState) collNamesDue(now time.Time) bool {
+	if st.loaded || st.loading {
+		return false
+	}
+	if st.triedAt.IsZero() {
+		return true
+	}
+	return now.Sub(st.triedAt) >= collNamesRetryAfter(st.failures)
+}
+
 /* ------------------------------------------------------------------
    端点契约
 ---------------------------------------------------------------- */
@@ -218,6 +298,198 @@ func profileRepliesSpec(name string, page int) tabSpec {
 		Paging:  pagingPages,
 		Kind:    kindComment,
 	}
+}
+
+// profileTopicCollSpec 是按合集名筛选「我的帖子」的端点契约。筛选参数
+// collection 只在公开用户主题端点上有；未筛选的列表也用它（见
+// profileTopicsSpec），编辑器选择器才用 /v1/me/topics。合集名进 query 用
+// QueryEscape，带空格 / 中文 / & 的名字不能改变参数边界。
+func profileTopicCollSpec(name, collection string, page int) tabSpec {
+	return tabSpec{
+		Label:   "按合集筛选的帖子",
+		Path:    "/v1/users/" + url.PathEscape(name) + "/topics",
+		Query:   "page=" + strconv.Itoa(page) + "&limit=" + strconv.Itoa(profileTopicCollLimit) + "&collection=" + url.QueryEscape(collection),
+		ListKey: "posts",
+		Paging:  pagingPages,
+		Kind:    kindTopic,
+	}
+}
+
+// topicCollName 是当前账号在筛选端点路径里要用的用户名。令牌里的用户名优先，
+// 资料尚未拉到时退回 /v1/me 里读到的；两者都没有就不发请求，避免拼出
+// /v1/users//topics 这种会 404 的路径。
+func (a *app) topicCollName(ps *profileState) string {
+	if name := a.auth.username(); name != "" {
+		return name
+	}
+	if ps != nil {
+		return ps.user.Name
+	}
+	return ""
+}
+
+// ensureProfileCollNames 在帖子分段视图里确保合集下拉的选项已加载。可每帧调用：
+// 未到重试时间的失败会被 collNamesDue 挡掉，成功一次后不再请求。
+func (a *app) ensureProfileCollNames() {
+	ps := a.profile
+	if ps == nil || !a.autoLoad || !a.auth.loggedIn() {
+		return
+	}
+	st := &ps.collNames
+	if !st.collNamesDue(time.Now()) {
+		return
+	}
+	st.loading = true
+	st.triedAt = time.Now()
+	st.seq++
+	seq := st.seq
+	actor := a.auth.username()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	go func() {
+		defer cancel()
+		items, err := a.client.fetchMyCollections(ctx)
+		a.publish(func() {
+			if a.profile != ps || st.seq != seq {
+				return
+			}
+			st.loading = false
+			if err != nil {
+				if !a.auth.loggedIn() || a.auth.username() != actor {
+					return
+				}
+				st.failures++
+				st.triedAt = time.Now()
+				// 补完授权后要立刻重跑，清掉刚记下的退避时间。
+				a.handleAuthError(err, func() {
+					if a.profile == ps {
+						ps.collNames.triedAt = time.Time{}
+					}
+					a.ensureProfileCollNames()
+				})
+				return
+			}
+			st.failures = 0
+			st.loaded = true
+			st.names = make([]string, 0, len(items))
+			for _, it := range items {
+				if it.Name != "" {
+					st.names = append(st.names, it.Name)
+				}
+			}
+			// 选中的合集已经不在列表里（改名或删掉）：清掉筛选，别留一个
+			// 永远搜不到结果的名字在框里。
+			if ps.topicColl != "" && !containsString(st.names, ps.topicColl) {
+				a.applyProfileTopicColl(profileTopicCollAll)
+			}
+		})
+	}()
+}
+
+// loadProfileTopicColl 拉筛选结果的第 page 页，走与四个分段相同的通用加载：
+// 分页、去重、限流退避与授权失败后的重跑都复用 loadSpec 的逻辑。
+func (a *app) loadProfileTopicColl(page int) {
+	ps := a.profile
+	if ps == nil || ps.topicColl == "" || page < 1 {
+		return
+	}
+	name := a.topicCollName(ps)
+	if name == "" {
+		st := &ps.topicCollSt
+		st.loading = false
+		st.err = "还不知道当前账号的用户名"
+		return
+	}
+	spec := profileTopicCollSpec(name, ps.topicColl, page)
+	a.loadSpec(toastProfile, &ps.topicCollSt, spec, page, func() { a.loadProfileTopicColl(page) })
+}
+
+// applyProfileTopicColl 应用或清除合集筛选。合集名变了就把旧列表整份丢掉，
+// 从第 1 页重拉；选「全部合集」时只清状态，不发请求——原来的「我的帖子」
+// 还在，界面直接切回去。相同名字重复提交不发请求，免得刷接口配额。
+func (a *app) applyProfileTopicColl(collection string) {
+	collection = strings.TrimSpace(collection)
+	if collection == profileTopicCollAll {
+		collection = ""
+	}
+	ps := a.profile
+	if ps == nil || collection == ps.topicColl {
+		return
+	}
+	ps.topicColl = collection
+	if collection == "" {
+		ps.topicCollDraft = profileTopicCollAll
+	} else {
+		ps.topicCollDraft = collection
+	}
+	st := &ps.topicCollSt
+	st.authWait = false
+	st.loaded = false
+	st.items = nil
+	st.selected = nil
+	st.loading = false
+	st.noMore = false
+	st.err = ""
+	st.moreErr = ""
+	st.page = 1
+	st.list.ScrollTo(0, ui.Start)
+	if collection != "" {
+		a.loadProfileTopicColl(1)
+	}
+}
+
+// reloadProfileTopicColl 是筛选结果上的「刷新」：保留筛选名，列表回到第 1 页。
+func (a *app) reloadProfileTopicColl() {
+	ps := a.profile
+	if ps == nil || ps.topicColl == "" || ps.topicCollSt.loading {
+		return
+	}
+	st := &ps.topicCollSt
+	st.authWait = false
+	st.loaded = false
+	st.items = nil
+	st.err = ""
+	st.moreErr = ""
+	st.noMore = false
+	st.list.ScrollTo(0, ui.Start)
+	a.loadProfileTopicColl(1)
+}
+
+// profileActiveContent 返回某个分段当前该显示的列表状态与端点：帖子分段一旦
+// 应用了合集筛选，就用筛选结果那份状态和 /v1/users/:name/topics 的 spec。
+func (a *app) profileActiveContent(ps *profileState, kind int) (*tabState, tabSpec) {
+	if kind < 0 || kind >= profileContentCount {
+		return nil, tabSpec{}
+	}
+	if ps != nil && kind == profileContentTopics && ps.topicColl != "" {
+		return &ps.topicCollSt, profileTopicCollSpec(a.topicCollName(ps), ps.topicColl, 1)
+	}
+	return &ps.content[kind], a.profileSpecFor(ps, kind, 1)
+}
+
+// loadProfileActiveContent 把加载请求派给当前该用的那份列表。重试、续拉和
+// 刷新都走它，筛选状态下就不会误拉回未筛选的 topic 列表。
+func (a *app) loadProfileActiveContent(kind, page int) {
+	ps := a.profile
+	if ps == nil || kind < 0 || kind >= profileContentCount {
+		return
+	}
+	if kind == profileContentTopics && ps.topicColl != "" {
+		a.loadProfileTopicColl(page)
+		return
+	}
+	a.loadProfileContent(kind, page)
+}
+
+func (a *app) reloadProfileActiveContent(kind int) {
+	ps := a.profile
+	if ps == nil || kind < 0 || kind >= profileContentCount {
+		return
+	}
+	if kind == profileContentTopics && ps.topicColl != "" {
+		a.reloadProfileTopicColl()
+		return
+	}
+	a.reloadProfileContent(kind)
 }
 
 func (c *Client) fetchProfileReplies(ctx context.Context, name string, page int) (pageResult, error) {
@@ -364,8 +636,15 @@ func (a *app) ensureProfileLoaded() {
 	switch ps.tab {
 	case profileTabContent:
 		st := &ps.content[ps.contentKind]
-		if !st.loaded && !st.loading && !st.authWait {
+		// 「我的帖子」要拼当前账号的用户名；令牌里没有、资料也还没拉到时
+		// 先不发请求，等资料回来后的下一帧再补上，避免拼出 /users//topics。
+		ready := ps.contentKind != profileContentTopics || a.topicCollName(ps) != ""
+		if ready && !st.loaded && !st.loading && !st.authWait {
 			a.loadProfileContent(ps.contentKind, 1)
+		}
+		// 帖子分段的合集下拉选项：从「我的合集」端点读，失败按退避重试。
+		if ps.contentKind == profileContentTopics {
+			a.ensureProfileCollNames()
 		}
 	case profileTabReplies:
 		if !ps.replyLoaded && !ps.replyLoading && name != "" {
@@ -431,7 +710,7 @@ func (a *app) loadProfileContent(kind, page int) {
 	if ps == nil || kind < 0 || kind >= profileContentCount {
 		return
 	}
-	a.loadSpec(toastProfile, &ps.content[kind], profileContentSpecs[kind], page,
+	a.loadSpec(toastProfile, &ps.content[kind], a.profileSpecFor(ps, kind, page), page,
 		func() { a.loadProfileContent(kind, page) })
 }
 

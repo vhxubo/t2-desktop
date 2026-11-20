@@ -70,7 +70,7 @@ var tabSpecs = []tabSpec{
 	{Label: "社区讨论", Path: "/v1/topics", Query: "page=1&limit=50&node_id=" + communityNodeID, ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
 	{Label: "动态", Path: "/v1/me/follows/timeline", Query: "page=1&limit=50", ListKey: "items", NeedsAuth: true, Paging: pagingPages, Kind: kindTimeline},
 	// 收藏 / 书签 / 我的帖子 / 我的合集不在侧边栏：它们是「我的」窗口里的
-	// 四类内容，端点见 profile.go 的 profileContentSpecs。
+	// 四类内容，端点见 profile.go 的 profileContentSpecs 与 profileTopicsSpec。
 	// 通知走开放 API 的消息列表；字段名是 list（不是 items），筛选另带
 	// type / unread_only，由 notificationQuery 生成。它不再是侧边栏页面：
 	// 入口是标题栏铃铛打开的弹窗，保留这一项是为了复用通用加载与分页。

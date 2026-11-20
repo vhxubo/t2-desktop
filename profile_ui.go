@@ -150,7 +150,8 @@ func (a *app) profileTag(c *ui.Context, name string) {
 	// Lobe 的 Popover 点锚点开合、点窗外与 Esc 关闭；气泡挂在账号标识下方。
 	// 锚点本身不再挂 OnClick：点它只开合气泡，进哪个页面在气泡里选。
 	// Popover 没有打开回调，但它在构建期就翻转 open：对比构建前后的值即可
-	// 认出这次是「打开」，趁机同步今日签到状态（同一天只会真正拉一次）。
+	// 认出这次是「打开」。每次展开都重新读一次余额，并趁机同步今日签到状态
+	//（签到按自然日缓存，同一天只会真正拉一次）。
 	wasOpen := a.profileMenuOpen
 	lobeoverlay.Popover(c, tag, &a.profileMenuOpen, lobeoverlay.PopoverProps{
 		Placement: lobeoverlay.Bottom,
@@ -158,6 +159,7 @@ func (a *app) profileTag(c *ui.Context, name string) {
 		a.profileMenuPanel(c)
 	})
 	if !wasOpen && a.profileMenuOpen {
+		a.refreshCoinTagBalance()
 		a.ensureCoinSignSynced()
 	}
 }
@@ -452,7 +454,7 @@ func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 			display.Text(c, line, display.TextProps{Type: lineType, FontSize: 11, Rows: 1})
 		})
 		a.profileAvatarEntry(c, ps)
-		a.smallAction(c, "刷新", ps.infoLoading, func() { a.reloadProfile() })
+		a.smallRefreshButton(c, ps.infoLoading, func() { a.reloadProfile() })
 	})
 }
 
@@ -564,6 +566,41 @@ var profileContentEmptyIcons = []*ui.SVG{
 	lucide.FileText(), lucide.Heart(), lucide.Bookmark(), lucide.FolderClosed(),
 }
 
+// profileTopicCollRow 是「帖子」分段上方的合集下拉。选项从 GET /v1/me/collections
+// 读，不让人手输合集名——拼错一个字就得到空列表，还看不出为什么。
+// 未筛选与筛选后的帖子都走公开端点 /v1/users/:name/topics，后者多带一个
+// collection 参数，所以下面用单独的列表状态，选中即应用，选回「全部合集」
+// 立刻回到原来的「我的帖子」。
+func (a *app) profileTopicCollRow(c *ui.Context, ps *profileState) {
+	st := &ps.collNames
+	names := make([]string, 0, len(st.names)+1)
+	names = append(names, profileTopicCollAll)
+	names = append(names, st.names...)
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Grow(1).MinWidth(0).Children(func() {
+			filter := field.Select(c, &ps.topicCollDraft, field.SelectProps{
+				Options:     selectOptions(names),
+				Size:        lobetheme.Small,
+				Placeholder: "选择合集筛选帖子",
+			})
+			filter.Label("按合集名筛选帖子")
+			if filter.Changed() {
+				a.applyProfileTopicColl(ps.topicCollDraft)
+			}
+		})
+		if st.loading {
+			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
+		} else if !st.loaded {
+			a.smallAction(c, "重试", false, func() {
+				// 手动重试跳过退避：用户点了就是要现在再试一次。
+				s := &ps.collNames
+				s.triedAt = time.Time{}
+				a.ensureProfileCollNames()
+			})
+		}
+	})
+}
+
 func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
 	kind := ps.contentKind
 	if kind < 0 || kind >= profileContentCount {
@@ -596,16 +633,20 @@ func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
 			kind, ps.contentKind = sel, sel
 		}
 		ui.Spacer(c).Grow(1)
-		st := &ps.content[kind]
+		st, _ := a.profileActiveContent(ps, kind)
 		if st.loaded {
 			display.Text(c, fmt.Sprintf("共 %d %s", profileContentTotal(st), profileContentUnits[kind]),
 				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 		}
-		a.smallAction(c, "刷新", st.loading, func() { a.reloadProfileContent(kind) })
+		a.smallRefreshButton(c, st.loading, func() { a.reloadProfileActiveContent(kind) })
 	})
 
-	st := &ps.content[kind]
-	spec := profileContentSpecs[kind]
+	// 合集下拉常驻在「帖子」分段上方；筛选生效时下面整段换成筛选结果。
+	if kind == profileContentTopics {
+		a.profileTopicCollRow(c, ps)
+	}
+
+	st, spec := a.profileActiveContent(ps, kind)
 	switch {
 	case st.loading && len(st.items) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
@@ -622,7 +663,7 @@ func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
 				SubTitle: st.err,
 				Extra: func() {
 					if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
-						a.loadProfileContent(kind, 1)
+						a.loadProfileActiveContent(kind, 1)
 					}
 				},
 			})
@@ -630,6 +671,10 @@ func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
 		return
 	case len(st.items) == 0:
 		empty := profileContentEmpty[kind]
+		// 筛选后的空状态要说清是「这个合集里没有」，别让人以为是没发过帖。
+		if kind == profileContentTopics && ps.topicColl != "" {
+			empty = [2]string{"这个合集里没有帖子。", "换一个合集，或者选「全部合集」。"}
+		}
 		ui.Column(c).Grow(1).MinHeight(0).Center().Children(func() {
 			display.Empty(c, display.EmptyProps{
 				Icon:        profileContentEmptyIcons[kind],
@@ -651,7 +696,7 @@ func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
 		a.profileContentRow(c, kind, items[i])
 	}).Grow(1).MinHeight(0).Gap(8)
 	if spec.Paging == pagingPages {
-		a.profileMoreContent(c, kind, st)
+		a.profileMoreContentWith(c, kind, st, a.loadProfileActiveContent)
 	}
 }
 
@@ -741,9 +786,10 @@ func (a *app) profileCollectionRow(c *ui.Context, it Item) {
 	})
 }
 
-// profileMoreContent 是分页列表底部的续拉行：还有下一页时给按钮，续拉失败
-// 时给出原因并可重试，已有内容保持不动。
-func (a *app) profileMoreContent(c *ui.Context, kind int, st *tabState) {
+// profileMoreContentWith 是分页列表底部的续拉行：还有下一页时给按钮，续拉
+// 失败时给出原因并可重试，已有内容保持不动。load 由调用方决定，合集筛选时
+// 要派给筛选列表，不能回到 profileContentSpecs 的端点。
+func (a *app) profileMoreContentWith(c *ui.Context, kind int, st *tabState, load func(int, int)) {
 	tk := lobetheme.TokensOf(c)
 	switch {
 	case st.moreErr != "":
@@ -751,7 +797,7 @@ func (a *app) profileMoreContent(c *ui.Context, kind int, st *tabState) {
 			display.Text(c, "加载更多失败："+st.moreErr, display.TextProps{
 				Type: display.TextDanger, FontSize: 11, Rows: 2,
 			}).Grow(1)
-			a.smallAction(c, "重试", false, func() { a.loadProfileContent(kind, st.page) })
+			a.smallAction(c, "重试", false, func() { load(kind, st.page) })
 		})
 	case st.loading && len(st.items) > 0:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -770,7 +816,7 @@ func (a *app) profileMoreContent(c *ui.Context, kind int, st *tabState) {
 			})
 			b.TextColor(tk.Primary)
 			if b.Clicked() {
-				a.loadProfileContent(kind, st.page+1)
+				load(kind, st.page+1)
 			}
 			ui.Spacer(c).Grow(1)
 		})
@@ -790,7 +836,7 @@ func (a *app) profileRepliesBody(c *ui.Context, ps *profileState) {
 				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 		}
 		ui.Spacer(c).Grow(1)
-		a.smallAction(c, "刷新", ps.replyLoading, func() {
+		a.smallRefreshButton(c, ps.replyLoading, func() {
 			if name != "" {
 				a.loadProfileReplies(name, 1)
 			}
