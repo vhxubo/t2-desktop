@@ -164,6 +164,46 @@ func TestScoreCategoryOptionsBounded(t *testing.T) {
 	}
 }
 
+// 分类很多时，下拉弹层里的选项只能在限高的滚动层里排布，不能画出弹层盖住
+// 下面的评分列表（field.Select 只设 MaxHeight 却没有滚动层，以前会溢出）。
+func TestScoresCategoryDropdownNoOverflow(t *testing.T) {
+	a := testApp(t)
+	a.scores = newScoresState()
+	st := a.scores
+	cats := make([]string, 30)
+	for i := range cats {
+		cats[i] = fmt.Sprintf("分类%02d", i)
+	}
+	st.categories = cats
+	st.categoriesLoaded = true
+	st.loaded = true
+
+	tt := ui.NewTester(a.scoresWindowView, scoresWinMinWidth, scoresWindowHeight)
+	tt.Frame()
+	// 点分类下拉的 trigger 打开弹层。位置从实际渲染的 trigger 取，标题栏
+	// 变高后 y 会整体下移，写死坐标会点空。
+	trigger, ok := tt.Find("全部分类")
+	if !ok {
+		t.Fatalf("找不到分类下拉 trigger：%q", tt.Texts())
+	}
+	tt.ClickAt(trigger.X+trigger.W/2, trigger.Y+trigger.H/2)
+	tt.Frame()
+
+	first, ok := tt.Find(cats[0])
+	if !ok {
+		t.Fatalf("下拉没有展开：%q", tt.Texts())
+	}
+	for _, cat := range cats {
+		r, ok := tt.Find(cat)
+		if !ok || r.W == 0 {
+			continue // 滚动后被裁掉的项不在可视区里
+		}
+		if r.Y > first.Y+256 {
+			t.Errorf("分类 %q 画出弹层滚动区：first=%+v opt=%+v", cat, first, r)
+		}
+	}
+}
+
 // 最小窗口宽度下筛选条排得下：标签不被压缩成「评…」，刷新也没被挤到下一行。
 func TestScoresFiltersFitMinWidth(t *testing.T) {
 	a := testApp(t)

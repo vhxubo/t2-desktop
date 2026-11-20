@@ -14,6 +14,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/field"
 	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
@@ -41,10 +42,11 @@ type scoresState struct {
 	categoriesErr     string
 	categoriesSeq     uint64
 
-	category     string
-	lastCategory string
-	sort         int
-	lastSort     int
+	category       string
+	lastCategory   string
+	categoryActive int
+	sort           int
+	lastSort       int
 
 	items      []scoreEntry
 	total      int
@@ -371,6 +373,105 @@ func scoreCategoryOptions(st *scoresState) []field.SelectOption {
 	return options
 }
 
+// scoreCategorySelect 画评分分类下拉：触发器和弹层走 Lobe 的 overlay.Popover，
+// 选项放进限高的滚动层（field.Select 的弹层没有滚动层，分类一多就溢出）。
+// 触发器保留焦点，上下键移动高亮，回车 / 空格由按钮的 Clicked 关掉气泡并选中。
+func scoreCategorySelect(c *ui.Context, selected *string, active *int, options []field.SelectOption) ui.Element {
+	tk := lobetheme.TokensOf(c)
+	c.Key("scores-category-select")
+	tr := ui.ButtonBase(c).MinHeight(24).Padding(0, 8).Gap(8).
+		Radius(tk.BorderRadiusSM).FontSize(12).AlignItems(ui.Center).TextColor(tk.Text).
+		Cursor(ui.CursorPointer).Unselectable()
+	open := ui.Local(tr, "scoreCategoryOpen", func() bool { return false })
+	border := tk.BorderSecondary
+	if tr.Hovered() && !tr.Focused() && !*open {
+		border = tk.Border
+	}
+	if *open {
+		border = tk.Primary
+		tr.Shadow(0, 0, 0, 2, tk.PrimaryBg)
+	}
+	tr.Background(tk.BgContainer).Border(1, border)
+
+	label := ""
+	choice := 0
+	for i, o := range options {
+		if o.Value == *selected {
+			label, choice = o.Label, i
+			break
+		}
+	}
+	if !*open {
+		*active = choice
+	}
+	tr.Children(func() {
+		ui.Row(c).Grow(1).MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, label).SingleLine()
+		})
+		turn := float32(0)
+		if *open {
+			turn = 180
+		}
+		ui.Icon(c, lucide.ChevronDown()).FontSize(16).TextColor(tk.TextSecondary).
+			Shrink(0).Rotate(turn)
+	})
+
+	move := func(d int) {
+		if len(options) == 0 {
+			return
+		}
+		if !*open {
+			*open, *active = true, choice
+			return
+		}
+		for k := 0; k < len(options); k++ {
+			*active = (*active + d + len(options)) % len(options)
+			if !options[*active].Disabled {
+				break
+			}
+		}
+	}
+	tr.OnShortcut(0, ui.KeyDown, func() { move(1) })
+	tr.OnShortcut(0, ui.KeyUp, func() { move(-1) })
+	// Lobe 的气泡读 anchor.Clicked 来开合；按钮在回车 / 空格上也报 Clicked，
+	// 所以气泡关掉的这一帧正好把高亮项选上。
+	tr.OnClick(func() {
+		if *open || len(options) == 0 || options[*active].Disabled {
+			return
+		}
+		*selected = options[*active].Value
+	})
+
+	lobeoverlay.Popover(c, tr, open, lobeoverlay.PopoverProps{Placement: lobeoverlay.Bottom}, func() {
+		ui.Column(c).Width(max(200, tr.Bounds().W-24)).Children(func() {
+			ui.Scroll(c).MaxHeight(256).Children(func() {
+				for i, o := range options {
+					item := ui.Row(c.Key(o.Value)).Disabled(o.Disabled).Padding(6, 12).MinHeight(32).
+						Gap(8).AlignItems(ui.Center).Radius(tk.BorderRadiusSM).
+						AlignSelf(ui.Stretch).FontSize(14).TextColor(tk.Text)
+					if i == *active || item.Hovered() {
+						item.Background(tk.FillTertiary).Cursor(ui.CursorPointer)
+					} else if !o.Disabled {
+						item.Cursor(ui.CursorPointer)
+					}
+					item.Children(func() {
+						ui.Text(c, o.Label).Grow(1).SingleLine()
+						if o.Value == *selected {
+							ui.Icon(c, lucide.Check()).FontSize(14).TextColor(tk.Primary).
+								Margin(0, 0, 0, 8)
+						}
+					})
+					if item.Clicked() && !o.Disabled {
+						*selected = o.Value
+						*open = false
+					}
+				}
+			})
+		})
+	})
+	return tr
+}
+
 // scoresFilters 用 Lobe 的 Segmented / Select / Button 画筛选条：排序直接绑定
 // st.sort，分类下拉绑定 st.category，改动由 view 里的 lastSort / lastCategory
 // 比对接住并重拉第一页。分类字典单独读，失败不影响评分列表。
@@ -389,11 +490,10 @@ func (a *app) scoresFilters(c *ui.Context, st *scoresState) {
 				display.Text(c, "评分分类", display.TextProps{
 					Type: display.TextSecondary, FontSize: 11, Rows: 1,
 				}).Shrink(0)
-				field.Select(c, &st.category, field.SelectProps{
-					Options: scoreCategoryOptions(st), Size: lobetheme.Small,
-				}).Label("评分分类").Tooltip("按分类筛选评分").Width(150).Shrink(0)
+				scoreCategorySelect(c, &st.category, &st.categoryActive, scoreCategoryOptions(st)).
+					Label("评分分类").Tooltip("按分类筛选评分").Width(150).Shrink(0)
 				ui.Spacer(c).Grow(1)
-				a.smallAction(c, "刷新", st.loading, a.reloadScores)
+				a.smallRefreshButton(c, st.loading, a.reloadScores)
 			})
 			if st.categoriesErr != "" {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
