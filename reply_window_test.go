@@ -105,10 +105,14 @@ func TestReplyWindowShowsEditorAndPreview(t *testing.T) {
 
 	tt := ui.NewTester(a.replyWindowView, replyWindowWidth, replyWindowHeight)
 	tt.Frame()
-	for _, want := range []string{"写评论", "收回评论区", "发送", "插入表情", "预览"} {
+	for _, want := range []string{"写评论", "新评论", "发送", "插入表情", "预览"} {
 		if !tt.HasText(want) {
 			t.Errorf("窗口里缺少 %q：%q", want, tt.Texts())
 		}
+	}
+	// 收回草稿的入口留在页面里，窗口里不再重复摆一个按钮。
+	if _, ok := tt.Find("收回评论区"); ok {
+		t.Errorf("窗口里不该再有收回评论区的按钮：%q", tt.Texts())
 	}
 	if !tt.HasText("Ctrl+Enter 发送") {
 		t.Errorf("窗口底部没有发送说明：%q", tt.Texts())
@@ -133,12 +137,12 @@ func TestReplyWindowShowsEditorAndPreview(t *testing.T) {
 		t.Errorf("收起预览后编辑区也消失了：%q", tt.Texts())
 	}
 
-	// Esc 之外的显式入口：收回评论区把草稿还给页面。
-	if err := tt.Click("收回评论区"); err != nil {
-		t.Fatalf("点收回失败：%v（%q）", err, tt.Texts())
+	// Esc 之外的显式入口：标题栏的关闭按钮同样把草稿还给页面。
+	if err := tt.Click("关闭"); err != nil {
+		t.Fatalf("点关闭失败：%v（%q）", err, tt.Texts())
 	}
 	if a.detail.composerDetached || a.replyWinFor != nil {
-		t.Error("收回后窗口状态没有清掉")
+		t.Error("关闭后窗口状态没有清掉")
 	}
 	if a.detail.draft != "写点 :sigh: 试试" {
 		t.Errorf("收回后草稿丢了：%q", a.detail.draft)

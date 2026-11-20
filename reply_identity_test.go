@@ -115,7 +115,7 @@ func TestReplyIdentitySwitchFromReplyWindow(t *testing.T) {
 }
 
 // 换了账号后提交，请求必须带那个账号自己的令牌；响应没带作者时也按那个
-// 账号补，金币事件同样不能记到本窗口名下。
+// 账号补，结果不能记到本窗口名下。
 func TestReplyIdentitySendsWithOtherAccount(t *testing.T) {
 	var mu sync.Mutex
 	var gotPath, gotAuth, gotKey, gotBody string
@@ -137,8 +137,6 @@ func TestReplyIdentitySendsWithOtherAccount(t *testing.T) {
 	a.client.Base = srv.URL + "/api"
 	a.detail.replyAsID = other.ID
 	a.detail.draft = "换个身份说一句"
-	var coins int
-	a.onCoinsChanged = func(coinEvent) { coins++ }
 	done := make(chan struct{})
 	a.onReplyPosted = func(replyItem, error) { close(done) }
 
@@ -172,9 +170,6 @@ func TestReplyIdentitySendsWithOtherAccount(t *testing.T) {
 	last := a.detail.replyList[len(a.detail.replyList)-1]
 	if last.ID != "new1" || last.Author != "bystander" {
 		t.Errorf("新评论的作者没有按切换后的账号补齐：%+v", last)
-	}
-	if coins != 0 {
-		t.Errorf("借用别的账号发评论不该刷新本窗口的金币：收到 %d 次事件", coins)
 	}
 }
 

@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/egoist/mygo/ui"
-	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
 // 详情页的临时回复身份
@@ -18,14 +18,14 @@ import (
 //     别的帖子再返回、或者把这个账号退出，都会回到窗口自己的账号；不落盘，
 //     下次打开还是自己；
 //   - 选择入口是评论框下方那枚身份标签（原来只写「当前账号 @谁」），点开
-//     气泡列出本机挂着的账号，选中即换；标签换成「回复身份 @谁」。
+//     弹窗列出本机挂着的账号，选中即换；标签换成「回复身份 @谁」。
 //
 // 提交走对方账号自己的 AuthManager（令牌、刷新、凭据都是它那一份），所以
 // 401 刷新与 scope 判断都按那个账号来；与它自己的窗口并发请求是安全的
 // （AuthManager 的刷新是单飞的）。缺权限时不能弹本窗口的授权弹窗——那会
 // 重新授权错的人——改为提示用户去那个账号的窗口补授权。
 
-// replySurface 标记身份标签画在哪扇窗口里。气泡的展开状态存在 detailState
+// replySurface 标记身份标签画在哪扇窗口里。弹窗的展开状态存在 detailState
 // 上，但只有点开它的那扇窗口才渲染，主窗口与独立写评论窗口不会同时弹。
 type replySurface string
 
@@ -115,22 +115,6 @@ func (a *app) replyClientFor(identity replyIdentity) *Client {
 	return &c
 }
 
-// noteReplyCoins 把「评论扣了金币」报给真正扣费的那个账号：自己发就刷新本
-// 窗口；借用别的账号发就通知那个账号的窗口（它开着时），不能刷新成本窗口
-// 的余额。只在 UI 线程调用。
-func (a *app) noteReplyCoins(identity replyIdentity) {
-	if !identity.Switched {
-		a.coinsChanged(coinEventReply)
-		return
-	}
-	if a.book == nil {
-		return
-	}
-	if acc := a.book.account(identity.ID); acc != nil && acc.app != nil && acc.app != a {
-		acc.app.coinsChanged(coinEventReply)
-	}
-}
-
 // resetReplyIdentity 清掉临时回复身份：离开详情页（关闭、内联跳转或返回）
 // 时调用。不弹提示——页面都已经变了，结果写在新的页面上反而多余。
 func (a *app) resetReplyIdentity(d *detailState) {
@@ -145,7 +129,7 @@ func (a *app) resetReplyIdentity(d *detailState) {
 	d.mentions.open = false
 }
 
-// applyReplyIdentity 采用选中的账号（id 为空表示窗口自己的账号），关掉气泡
+// applyReplyIdentity 采用选中的账号（id 为空表示窗口自己的账号），关掉弹窗
 // 并在操作发生的那扇窗口里报告结果。
 func (a *app) applyReplyIdentity(d *detailState, host replySurface, id, name string) {
 	if d == nil {
@@ -175,8 +159,8 @@ func (a *app) applyReplyIdentity(d *detailState, host replySurface, id, name str
 	a.toast(target, "已切换为以 @"+name+" 的身份回复，关闭详情页后恢复")
 }
 
-// toggleReplyIdentityPicker 开关身份气泡（显式入口）。点标签时走
-// prepareReplyIdentityPicker，开合交给 Lobe Popover。
+// toggleReplyIdentityPicker 开关身份弹窗（显式入口）。点标签时直接调用它；
+// host 记下是哪扇窗口点开的，弹窗只在那一扇里画。
 func (a *app) toggleReplyIdentityPicker(d *detailState, host replySurface) {
 	if d == nil {
 		return
@@ -189,18 +173,8 @@ func (a *app) toggleReplyIdentityPicker(d *detailState, host replySurface) {
 	d.identityHost = host
 }
 
-// prepareReplyIdentityPicker 记下这次点击所在的 host。开合完全交给 Lobe
-// Popover：它在构建期切换 identityOpen，OnClick 在帧末才跑，这里不能再碰
-// identityOpen，否则会把刚打开的气泡关掉。
-func (a *app) prepareReplyIdentityPicker(d *detailState, host replySurface) {
-	if d == nil {
-		return
-	}
-	d.identityHost = host
-}
-
 // replyIdentityBadge 是评论框下方那枚身份标签：多账号时显示「当前账号 @谁」，
-// 临时换过账号后显示「回复身份 @谁」。点开气泡可以换账号。
+// 临时换过账号后显示「回复身份 @谁」。点开弹窗可以换账号。
 //
 // 它是详情页里唯一说明「这条评论以谁的身份发出」的地方，所以只在这扇窗口
 // 自己的身份与详情页状态都可见时画（单账号、未登录时不画）。
@@ -271,20 +245,23 @@ func (a *app) replyIdentityBadge(c *ui.Context, d *detailState, host replySurfac
 		badge.Label("当前账号").Tooltip(
 			"点一下换个账号来回复这篇帖子；只对这一篇生效，关闭详情页后恢复")
 	}
-	badge.OnClick(func() { a.prepareReplyIdentityPicker(d, host) })
-	// 气泡关着时每个 host 都要把 Popover 建出来，否则点开的那一次点击不会
-	// 传到 Lobe；气泡开着时只让拥有它的 host 建，避免两扇窗口同时弹出。
-	if !d.identityOpen || d.identityHost == host {
-		lobeoverlay.Popover(c, badge, &d.identityOpen, lobeoverlay.PopoverProps{
-			Placement: lobeoverlay.Bottom,
-		}, func() {
-			a.replyIdentityPanel(c, d, host)
-		})
+	badge.OnClick(func() { a.toggleReplyIdentityPicker(d, host) })
+	// 身份弹窗只在点开它的那扇窗口里画：主窗口与独立评论窗口共用 d，
+	// identityHost 决定归属，免得一次点击弹出两扇。
+	if !d.identityOpen || d.identityHost != host {
+		return badge
 	}
+	feedback.Modal(c, &d.identityOpen, feedback.ModalProps{
+		Title:    "用哪个账号回复",
+		Width:    420,
+		NoFooter: true,
+	}, func() {
+		a.replyIdentityPanel(c, d, host)
+	})
 	return badge
 }
 
-// replyIdentityOption 是气泡里的一行：当前账号（Current）或本机另一个账号。
+// replyIdentityOption 是弹窗里的一行：当前账号（Current）或本机另一个账号。
 type replyIdentityOption struct {
 	ID         string
 	Name       string
@@ -293,7 +270,7 @@ type replyIdentityOption struct {
 	NeedsLogin bool
 }
 
-// replyIdentityPanel 是身份气泡的内容：当前账号、本机其他账号，以及「只对
+// replyIdentityPanel 是身份弹窗里的内容：当前账号、本机其他账号，以及「只对
 // 这一篇生效」的说明。点一行就换过去，结果用窗口内 toast 报告。
 func (a *app) replyIdentityPanel(c *ui.Context, d *detailState, host replySurface) {
 	t := c.Theme()
@@ -327,7 +304,7 @@ func (a *app) replyIdentityPanel(c *ui.Context, d *detailState, host replySurfac
 	})
 }
 
-// replyIdentityRow 是气泡里的一行账号：头像、昵称与当前使用状态；登录已失效
+// replyIdentityRow 是弹窗里的一行账号：头像、昵称与当前使用状态；登录已失效
 // 的账号仍然列出来（它还在账号册里），点一下提示先重新登录。
 func (a *app) replyIdentityRow(c *ui.Context, d *detailState, host replySurface, opt replyIdentityOption) {
 	t := c.Theme()

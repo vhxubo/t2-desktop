@@ -1,20 +1,30 @@
 package main
 
 import (
-	"fmt"
+	"strconv"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 独立写评论窗口：把评论输入框里的草稿搬进一个单独的 mygo 窗口，左边写、
 // 右边实时预览，主窗口留在帖子上——长回复要一边翻正文一边写，页面里的
 // 输入框再高也只够写两行。
 //
+// 整套界面走 Lobe UI：颜色取 TokensOf(c)，标题 / 说明 / 提示用 display.Text，
+// 图标用 lucide，分隔线用 layout.Divider，工具条开关用 action.ActionIcon，
+// 与发帖窗口、主窗口是同一套设计语言。
+//
 // 草稿始终是 detailState.draft 那一份字符串，窗口只借用它：打开时把
-// composerDetached 置位，页面里的评论框换成一行说明与「收回」入口，关掉
-// 窗口（或点「收回评论区」）时清掉标记，文字原样回到页面里的评论框。
+// composerDetached 置位，页面里的评论框换成一行说明与「收回」入口；关掉
+// 窗口（点标题栏的关闭按钮、Esc，或页面里的「收回评论区」）时清掉标记，
+// 文字原样回到页面里的评论框。窗口内不再单独放一个「收回评论区」按钮。
 //
 // 数据与请求在 detail.go / detail_ui.go（submitReply）；这里只负责窗口的
 // 开关与窗口里的排版。
@@ -112,8 +122,8 @@ func (a *app) openReplyWindow() {
 }
 
 // closeReplyWindow 收起独立窗口，把草稿还给页面里的评论框。窗口没开着时
-// 只清状态（headless 测试走的就是这条），所以「收回评论区」在任何情况下
-// 都能把输入框放回页面。
+// 只清状态（headless 测试走的就是这条），所以窗口里的关闭按钮和页面里的
+// 「收回评论区」在任何情况下都能把输入框放回页面。
 func (a *app) closeReplyWindow() {
 	if d := a.replyWinFor; d != nil {
 		d.composerDetached = false
@@ -154,9 +164,9 @@ func (a *app) redrawReplyWindow() {
 // 这里不需要遮罩，也不占主窗口的位置。
 func (a *app) replyWindowView(c *ui.Context) {
 	a.applyTheme(c)
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	a.srv = c.Services()
-	c.Root().Background(t.Background)
+	c.Root().Background(tk.BgLayout)
 	// 这一帧的详情游标拨到写评论窗口绑定的那篇：正文上传、发送结果里的
 	// toast 与身份气泡都要落在这篇帖子上，而不是上一条画过的详情窗口。
 	if d := a.replyWinFor; d != nil {
@@ -176,26 +186,21 @@ func (a *app) replyWindowView(c *ui.Context) {
 	a.drainPaste(uploadTargetReply)
 
 	ui.Column(c).Fill().Children(func() {
-		// 自绘标题栏：左边是标题与「在回复谁」，右边是收回 / 最小化 / 关闭。
+		// 自绘标题栏：左边是标题与「在回复谁」，右边是最小化 / 关闭。
 		ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
-			Background(t.Surface).DragWindow().Children(func() {
+			Background(tk.BgLayout).DragWindow().Children(func() {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, commentBubbleIcon).Size(16, 16).TextColor(t.Accent)
-				ui.Text(c, "写评论").FontSize(13).Bold().SingleLine().TextColor(t.Text)
+				ui.Icon(c, lucide.MessageSquareText()).Size(16, 16).TextColor(tk.Primary)
+				display.Text(c, "写评论", display.TextProps{
+					Strong: true, FontSize: 13, Rows: 1,
+				})
 				if sub := replyWindowSubtitle(d); sub != "" {
-					ui.Text(c, sub).FontSize(11).TextColor(t.TextMuted).SingleLine()
+					display.Text(c, sub, display.TextProps{
+						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+					})
 				}
 				a.accountWindowTag(c)
-			})
-			// 「收回评论区」给一个带文字的入口：这是窗口里唯一会「关掉」但
-			// 不丢草稿的动作，值得比一个叉更明确。
-			ui.Row(c).AlignItems(ui.Center).Padding(0, 6).Children(func() {
-				if ui.Button(c, "收回评论区").
-					Tooltip("把草稿收回页面里的评论框，已经写好的文字不变").
-					Clicked() {
-					a.closeReplyWindow()
-				}
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.replyWin; win != nil {
@@ -204,7 +209,7 @@ func (a *app) replyWindowView(c *ui.Context) {
 			})
 			titleBarButton(c, titleClose, "关闭", a.closeReplyWindow)
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
 		a.replyWindowBody(c, d)
 	})
@@ -219,30 +224,46 @@ func replyWindowSubtitle(d *detailState) string {
 	return "回复 " + d.replyTo.label()
 }
 
+// replyWindowPreviewToggle 是窗口工具条上的预览开关：Lobe 的图标按钮，
+// 选中时用底色标出「显示中」。label 保留文字名，读屏与点击测试照旧按
+// 「预览」找得到；KeepFocus 让点开关时光标仍留在编辑区里。
+func replyWindowPreviewToggle(c *ui.Context, on bool, onClick func()) {
+	icon := lucide.Eye()
+	if !on {
+		icon = lucide.EyeOff()
+	}
+	b := action.ActionIcon(c, icon, action.ActionIconProps{
+		Size: lobetheme.Small, Active: on, Title: "预览",
+	}).KeepFocus()
+	if b.Clicked() {
+		onClick()
+	}
+}
+
 // replyWindowBody 是窗口的正文：一行紧凑工具条（标记 + 表情 / 图片 / 预览
 // 开关），按需展开的面板，然后是左边写、右边预览的两栏，底部是状态与发送。
 func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// 整个编辑区也是拖放区：图片直接拖进窗口就能上传。
 	box := ui.Column(c).FillWidth().Grow(1).MinHeight(0).
 		Padding(6, replyWindowPad).Gap(4)
 	over := a.editorDropZone(box, uploadTargetReply)
 	if over {
-		box.Background(t.SurfaceHover)
+		box.Background(tk.FillSecondary)
 	}
 	box.Children(func() {
 		ui.Row(c).FillWidth().Gap(2).AlignItems(ui.Center).KeepFocus().Children(func() {
 			a.editorToolbar(c, &d.mdEditor, &d.draft)
-			a.editorPanelButtons(c, &d.mdEditor, "插入表情", "插入图片")
+			a.editorPanelButtons(c, &d.mdEditor, &d.draft, a.replyCommunityEmojis(d), "插入表情", "插入图片")
 			// 预览开关：默认两边都显示，窗口窄的时候可以收起右栏专心写。
-			a.editorIconToggle(c, d.winPreview, eyeIcon, "预览",
-				"显示 / 收起右侧预览", func() { d.winPreview = !d.winPreview })
+			replyWindowPreviewToggle(c, d.winPreview, func() { d.winPreview = !d.winPreview })
 		})
 		a.editorPanels(c, uploadTargetReply, &d.mdEditor, &d.draft,
 			a.replyCommunityEmojis(d))
 		if over {
-			ui.Text(c, "松开即可把图片插入评论").FontSize(11).
-				TextColor(t.Accent).Padding(4, 2)
+			display.Text(c, "松开即可把图片插入评论", display.TextProps{
+				Type: display.TextInfo, FontSize: 11, Rows: 1,
+			}).Padding(4, 2)
 		}
 		// 评论费用状态栏：字数、预计发评金币、可省金币的徽章与「走个面」
 		// 开关。占整窗宽度，左右两栏都看得到（见 comment_cost_ui.go）。
@@ -258,13 +279,14 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 			AlignItems(ui.Stretch).Children(func() {
 			// 左栏：输入框占满整栏，发送在栏底的页脚里。
 			ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).
-				Padding(4, 8).Radius(10).Border(1, t.Border).
-				Background(t.Background).Children(func() {
+				Padding(4, 8).Radius(10).Border(1, tk.BorderSecondary).
+				Background(tk.BgContainer).Children(func() {
 				c.Key("reply-window-field")
 				a.replyTextArea(c, d, replySurfaceWindow, replyFieldWindow, true)
-				// 面板要贴着 @：输入框自己有 8 / 4 的内边距，@ 的矩形要按
-				// 同一份内边距算，否则面板会偏到输入框边框上。
+				// 面板要贴着 @ / :：输入框自己有 8 / 4 的内边距，字符的矩形
+				// 要按同一份内边距算，否则面板会偏到输入框边框上。
 				a.mentionPopover(c, d, replySurfaceWindow, 8, 4)
+				a.emojiShortcodePopover(c, d, replySurfaceWindow, 8, 4)
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 					// 窄窗口只留手势说明：两栏一分，页脚放不下整句
 					// 「支持 Markdown 与 :短码: 表情」，截成省略号更难看。
@@ -272,14 +294,15 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 					if w, _ := c.Size(); w < replyWindowWidth-120 {
 						hint = "Ctrl+Enter 发送"
 					}
-					ui.Text(c, hint).FontSize(11).TextColor(t.TextMuted).SingleLine().
-						Grow(1).MinWidth(0)
+					display.Text(c, hint, display.TextProps{
+						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+					}).Grow(1).MinWidth(0)
 					// 登录后字数在评论费用状态栏里报（见 comment_cost_ui.go），
 					// 同一条链上不重复写两遍；未登录时、以及临时换了回复账号
 					// 把状态栏收起时，仍留在这里。
 					if d.replyAsID != "" || !a.commentCostBarVisible() {
-						ui.Text(c, fmt.Sprintf("%d 字", utf8.RuneCountInString(d.draft))).
-							FontSize(11).TextColor(t.TextMuted).SingleLine()
+						display.Text(c, strconv.Itoa(utf8.RuneCountInString(d.draft))+" 字",
+							display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 					}
 					// 窗口页脚同样写明以哪个账号发出，点开还能换一个账号回复
 					//（见 reply_identity.go）：标题栏虽然有窗口账号标识，但点
@@ -293,8 +316,8 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 				// 右栏：按发表后的样子实时渲染，跟着窗口高度长，不再固定
 				// 180 DIP（那是页面里评论框的高度）。
 				ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).
-					Radius(10).Border(1, t.Border).
-					Background(t.Surface).Children(func() {
+					Radius(10).Border(1, tk.BorderSecondary).
+					Background(tk.BgElevated).Children(func() {
 					a.editorPreviewView(c, d.draft, a.replyEmojis(d),
 						a.commentMd, 0)
 				})
