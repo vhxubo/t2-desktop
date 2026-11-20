@@ -661,7 +661,7 @@ func TestPanelViewListsAccountsWithUnreadAndActions(t *testing.T) {
 	for _, want := range []string{
 		"账号", "2 个账号", "jimmy", "amy",
 		"登录已失效，需要重新授权",
-		"重新登录", "退出", "添加账号", "每个账号一个窗口",
+		"重新登录", "退出", "添加账号", "注册",
 	} {
 		if !tt.HasText(want) {
 			t.Errorf("账号面板缺少文案 %q：%q", want, tt.Texts())
@@ -705,7 +705,7 @@ func TestPanelViewLayoutFitsTheWindow(t *testing.T) {
 	if add.Y+add.H > float32(accountsWindowHeight) {
 		t.Errorf("「添加账号」被窗口裁掉了：y=%v h=%v", add.Y, add.H)
 	}
-	for _, label := range []string{"jimmy", "amy", "打开", "退出", "添加账号"} {
+	for _, label := range []string{"jimmy", "amy", "打开", "退出", "添加账号", "注册"} {
 		r, ok := tt.Find(label)
 		if !ok {
 			t.Errorf("找不到 %q", label)
@@ -722,10 +722,31 @@ func TestPanelViewExplainsHowToAddFirstAccount(t *testing.T) {
 	b := testBook(t)
 	tt := ui.NewTester(b.panelView, accountsWindowWidth, accountsWindowHeight)
 	tt.Frame()
-	for _, want := range []string{"还没有登录账号", "添加账号", "未登录"} {
+	for _, want := range []string{"还没有登录账号", "添加账号", "注册", "未登录"} {
 		if !tt.HasText(want) {
 			t.Errorf("空账号面板缺少文案 %q：%q", want, tt.Texts())
 		}
+	}
+}
+
+// 账号面板的「注册」打开带邀请码的注册页：地址沿用侧边栏与托盘共用的
+// signupURL，邀请码写在路径里，不能在这次点击里丢掉。
+func TestPanelSignupOpensInviteURL(t *testing.T) {
+	b := testBook(t)
+	addTestAccount(t, b, "jimmy")
+	opened := ""
+	b.openURL = func(u string) error { opened = u; return nil }
+
+	tt := ui.NewTester(b.panelView, accountsWindowWidth, accountsWindowHeight)
+	tt.Frame()
+	if err := tt.Click("注册"); err != nil {
+		t.Fatal(err)
+	}
+	if opened != signupURL {
+		t.Fatalf("注册按钮打开的地址 = %q，期望 %q", opened, signupURL)
+	}
+	if !strings.Contains(opened, "/auth/signup/") {
+		t.Errorf("注册页地址没有带邀请码：%q", opened)
 	}
 }
 

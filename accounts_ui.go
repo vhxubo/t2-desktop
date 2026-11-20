@@ -261,7 +261,7 @@ func accountRowHint(acc accountView) string {
 	}
 }
 
-// panelFooter 是面板底部：添加账号、正在进行的授权与说明文字。
+// panelFooter 是面板底部：添加账号与正在进行的授权。
 func (b *accountBook) panelFooter(c *ui.Context, pending *accountLogin) {
 	ui.Column(c).FillWidth().Padding(12, 14).Gap(8).Children(func() {
 		if pending != nil {
@@ -274,6 +274,10 @@ func (b *accountBook) panelFooter(c *ui.Context, pending *accountLogin) {
 			}).Clicked() {
 				b.startAddAccount()
 			}
+			// 注册是网页流程，和侧边栏 / 托盘共用同一个带邀请码的地址。
+			if action.Button(c, "注册", action.ButtonProps{}).Clicked() {
+				b.openSignup()
+			}
 			if b.guestApp() == nil && b.accountCount() > 0 {
 				if action.Button(c, "未登录窗口", action.ButtonProps{}).Clicked() {
 					b.openGuestWindow()
@@ -285,12 +289,15 @@ func (b *accountBook) panelFooter(c *ui.Context, pending *accountLogin) {
 				Type: display.TextSecondary, FontSize: 11, Rows: 3,
 			})
 		}
-		feedback.Alert(c, "每个账号一个窗口", feedback.AlertProps{
-			Type: feedback.Info, Variant: feedback.Plain, NoIcon: true,
-			Description: "关掉窗口它就挂在后台：未读角标与登录状态照样更新。" +
-				"退出账号会删掉本机保存的令牌，下次要重新授权。",
-		})
 	})
+}
+
+// openSignup 打开带邀请码的 2Libra 注册页：signupURL 已经把 aff 写在地址里，
+// 账号面板和侧边栏、托盘走的是同一个入口，注册仍由系统浏览器完成。
+func (b *accountBook) openSignup() {
+	if err := b.openURL(signupURL); err != nil {
+		b.setLoginMsg("打开注册页失败：" + err.Error())
+	}
 }
 
 // panelPendingLogin 是「正在等授权」那一段。内置浏览器授权时给出「打开授权
