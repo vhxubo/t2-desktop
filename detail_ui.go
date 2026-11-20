@@ -943,7 +943,7 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 	// 复制链接排最左边，与页面操作之间隔一道短竖线：分享帖子不是一类事。
 	if href := d.originURL(); href != "" {
 		acts = append(acts, detailToolAction{
-			kind: detailToolCopy, icon: copyLinkIcon,
+			kind: detailToolCopy, icon: lucide.Copy(),
 			label: "复制帖子链接", tip: "把这篇帖子的链接复制到剪贴板", href: href,
 		})
 	}
@@ -951,7 +951,7 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 	// 为了放它固定占掉一行。正文收起时不看它的偏移：那栏根本没画出来。
 	if first, _ := d.list.Visible(); (!d.bodyCollapsed && d.bodyScroll.Y > 0) || first > 0 {
 		acts = append(acts, detailToolAction{
-			icon: backTopIcon, label: "返回顶部", tip: "正文与评论都回到顶部",
+			icon: lucide.ArrowUp(), label: "返回顶部", tip: "正文与评论都回到顶部",
 			// 直接把偏移写回 ScrollState 就是立即回顶（ScrollTo 会走动画）。
 			onClick: func() {
 				d.bodyScroll.X, d.bodyScroll.Y = 0, 0
@@ -964,19 +964,19 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 	if a.canEditTopic(d) {
 		acts = append(acts,
 			detailToolAction{
-				icon: editIcon, label: "编辑帖子", tip: "修改标题与正文",
+				icon: lucide.PenLine(), label: "编辑帖子", tip: "修改标题与正文",
 				onClick: func() { a.showTopicEdit(d) },
 			},
 			detailToolAction{
-				icon: postscriptIcon, label: "追加附言", tip: "在帖子末尾追加一段附言",
+				icon: lucide.FilePlus2(), label: "追加附言", tip: "在帖子末尾追加一段附言",
 				onClick: func() { a.showPostscript(d) },
 			},
 		)
 	}
 	if d.topic != nil && a.canToggleComments(d) {
-		icon, label, tip := commentsOffIcon, "关闭评论", "关闭评论：关闭后其他读者不能再回复"
+		icon, label, tip := lucide.MessageSquareOff(), "关闭评论", "关闭评论：关闭后其他读者不能再回复"
 		if d.topic.CommentsClosed {
-			icon, label, tip = commentBubbleIcon, "开启评论", "重新开启这篇帖子的评论"
+			icon, label, tip = lucide.MessageCircle(), "开启评论", "重新开启这篇帖子的评论"
 		}
 		busy := d.comments.busy
 		if busy {
@@ -992,12 +992,12 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 		tip = "正在刷新…"
 	}
 	acts = append(acts, detailToolAction{
-		kind: detailToolRefresh, icon: refreshIcon, label: "刷新", tip: tip, busy: loading,
+		kind: detailToolRefresh, icon: lucide.RefreshCw(), label: "刷新", tip: tip, busy: loading,
 	})
 	// 独立详情窗口的自定义标题栏已经有「关闭」，不再悬浮一枚重复的关闭按钮。
 	if d.host == nil {
 		acts = append(acts, detailToolAction{
-			icon: closeIcon, label: "关闭详情", tip: "关闭详情（Esc）", onClick: a.closeDetail,
+			icon: lucide.X(), label: "关闭详情", tip: "关闭详情（Esc）", onClick: a.closeDetail,
 		})
 	}
 	// 复制链接之后的第一个动作都隔一道短竖线，不只是「返回顶部」：没有滚动
@@ -1047,45 +1047,57 @@ func (a *app) renderDetailToolAction(c *ui.Context, d *detailState, act detailTo
 	}
 }
 
-// detailToolButton 是悬浮工具条里的纯图标按钮：无边框、无填充，悬停才出现
-// 浅底，与列表页的 FAB 区分开。label 供读屏与测试识别，tip 是悬停说明。
-func (a *app) detailToolButton(c *ui.Context, icon *ui.SVG, label, tip string, onClick func()) {
-	t := c.Theme()
+// 悬浮工具条按钮的几何锁定值：30 的方形热区 + 17 的图标，决定工具条中心
+// 与右栏「评论」标题齐平（见 TestDetailToolbarCenteredWithReplyTitle）。
+// 从 mygo 裸画法换成 Lobe 组件也不能挪这两个数。
+const (
+	detailToolBox   float32 = 30
+	detailToolGlyph float32 = 17
+)
+
+// detailActionIcon 是详情页悬浮工具条共用的 Lobe 图标按钮：ActionIcon 管方块
+// 尺寸、圆角、透明底、hover 浅底与键盘焦点，label 给读屏和点击测试，tip 说明
+// 点了会发生什么。忙碌时退成同尺寸的禁用方块 + Lobe 转圈，请求在途不会连点。
+func (a *app) detailActionIcon(c *ui.Context, icon *ui.SVG, label, tip string, busy bool, onClick func()) ui.Element {
 	tk := lobetheme.TokensOf(c)
-	b := ui.Box(c).Size(30, 30).Radius(tk.BorderRadiusSM).Center().Background(ui.Transparent)
-	hovered := b.Hovered()
-	if hovered {
-		b.Background(tk.FillSecondary)
+	if busy {
+		b := ui.ButtonBase(c).Size(detailToolBox, detailToolBox).Center().Disabled(true).
+			Radius(tk.BorderRadiusSM).Background(ui.Transparent).Border(1, ui.Transparent)
+		b.Label(label).Tooltip(tip)
+		b.Children(func() { lobeSpin(c, feedback.SpinProps{CustomSize: 15}) })
+		return b
 	}
-	ink := t.TextMuted
-	if hovered {
-		ink = t.Text
-	}
-	b.Children(func() {
-		ui.Icon(c, icon).Size(17, 17).TextColor(ink)
+	b := action.StyleActionIcon(c, ui.ButtonBase(c), icon, action.ActionIconProps{
+		BlockSize: detailToolBox, GlyphSize: detailToolGlyph,
 	})
-	b.Label(label).Tooltip(tip).OnClick(onClick)
+	// Lobe 默认用 TextTertiary 画静止图标、TextSecondary 画悬停图标；这里把
+	// 悬停提亮到完整的 Text，和正文里其它图标的层级保持一致。
+	ink := tk.TextSecondary
+	if b.Hovered() {
+		ink = tk.Text
+	}
+	b.TextColor(ink).Label(label).Tooltip(tip)
+	if onClick != nil {
+		b.OnClick(onClick)
+	}
+	return b
+}
+
+// detailToolButton 是悬浮工具条里的纯图标按钮：Lobe 的 ActionIcon 给浅底与
+// 圆角，label 供读屏与测试识别，tip 是悬停说明。
+func (a *app) detailToolButton(c *ui.Context, icon *ui.SVG, label, tip string, onClick func()) {
+	a.detailActionIcon(c, icon, label, tip, false, onClick)
 }
 
 // detailCopyButton 是工具条里的「复制链接」：把 href 写进系统剪贴板，结果
 // 由主窗口 toast 报告（成功或失败都提示，见 copyToClipboard）。悬停时图标
 // 换强调色，和旁边的页面操作区分开。
 func (a *app) detailCopyButton(c *ui.Context, href, label, tip string) {
-	t := c.Theme()
-	tk := lobetheme.TokensOf(c)
-	b := ui.Box(c).Size(30, 30).Radius(tk.BorderRadiusSM).Center().Background(ui.Transparent)
-	hovered := b.Hovered()
-	if hovered {
-		b.Background(tk.FillSecondary)
+	b := a.detailActionIcon(c, lucide.Copy(), label, tip, false, nil)
+	// 悬停时图标换强调色，和旁边的页面操作区分开。
+	if b.Hovered() {
+		b.TextColor(lobetheme.TokensOf(c).Primary)
 	}
-	ink := t.TextMuted
-	if hovered {
-		ink = tk.Primary
-	}
-	b.Children(func() {
-		ui.Icon(c, copyLinkIcon).Size(17, 17).TextColor(ink)
-	})
-	b.Label(label).Tooltip(tip)
 	if b.Clicked() {
 		a.copyToClipboard(c, href, a.detailToast(), "已复制链接")
 	}
@@ -1113,37 +1125,12 @@ func (a *app) copyToClipboard(c *ui.Context, text string, target toastTarget, ok
 // detailRefreshButton 是悬浮工具条里的刷新按钮：请求在途时换成转圈并禁用，
 // 避免连点重复发请求。它刷新的是整页（正文 + 第一页评论）。
 func (a *app) detailRefreshButton(c *ui.Context, d *detailState) {
-	t := c.Theme()
-	tk := lobetheme.TokensOf(c)
 	loading := d.topicLoading || d.replyLoading
-	b := ui.Box(c).Size(30, 30).Radius(tk.BorderRadiusSM).Center().Background(ui.Transparent)
-	hovered := b.Hovered()
-	if hovered && !loading {
-		b.Background(tk.FillSecondary)
-	}
-	if loading {
-		b.Disabled(true)
-	}
-	b.Children(func() {
-		if loading {
-			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
-			return
-		}
-		ink := t.TextMuted
-		if hovered {
-			ink = t.Text
-		}
-		ui.Icon(c, refreshIcon).Size(17, 17).TextColor(ink)
-	})
-	b.Label("刷新")
 	tip := "重新加载正文与评论"
 	if loading {
 		tip = "正在刷新…"
 	}
-	b.Tooltip(tip)
-	if !loading {
-		b.OnClick(a.refreshDetail)
-	}
+	a.detailActionIcon(c, lucide.RefreshCw(), "刷新", tip, loading, a.refreshDetail)
 }
 
 func (a *app) topicBody(c *ui.Context, d *detailState) {

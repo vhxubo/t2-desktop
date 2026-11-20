@@ -7,6 +7,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
 )
 
 // 「评论开关」：作者关闭 / 重新开启自己帖子下的评论。端点逐字照抄
@@ -185,38 +186,15 @@ func (a *app) commentsStatusButton(c *ui.Context, d *detailState) {
 	if !a.canToggleComments(d) {
 		return
 	}
-	t := c.Theme()
 	busy := d.comments.busy
-	icon, label, tip := commentsOffIcon, "关闭评论", "关闭评论：关闭后其他读者不能再回复"
+	icon, label, tip := lucide.MessageSquareOff(), "关闭评论", "关闭评论：关闭后其他读者不能再回复"
 	if d.topic.CommentsClosed {
-		icon, label, tip = commentBubbleIcon, "开启评论", "重新开启这篇帖子的评论"
+		icon, label, tip = lucide.MessageCircle(), "开启评论", "重新开启这篇帖子的评论"
 	}
 	if busy {
 		label, tip = "正在提交评论开关", "正在提交…"
 	}
-	b := ui.Box(c).Size(30, 30).Radius(8).Center().Background(ui.Transparent)
-	hovered := b.Hovered()
-	if hovered && !busy {
-		b.Background(t.SurfaceHover)
-	}
-	if busy {
-		b.Disabled(true)
-	}
-	b.Children(func() {
-		if busy {
-			lobeSpin(c, feedback.SpinProps{CustomSize: 14})
-			return
-		}
-		ink := t.TextMuted
-		if hovered {
-			ink = t.Text
-		}
-		ui.Icon(c, icon).Size(17, 17).TextColor(ink)
-	})
-	b.Label(label).Tooltip(tip)
-	if !busy {
-		b.OnClick(func() { a.askToggleComments(d) })
-	}
+	a.detailActionIcon(c, icon, label, tip, busy, func() { a.askToggleComments(d) })
 }
 
 // commentsStatusDialog 是「关闭 / 开启评论」的确认框。确认后由
