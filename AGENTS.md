@@ -32,45 +32,7 @@ a pure white page.
 
 - 代码注释、日志、界面文案保持中文，与现有代码一致；只有提交信息必须英文。
 - 测试会断言这些中文文案，改文案要同步改测试。
-
-## 交互反馈：结果优先用窗口内 toast
-
-**操作结果（成功或失败）优先用窗口内 toast，不要用内联文字占版面。** 保存代理、
-清理缓存、标记已读、发评论、关注作者这类「点一下就有结果」的动作，结果都以窗口
-底部的 toast 报告，几秒后自己消失。
-
-- 新代码要发提示时用 `a.toast(target, text)`（见 `toasts.go`），不要在图里加一行
-  红色或绿色的结果文字。页面里只留「正在做」的进度（转圈 + 说明），不留结论。
-- `c.Toast` 只能在构建期调用。后台结果先排队，再由目标窗口的 view 调
-  `a.drainToasts(c, ...)` 领走；不要在协程或状态回调里直接调 `c.Toast`。
-- 目标窗口不在了就退回主窗口（`mainClaimsToasts`），别让结果悄悄丢掉。
-- 页面级状态例外，仍留在页面里：整页「加载失败」、「加载更多失败」这类要说明页面
-  为什么是空的、并且要给出「重试」入口的提示保持内联，不要换成 toast。
-- 测试用 `tt.HasText(...)` 断言 toast 文案，用 `tt.Advance(...)` 验证它会自己消失；
-  toast 只在构建期发出，所以断言前要先 `tt.Frame()` 让窗口领走队列里的提示。
-
-## 操作按钮：图标 + tooltip
-
-**界面上的操作按钮优先用「图标 + tooltip」表现，不写文字标签；所有关闭按钮一律
-如此。** 图标把宽度留给内容，说明放在悬浮提示里，读屏与点击测试靠无障碍名命中。
-
-- 关闭一律用 ✕ 图标 + tooltip「关闭」。窗口标题栏用 `titleBarButton`，详情页悬浮
-  工具条用 `detailToolButton`，编辑器工具条用 `editorIconButton`，对话框标题行 /
-  设置项 / 列表行用 `iconActionButton`（见 `icon_button.go`）。不要写
-  `ui.Button(c, "关闭")`，也不要为某个位置再抄一套图标按钮画法。
-- 通行图标（叉、废纸篓、刷新、返回、收起 / 展开、齿轮、退出、发送）能独立表意的
-  动作都用图标；含义不确定、或同一处并排几个图标会分不清的（账号行里的「打开 /
-  退出」）保留文字。
-- 图标按钮两样必须齐备：`.Label(...)` 给读屏、键盘焦点与点击测试用，`.Tooltip(...)`
-  说明点了会发生什么（不是把 label 复述一遍）。只画图标不挂 Tooltip 等于让人猜。
-- 图标本身只是装饰时（窗口标题、页签、空状态插图）才可以直接 `ui.Icon` 放着。
-- 文字按钮留给这些位置：主操作（发布、保存、签到、投入金币）、对话框底部成对的
-  取消 / 确认、页面级状态里的「重试 / 去登录 / 打开浏览器授权」、带内容的行内按钮
-  （昵称、节点、楼层号）与二选一芯片。
-- 新图标加在 `icons.go`（24×24、`stroke=currentColor` 的线性图标），不要在界面
-  代码里现场拼 SVG。
-- 改按钮文案或换成图标时同步改测试：图标按钮用 `tt.Click("无障碍名")` /
-  `tt.Access("无障碍名")` 命中，`AccessInfo.Description` 就是 tooltip 文案。
+- 禁止在 UI 部分展示过多文案描述
 
 ## 项目约定
 
@@ -78,7 +40,7 @@ a pure white page.
   唯一的例外是多账号授权页（见下方「授权走哪个浏览器」），它放在内置浏览器窗口里。
 - 应用状态里不要保存 `ui.Element` 或 `*ui.Context`：元素每次构建都会失效。
   后台结果通过 `Window.Update` / `app.publish` 回到 UI 线程。
-- 改 UI 前先按 `.agents/skills/mygo-maintenance/SKILL.md` 的约定核对 mygo 版本与 API。
+- 改 UI 前先按 `.agents/skills/mygo-maintenance/SKILL.md` 的约定核对 mygo 版本与 API， 基于 lobe ui。
 - 登录令牌（含 refresh_token）一律走 `mygo.Secrets`（OS 凭据库：Windows
   凭据管理器 / macOS Keychain / Linux Secret Service），不得明文落盘。实现见
   `auth.go` 的 `tokenStore` 接口与 `secureTokenStore`：仅在凭据库不可用

@@ -221,7 +221,7 @@ gofmt -l .                      # 不应输出任何文件
 | 交互（投票 / 表态 / 关注） | `vote.go`、`interact.go`、`follow.go` |
 | 书签 / 合集 | `bookmarks.go`、`collections.go` |
 | 关注与粉丝名单 | `follows.go`、`follows_ui.go` |
-| 金币 | `coins.go`、`coins_ui.go`、`coins_window.go`、`coin_events.go`、`coin_cache.go` |
+| 金币 | `coins.go`、`coins_ui.go`、`coins_window.go`、`coin_cache.go` |
 | 潘多拉 | `pandora.go`、`pandora_window.go`、`pandora_ui.go` |
 | 通知 | `notifications.go`、`notifications_ui.go`、`stream.go`（SSE） |
 | 搜索 / 节点 | `search.go`、`search_ui.go`、`nodes.go`、`cascader.go` |
