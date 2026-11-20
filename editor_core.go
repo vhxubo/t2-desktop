@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
@@ -40,13 +41,39 @@ type mdEditor struct {
 	// emojiQuery 是表情搜索词；emojiOnlyPost 为真时只看当前帖子自带的表情。
 	emojiQuery    string
 	emojiOnlyPost bool
+	// emojiTab 切换社区图片表情（0）与内置系统表情（1）。
+	emojiTab int
+	// emojiCategory 是系统表情的分类筛选，值为中文标签，空串与「全部」同义。
+	emojiCategory string
 	// emojiShown 限制一次画出的表情数，面板用「显示更多」逐批展开。
 	emojiShown int
+	// base64Open 是「Base64 编码」Modal 的开合；base64Input 是 Modal 里的原文
+	// 输入框。确认后把编码串插进正文，窗口关掉、下次打开都能重来。
+	base64Open  bool
+	base64Input string
+	// 插入帖子选择器（GET /v1/me/topics）：面板开合、搜索词、结果和退避。
+	// 与表情 / 图片一样是纯 UI 状态，跟着各自编辑器的生命周期走。
+	topicOpen     bool
+	topicQuery    string
+	topicQueried  string
+	topicLoading  bool
+	topicLoaded   bool
+	topicErr      string
+	topicSeq      uint64
+	topicItems    []myTopicPick
+	topicTriedAt  time.Time
+	topicFailures int
+	// topicEditAt 是检测到搜索词变化的时间，用来给远程搜索做短暂防抖：
+	// 打一串字只发一次请求，而不是每敲一个键都打一次接口。
+	topicEditAt time.Time
 }
+
+// systemEmojiAll 是系统表情分类筛选的「全部」选项，与选择器里的第一项一致。
+const systemEmojiAll = "全部"
 
 // newMDEditor 给一份默认状态：表情面板每批 40 个。
 func newMDEditor() mdEditor {
-	return mdEditor{emojiShown: emojiPageSize}
+	return mdEditor{emojiShown: emojiPageSize, emojiCategory: systemEmojiAll}
 }
 
 const (
@@ -189,12 +216,27 @@ func (e *mdEditor) togglePanel(which string) {
 		e.emojiOpen = !e.emojiOpen
 		if e.emojiOpen {
 			e.imageOpen = false
+			e.topicOpen = false
 			e.emojiShown = emojiPageSize
 		}
 	case "image":
 		e.imageOpen = !e.imageOpen
 		if e.imageOpen {
 			e.emojiOpen = false
+			e.topicOpen = false
+		}
+	case "topic":
+		e.topicOpen = !e.topicOpen
+		if e.topicOpen {
+			e.emojiOpen = false
+			e.imageOpen = false
+		}
+	case "base64":
+		e.base64Open = !e.base64Open
+		if e.base64Open {
+			e.emojiOpen = false
+			e.imageOpen = false
+			e.topicOpen = false
 		}
 	}
 }
@@ -255,6 +297,42 @@ func emojiShortcode(e emojiInfo) string {
 		return ":" + code + ":"
 	}
 	return ""
+}
+
+// systemEmojiOptions 给分类下拉用：第一项是「全部」。
+func systemEmojiOptions() []string {
+	opts := make([]string, 0, len(systemEmojiCategories)+1)
+	opts = append(opts, systemEmojiAll)
+	for _, cat := range systemEmojiCategories {
+		opts = append(opts, cat.Label)
+	}
+	return opts
+}
+
+// filteredSystemEmojis 按分类与搜索词筛选内置系统表情。搜索匹配英文别名，
+// 与线上 emoji-picker-react 的英文搜索保持一致。
+func filteredSystemEmojis(query, category string) []systemEmoji {
+	q := strings.ToLower(strings.TrimSpace(query))
+	var catID string
+	if category != "" && category != systemEmojiAll {
+		for _, c := range systemEmojiCategories {
+			if c.Label == category {
+				catID = c.ID
+				break
+			}
+		}
+	}
+	out := make([]systemEmoji, 0, len(systemEmojis))
+	for _, e := range systemEmojis {
+		if catID != "" && e.Category != catID {
+			continue
+		}
+		if q != "" && !strings.Contains(strings.ToLower(e.Names), q) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // editorPendingUploads 数出正文里还没换成真实 URL 的图片占位符。发布前用它

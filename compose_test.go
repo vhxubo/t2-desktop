@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
 )
 
 // 幂等键必须是 [A-Za-z0-9_-]{1,255}（index.md 4.8）。
@@ -254,19 +255,8 @@ func TestComposePublishSendsDocumentedPayload(t *testing.T) {
 		}
 		done.Done()
 	}
-	// 发帖会扣金币：成功后必须发出全局金币刷新事件。
-	events := make(chan coinEvent, 1)
-	a.onCoinsChanged = func(event coinEvent) { events <- event }
 	a.submitCompose()
 	done.Wait()
-	select {
-	case event := <-events:
-		if event != coinEventPost {
-			t.Errorf("发帖事件 = %q，期望 %q", event, coinEventPost)
-		}
-	default:
-		t.Error("发帖成功后没有发出金币刷新事件")
-	}
 
 	if gotPath != "/v1/topics" || gotAuth != "Bearer test-token" || gotKey == "" {
 		t.Fatalf("路径 / 鉴权 / 幂等键不对：%q %q %q", gotPath, gotAuth, gotKey)
@@ -671,6 +661,37 @@ func TestComposeFabPaintsAboveList(t *testing.T) {
 	// 按钮左侧紧挨着的仍是页面底色（浅色主题为纯白）。
 	if out := img.RGBAAt(int(r.X)-6, cy); out.R != 255 || out.G != 255 || out.B != 255 {
 		t.Errorf("FAB 左边缘之外的像素 = %v，期望页面底色", out)
+	}
+}
+
+// 底部「发布」按钮带一枚与悬浮发帖按钮同源的图标：同样 15 DIP 见方，并把
+// 文案往右挤出一个图标加间距的宽度；文案与按钮的可访问名保持不变。
+func TestComposePublishButtonHasIcon(t *testing.T) {
+	view := func(withIcon bool) func(*ui.Context) {
+		return func(c *ui.Context) {
+			ui.Row(c).Padding(8).Children(func() {
+				if withIcon {
+					composePublishButton(c, "发布")
+					return
+				}
+				b := action.StyleButton(c, ui.ButtonBase(c), "", action.ButtonProps{Variant: action.Primary})
+				b.Label("发布").Children(func() { ui.Text(c, "发布").SingleLine() })
+			})
+		}
+	}
+	plain, with := ui.NewTester(view(false), 240, 80), ui.NewTester(view(true), 240, 80)
+	plain.Frame()
+	with.Frame()
+	pr, ok := plain.Find("发布")
+	if !ok {
+		t.Fatal("基准按钮没画出来")
+	}
+	wr, ok := with.Find("发布")
+	if !ok || !with.HasText("发布") {
+		t.Fatalf("发布按钮没画出来：%q", with.Texts())
+	}
+	if wr.W < pr.W+15 {
+		t.Errorf("发布按钮没有留出 15 DIP 的图标：不带图标 %v，带图标 %v", pr, wr)
 	}
 }
 

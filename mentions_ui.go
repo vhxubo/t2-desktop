@@ -8,6 +8,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
@@ -85,12 +86,20 @@ func mentionAtRect(c *ui.Context, d *detailState, padX, padY float32) ui.Rect {
 	return ui.Rect{X: field.X + padX + r.X, Y: field.Y + padY + r.Y, W: r.W, H: r.H}
 }
 
-// mentionPopover 让面板的一个角紧贴 @：下方放得下就从 @ 的左下角向下展开，
+// mentionPopover 让气泡的一个角紧贴 @：下方放得下就从 @ 的左下角向下展开，
 // 放不下就把面板下沿贴到 @ 上方；两边都不够时选大的那一边，内容自己滚。
-// 面板不超出窗口左右边缘（@ 在行尾时往左让），也不会盖住窗口标题栏。
+// 气泡的水平位置由定位块决定，不超出窗口左右边缘（@ 在行尾时往左让）。
 func (a *app) mentionPopover(c *ui.Context, d *detailState, host replySurface, padX, padY float32) {
 	st := &d.mentions
-	if !st.open || st.host != host {
+	if !st.open {
+		// Lobe 气泡自己会在点窗外 / Esc 时收起；收起时停掉排队中的用户搜索，
+		// 免得面板都没了还花一次配额。
+		if st.search.pending != "" || st.search.busy || st.search.query != "" {
+			st.resetSearch()
+		}
+		return
+	}
+	if st.host != host {
 		return
 	}
 	data := a.mentionData(d, d.draft)
@@ -100,7 +109,6 @@ func (a *app) mentionPopover(c *ui.Context, d *detailState, host replySurface, p
 		// 一个可 @ 的人都没有：不摆一块空面板，等名单回来或用户改搜索词。
 		return
 	}
-	tk := lobetheme.TokensOf(c)
 	at := mentionAtRect(c, d, padX, padY)
 	winW, winH := c.Size()
 	width := st.panelWidth(rows)
@@ -127,30 +135,22 @@ func (a *app) mentionPopover(c *ui.Context, d *detailState, host replySurface, p
 		left = winW - mentionPanelMargin - width
 	}
 	left = max(left, mentionPanelMargin)
+	placement, anchorY := lobeoverlay.Bottom, at.Y+at.H
+	if up {
+		placement, anchorY = lobeoverlay.Top, at.Y
+	}
 
 	ui.Overlay(c, func() {
-		dismiss := ui.Box(c).Absolute().Left(0).Top(0).Fill()
-		dismiss.Label("收起提及候选").OnClick(func() {
-			st.open = false
-			// 顺手停掉排队中的用户搜索：面板都收起了，不该再花一次配额。
-			st.resetSearch()
+		// 零尺寸的定位块贴在 @ 上：Lobe 气泡按它摆面板，自己管点窗外 / Esc 关闭。
+		// 气泡水平居中于定位块，所以把定位块放在面板中心的水平位置。
+		anchor := ui.Box(c).Absolute().Left(left+width/2).Top(anchorY).Size(0, 0)
+		lobeoverlay.Popover(c, anchor, &st.open, lobeoverlay.PopoverProps{Placement: placement}, func() {
+			// KeepFocus：在面板里点行、点重试都不把焦点从输入框抢走，选完人
+			// 光标还在原处，接着就能打字。
+			ui.Column(c).Width(width).KeepFocus().Label("提及候选面板").Children(func() {
+				a.mentionPanel(c, d, host, rows, data, maxH)
+			})
 		})
-
-		// KeepFocus：在面板里点行、点重试都不把焦点从输入框抢走，选完人
-		// 光标还在原处，接着就能打字。
-		panel := ui.Column(c).Width(width).Padding(mentionPanelPad).Gap(mentionPanelGap).
-			Radius(tk.BorderRadius).Background(tk.BgElevated).TextColor(tk.Text).
-			FontSize(tk.FontSize).KeepFocus().Label("提及候选面板")
-		if up {
-			panel.Absolute().Left(left).Bottom(winH - at.Y + mentionPanelGap)
-		} else {
-			panel.Absolute().Left(left).Top(at.Y + at.H + mentionPanelGap)
-		}
-		tk.Elevate(panel, lobetheme.BoxShadowSecondary)
-		if panel.OverlayShortcut(0, ui.KeyEscape) {
-			st.open = false
-		}
-		panel.Children(func() { a.mentionPanel(c, d, host, rows, data, maxH) })
 	})
 }
 

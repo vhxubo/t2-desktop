@@ -180,6 +180,17 @@ type mentionSearchState struct {
 	cache map[string][]mentionPerson
 }
 
+// reset 收起候选面板并清掉这一轮 @前缀。名单缓存与搜索缓存都保留，下次
+// 键入 @ 仍然即时。: 面板打开时用它让两套候选互斥（见 emoji_shortcode.go）。
+func (st *mentionState) reset() {
+	st.typing = false
+	st.open = false
+	st.tokenStart, st.tokenEnd = -1, -1
+	st.query = ""
+	st.active = 0
+	st.resetSearch()
+}
+
 // resetSearch 关掉这一轮搜索：停掉排队、作废在途请求、清掉当前结果。
 // 缓存保留，回到同一个前缀时仍然即时。
 func (st *mentionState) resetSearch() {

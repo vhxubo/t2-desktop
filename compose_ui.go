@@ -179,6 +179,26 @@ func (a *app) redrawComposeWindow() {
    主页的悬浮入口
 ---------------------------------------------------------------- */
 
+// composePostIcon 画发帖主操作里的图标。主页悬浮的「发帖」按钮和窗口底部的
+// 「发布」按钮都用它：同一枚 SquarePen、同样的 15×15 与强调色前景，保证两处
+// 的发帖图标看着是同一个（见 composeFab、composePublishButton）。
+func composePostIcon(c *ui.Context) {
+	tk := lobetheme.TokensOf(c)
+	ui.Icon(c, lucide.SquarePen()).Size(15, 15).TextColor(tk.PrimaryForeground)
+}
+
+// composePublishButton 画底部的主操作按钮：图标 + 文案，图标与文字的间距沿用
+// Lobe Button 自带的 6 DIP，配色直接取强调色按钮的前景色，与 FAB 同一套观感。
+func composePublishButton(c *ui.Context, label string) ui.Element {
+	b := action.StyleButton(c, ui.ButtonBase(c), "", action.ButtonProps{Variant: action.Primary})
+	b.Label(label).Children(func() {
+		composePostIcon(c)
+		// 与 action.Button 的文案用同一字阶，只是前面多了一枚图标。
+		ui.Text(c, label).SingleLine()
+	})
+	return b
+}
+
 // composeFab 是主页右下角那一列悬浮按钮里的「发帖」：主操作，放在最下面。
 // 位置由 listFabs 的竖列给（见 fabs.go），这里只管长什么样；公开 tab 与
 // 私人 tab 都能用（未登录时点它先走授权）。图标 + 文案一起显示，任何窗口
@@ -189,7 +209,7 @@ func (a *app) composeFab(c *ui.Context) {
 	b := action.StyleButton(c, ui.ButtonBase(c), "", action.ButtonProps{Variant: action.Primary})
 	b.Label("发帖").Tooltip("写一篇新帖子").OnClick(a.showCompose)
 	b.Children(func() {
-		ui.Icon(c, lucide.SquarePen()).Size(15, 15).TextColor(tk.PrimaryForeground)
+		composePostIcon(c)
 		display.Text(c, "发帖", display.TextProps{FontSize: 12, Strong: true}).
 			Font(sidebarFont).SingleLine().TextColor(tk.PrimaryForeground)
 	})
@@ -542,7 +562,7 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 				a.editorIconToggle(c, st.preview == 1, eyeIcon, "预览", "预览模式",
 					func() { st.preview = 1 })
 			})
-			a.editorPanelButtons(c, &st.mdEditor, "表情", "上传图片")
+			a.editorPanelButtons(c, &st.mdEditor, &st.body, nil, "表情", "上传图片")
 			count := display.Text(c, fmt.Sprintf("%d / %d 字",
 				utf8.RuneCountInString(st.body), composeContentMax),
 				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
@@ -1373,7 +1393,12 @@ func (a *app) composeFooter(c *ui.Context, st *composeState) {
 			})
 		}
 		ui.Spacer(c).Grow(1)
-		if action.Button(c, "清空", action.ButtonProps{Size: lobetheme.Small}).Clicked() && !busy {
+		// 「清空」退成低调的文字按钮，让旁边的强调色「发布」成为唯一的视觉
+		// 重心；发布在途时直接禁用，省得点了没反应还要靠提示解释。
+		clear := action.Button(c, "清空", action.ButtonProps{
+			Variant: action.Text,
+		}).Tooltip("清空当前草稿，保留节点选择").Disabled(busy)
+		if clear.Clicked() {
 			if moment {
 				st.resetMomentForm()
 			} else {
@@ -1382,15 +1407,15 @@ func (a *app) composeFooter(c *ui.Context, st *composeState) {
 			}
 		}
 		// 「当前账号」与「发布」贴在一起：多账号时点下去之前就能看清是哪个
-		// 账号发出去（见 account_badge.go）。
+		// 账号发出去（见 account_badge.go）。发布按钮带图标，样式与主页悬浮
+		// 的「发帖」按钮共用同一套（见 composePostIcon）。
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Children(func() {
 			a.accountBadge(c)
 			label := "发布"
 			if moment {
 				label = "发布动态"
 			}
-			publish := action.Button(c, label, action.ButtonProps{Variant: action.Primary}).
-				Disabled(busy)
+			publish := composePublishButton(c, label).Disabled(busy)
 			if publish.Clicked() {
 				if moment {
 					a.submitMoment()
@@ -1484,9 +1509,6 @@ func (a *app) submitCompose() {
 			if a.autoLoad {
 				a.reloadCurrent()
 			}
-			// 发帖会扣金币（随帖的金币池、兑换码红包也都算在这一笔里）：
-			// 发出全局金币刷新事件，标题栏与金币窗口一起更新。
-			a.coinsChanged(coinEventPost)
 			if a.onPostPublished != nil {
 				a.onPostPublished(created, nil)
 			}
@@ -1546,9 +1568,6 @@ func (a *app) submitMoment() {
 			st.momentSig = ""
 			st.resetMomentForm()
 			a.toast(toastCompose, "动态已发布")
-			// 动态可能产生内容检查等扣费：走全局金币刷新，已经加载过的
-			// 余额与流水一起更新。
-			a.coinsChanged(coinEventPost)
 			if a.onPostPublished != nil {
 				a.onPostPublished(created, nil)
 			}

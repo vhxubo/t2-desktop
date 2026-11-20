@@ -301,7 +301,7 @@ func (a *app) editEditorSection(c *ui.Context, st *editState) {
 		ui.Row(c).FillWidth().Gap(2).AlignItems(ui.Center).KeepFocus().
 			Children(func() {
 				a.editorToolbar(c, &st.mdEditor, &st.body)
-				a.editorPanelButtons(c, &st.mdEditor, "插入表情", "插入图片")
+				a.editorPanelButtons(c, &st.mdEditor, &st.body, st.emojis, "插入表情", "插入图片")
 				a.editorIconToggle(c, st.winPreview, eyeIcon, "预览",
 					"显示 / 收起右侧预览", func() { st.winPreview = !st.winPreview })
 				ui.Textf(c, "%d / %d 字", utf8.RuneCountInString(st.body), composeContentMax).

@@ -632,6 +632,7 @@ func TestMentionPanelCornerAtAt(t *testing.T) {
 
 	typeAt(t, tt)
 	waitMentionLoaded(t, a)
+	tt.Advance(500 * time.Millisecond) // 等 Lobe 气泡入场动画结束再量位置
 	tt.Frame()
 	panel, ok := tt.Find("提及候选面板")
 	if !ok {
@@ -814,6 +815,8 @@ func TestMentionPanelFitsContent(t *testing.T) {
 		a, tt := mentionUIApp(t, srv)
 		typeAt(t, tt)
 		waitMentionLoaded(t, a)
+		// Lobe 气泡入场时会缩放；等动画结束再量尺寸，别把中间帧当成最终大小。
+		tt.Advance(500 * time.Millisecond)
 		tt.Frame()
 		panel, ok := tt.Find("提及候选面板")
 		if !ok {

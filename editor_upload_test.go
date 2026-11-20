@@ -531,6 +531,9 @@ func TestEditorEmojiPanelAndPreview(t *testing.T) {
 	if a.compose.body != ":sigh:" {
 		t.Errorf("点击表情应插入一层冒号的短码：%q", a.compose.body)
 	}
+	if a.compose.emojiOpen || tt.HasText("搜索表情") {
+		t.Errorf("选中表情后面板没有自动收起：%q", tt.Texts())
+	}
 
 	// 过滤：只看本帖表情时，全局短码不出现。
 	community := map[string]string{":party:": "/emojis/party.png"}
