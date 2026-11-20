@@ -129,6 +129,17 @@ type accountProfile struct {
 	FollowKnown bool
 }
 
+// roleGuardian 是站点角色里的「守护者」。守护者和 Pro 会员一样有 2Libra
+// 官方图床的上传权限，每天 20 张的配额由服务端控制，客户端不另计数。
+const roleGuardian = "guardian"
+
+// canUseOfficialHost 判断这个账号能不能用 2Libra 官方图床：Pro 会员，或
+// 站点角色是守护者（role=guardian），两者任一即可。role 与 is_pro 一样来自
+// /v1/me 与公开资料共用的解码（见 decodeAccountProfile）。
+func (p accountProfile) canUseOfficialHost() bool {
+	return p.IsPro || p.Role == roleGuardian
+}
+
 // profileState 是「我的」窗口的全部界面状态。只有 UI 线程读写；后台请求
 // 完成后通过 publish 回填，并用每类数据的 seq 丢弃过期结果。
 type profileState struct {
@@ -403,10 +414,10 @@ func (a *app) loadProfileInfo(name string) {
 			}
 			ps.user = p
 			ps.infoErr = ""
-			// 「我的」窗口读到的资料最权威：顺手把 Pro 状态写回令牌缓存，
+			// 「我的」窗口读到的资料最权威：顺手把 Pro 状态与角色写回令牌缓存，
 			// 图库设置里官方图床的可用性跟着一起更新。
 			if p.Name != "" && p.Name == a.auth.username() {
-				a.auth.setProStatus(p.IsPro)
+				a.auth.setOfficialHostAccess(p.IsPro, p.Role)
 			}
 			a.prefetchAvatars(p.Avatar)
 		})

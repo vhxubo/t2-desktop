@@ -660,9 +660,9 @@ func TestParseFormFields(t *testing.T) {
 	}
 }
 
-// 官方图床只对 Pro 会员开放：未登录、非 Pro、还没确认都不能算就绪，
-// 提示要说清楚是哪一种。
-func TestOfficialImageHostRequiresPro(t *testing.T) {
+// 官方图床只对 Pro 会员与守护者（role=guardian）开放：未登录、无权限、还没
+// 确认都不能算就绪，提示要说清楚是哪一种。
+func TestOfficialImageHostRequiresProOrGuardian(t *testing.T) {
 	a := testApp(t)
 	h := hostByID(a.hosts, "2libra")
 	if a.hostReady(h) {
@@ -677,36 +677,47 @@ func TestOfficialImageHostRequiresPro(t *testing.T) {
 		t.Fatal(err)
 	}
 	if a.hostReady(h) {
-		t.Error("还没确认 Pro 状态时不该就绪")
+		t.Error("还没确认权限时不该就绪")
 	}
-	if r := a.hostNotReadyReason(h); !strings.Contains(r, "Pro") {
+	if r := a.hostNotReadyReason(h); !strings.Contains(r, "权限") {
 		t.Errorf("未确认提示 = %q", r)
 	}
-	a.auth.setProStatus(false)
+	a.auth.setOfficialHostAccess(false, "")
 	if a.hostReady(h) {
-		t.Error("非 Pro 账号不该就绪")
+		t.Error("既不是 Pro 也不是守护者的账号不该就绪")
 	}
-	if r := a.hostNotReadyReason(h); !strings.Contains(r, "Pro") || !strings.Contains(r, "Token") {
-		t.Errorf("非 Pro 提示应指向免 Token 图床：%q", r)
+	if r := a.hostNotReadyReason(h); !strings.Contains(r, "Pro") || !strings.Contains(r, "守护者") || !strings.Contains(r, "Token") {
+		t.Errorf("无权限提示应指向免 Token 图床并说明门槛：%q", r)
 	}
-	a.auth.setProStatus(true)
+	// 守护者即使 is_pro=false 也能用：这是本次要支持的场景。
+	a.auth.setOfficialHostAccess(false, roleGuardian)
+	if !a.hostReady(h) {
+		t.Error("守护者账号应能用官方图床")
+	}
+	a.auth.setOfficialHostAccess(true, "")
 	if !a.hostReady(h) {
 		t.Error("Pro 账号应能用官方图床")
 	}
-	// 「我的」窗口读到的资料优先于缓存；但加载失败时不能当成「非 Pro」。
+	// 「我的」窗口读到的资料优先于缓存；但加载失败时不能当成「无权限」。
 	a.profile.infoLoaded = true
 	a.profile.infoErr = "网络错误"
 	if !a.hostReady(h) {
-		t.Error("资料加载失败不该把 Pro 账号判成非 Pro")
+		t.Error("资料加载失败不该把有权账号判成无权")
 	}
 	a.profile.infoErr = ""
 	a.profile.user = accountProfile{Name: "jimmy", IsPro: false}
 	if a.hostReady(h) {
-		t.Error("资料说不是 Pro 时应以资料为准")
+		t.Error("资料说不是 Pro 也不是守护者时应以资料为准")
+	}
+	// 资料里的 role=guardian 同样要能被识别（/v1/me 的实测字段）。
+	a.profile.user = accountProfile{Name: "jimmy", IsPro: false, Role: roleGuardian}
+	if !a.hostReady(h) {
+		t.Error("资料里 role=guardian 应能用官方图床")
 	}
 }
 
-// Pro 状态跟着令牌落盘：重启后不必再问一次，刷新令牌也不能把它丢掉。
+// Pro / 守护者状态跟着令牌落盘：重启后不必再问一次，刷新令牌也不能把它丢掉。
+// 守护者的 is_pro=false，靠 role 字段单独记住。
 func TestProStatusCachedWithToken(t *testing.T) {
 	dir := t.TempDir()
 	a := newApp(dir)
@@ -715,27 +726,34 @@ func TestProStatusCachedWithToken(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a.auth.setProStatus(true)
-	if pro, known := a.auth.proStatus(); !known || !pro {
-		t.Fatalf("Pro 状态 = %v / %v", pro, known)
+	a.auth.setOfficialHostAccess(false, roleGuardian)
+	if allowed, known := a.auth.officialHostAccess(); !known || !allowed {
+		t.Fatalf("守护者权限 = %v / %v", allowed, known)
 	}
-	// 刷新令牌拿到的是新 tokenData，不带账号资料：Pro 结论要沿用。
+	// 刷新令牌拿到的是新 tokenData，不带账号资料：权限结论要沿用。
 	if err := a.auth.storeToken(tokenData{
 		AccessToken: "tok2", RefreshToken: "r2", TokenType: "Bearer",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if pro, known := a.auth.proStatus(); !known || !pro {
-		t.Errorf("刷新后 Pro 状态丢了：%v / %v", pro, known)
+	if allowed, known := a.auth.officialHostAccess(); !known || !allowed {
+		t.Errorf("刷新后守护者权限丢了：%v / %v", allowed, known)
 	}
 
 	b := newApp(dir)
-	if pro, known := b.auth.proStatus(); !known || !pro {
-		t.Errorf("重开后 Pro 状态 = %v / %v", pro, known)
+	if allowed, known := b.auth.officialHostAccess(); !known || !allowed {
+		t.Errorf("重开后守护者权限 = %v / %v", allowed, known)
+	}
+	// role 为空的刷新结果不该覆盖已缓存的守护者身份。
+	if err := b.auth.storeToken(tokenData{AccessToken: "tok3", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, known := b.auth.officialHostAccess(); !known || !allowed {
+		t.Errorf("刷新后角色被空值覆盖：%v / %v", allowed, known)
 	}
 	b.auth.Logout()
-	if _, known := b.auth.proStatus(); known {
-		t.Error("退出登录后不该还留着上一个账号的 Pro 状态")
+	if _, known := b.auth.officialHostAccess(); known {
+		t.Error("退出登录后不该还留着上一个账号的权限")
 	}
 }
 

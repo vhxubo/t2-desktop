@@ -304,7 +304,7 @@ type app struct {
 	// 的工具面板直接把它绑到下拉框上。都只在 UI 线程读写，见 image_hosts.go。
 	hosts           imageHostConfig
 	hostActiveLabel string
-	// proChecking 表示正在读当前账号的 Pro 状态（官方图床只对 Pro 开放）。
+	// proChecking 表示正在读当前账号的 Pro 状态 / 守护者角色（官方图床权限）。
 	// 同一时刻只发一次请求，结果写回 auth 的令牌缓存；只在 UI 线程读写。
 	proChecking bool
 	// hostTesting 是正在测试的那条图库 ID：设置里点「测试这个图床」会上传
@@ -1018,8 +1018,8 @@ func (a *app) onAuthChanged(err error) {
 		// 潘多拉入口也静默读一次今日状态：首页标题栏要能直接显示抽中的
 		// 事件名，不必先打开潘多拉弹窗。
 		a.loadPandoraEntry()
-		// 官方图床只对 Pro 开放：登录后就把 Pro 状态读回来，别等用户拖图
-		// 片时才提示「还没确认」。
+		// 官方图床只对 Pro 会员与守护者开放：登录后就把权限读回来，别等用户拖
+		// 图片时才提示「还没确认」。
 		a.refreshProStatus(true)
 	} else {
 		a.stopNotificationWatch()

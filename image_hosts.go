@@ -31,7 +31,8 @@ import (
 // 预设按「免 Token 优先」排：Kappa、ImgBB、Photo.Lily、Appinn、Tikolu、
 // Skyimg 都不用注册、不用填 Token，装好就能传，因此排在前面并默认启用；
 // MJJ.Today 与 111666.best 同样免 Token，但国内直连被拦，默认停用。2Libra
-// 官方图床排在其后，只对 Pro 会员开放（见 hostReady / hostNotReadyReason）；
+// 官方图床排在其后，只对 Pro 会员与守护者（role=guardian）开放（见 hostReady /
+// hostNotReadyReason）；
 // StarDots 要 Key + Secret、Imgur 要 Client-ID、SM.MS 与兰空要 Token，默认
 // 停用，填好再启用。Catbox / Litterbox / x0.at 也免 Token，但分别受「国内
 // 直连不通」「只能留 72 小时」「拒绝部分网络」的限制，默认停用并在 Note 里
@@ -79,7 +80,7 @@ type imageHostKind string
 const (
 	// imageHostOfficial 走 2Libra 自己的 /v1/upload/image 与 {c,m,d,t} 信封，
 	// 令牌来自应用登录态，缺 upload scope 时由全局授权链路补上。它只对 Pro
-	// 会员开放，判断见 app.hostReady。
+	// 会员与守护者（role=guardian）开放，判断见 app.hostReady。
 	imageHostOfficial imageHostKind = "official"
 	// imageHostGeneric 是通用的 multipart + JSON / 纯文本图床。
 	imageHostGeneric imageHostKind = "generic"
@@ -125,8 +126,8 @@ type imageHostConfig struct {
 // 不用注册、不用 Token 的图床排在前面，其中实测国内能直连的（Kappa / ImgBB /
 // Photo.Lily / Appinn / Tikolu / Skyimg）默认启用，Kappa 当「当前使用」；
 // MJJ.Today 与 111666.best 也免 Token，但国内直连被拦，默认停用并在 Note
-// 里写明要开代理。官方图床排在其后（只对 Pro 开放，默认也启用，Pro 用户
-// 可以直接切过去）；需要 Key / Client-ID / Token 的 StarDots、Imgur、SM.MS
+// 里写明要开代理。官方图床排在其后（只对 Pro 会员与守护者开放，默认也启用，
+// 有权用户可以直接切过去）；需要 Key / Client-ID / Token 的 StarDots、Imgur、SM.MS
 // 与兰空默认停用，填好再启用。
 //
 // 免费图床更迭很快：0x0.st 已停止上传、uguu.se 长期 502、catbox.moe 在
@@ -216,7 +217,7 @@ func defaultImageHostConfig() imageHostConfig {
 			{
 				ID: "2libra", Name: "2Libra 官方图床", Kind: imageHostOfficial,
 				Field: "file", MaxBytes: defaultImageMaxBytes, Enabled: true, Builtin: true,
-				Note: "仅 Pro 会员可用；登录 2Libra 后自动确认身份，每人每天 20 张。",
+				Note: "仅 Pro 会员与守护者可用；登录 2Libra 后自动确认身份，每人每天 20 张。",
 			},
 			{
 				ID: "stardots", Name: "StarDots", Kind: imageHostGeneric,
@@ -525,9 +526,9 @@ func validateImageHostHeaders(h imageHost) error {
 }
 
 // hostReady 判断一条图床是否真的能发请求：没启用、没填地址、或请求头里
-// 要 Token 却没填，都不算就绪。官方图床还要求账号是 Pro 会员 —— 它只对 Pro
-// 开放，而 Pro 状态要等账号资料读回来，未确认时同样按不可用处理。内置协议
-// 自带地址，只差凭据的（StarDots）按凭据判断。
+// 要 Token 却没填，都不算就绪。官方图床还要求账号能用它 —— Pro 会员或守护者
+// （role=guardian）才可以，而这个结论要等账号资料读回来，未确认时同样按不可用
+// 处理。内置协议自带地址，只差凭据的（StarDots）按凭据判断。
 func (a *app) hostReady(h *imageHost) bool {
 	if h == nil || !h.Enabled {
 		return false
@@ -536,8 +537,8 @@ func (a *app) hostReady(h *imageHost) bool {
 		if a.auth == nil || !a.auth.loggedIn() {
 			return false
 		}
-		pro, known := a.proStatus()
-		return known && pro
+		allowed, known := a.officialHostAccess()
+		return known && allowed
 	}
 	if h.Adapter != "" {
 		return adapterReady(h)
@@ -548,31 +549,31 @@ func (a *app) hostReady(h *imageHost) bool {
 	return !strings.Contains(h.Header, "{{token}}") || strings.TrimSpace(h.Token) != ""
 }
 
-// proStatus 返回当前账号是不是 Pro，以及这个结论是否已经确认。官方图床只对
-// Pro 开放，但 Pro 状态来自账号资料，不能等用户打开「我的」窗口：登录时、
-// 启动后都会主动读一次，结果缓存在令牌里（OS 凭据库，无凭据库时退回
-// token.json）；「我的」窗口读过更新鲜的资料时以它为准。
-func (a *app) proStatus() (pro, known bool) {
+// officialHostAccess 返回当前账号能否用官方图床，以及这个结论是否已经确认。
+// Pro 会员或守护者（role=guardian）都有权限。状态来自账号资料，不能等用户
+// 打开「我的」窗口：登录时、启动后都会主动读一次，结果缓存在令牌里（OS 凭据库，
+// 无凭据库时退回 token.json）；「我的」窗口读过更新鲜的资料时以它为准。
+func (a *app) officialHostAccess() (allowed, known bool) {
 	// 只有真的读到资料才作数：加载失败时 infoLoaded 也是 true，但 user 还是
-	// 零值，照它的 IsPro 会把 Pro 用户误判成非 Pro。
+	// 零值，照它的字段会把有权用户误判成无权。
 	if ps := a.profile; ps != nil && ps.infoLoaded && ps.infoErr == "" && ps.user.Name != "" {
-		return ps.user.IsPro, true
+		return ps.user.canUseOfficialHost(), true
 	}
 	if a.auth == nil {
 		return false, false
 	}
-	return a.auth.proStatus()
+	return a.auth.officialHostAccess()
 }
 
-// refreshProStatus 读一次当前账号的公开资料，把 is_pro 记进令牌缓存。force
-// 为 false 时只在还没确认过的情况下才发请求（启动时用），force 为 true 时
+// refreshProStatus 读一次当前账号的公开资料，把 is_pro 与 role 记进令牌缓存。
+// force 为 false 时只在还没确认过的情况下才发请求（启动时用），force 为 true 时
 // 不管缓存直接重读（刚登录、或用户在设置里点了「重新确认」）。
 func (a *app) refreshProStatus(force bool) {
 	if a.auth == nil || !a.autoLoad || a.proChecking || !a.auth.loggedIn() {
 		return
 	}
 	if !force {
-		if _, known := a.proStatus(); known {
+		if _, known := a.officialHostAccess(); known {
 			return
 		}
 	}
@@ -590,7 +591,7 @@ func (a *app) refreshProStatus(force bool) {
 			if err != nil || p.Name == "" {
 				return
 			}
-			a.auth.setProStatus(p.IsPro)
+			a.auth.setOfficialHostAccess(p.IsPro, p.Role)
 		})
 	}()
 }

@@ -88,8 +88,8 @@ func (a *app) afterMainWindowOpen() {
 	// 令牌里已经缓存了用户名与头像地址；这里再校准一次，老会话也能补上
 	// 头像，并在加载完成后刷新标题栏。
 	a.ensureAvatar()
-	// Pro 状态同样属于老会话要补齐的信息：官方图床只对 Pro 开放，令牌里
-	// 还没记过就现在读一次。
+	// 访问权限同样属于老会话要补齐的信息：官方图床只对 Pro 会员与守护者开放，
+	// 令牌里还没记过就现在读一次。
 	a.refreshProStatus(false)
 	go func() {
 		ctx := context.Background()

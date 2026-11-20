@@ -709,18 +709,18 @@ func TestSettingsWindowRendersAdapterHostEditor(t *testing.T) {
 	}
 }
 
-// 官方图床只对 Pro 开放：设置里要按当前账号的状态给出不同说明。
+// 官方图床只对 Pro 会员与守护者开放：设置里要按当前账号的状态给出不同说明。
 func TestSettingsWindowOfficialHostProNote(t *testing.T) {
 	a := testApp(t)
 	a.settingsTab = settingsTabHosts
 	a.hostEditLabel = "2Libra 官方图床"
 	tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
 	tt.Frame()
-	if !tt.HasText("只对 Pro 会员开放") {
-		t.Errorf("没说明 Pro 门槛：%q", tt.Texts())
+	if !tt.HasText("只对 Pro 会员与守护者开放") {
+		t.Errorf("没说明图库门槛：%q", tt.Texts())
 	}
 	if !tt.HasText("当前未登录") {
-		t.Errorf("未登录时没说明会先确认 Pro 状态：%q", tt.Texts())
+		t.Errorf("未登录时没说明会先确认账号权限：%q", tt.Texts())
 	}
 
 	if err := a.auth.storeToken(tokenData{
@@ -728,14 +728,20 @@ func TestSettingsWindowOfficialHostProNote(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a.auth.setProStatus(false)
+	a.auth.setOfficialHostAccess(false, "")
 	tt.Frame()
-	if !tt.HasText("当前账号不是 Pro") {
-		t.Errorf("非 Pro 账号没看到提示：%q", tt.Texts())
+	if !tt.HasText("当前账号既不是 Pro 也不是守护者") {
+		t.Errorf("无权限账号没看到提示：%q", tt.Texts())
 	}
-	a.auth.setProStatus(true)
+	// 守护者即使不是 Pro，也要看到可以直接使用的说明。
+	a.auth.setOfficialHostAccess(false, roleGuardian)
 	tt.Frame()
-	if !tt.HasText("当前账号是 Pro") {
+	if !tt.HasText("当前账号是 Pro 会员或守护者") {
+		t.Errorf("守护者没看到可用提示：%q", tt.Texts())
+	}
+	a.auth.setOfficialHostAccess(true, "")
+	tt.Frame()
+	if !tt.HasText("当前账号是 Pro 会员或守护者") {
 		t.Errorf("Pro 账号没看到提示：%q", tt.Texts())
 	}
 }

@@ -31,7 +31,7 @@ func (a *app) imageHostsSection(c *ui.Context) {
 	settingsSection(c, "图库（图床）", func() {
 		settingsDescription(c, "写帖子或评论时拖入、选择、粘贴的图片会传到「当前使用」的图库。"+
 			"Kappa / MJJ.Today / ImgBB / Appinn / Skyimg 这类图床免注册、免 Token；"+
-			"2Libra 官方图床只对 Pro 会员开放。免费图床变动频繁，可以点下面的"+
+			"2Libra 官方图床只对 Pro 会员与守护者开放。免费图床变动频繁，可以点下面的"+
 			"「测试这个图床」确认还能不能用。", 4)
 		a.imageHostActivePicker(c)
 		layout.Divider(c, layout.DividerProps{})
@@ -265,32 +265,32 @@ func (a *app) adapterHostFields(c *ui.Context, h *imageHost) {
 	}
 }
 
-// officialHostStatus 说明官方图床的门槛：它只对 Pro 会员开放，所以这里要
-// 明确告诉用户当前账号是不是 Pro、为什么还不能用，并留一个重新确认的入口
-// （登录状态是缓存来的，换会员后不一定马上更新）。
+// officialHostStatus 说明官方图床的门槛：它只对 Pro 会员与守护者开放，所以
+// 要明确告诉用户当前账号有没有权限、为什么还不能用，并留一个重新确认的入口
+// （登录状态是缓存来的，换了会员 / 角色后不一定马上更新）。
 func (a *app) officialHostStatus(c *ui.Context) {
 	display.Text(c, "2Libra 官方图床：需要 upload 权限，每人每天 20 张，单张不超过 10 MB；"+
-		"只对 Pro 会员开放，缺权限时应用会自动弹出授权。",
+		"只对 Pro 会员与守护者开放，缺权限时应用会自动弹出授权。",
 		display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 3})
 	if a.auth == nil || !a.auth.loggedIn() {
-		display.Text(c, "当前未登录：登录 2Libra 后会自动确认 Pro 状态。",
+		display.Text(c, "当前未登录：登录 2Libra 后会自动确认账号权限。",
 			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 		return
 	}
-	pro, known := a.proStatus()
+	allowed, known := a.officialHostAccess()
 	switch {
 	case !known:
-		display.Text(c, "还没确认当前账号的 Pro 状态，可以点下面的按钮重新确认。",
+		display.Text(c, "还没确认当前账号的图库权限，可以点下面的按钮重新确认。",
 			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
-	case pro:
-		display.Text(c, "当前账号是 Pro，可以直接使用。",
+	case allowed:
+		display.Text(c, "当前账号是 Pro 会员或守护者，可以直接使用。",
 			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 	default:
-		display.Text(c, "当前账号不是 Pro，官方图床不可用；请在上面「当前使用」里换用免 Token 图床（Kappa / Catbox）。",
+		display.Text(c, "当前账号既不是 Pro 也不是守护者，官方图床不可用；请在上面「当前使用」里换用免 Token 图床（Kappa / Catbox）。",
 			display.TextProps{Type: display.TextDanger, FontSize: 11, Rows: 3})
 	}
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		if action.Button(c, "重新确认 Pro 状态", action.ButtonProps{Size: lobetheme.Small}).
+		if action.Button(c, "重新确认图库权限", action.ButtonProps{Size: lobetheme.Small}).
 			Disabled(a.proChecking).Clicked() {
 			a.refreshProStatus(true)
 		}

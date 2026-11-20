@@ -60,10 +60,13 @@ type tokenData struct {
 	// Avatar is the account's avatar URL, cached so the title bar can show the
 	// picture at the next start without asking the profile endpoint again.
 	Avatar string `json:"avatar,omitempty"`
-	// IsPro / ProKnown 缓存当前账号是不是 Pro：2Libra 官方图床只对 Pro 开放，
-	// 而上传不该先等一次资料请求。ProKnown 区分「确认过不是 Pro」与「还没读到」。
-	IsPro    bool `json:"is_pro,omitempty"`
-	ProKnown bool `json:"pro_known,omitempty"`
+	// IsPro / ProKnown / Role 缓存能否用 2Libra 官方图床：Pro 会员或守护者
+	// （role=guardian）都可以，而上传不该先等一次资料请求。ProKnown 区分
+	// 「确认过没有权限」与「还没读到」。Role 沿用 is_pro/pro_known 这两个
+	// 历史 JSON 键之外的独立键；旧令牌没有它，刷新过资料后自然补上。
+	IsPro    bool   `json:"is_pro,omitempty"`
+	ProKnown bool   `json:"pro_known,omitempty"`
+	Role     string `json:"role,omitempty"`
 }
 
 // configDir is the config directory. The token itself is kept in the OS
@@ -615,10 +618,10 @@ func (m *AuthManager) storeTokenForEpoch(t tokenData, epoch uint64) error {
 	if m.token != nil && t.Username == "" {
 		t.Username = m.token.Username
 	}
-	// 刷新令牌不会带回账号资料：Pro 状态沿用上一次读到的结果，免得每次
-	// 刷新后官方图床又变回「还没确认」。
+	// 刷新令牌不会带回账号资料：官方图床权限（Pro / 守护者）沿用上一次
+	// 读到的结果，免得每次刷新后官方图床又变回「还没确认」。
 	if m.token != nil && !t.ProKnown {
-		t.IsPro, t.ProKnown = m.token.IsPro, m.token.ProKnown
+		t.IsPro, t.ProKnown, t.Role = m.token.IsPro, m.token.ProKnown, m.token.Role
 	}
 	if scopes := strings.Fields(t.Scope); len(scopes) > 0 {
 		m.knownScopes = mergeScopeList(m.knownScopes, scopes)
@@ -629,6 +632,7 @@ func (m *AuthManager) storeTokenForEpoch(t tokenData, epoch uint64) error {
 }
 
 // proStatus 返回缓存的 Pro 状态与「是否已确认」。没登录时两者都是零值。
+// 只表示 is_pro，不含守护者角色；判断能否用官方图床请用 officialHostAccess。
 func (m *AuthManager) proStatus() (pro, known bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -638,18 +642,49 @@ func (m *AuthManager) proStatus() (pro, known bool) {
 	return m.token.IsPro, m.token.ProKnown
 }
 
+// officialHostAccess 返回缓存的账号能否用官方图床，以及是否已确认。Pro 会员
+// 与守护者（role=guardian）都有权限，任一命中即可。没登录时两者都是零值。
+func (m *AuthManager) officialHostAccess() (allowed, known bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.token == nil {
+		return false, false
+	}
+	return m.token.IsPro || m.token.Role == roleGuardian, m.token.ProKnown
+}
+
 // setProStatus 记下刚读到的 Pro 状态并落盘：下次启动不必再问一次。没登录
 // （令牌已被清掉）时直接忽略，不把上一个账号的结论写给下一个账号。
 func (m *AuthManager) setProStatus(pro bool) {
+	m.setAccountAccess(pro, "")
+}
+
+// setOfficialHostAccess 记下刚读到的 is_pro 与 role 并落盘。role 为空（例如
+// 公开资料没带这个字段）时沿用缓存里已有的角色，避免把守护者误判成普通人。
+func (m *AuthManager) setOfficialHostAccess(pro bool, role string) {
+	curRole := ""
+	if m.token != nil {
+		m.mu.Lock()
+		curRole = m.token.Role
+		m.mu.Unlock()
+	}
+	if role == "" {
+		role = curRole
+	}
+	m.setAccountAccess(pro, role)
+}
+
+// setAccountAccess 把 Pro / 角色一次性写进令牌缓存并落盘。
+func (m *AuthManager) setAccountAccess(pro bool, role string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.token == nil {
 		return
 	}
-	if m.token.ProKnown && m.token.IsPro == pro {
+	if m.token.ProKnown && m.token.IsPro == pro && m.token.Role == role {
 		return
 	}
-	m.token.IsPro, m.token.ProKnown = pro, true
+	m.token.IsPro, m.token.ProKnown, m.token.Role = pro, true, role
 	_ = m.store.save(m.token)
 }
 

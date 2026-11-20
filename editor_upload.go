@@ -127,7 +127,7 @@ func (a *app) uploadByID(id uint64) *uploadJob {
 // ------------------------------------------------------------------
 
 // hostNotReadyReason 把「图库不能用」翻译成能照着做的一句话，避免只弹
-// 一句「上传失败」让用户去猜是没登录、没启用、不是 Pro 还是没填 Token。
+// 一句「上传失败」让用户去猜是没登录、没启用、没权限还是没填 Token。
 func (a *app) hostNotReadyReason(h *imageHost) string {
 	switch {
 	case h == nil:
@@ -138,12 +138,12 @@ func (a *app) hostNotReadyReason(h *imageHost) string {
 		if a.auth == nil || !a.auth.loggedIn() {
 			return "上传图片需要先登录 2Libra"
 		}
-		pro, known := a.proStatus()
+		allowed, known := a.officialHostAccess()
 		switch {
 		case !known:
-			return "还没确认你的 2Libra Pro 状态，请稍后重试；也可以到「设置 → 图库」换用免 Token 图床"
-		case !pro:
-			return "2Libra 官方图床只对 Pro 会员开放，请到「设置 → 图库」换用免 Token 图床"
+			return "还没确认你的 2Libra 图库权限，请稍后重试；也可以到「设置 → 图库」换用免 Token 图床"
+		case !allowed:
+			return "2Libra 官方图床只对 Pro 会员与守护者开放，请到「设置 → 图库」换用免 Token 图床"
 		default:
 			return "图库「" + h.Name + "」暂时不可用，请到「设置 → 图库」里检查"
 		}
@@ -167,9 +167,9 @@ func (a *app) enqueueUploads(t uploadTarget, sources []uploadSource) int {
 	}
 	host := a.activeHost()
 	if !a.hostReady(host) {
-		// 官方图床的 Pro 状态还没读到时顺手补一次：确认完再拖一次就能用。
+		// 官方图床的访问权限还没读到时顺手补一次：确认完再拖一次就能用。
 		if host != nil && host.Kind == imageHostOfficial && a.auth != nil && a.auth.loggedIn() {
-			if _, known := a.proStatus(); !known {
+			if _, known := a.officialHostAccess(); !known {
 				a.refreshProStatus(true)
 			}
 		}
