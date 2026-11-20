@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -65,7 +66,7 @@ func (a *app) restrictedSection(c *ui.Context, d *detailState) {
 		for _, kind := range []string{"info", "auction", "bids"} {
 			if l := d.restricted.load(kind); l.loading {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Spinner(c).Size(13, 13)
+					lobeSpin(c, feedback.SpinProps{CustomSize: 13})
 					ui.Text(c, map[string]string{
 						"info": "正在读取受限内容…", "auction": "正在读取竞拍状态…", "bids": "正在读取出价记录…",
 					}[kind]).FontSize(11).TextColor(t.TextMuted)
@@ -173,7 +174,7 @@ func (a *app) restrictedUnlockPanel(c *ui.Context, d *detailState, price int) {
 			}
 			ui.Spacer(c).Grow(1)
 			if d.restricted.busy {
-				ui.Spinner(c).Size(13, 13)
+				lobeSpin(c, feedback.SpinProps{CustomSize: 13})
 				ui.Text(c, "正在解锁…").FontSize(11).TextColor(t.TextMuted)
 				return
 			}

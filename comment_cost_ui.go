@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -73,7 +74,7 @@ func (a *app) commentCostBar(c *ui.Context, draft string) {
 			a.commentCostActionButton(c, st, act)
 		}
 		if st != nil && st.busyID != "" {
-			ui.Spinner(c).Size(12, 12)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 12})
 		}
 	})
 }
@@ -98,7 +99,7 @@ func (a *app) commentCostLoadingBar(c *ui.Context, st *commentCostState, length 
 	}
 	ui.Text(c, "正在读取徽章信息…").FontSize(11).TextColor(t.TextMuted).
 		SingleLine().Grow(1).MinWidth(0)
-	ui.Spinner(c).Size(12, 12)
+	lobeSpin(c, feedback.SpinProps{CustomSize: 12})
 }
 
 // commentActivityButton 是「走个面」的佩戴 / 摘下开关：它和评论费用无关，

@@ -471,7 +471,7 @@ func (a *app) imageCacheSection(c *ui.Context) {
 		if !s.Scanned {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				if s.Busy {
-					feedback.Spin(c, feedback.SpinProps{CustomSize: 12}, nil)
+					lobeSpin(c, feedback.SpinProps{CustomSize: 12})
 				}
 				display.Text(c, "正在统计缓存大小…", display.TextProps{
 					Type: display.TextSecondary, FontSize: 12, Rows: 1,
@@ -500,7 +500,7 @@ func (a *app) imageCacheSection(c *ui.Context) {
 		// 结果走 toast，这里只说明正在做什么：进度是当前状态，不是结论。
 		if s.Progress != "" {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				feedback.Spin(c, feedback.SpinProps{CustomSize: 12}, nil)
+				lobeSpin(c, feedback.SpinProps{CustomSize: 12})
 				display.Text(c, s.Progress, display.TextProps{
 					Type: display.TextSecondary, FontSize: 12, Rows: 2,
 				})

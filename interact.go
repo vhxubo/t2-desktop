@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"math"
 	"net/http"
 	"net/url"
@@ -779,6 +780,11 @@ func (a *app) topicInteractionVisible(d *detailState) bool {
 		return false
 	}
 	p := d.topic
+	// 无权帖的内容块被置空，表态 / 收藏 / 打赏写端点会 403。虽然外壳的
+	// reactions_summary 仍在，这里不画可点的互动入口，只留正文的访问墙。
+	if p.guardBlocks() {
+		return false
+	}
 	return len(visibleReactions(p.Reactions)) > 0 || p.Rewards.Total > 0 ||
 		a.canActOn(d, reactionTopic) || a.canRewardOn(d, reactionTopic)
 }
@@ -1092,7 +1098,7 @@ func (a *app) rewardPanel(c *ui.Context, d *detailState, target string) {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.Spacer(c).Grow(1)
 			if d.react.rewardBusy {
-				ui.Spinner(c).Size(13, 13)
+				lobeSpin(c, feedback.SpinProps{CustomSize: 13})
 				ui.Text(c, "正在打赏…").FontSize(11).TextColor(t.TextMuted)
 				return
 			}

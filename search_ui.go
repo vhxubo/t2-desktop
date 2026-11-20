@@ -244,7 +244,7 @@ func (a *app) searchBody(c *ui.Context, st *searchState) {
 	switch {
 	case st.loading && len(st.hits) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			feedback.Spin(c, feedback.SpinProps{CustomSize: 26}, nil)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 26})
 			display.Text(c, searchSearching, display.TextProps{
 				Type: display.TextSecondary, Rows: 1,
 			})
@@ -278,7 +278,7 @@ func (a *app) searchBody(c *ui.Context, st *searchState) {
 	}
 	if st.firstLoading && len(st.hits) > 0 {
 		ui.Row(c).Padding(0, 14, 6, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-			feedback.Spin(c, feedback.SpinProps{CustomSize: 13}, nil)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 13})
 			display.Text(c, searchSearching, display.TextProps{
 				Type: display.TextSecondary, FontSize: 11, Rows: 1,
 			})
@@ -301,7 +301,7 @@ func (a *app) searchBody(c *ui.Context, st *searchState) {
 	}
 	if st.loading && !st.firstLoading && len(st.hits) > 0 {
 		ui.Row(c).Padding(6, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-			feedback.Spin(c, feedback.SpinProps{CustomSize: 13}, nil)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 13})
 			display.Text(c, "正在加载更多…", display.TextProps{
 				Type: display.TextSecondary, FontSize: 11, Rows: 1,
 			})
@@ -368,7 +368,7 @@ func (a *app) searchHotTagsBlock(c *ui.Context, st *searchState) {
 			})
 		case st.hotTagsLoading && len(st.hotTags) == 0:
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+				lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
 				display.Text(c, "正在读取热门标签…", display.TextProps{
 					Type: display.TextSecondary, FontSize: 11, Rows: 1,
 				})

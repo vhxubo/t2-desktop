@@ -578,6 +578,8 @@ func TestNativeNoticeClickOpensTheRightAccount(t *testing.T) {
 	b.openURL = func(u string) error { opened = u; return nil }
 	// 应用已就绪才有窗口可拉；两个窗口都挂着，openNotice 不会去建新窗口。
 	b.afterReady = true
+	appA.autoLoad = false
+	appJ.autoLoad = false
 	appA.noticeTargets = nil
 	appA.pageName = "list"
 	appA.detail = nil
@@ -589,10 +591,10 @@ func TestNativeNoticeClickOpensTheRightAccount(t *testing.T) {
 		t.Errorf("目标没了不该乱开页面：%q", appA.pageName)
 	}
 
-	// 认不出账号（升级前弹出的旧通知）：仍回到站内消息中心。
+	// 认不出账号（升级前弹出的旧通知）：也在应用内打开消息中心，不跳浏览器。
 	b.openNotice("t2-notification:legacy")
-	if opened != siteBaseURL+"/notifications" {
-		t.Errorf("认不出账号时应回到站内消息中心：%q", opened)
+	if opened != "" {
+		t.Errorf("认不出账号时不该把消息甩给系统浏览器：%q", opened)
 	}
 }
 

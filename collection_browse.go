@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"strconv"
 
 	"github.com/egoist/mygo/ui"
@@ -109,7 +110,7 @@ func (a *app) collectionTopicsBody(c *ui.Context, b *collectionBrowse, open func
 	switch {
 	case st.loading && len(st.items) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(24, 24)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 24})
 			ui.Text(c, "正在加载合集内容…").FontSize(12).TextColor(t.TextMuted)
 		})
 		return
@@ -158,7 +159,7 @@ func (a *app) collectionTopicsMore(c *ui.Context, b *collectionBrowse) {
 		})
 	case st.loading && len(st.items) > 0:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Spinner(c).Size(14, 14)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 14})
 			ui.Text(c, "正在加载更多…").FontSize(11).TextColor(t.TextMuted)
 		})
 	// 服务端给了总数且已经全部拿到时不再给按钮：留着它只会让人点一下拿到

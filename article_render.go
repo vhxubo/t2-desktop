@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"strings"
 	"unicode/utf8"
 
@@ -367,7 +368,7 @@ func (a *app) articlePicturePending(c *ui.Context, dest, alt string, w, h float3
 	box.Children(func() {
 		ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
 			if loading {
-				ui.Spinner(c).Size(16, 16).Label("图片加载中")
+				lobeSpin(c, feedback.SpinProps{CustomSize: 16}).Label("图片加载中")
 			}
 			text := imageFailedText
 			if loading {

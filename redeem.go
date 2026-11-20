@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"net/url"
 	"strings"
 	"time"
@@ -436,7 +437,7 @@ func (a *app) redeemSection(c *ui.Context, d *detailState) {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Spacer(c).Grow(1)
 			if d.redeem.busy {
-				ui.Spinner(c).Size(13, 13)
+				lobeSpin(c, feedback.SpinProps{CustomSize: 13})
 				ui.Text(c, "正在领取…").FontSize(11).TextColor(t.TextMuted)
 				return
 			}

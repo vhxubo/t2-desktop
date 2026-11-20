@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -42,7 +43,7 @@ func (a *app) pandoraCardProgress(c *ui.Context, text string) {
 	tk := lobetheme.TokensOf(c)
 	ui.Row(c).FillWidth().Padding(36, 0).Gap(10).AlignItems(ui.Center).
 		Justify(ui.Center).Children(func() {
-		ui.Spinner(c).Size(18, 18)
+		lobeSpin(c, feedback.SpinProps{CustomSize: 18})
 		ui.Text(c, text).FontSize(13).TextColor(tk.TextSecondary)
 	})
 }

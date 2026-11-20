@@ -14,40 +14,54 @@ var (
 	linkInText     = regexp.MustCompile(`(?:https?://|www\.)[^\s<>"'，。；！？、）\]]+|/post/[A-Za-z0-9_\-/%.]+`)
 )
 
-// parseInAppTopicLink recognises absolute, www and site-relative links to a
-// post: /post/<short_id> or /post/<node.slug>/<short_id>, optionally with a
-// ?commentId= (or #comment-<id>) anchor. It never accepts lookalike hosts.
-func parseInAppTopicLink(raw string) (Item, bool) {
+// parseSiteLink normalises a link to the 2Libra site and checks its host.
+// It accepts absolute http(s) links, protocol-relative links and site-relative
+// paths, but never a lookalike host, a foreign scheme or a URL carrying
+// userinfo. Both the in-app post link and the user profile link below use it,
+// so a link the app claims as its own is never one someone else planted.
+func parseSiteLink(raw string) (*url.URL, bool) {
 	raw = strings.TrimSpace(raw)
 	// Markdown autolinks and Chinese prose leave punctuation behind.
 	raw = strings.TrimRight(raw, ".,;:!?)]}，。；！？、》\"'")
 	if raw == "" {
-		return Item{}, false
+		return nil, false
 	}
 	if strings.HasPrefix(strings.ToLower(raw), "www.") {
 		raw = "https://" + raw
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.User != nil {
-		return Item{}, false
+		return nil, false
 	}
 	switch {
 	case u.Scheme == "" && u.Host == "":
-		// /post/... site-relative path. A bare "post/..." is relative to
-		// the current post, not to the site root, so it must not be taken.
+		// A "/post/..." or "/user/..." path is relative to the site root.
+		// A bare "post/..." is relative to the current page and must not be
+		// claimed by the app.
 		if !strings.HasPrefix(u.Path, "/") {
-			return Item{}, false
+			return nil, false
 		}
 	case u.Scheme == "" && u.Host != "":
-		// //2libra.com/post/... protocol-relative link.
+		// //2libra.com/... protocol-relative link.
 		if !is2LibraHost(u) {
-			return Item{}, false
+			return nil, false
 		}
 	case u.Scheme == "https" || u.Scheme == "http":
 		if !is2LibraHost(u) {
-			return Item{}, false
+			return nil, false
 		}
 	default:
+		return nil, false
+	}
+	return u, true
+}
+
+// parseInAppTopicLink recognises absolute, www and site-relative links to a
+// post: /post/<short_id> or /post/<node.slug>/<short_id>, optionally with a
+// ?commentId= (or #comment-<id>) anchor. It never accepts lookalike hosts.
+func parseInAppTopicLink(raw string) (Item, bool) {
+	u, ok := parseSiteLink(raw)
+	if !ok {
 		return Item{}, false
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
@@ -81,6 +95,27 @@ func parseInAppTopicLink(raw string) (Item, bool) {
 		CommentID: commentID,
 		URL:       origin,
 	}, true
+}
+
+// parseUserAboutLink recognises a link to a 2Libra user's profile page:
+// /user/<name>/about, the target of a "follow" notification. It accepts the
+// same shapes as a post link (absolute, www, protocol-relative, site-relative)
+// and rejects lookalike hosts, so a foreign "/user/..." path is not opened as
+// a local profile.
+func parseUserAboutLink(raw string) (string, bool) {
+	u, ok := parseSiteLink(raw)
+	if !ok {
+		return "", false
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) != 3 || parts[0] != "user" || parts[2] != "about" {
+		return "", false
+	}
+	name, err := url.PathUnescape(parts[1])
+	if err != nil || name == "" {
+		return "", false
+	}
+	return name, true
 }
 
 // is2LibraHost rejects lookalike hosts (2libra.com.evil.com), media hosts

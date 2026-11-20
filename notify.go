@@ -331,24 +331,36 @@ func (a *app) rememberNoticeTarget(id, target string) {
 	a.noticeTargets[id] = target
 }
 
-// openNotificationTarget opens the message's target: a 2Libra post or comment
-// goes back to the main window, which is brought to the front with the post
-// (and the comment anchor) opened; anything else goes to the system browser.
+// openNotificationTarget opens the message's target inside the app: a 2Libra
+// post or comment goes back to the main window with the post (and the comment
+// anchor) opened; a user profile opens that person's card; every other target
+// (RSS, votes, system messages...) stays in the notification window, whose row
+// already shows the message. Nothing here hands a notification to the system
+// browser: the browser is usually logged into a different account, so a jump
+// there would take the user away from the message they just clicked.
 // 通知窗口只是入口：点开帖子时主窗口照常切到详情页，通知窗口自己不关 ——
 // 读完后还能回到原来的消息列表与滚动位置。
 //
 // notifID 是点开的这条消息：目标带评论定位时先只记账，等那层楼出现在评论区
 // 可视区再标为已读（见 markNotificationSeen）。目标没有评论定位（表态了你的
-// 帖子、收藏了你的帖子…）时不动已读状态；交给系统浏览器的目标同样不动，
-// 用户还没在应用里看到内容。目标带评论定位时默认收起左侧正文，让评论区占满
-// 整行直接露出目标那层楼，用户仍可手动展开。
+// 帖子、收藏了你的帖子…）时不动已读状态；留在消息中心的目标同样不动 ——
+// 消息本来就在屏幕上，不需要再发一次已读。目标带评论定位时默认收起左侧正文，
+// 让评论区占满整行直接露出目标那层楼，用户仍可手动展开。
 func (a *app) openNotificationTarget(target, notifID string) {
 	if target == "" {
 		return
 	}
 	it, inApp := parseInAppTopicLink(target)
 	if !inApp {
-		a.openExternal(target)
+		if name, ok := parseUserAboutLink(target); ok {
+			a.showUserCard(name)
+			return
+		}
+		// 消息窗口已经开着时，这条消息就在屏幕上：不要重新拉第一页，否则
+		// 用户正读到的位置会被刷掉。系统通知点进来时窗口没开，才需要打开它。
+		if !a.notifShown {
+			a.showNotifications()
+		}
 		return
 	}
 	a.openDetail(it)

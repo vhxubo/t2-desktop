@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"math"
 	"strconv"
 
@@ -290,7 +291,7 @@ func (a *app) rewardPoolPanel(c *ui.Context, d *detailState) {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.Spacer(c).Grow(1)
 			if d.pool.busy {
-				ui.Spinner(c).Size(13, 13)
+				lobeSpin(c, feedback.SpinProps{CustomSize: 13})
 				ui.Text(c, "正在投入…").FontSize(11).TextColor(t.TextMuted)
 				return
 			}

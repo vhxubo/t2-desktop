@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"time"
 	"unicode/utf8"
 
@@ -362,7 +363,7 @@ func (a *app) editWindowFooter(c *ui.Context, st *editState) {
 		AlignItems(ui.Center).Children(func() {
 		ui.Row(c).Grow(1).MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
 			if st.busy {
-				ui.Spinner(c).Size(14, 14)
+				lobeSpin(c, feedback.SpinProps{CustomSize: 14})
 				ui.Text(c, "正在保存…").FontSize(11).TextColor(t.TextMuted).SingleLine()
 			} else if !st.changed() {
 				ui.Text(c, "还没有改动").FontSize(11).TextColor(t.TextMuted).SingleLine()

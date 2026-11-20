@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"math"
 	"net/url"
 	"strings"
@@ -551,7 +552,7 @@ func (a *app) betPanel(c *ui.Context, d *detailState, o betOption) {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.Spacer(c).Grow(1)
 			if d.bet.busy {
-				ui.Spinner(c).Size(13, 13)
+				lobeSpin(c, feedback.SpinProps{CustomSize: 13})
 				ui.Text(c, "正在参与…").FontSize(11).TextColor(t.TextMuted)
 				return
 			}

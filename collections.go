@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"net/http"
 	"net/url"
 	"strings"
@@ -528,7 +529,7 @@ func (a *app) collectionPanel(c *ui.Context, d *detailState) {
 		switch {
 		case d.coll.loading && len(d.coll.items) == 0:
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Spinner(c).Size(12, 12)
+				lobeSpin(c, feedback.SpinProps{CustomSize: 12})
 				ui.Text(c, "正在读取合集…").FontSize(11).TextColor(t.TextMuted)
 			})
 		case d.coll.err != "":

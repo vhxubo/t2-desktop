@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
 // 「属性雷达」标签页：站点给的六维属性画成雷达图，右侧是六项数值。属性
@@ -20,7 +21,7 @@ func (a *app) userCardAttrsBody(c *ui.Context, cs *userCardState) {
 		// 有数据，往下画图。
 	case !cs.profileLoaded && cs.profileErr == "":
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(20, 20)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 20})
 			ui.Text(c, "正在读取属性…").FontSize(12).TextColor(t.TextMuted)
 		})
 		return

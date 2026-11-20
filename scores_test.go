@@ -147,6 +147,50 @@ func TestScoresWindowRenders(t *testing.T) {
 	}
 }
 
+// 分类名很长时，下拉弹层不能按最长项撑出窗口：显示文案限长，筛选值保留原名。
+func TestScoreCategoryOptionsBounded(t *testing.T) {
+	long := strings.Repeat("很长的分类名", 8)
+	st := newScoresState()
+	st.categories = []string{"书籍", long}
+	opts := scoreCategoryOptions(st)
+	if len(opts) != 3 || opts[0].Value != scoreCategoryAll {
+		t.Fatalf("分类选项 = %+v", opts)
+	}
+	if got := []rune(opts[2].Label); len(got) > scoreCategoryLabelMax+1 {
+		t.Errorf("选项文案没有限长：%q（上限 %d）", opts[2].Label, scoreCategoryLabelMax)
+	}
+	if opts[2].Value != long {
+		t.Errorf("选项值被截断了：%q", opts[2].Value)
+	}
+}
+
+// 最小窗口宽度下筛选条排得下：标签不被压缩成「评…」，刷新也没被挤到下一行。
+func TestScoresFiltersFitMinWidth(t *testing.T) {
+	a := testApp(t)
+	a.scores = newScoresState()
+	st := a.scores
+	st.categories = []string{strings.Repeat("很长的分类名", 8)}
+	st.categoriesLoaded = true
+	st.loaded = true
+
+	tt := ui.NewTester(a.scoresWindowView, scoresWinMinWidth, scoresWindowHeight)
+	tt.Frame()
+	label, ok := tt.Find("评分分类")
+	if !ok {
+		t.Fatalf("分类标签没有完整显示：%q", tt.Texts())
+	}
+	refresh, ok := tt.Find("刷新")
+	if !ok {
+		t.Fatalf("筛选条没有刷新按钮：%q", tt.Texts())
+	}
+	if refresh.Y > label.Y+label.H || refresh.Y+refresh.H < label.Y {
+		t.Errorf("刷新被挤到下一行：标签 %+v / 刷新 %+v", label, refresh)
+	}
+	if refresh.X+refresh.W > scoresWinMinWidth {
+		t.Errorf("刷新按钮溢出窗口：%+v", refresh)
+	}
+}
+
 // 加载：路径 / 查询 / 回填；分类字典单独读，失败不影响评分列表。
 func TestLoadScores(t *testing.T) {
 	var paths []string
@@ -174,8 +218,10 @@ func TestLoadScores(t *testing.T) {
 	}
 }
 
-// 主页 FAB 有评分榜入口；showScores 在 headless 下至少准备好状态。
-func TestScoresFabAndOpen(t *testing.T) {
+// 评分榜入口从主页 FAB 移到了侧边栏「动态」下面（分割线之后）：带外链窗口
+// 图标与「在新窗口打开」说明；点它走 showScores，headless 下至少准备好状态。
+// 主页不再画评分榜 FAB。
+func TestScoresSidebarEntryAndOpen(t *testing.T) {
 	a := testApp(t)
 	a.tabs[0].items = []Item{{Key: "k1", Title: "一条列表"}}
 	a.tabs[0].loaded = true
@@ -183,12 +229,48 @@ func TestScoresFabAndOpen(t *testing.T) {
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	if _, ok := tt.Find("评分榜"); !ok {
-		t.Fatalf("主页没有评分榜 FAB：%q", tt.Texts())
+	entry, ok := tt.Find("评分榜")
+	if !ok {
+		t.Fatalf("侧边栏没有评分榜入口：%q", tt.Texts())
 	}
-	a.showScores()
+	if entry.X+entry.W > sidebarWidth+1 {
+		t.Errorf("评分榜入口超出 %d 宽的导航轨：%+v", sidebarWidth, entry)
+	}
+
+	// 排在「动态」下面，上面紧挨着一条分割线，和浏览页分开。
+	timeline, ok := tt.Find("动态")
+	if !ok {
+		t.Fatalf("侧边栏没有「动态」：%q", tt.Texts())
+	}
+	if entry.Y <= timeline.Y {
+		t.Errorf("评分榜 y=%.0f，应在「动态」（y=%.0f）下面", entry.Y, timeline.Y)
+	}
+	items := a.sidebarNavItems()
+	scoresAt := -1
+	for i, it := range items {
+		if it.Key == "scores" {
+			scoresAt = i
+		}
+	}
+	if scoresAt < 2 || !items[scoresAt-1].Divider ||
+		!strings.HasPrefix(items[scoresAt-2].Label, "动态") {
+		t.Errorf("评分榜应紧挨在「动态」下方的分割线之后：%+v", items)
+	}
+
+	if err := tt.Click("评分榜"); err != nil {
+		t.Fatal(err)
+	}
 	if a.scores == nil {
-		t.Error("showScores 没有准备好评分榜状态")
+		t.Error("点侧边栏评分榜没有准备好评分榜状态")
+	}
+
+	// 展开态额外给出「在新窗口打开」的说明，和外链窗口图标一起标明它开的是
+	// 独立窗口，不是上面那种页内导航。
+	a.navExpanded = true
+	expanded := ui.NewTester(a.view, 1100, 760)
+	expanded.Frame()
+	if !expanded.HasText("在新窗口打开") {
+		t.Errorf("评分榜入口没有标出是独立窗口：%q", expanded.Texts())
 	}
 }
 

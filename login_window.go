@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"net/url"
 	"strings"
 
@@ -343,7 +344,7 @@ func (b *accountBook) loginWindowView(c *ui.Context) {
 				b.loginWindowError(c)
 			case b.loginView == nil:
 				ui.Column(c).Fill().Center().Gap(8).Children(func() {
-					ui.Spinner(c).Size(24, 24)
+					lobeSpin(c, feedback.SpinProps{CustomSize: 24})
 					ui.Text(c, "正在打开授权页…").FontSize(12).TextColor(t.TextMuted)
 				})
 			default:

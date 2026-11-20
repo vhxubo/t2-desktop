@@ -102,6 +102,12 @@ type topicDetail struct {
 	GuardAttr      string
 	GuardAttrValue int
 	GuardKnown     bool
+	// GuardPassed 是 access_guard.passed：false 表示当前令牌无权看这篇帖子，
+	// 服务端已按 11-19 口径把内容块置空，客户端要渲染访问墙（而不是继续画
+	// 一个空白正文）。GuardPassedKnown 区分「明确返回 false」与「老响应 /
+	// 离线缓存没有这个键」：后者按可见处理，避免把正常帖子误判成无权。
+	GuardPassed      bool
+	GuardPassedKnown bool
 	// Reactions 是帖子收到的表情表态汇总；Rewards 是打赏合计与打赏者。
 	Reactions []reactionStat
 	Rewards   rewardStat
@@ -367,12 +373,18 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 		t.GuardLevel = g.num("level", "access_guard_level")
 		t.GuardAttr = g.str("attr", "attribute", "access_guard_attr")
 		t.GuardAttrValue = g.num("attr_value", "attribute_value", "access_guard_attr_value")
+		// 文档把 passed 放在 access_guard 里；线上偶尔平铺在顶层，两处都认。
+		t.GuardPassed, t.GuardPassedKnown = boolFieldOf(g, "passed")
+		if !t.GuardPassedKnown {
+			t.GuardPassed, t.GuardPassedKnown = boolFieldOf(o, "access_guard_passed")
+		}
 	} else if o.has("access_guard_type", "access_guard_level", "access_guard_attr") {
 		t.GuardKnown = true
 		t.GuardType = o.str("access_guard_type")
 		t.GuardLevel = o.num("access_guard_level")
 		t.GuardAttr = o.str("access_guard_attr")
 		t.GuardAttrValue = o.num("access_guard_attr_value")
+		t.GuardPassed, t.GuardPassedKnown = boolFieldOf(o, "access_guard_passed")
 	}
 	t.Emojis = decodeEmojiURLs(o["emojis"])
 	t.Reactions = decodeReactionStats(o["reactions_summary"], o["reactions"], o["my_reactions"])
@@ -399,6 +411,33 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 	// 开奖结果：api-write.md「抽奖」一节写在 extra.lottery，顶层也认。
 	t.Lottery = decodeTopicLottery(o)
 	return t, nil
+}
+
+// boolFieldOf 读一个布尔字段并区分「缺失」与「false」。两个返回值分别是
+// 字段值和是否真的见到了这个键；字段不是布尔时同样按缺失处理，让老响应和
+// 离线缓存继续按「没有访问墙」渲染。
+func boolFieldOf(o object, keys ...string) (value, known bool) {
+	if o == nil {
+		return false, false
+	}
+	for _, k := range keys {
+		raw, ok := o[k]
+		if !ok {
+			continue
+		}
+		var b bool
+		if json.Unmarshal(raw, &b) == nil {
+			return b, true
+		}
+	}
+	return false, false
+}
+
+// guardBlocks 报告这篇帖子是否被引擎按访问墙拦下。只有明确读到
+// access_guard.passed == false 才算；判断依据是 passed 本身，不是正文是否
+// 为空（正文可能本来就空，见 11-19 的访问限制口径）。
+func (t *topicDetail) guardBlocks() bool {
+	return t != nil && t.GuardPassedKnown && !t.GuardPassed
 }
 
 // categoryPath 是节点的两级分类：有父节点时拼成「父 · 子」，只有一级时退回

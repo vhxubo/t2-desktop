@@ -137,7 +137,7 @@ func (a *app) coinRedeemView(c *ui.Context, cs *coinState) {
 	switch {
 	case cs.redeemLoading && len(cs.redeemItems) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(24, 24)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 24})
 			display.Text(c, "正在加载兑换记录…", display.TextProps{
 				Type: display.TextSecondary, Rows: 1,
 			})

@@ -909,7 +909,7 @@ func TestNotificationBellNeedsLogin(t *testing.T) {
 }
 
 // 点开一条帖子 / 评论类消息，主窗口切到该帖（带评论定位），通知窗口不关；
-// 其它目标交给系统浏览器，主窗口不动。
+// 其它目标留在应用内（关注开资料卡，其余留在消息中心），不外跳浏览器。
 func TestNotificationTargetOpensInMainWindow(t *testing.T) {
 	a := notificationWindowApp(t)
 	st := a.tabs[notificationTabIndex()]
@@ -943,9 +943,11 @@ func TestNotificationTargetOpensInMainWindow(t *testing.T) {
 		t.Errorf("评论定位 = %q，期望 c1", a.detail.focusID)
 	}
 
-	// 指向站点用户页的消息不是帖子：交给系统浏览器，主窗口留在列表。
+	// 关注消息指向站点用户页：在应用内打开那个人的资料卡，主窗口留在列表，
+	// 也不交给系统浏览器（浏览器里可能是另一个账号）。
 	a.pageName = "list"
 	a.detail = nil
+	a.userCard = nil
 	st.items = []Item{{Key: "f1", Notif: &notification{
 		ID: "f1", Type: "follow", IsRead: true,
 		Payload: mustObject(t, `{"followerUsername":"bob"}`),
@@ -959,9 +961,25 @@ func TestNotificationTargetOpensInMainWindow(t *testing.T) {
 	if a.pageName != "list" {
 		t.Errorf("站点链接不该把主窗口切走：%q", a.pageName)
 	}
-	urls := tt2.OpenedURLs()
-	if len(urls) == 0 || urls[0] != "https://2libra.com/user/bob/about" {
-		t.Errorf("消息目标没有交给系统浏览器：%v", urls)
+	if a.userCard == nil || a.userCard.username != "bob" {
+		t.Errorf("关注消息没有在应用内打开 bob 的资料卡：%+v", a.userCard)
+	}
+	if urls := tt2.OpenedURLs(); len(urls) != 0 {
+		t.Errorf("通知被交给了系统浏览器：%v", urls)
+	}
+
+	// 其它站点目标（RSS、投票、系统等）留在应用的消息中心里，不外跳浏览器。
+	st.items = []Item{{Key: "s1", Notif: &notification{
+		ID: "s1", Type: "system", IsRead: true,
+		Payload: mustObject(t, `{"message":"订阅更新了","path":"/article/42"}`),
+	}}}
+	tt3 := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt3.Frame()
+	if err := tt3.Click("订阅更新了"); err != nil {
+		t.Fatalf("点击系统消息失败：%v", err)
+	}
+	if urls := tt3.OpenedURLs(); len(urls) != 0 {
+		t.Errorf("系统消息被交给了系统浏览器：%v", urls)
 	}
 }
 

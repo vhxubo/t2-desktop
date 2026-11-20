@@ -6,6 +6,13 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	"github.com/lobehub/lobe-mygo/pkg/nav"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 「用户资料」窗口：点任何一处统一用户标识（头像 + 昵称）打开，是一个独立
@@ -32,7 +39,10 @@ import (
 // 横幅只剩大片空白。现在用和其他窗口相同的 32 DIP 自绘标题栏，头像、昵称
 // 与关注按钮并成一行，资料与列表因此整体上移。
 //
-// 数据、状态与请求在 user_card.go；这里只负责窗口的开关与界面。
+// 整套界面走 Lobe UI：标题栏图标、资料头的标签、关注按钮、分段、统计卡片、
+// 加载 / 空 / 失败状态与列表行分别由 lucide、display.Tag、action.Button、
+// nav.Tabs、layout.Block 与 feedback 的组件提供。文案与动作保持不变，只换
+// 观感；配色统一取 lobetheme.TokensOf(c)。数据、状态与请求在 user_card.go。
 
 /* ------------------------------------------------------------------
    入口、显示与关闭
@@ -137,13 +147,15 @@ func (a *app) redrawUserCardWindow() {
 --------------------------------------------------------------- */
 
 // userCardWindowView 是资料卡窗口的 view。窗口没有系统标题栏：顶部是自绘
-// 标题栏（拖动窗口、最小化与关闭），下面直接是资料主体。
+// 标题栏（拖动窗口、最小化与关闭），下面直接是资料主体。布局、文字与状态
+// 提示全部走 Lobe：文字 display.Text、分段 nav.Tabs、分隔线 layout.Divider，
+// 区域背景取 tk.BgLayout。
 func (a *app) userCardWindowView(c *ui.Context) {
 	a.applyTheme(c)
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// 列表行等入口可能把链接交给系统浏览器，服务取本窗口自己的那份。
 	a.srv = c.Services()
-	c.Root().Background(t.Background)
+	c.Root().Background(tk.BgLayout)
 	// 关注 / 取关的结果以 toast 显示在这个窗口里，不退回主窗口。
 	a.drainToasts(c, a.claimsToasts(toastUserCard))
 	// Esc 收起窗口：随时可以再打开。
@@ -159,17 +171,34 @@ func (a *app) userCardWindowView(c *ui.Context) {
 
 	ui.Column(c).Fill().Children(func() {
 		a.userCardTitleBar(c)
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 		a.userCardHeader(c, cs)
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 		a.userCardBio(c, cs)
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 		a.userCardStats(c, cs)
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
+		// 标签页用 Lobe 的 nav.Tabs：选中态与滑动指示块由组件负责。切换时
+		// 只换正文，各页的滚动与分页状态都留在 userCardState。
 		ui.Row(c).FillWidth().Padding(6, 16).Children(func() {
-			ui.Tabs(c, &cs.tab, userCardTabLabels...)
+			c.Key("user-card-tabs")
+			items := make([]nav.TabItem, 0, len(userCardTabLabels))
+			for _, label := range userCardTabLabels {
+				items = append(items, nav.TabItem{Label: label})
+			}
+			sel := cs.tab
+			nav.Tabs(c, &sel, nav.TabsProps{
+				Items:   items,
+				Variant: nav.TabsSquare,
+				Size:    lobetheme.Small,
+			}, nil)
+			if sel != cs.tab && sel >= 0 && sel < len(userCardTabLabels) {
+				cs.tab = sel
+			}
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
+		// 每页给一个独立的 key，避免不同页复用彼此的状态。
+		c.Key(fmt.Sprintf("user-card-page-%d", cs.tab))
 		ui.Column(c).Grow(1).MinHeight(0).Padding(12, 16).Children(func() {
 			switch cs.tab {
 			case userCardTabReplies:
@@ -194,18 +223,18 @@ func (a *app) userCardWindowView(c *ui.Context) {
 	a.authDialogFor(c, toastUserCard)
 }
 
-// userCardTitleBar 是自绘标题栏：左边是人形图标与「用户资料」，右边是
-// 最小化与关闭，画法与主窗口、通知、我的三个窗口一致。它同时是拖动窗口的
-// 区域。资料头里写的是这张卡片的用户；标题栏最右那枚标识写的是「这扇窗口
+// userCardTitleBar 是自绘标题栏：左边是 Lucide 人形图标与「用户资料」，右边
+// 是最小化与关闭，画法与主窗口、通知、我的三个窗口一致。它同时是拖动窗口
+// 的区域。资料头里写的是这张卡片的用户；标题栏最右那枚标识写的是「这扇窗口
 // 属于哪个账号」，多账号时不至于把别人的资料当成自己账号的窗口。
 func (a *app) userCardTitleBar(c *ui.Context) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
-		Background(t.Surface).DragWindow().Children(func() {
+		Background(tk.BgLayout).DragWindow().Children(func() {
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 			AlignItems(ui.Center).Children(func() {
-			ui.Icon(c, profileIcon).Size(16, 16).TextColor(t.Accent)
-			ui.Text(c, "用户资料").FontSize(13).Bold().SingleLine()
+			ui.Icon(c, lucide.User()).Size(16, 16).TextColor(tk.Primary)
+			display.Text(c, "用户资料", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
 			a.accountWindowTag(c)
 		})
 		titleBarButton(c, titleMinimize, "最小化", func() {
@@ -221,18 +250,17 @@ func (a *app) userCardTitleBar(c *ui.Context) {
 // 按钮。关注按钮与身份信息同一行，不再单独占一行；资料头是整张卡里唯一
 // 需要突出的地方，其余区块都贴着它往下排。
 func (a *app) userCardHeader(c *ui.Context, cs *userCardState) {
-	t := c.Theme()
 	u := cs.user
 	ui.Row(c).FillWidth().Padding(12, 16).Gap(14).AlignItems(ui.Center).Children(func() {
 		avatarView(c, cs.username, a.avatarBitmap(u.Avatar), userCardAvatar)
 		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, cs.title()).FontSize(16).Bold().SingleLine()
+				display.Text(c, cs.title(), display.TextProps{Strong: true, FontSize: 16, Rows: 1})
 				if u.Level > 0 {
-					userCardChip(c, fmt.Sprintf("Lv.%d", u.Level), t.TextMuted)
+					userCardTag(c, fmt.Sprintf("Lv.%d", u.Level), display.TagGray)
 				}
 				if u.IsPro {
-					userCardChip(c, "PRO", t.Accent)
+					userCardTag(c, "PRO", display.TagBlue)
 				}
 			})
 			// 第二行：@用户名 + 注册时间 + 佩戴中的徽章。徽章名字来自接口，
@@ -240,17 +268,18 @@ func (a *app) userCardHeader(c *ui.Context, cs *userCardState) {
 			// 放不下时自动折行，不会把关注按钮挤出窗口。
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
 				if meta := userCardHeaderMeta(cs); meta != "" {
-					ui.Text(c, meta).FontSize(12).
-						TextColor(t.TextMuted).MaxLines(2)
+					display.Text(c, meta, display.TextProps{
+						Type: display.TextSecondary, FontSize: 12, Rows: 2,
+					})
 				}
 				for _, b := range u.Badges {
 					if b.Name == "" {
 						continue
 					}
-					userCardChip(c, b.Name, t.Warning)
+					userCardTag(c, b.Name, display.TagGold)
 					// 「我来过」的状态显示在徽章右侧，与站内一致；没有就是没有。
 					if b.Status != nil {
-						userCardChip(c, b.Status.Text, t.TextMuted)
+						userCardTag(c, b.Status.Text, display.TagGray)
 					}
 				}
 			})
@@ -272,44 +301,36 @@ func userCardHeaderMeta(cs *userCardState) string {
 	return strings.Join(parts, " · ")
 }
 
-// userCardChip 是昵称旁的短标签：PRO、徽章名与统计数字都用它，靠颜色区分。
-func userCardChip(c *ui.Context, label string, tint ui.Color) {
-	t := c.Theme()
-	ui.Box(c).Shrink(0).Padding(1, 6).Radius(4).Background(t.Surface).
-		Border(1, t.Border).Children(func() {
-		ui.Text(c, label).FontSize(10).TextColor(tint).SingleLine()
+// userCardTag 是昵称旁的短标签：等级、PRO、徽章名与徽章状态共用 Lobe 的
+// Tag，靠颜色区分。原先手涂的描边盒子换成组件后，字号与圆角跟其它窗口一致。
+func userCardTag(c *ui.Context, label string, color display.TagColor) {
+	display.Tag(c, label, display.TagProps{
+		Size: lobetheme.Small, Color: color, Variant: display.TagFilled, Round: true,
 	})
 }
 
 // userCardFollowButton 画关注按钮：未关注是主按钮「关注他」，已关注是低
 // 强调的描边按钮「已关注」，点一下切换。自己的资料卡不显示。它画在资料头
-// 的右侧，与昵称同一行。
+// 的右侧，与昵称同一行。按钮走 Lobe 的 action.Button，文案与 tooltip 不变。
 func (a *app) userCardFollowButton(c *ui.Context, cs *userCardState) {
 	if !a.userCardCanFollow() {
 		return
 	}
-	t := c.Theme()
 	following := a.userCardFollowing()
 	label := "关注他"
+	variant := action.Primary
 	if following {
 		label = "已关注"
+		variant = action.Default
 	}
-	var btn ui.Element
+	b := action.Button(c, label, action.ButtonProps{Size: lobetheme.Small, Variant: variant})
+	b.Shrink(0).Disabled(cs.follow.busy)
 	if following {
-		btn = ui.Button(c, label).
-			Background(ui.Transparent).
-			Border(1, t.Border).
-			TextColor(t.TextMuted)
+		b.Tooltip("点击取消关注")
 	} else {
-		btn = ui.PrimaryButton(c, label)
+		b.Tooltip("关注这位用户")
 	}
-	btn.FontSize(12).Padding(4, 12).Radius(6).Disabled(cs.follow.busy)
-	if following {
-		btn.Tooltip("点击取消关注")
-	} else {
-		btn.Tooltip("关注这位用户")
-	}
-	if btn.Clicked() {
+	if b.Clicked() {
 		a.toggleUserCardFollow(!following)
 	}
 }
@@ -319,12 +340,13 @@ func (a *app) userCardFollowButton(c *ui.Context, cs *userCardState) {
 // 占位符换成该用户的实际数字。介绍可能很长，超过一块的高度就在块内滚动，
 // 下面的统计、标签页与列表不会被挤出窗口。
 func (a *app) userCardBio(c *ui.Context, cs *userCardState) {
-	t := c.Theme()
 	// MinHeight(0)：窗口缩到最小时先压这一块（里面的介绍框会跟着缩短），
 	// 否则内容会把统计、标签页与列表顶出窗口。
 	ui.Column(c).FillWidth().MinHeight(0).Padding(10, 16).Gap(4).Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(6).Children(func() {
-			ui.Text(c, "个人简介").FontSize(11).TextColor(t.TextMuted).SingleLine()
+			display.Text(c, "个人简介", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 			ui.Spacer(c).Grow(1)
 			// 只有本人、且介绍已经读到，才给编辑入口：没读到正文就编辑，
 			// 容易用空草稿覆盖掉原来的内容。
@@ -335,29 +357,37 @@ func (a *app) userCardBio(c *ui.Context, cs *userCardState) {
 		switch {
 		case cs.aboutErr != "":
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "介绍暂时不可用："+cs.aboutErr).FontSize(userCardBioFontSize).
-					TextColor(t.Danger).MaxLines(2).Grow(1)
+				display.Text(c, "介绍暂时不可用："+cs.aboutErr, display.TextProps{
+					Type: display.TextDanger, FontSize: userCardBioFontSize, Rows: 2,
+				}).Grow(1).MinWidth(0)
 				a.smallAction(c, "重试", cs.aboutLoading, a.loadUserCardAbout)
 			})
 		case !cs.aboutLoaded || cs.aboutLoading:
-			ui.Text(c, "正在读取个人介绍…").FontSize(userCardBioFontSize).TextColor(t.Text)
+			display.Text(c, "正在读取个人介绍…", display.TextProps{
+				FontSize: userCardBioFontSize, Rows: 1,
+			})
 		case strings.TrimSpace(cs.about.Content) == "":
 			// 没填写和「仅社区成员可见」都是空正文，但原因不同，不能混为一谈。
 			text := "这位用户还没有填写个人介绍。"
 			if cs.about.PublicKnown && !cs.about.IsPublic {
 				text = "这位用户的个人介绍仅在社区内可见。"
 			}
-			ui.Text(c, text).FontSize(userCardBioFontSize).TextColor(t.Text)
+			display.Text(c, text, display.TextProps{FontSize: userCardBioFontSize, Rows: 2})
 		default:
-			ui.Scroll(c).FillWidth().MaxHeight(userCardBioContentHeight(c)).Children(func() {
+			// Lobe 的细滚动条与边缘渐隐，替换 mygo 原生 Scroll；高度仍按窗口
+			// 剩余空间计算，窗口被缩小时介绍先让位。
+			scroll := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
 				// 介绍自己的 emojiMap 可能带社区图标；并到全局表情表后一起
 				// 渲染，规则与帖子正文相同。
 				emojis := mergeEmojiMaps(a.emojis, cs.about.Emojis)
 				src := replaceEmoji(expandAboutStats(cs.about.Content, cs.about.Stats), emojis, true)
 				a.markdownView(c, src, a.bioMd)
 			})
+			scroll.FillWidth().MaxHeight(userCardBioContentHeight(c))
 			if meta := userCardAboutMeta(cs.about); meta != "" {
-				ui.Text(c, meta).FontSize(11).TextColor(t.TextMuted).SingleLine()
+				display.Text(c, meta, display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				})
 			}
 		}
 	})
@@ -398,7 +428,7 @@ func userCardAboutMeta(about userAbout) string {
 }
 
 // userCardStats 是统计条：主题数、回复数、粉丝、关注。数字都来自接口，
-// 列表还没拉到时显示占位而不是 0。
+// 列表还没拉到时显示占位而不是 0。四张统计卡走 Lobe 的 layout.Block。
 func (a *app) userCardStats(c *ui.Context, cs *userCardState) {
 	known := cs.profileLoaded
 	ui.Row(c).FillWidth().Padding(10, 16).Gap(8).Wrap().Children(func() {
@@ -418,12 +448,14 @@ func userCardCountText(known bool, n int) string {
 }
 
 func userCardStat(c *ui.Context, label, value string) {
-	t := c.Theme()
-	ui.Box(c).Grow(1).MinWidth(0).Padding(6, 8).Radius(8).
-		Background(t.Surface).Border(1, t.Border).Children(func() {
+	b := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
+		Grow(1).MinWidth(0).Padding(6, 8)
+	b.Children(func() {
 		ui.Column(c).Gap(1).Children(func() {
-			ui.Text(c, value).FontSize(14).Bold().SingleLine()
-			ui.Text(c, label).FontSize(10).TextColor(t.TextMuted).SingleLine()
+			display.Text(c, value, display.TextProps{Strong: true, FontSize: 14, Rows: 1})
+			display.Text(c, label, display.TextProps{
+				Type: display.TextSecondary, FontSize: 10, Rows: 1,
+			})
 		})
 	})
 }
@@ -441,36 +473,48 @@ func (a *app) userCardCollectionsBody(c *ui.Context, cs *userCardState) {
 }
 
 // userCardListBody 画一个标签页的列表：加载中、失败、空与正常四种状态，
-// 正常时每行可以点开正文。
+// 正常时每行可以点开正文。四种状态分别用 Lobe 的 Spin、Result、Empty 与
+// Block，文案与入口保持原样。
 func (a *app) userCardListBody(c *ui.Context, cs *userCardState, kind userCardListKind) {
-	t := c.Theme()
 	l := cs.list(kind)
 	switch {
 	case l.loading && len(l.items) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(20, 20)
-			ui.Text(c, "正在加载…").FontSize(12).TextColor(t.TextMuted)
+			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Large})
+			display.Text(c, "正在加载…", display.TextProps{
+				Type: display.TextSecondary, FontSize: 12, Rows: 1,
+			})
 		})
 		return
 	case l.err != "":
-		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(10).Children(func() {
-			ui.Text(c, "加载失败").FontSize(13).Bold()
-			ui.Text(c, l.err).FontSize(12).TextColor(t.Danger).MaxLines(3)
-			if ui.Button(c, "重试").Clicked() {
-				a.loadUserCardList(kind, 1)
-			}
+		ui.Column(c).Grow(1).MinHeight(0).Center().Children(func() {
+			feedback.Result(c, feedback.ResultProps{
+				Status:   feedback.ResultError,
+				Title:    "加载失败",
+				SubTitle: l.err,
+				Extra: func() {
+					if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+						a.loadUserCardList(kind, 1)
+					}
+				},
+			})
 		})
 		return
 	case l.loaded && len(l.items) == 0:
-		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(6).Children(func() {
-			switch kind {
-			case userCardReplies:
-				ui.Text(c, "这位用户还没有发表过回复。").FontSize(12).TextColor(t.TextMuted)
-			case userCardCollections:
-				ui.Text(c, "这位用户还没有公开合集。").FontSize(12).TextColor(t.TextMuted)
-			default:
-				ui.Text(c, "这位用户还没有发布过主题。").FontSize(12).TextColor(t.TextMuted)
-			}
+		empty := display.EmptyProps{}
+		switch kind {
+		case userCardReplies:
+			empty.Title = "这位用户还没有发表过回复。"
+			empty.Icon = lucide.MessageCircle()
+		case userCardCollections:
+			empty.Title = "这位用户还没有公开合集。"
+			empty.Icon = lucide.Folder()
+		default:
+			empty.Title = "这位用户还没有发布过主题。"
+			empty.Icon = lucide.FileText()
+		}
+		ui.Column(c).Grow(1).MinHeight(0).Center().Children(func() {
+			display.Empty(c, empty)
 		})
 		return
 	}
@@ -494,23 +538,30 @@ func (a *app) userCardListBody(c *ui.Context, cs *userCardState, kind userCardLi
 // userCardMore 是列表底部的续拉：还有下一页时给按钮，续拉失败时给出原因
 // 并可重试，已有内容保持不动。
 func (a *app) userCardMore(c *ui.Context, cs *userCardState, kind userCardListKind) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	l := cs.list(kind)
 	switch {
 	case l.moreErr != "":
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "加载更多失败："+l.moreErr).FontSize(11).
-				TextColor(t.Danger).MaxLines(2).Grow(1)
+			display.Text(c, "加载更多失败："+l.moreErr, display.TextProps{
+				Type: display.TextDanger, FontSize: 11, Rows: 2,
+			}).Grow(1).MinWidth(0)
 			a.smallAction(c, "重试", false, func() { a.loadUserCardList(kind, l.page) })
 		})
 	case l.loading:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Spinner(c).Size(14, 14)
-			ui.Text(c, "正在加载更多…").FontSize(11).TextColor(t.TextMuted)
+			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
+			display.Text(c, "正在加载更多…", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		})
 	case !l.noMore:
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "加载更多").Clicked() {
+			b := action.Button(c, "加载更多", action.ButtonProps{
+				Size: lobetheme.Small, Variant: action.Default,
+			})
+			b.TextColor(tk.Primary)
+			if b.Clicked() {
 				a.loadUserCardList(kind, l.page+1)
 			}
 			ui.Spacer(c).Grow(1)
@@ -519,28 +570,37 @@ func (a *app) userCardMore(c *ui.Context, cs *userCardState, kind userCardListKi
 }
 
 // userCardRow 是一行内容：主题行显示标题与元信息，回复行显示正文摘要与
-// 它所属的帖子；右侧是时间。点一下回到主窗口的正文页。
+// 它所属的帖子；右侧是时间。点一下回到主窗口的正文页。整行是一张可点的
+// Lobe Block，悬停时底色提亮，文案与提示保持原样。
 func (a *app) userCardRow(c *ui.Context, it Item, kind userCardListKind) {
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// 主题行跟着本地已读状态把标题置灰；回复行表示的是评论内容，不跟帖子
 	// 的已读走（与 rows.go 的富行同一规则）。
-	titleColor := postTitleColor(t, kind == userCardTopics && a.isPostRead(it.ShortID))
-	row := ui.ButtonBase(c).FillWidth().Padding(8, 10).Radius(8).
-		Background(t.Background).Border(1, t.Border)
+	titleColor := tk.Text
+	if kind == userCardTopics && a.isPostRead(it.ShortID) {
+		titleColor = tk.TextSecondary
+	}
+	row := layout.Block(c, layout.BlockProps{
+		Variant: layout.BlockOutlined, Clickable: true,
+	}).FillWidth().Padding(8, 10)
 	if row.Hovered() {
-		row.Background(t.SurfaceHover)
+		row.Background(tk.FillSecondary)
 	}
 	row.Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-				ui.Text(c, "· "+it.Title).FontSize(12).
-					MaxLines(2).TextColor(titleColor)
+				t := display.Text(c, "· "+it.Title, display.TextProps{FontSize: 12, Rows: 2})
+				t.TextColor(titleColor)
 				if meta := userCardRowMeta(it, kind); meta != "" {
-					ui.Text(c, meta).FontSize(11).TextColor(t.TextMuted).MaxLines(1)
+					display.Text(c, meta, display.TextProps{
+						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+					})
 				}
 			})
 			if when := userCardWhen(it); when != "" {
-				ui.Text(c, when).FontSize(11).Shrink(0).TextColor(t.TextMuted)
+				display.Text(c, when, display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				}).Shrink(0)
 			}
 		})
 	})

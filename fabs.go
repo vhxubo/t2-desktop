@@ -4,6 +4,8 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 右下角的悬浮按钮（FAB）组：只用在主页列表上，画法与几何见这里。详情页
@@ -22,6 +24,10 @@ const (
 
 // fabStack 画右下角竖排的一列悬浮按钮。buttons 按从上到下的顺序给出，
 // 最后一个贴着右下角；空列表什么也不画。
+//
+// Lobe 没有「绝对定位的悬浮按钮列」这种组件，这里仍用 mygo 的 Column 做
+// 定位容器；列里的每枚按钮本身都是 Lobe 组件（见 fabButton / composeFab），
+// 配色与圆角也全部取自 Lobe token。
 func (a *app) fabStack(c *ui.Context, buttons ...func(*ui.Context)) {
 	if len(buttons) == 0 {
 		return
@@ -34,16 +40,20 @@ func (a *app) fabStack(c *ui.Context, buttons ...func(*ui.Context)) {
 	})
 }
 
-// fabButton 画一个 Lobe 风格的次级 FAB：ActionIcon 的 BlockSize 给方块尺寸，
-// 悬停由它自己处理。label 是可访问名，tip 是悬停说明；loading 时禁用按钮并
-// 在图标位转圈，请求还在路上，连点不该重复发。
+// fabButton 画一个 Lobe 次级 FAB：ActionIcon 的 BlockSize 给方块尺寸，悬停由
+// 它自己处理；图标由调用处传 Lobe 的 lucide 图标（见 listFabs）。label 是可
+// 访问名，tip 是悬停说明；loading 时禁用按钮并在图标位转圈，请求还在路上，
+// 连点不该重复发。
 func (a *app) fabButton(c *ui.Context, icon *ui.SVG, label, tip string, loading bool, onClick func()) {
 	if loading {
-		// 请求在路上：禁用态方块里只放转圈，连点不会重复发。
-		b := ui.Box(c).Size(fabCircle, fabCircle).Center().Disabled(true)
+		// 请求在路上：按钮退成 Lobe ActionIcon 的禁用态——方块尺寸与圆角都取
+		// Lobe token，只把图标位换成转圈，连点不会重复发。
+		tk := lobetheme.TokensOf(c)
+		b := ui.ButtonBase(c).Size(fabCircle, fabCircle).Center().Disabled(true).
+			Radius(tk.BorderRadiusSM).Background(ui.Transparent).Border(1, ui.Transparent)
 		b.Label(label).Tooltip(tip)
 		b.Children(func() {
-			feedback.Spin(c, feedback.SpinProps{CustomSize: 16}, nil)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 16})
 		})
 		return
 	}
@@ -52,14 +62,15 @@ func (a *app) fabButton(c *ui.Context, icon *ui.SVG, label, tip string, loading 
 }
 
 // listFabs 是主页内容区右下角的一列悬浮按钮：发帖（主操作，强调色胶囊）、
-// 发动态、评分榜、刷新，以及列表滚离顶部之后才出现的「返回顶部」。发帖固定
-// 在最下面，离手最近，其余往上排。
+// 发动态、刷新，以及列表滚离顶部之后才出现的「返回顶部」。发帖固定
+// 在最下面，离手最近，其余往上排。评分榜入口已移到侧边栏「动态」下面
+// （见 sidebarNavItems），它开的是独立窗口，不适合和这些页面操作混在一起。
 func (a *app) listFabs(c *ui.Context) {
 	st := a.tabs[a.tab]
 	var buttons []func(*ui.Context)
 	if listScrolled(st) {
 		buttons = append(buttons, func(c *ui.Context) {
-			a.fabButton(c, backTopIcon, "返回顶部", "回到列表顶部", false, func() {
+			a.fabButton(c, lucide.ArrowUp(), "返回顶部", "回到列表顶部", false, func() {
 				st.list.ScrollTo(0, ui.Start)
 			})
 		})
@@ -70,13 +81,10 @@ func (a *app) listFabs(c *ui.Context) {
 		if loading {
 			tip = "正在刷新…"
 		}
-		a.fabButton(c, refreshIcon, "刷新", tip, loading, a.reloadCurrent)
+		a.fabButton(c, lucide.RefreshCw(), "刷新", tip, loading, a.reloadCurrent)
 	})
 	buttons = append(buttons, func(c *ui.Context) {
-		a.fabButton(c, scoresIcon, "评分榜", "看看帖子评分榜", false, a.showScores)
-	})
-	buttons = append(buttons, func(c *ui.Context) {
-		a.fabButton(c, commentBubbleIcon, "发动态", "写一条短动态（最多 500 字）", false, a.showMomentCompose)
+		a.fabButton(c, lucide.MessageCircle(), "发动态", "写一条短动态（最多 500 字）", false, a.showMomentCompose)
 	})
 	buttons = append(buttons, a.composeFab)
 	a.fabStack(c, buttons...)

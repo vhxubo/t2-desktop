@@ -1139,6 +1139,16 @@ func sidebarListInset(nav layout.SideNavState) float32 {
 	return (1 - min(max(nav.Collapse, 0), 1)) * navListInset
 }
 
+// 侧边栏头部与底部共用的内边距。头部是「上 10 / 左右 16 / 下 6」；底部镜像
+// 过来取「上 6 / 左右 16 / 下 10」，最后一项距窗口底缘的留白因此和顶部开关
+// 距顶的留白一致，两侧也和头部对齐。左右在展开态走 sidebarListInset（16），
+// 折叠态归零，保证图标轨仍居中在 32 DIP。
+const (
+	sidebarInsetX      float32 = 16
+	sidebarInsetTop    float32 = 10
+	sidebarInsetBottom float32 = 6
+)
+
 // sidebarFont 是元信息用的等宽字体：小字号下数字与时序排得整齐，
 // 和无衬线字体形成两层质感。
 const sidebarFont = "monospace"
@@ -1174,7 +1184,8 @@ func (a *app) sidebarHeader(c *ui.Context, nav layout.SideNavState) {
 		name = "折叠侧边栏"
 		icon = lucide.PanelLeftClose()
 	}
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(10, 16, 6, 16).Children(func() {
+	ui.Row(c).Gap(10).AlignItems(ui.Center).
+		Padding(sidebarInsetTop, sidebarInsetX, sidebarInsetBottom, sidebarInsetX).Children(func() {
 		b := action.StyleActionIcon(c, ui.ButtonBase(c), icon, action.ActionIconProps{
 			BlockSize: 32, GlyphSize: 16,
 		})
@@ -1190,8 +1201,11 @@ func (a *app) sidebarHeader(c *ui.Context, nav layout.SideNavState) {
 
 // sidebarNavItems 是浏览页导航的列表数据，展开态交给 display.List，折叠态
 // 交给 sidebarRail 的 ActionIcon。
+//
+// 评分榜是「动态」之后的一项，上面单独加一条分割线：它不是浏览页，而是打开
+// 一扇独立窗口，所以图标用方框 + 向右上角外指的箭头，展开态再补一行说明。
 func (a *app) sidebarNavItems() []display.ListItem {
-	items := make([]display.ListItem, 0, len(tabSpecs))
+	items := make([]display.ListItem, 0, len(tabSpecs)+2)
 	for i, s := range tabSpecs {
 		if s.Kind == kindNotification {
 			continue
@@ -1206,6 +1220,11 @@ func (a *app) sidebarNavItems() []display.ListItem {
 			Icon:  icon,
 		})
 	}
+	items = append(items, display.ListItem{Divider: true})
+	items = append(items, display.ListItem{
+		Key: "scores", Label: "评分榜", Icon: lucide.SquareArrowOutUpRight(),
+		Description: "在新窗口打开",
+	})
 	return items
 }
 
@@ -1214,11 +1233,7 @@ func (a *app) sidebarNavItems() []display.ListItem {
 func (a *app) sidebarNavList(c *ui.Context, nav layout.SideNavState) {
 	items := a.sidebarNavItems()
 	if !nav.Expanded {
-		sidebarRail(c, items, a.navSel, func(key string) {
-			if idx, ok := tabIndexFromID(key); ok {
-				a.selectTab(idx)
-			}
-		})
+		sidebarRail(c, items, a.navSel, a.handleSidebarNavItem)
 		return
 	}
 	ui.Column(c).Padding(0, 0, 0, sidebarListInset(nav)).Children(func() {
@@ -1230,20 +1245,33 @@ func (a *app) sidebarNavList(c *ui.Context, nav layout.SideNavState) {
 			RailWidth: nav.RailWidth,
 		})
 		if clicked != "" {
-			if idx, ok := tabIndexFromID(clicked); ok {
-				a.selectTab(idx)
-			}
+			a.handleSidebarNavItem(clicked)
 		}
 	})
+}
+
+// handleSidebarNavItem 分发导航列表的点击：t<n> 是浏览页切换，其余（评分榜）
+// 走底部入口共用的动作分发。折叠图标轨与展开列表都走这里，不会漏掉窗口入口。
+func (a *app) handleSidebarNavItem(key string) {
+	if idx, ok := tabIndexFromID(key); ok {
+		a.selectTab(idx)
+		return
+	}
+	a.handleSidebarAction(key)
 }
 
 // sidebarRail 把折叠态的导航画成 Lobe ActionIcon 图标轨：保留 ActionIcon 的
 // 外观与状态，再用 Lobe 的 overlay.Tooltip 把名字浮在图标右侧，指针停留或
 // 键盘聚焦都能看到，无障碍描述也是同一个名字。
 func sidebarRail(c *ui.Context, items []display.ListItem, active string, onSelect func(string)) {
+	tk := lobetheme.TokensOf(c)
 	ui.Column(c).Gap(2).AlignItems(ui.Center).AlignSelf(ui.Stretch).Children(func() {
 		for _, it := range items {
 			if it.Divider {
+				// 折叠态也把分组的分割线画出来，别让「动态」下面的窗口入口
+				// 看着和浏览页连成一串。
+				ui.Box(c).Height(1).Margin(4, 8).AlignSelf(ui.Stretch).
+					Background(tk.BorderSecondary)
 				continue
 			}
 			b := action.StyleActionIcon(c, ui.ButtonBase(c), it.Icon, action.ActionIconProps{
@@ -1286,7 +1314,8 @@ func (a *app) selectTab(idx int) {
 
 // sidebarFooterItems 是底部常驻入口的数据：账号/设置/关于，未登录时再加登录
 // 与注册。退出登录已收进标题栏账号菜单的气泡里，外观三档也在设置窗口的
-// 「外观」页，侧边栏不再单独占这些行。
+// 「外观」页，侧边栏不再单独占这些行。评分榜入口在导航列表「动态」之后
+// （见 sidebarNavItems），不在这里。
 func (a *app) sidebarFooterItems() []display.ListItem {
 	items := []display.ListItem{
 		{Key: "accounts", Label: "账号", Icon: lucide.UsersRound()},
@@ -1312,13 +1341,18 @@ func (a *app) sidebarFooterItems() []display.ListItem {
 
 // sidebarFooterList 展开时用 display.List 画底部入口并留出左侧空白；折叠时
 // 换成带 tooltip 的 ActionIcon 图标轨，点击仍走同一处 handleSidebarAction。
+// 底部内边距镜像头部（见 sidebarInsetX / sidebarInsetTop / sidebarInsetBottom）：
+// 左右与头部同为 16，最后一项距底缘留出头部距顶的 10，不再贴着窗口底边。
 func (a *app) sidebarFooterList(c *ui.Context, nav layout.SideNavState) {
 	items := a.sidebarFooterItems()
 	if !nav.Expanded {
-		sidebarRail(c, items, "", a.handleSidebarAction)
+		// 折叠态图标轨居中靠左右零内边距，这里只补底部留白，别把图标推离轨中线。
+		ui.Column(c).Padding(0, 0, sidebarInsetTop, 0).Children(func() {
+			sidebarRail(c, items, "", a.handleSidebarAction)
+		})
 		return
 	}
-	ui.Column(c).Padding(0, 0, 0, sidebarListInset(nav)).Children(func() {
+	ui.Column(c).Padding(sidebarInsetBottom, sidebarListInset(nav), sidebarInsetTop, sidebarListInset(nav)).Children(func() {
 		clicked := display.List(c, display.ListProps{
 			Items:     items,
 			Compact:   true,
@@ -1340,6 +1374,8 @@ func (a *app) handleSidebarAction(key string) {
 		a.showSettings()
 	case "about":
 		a.showAbout()
+	case "scores":
+		a.showScores()
 	case "wait":
 		a.pageName = "login"
 	case "cancel":
@@ -1670,11 +1706,11 @@ func (a *app) body(c *ui.Context) {
 	}
 	if st.loading && len(st.items) == 0 {
 		ui.Column(c).Grow(1).Center().Children(func() {
-			feedback.Spin(c, feedback.SpinProps{
+			lobeSpin(c, feedback.SpinProps{
 				Variant: feedback.SpinNetwork,
 				Size:    lobetheme.Large,
 				Tip:     "正在加载 " + spec.Label + "…",
-			}, nil)
+			})
 		})
 		return
 	}
@@ -1756,7 +1792,7 @@ func (a *app) loadMoreFooter(c *ui.Context, errText string, loading bool, retry 
 			}
 			return
 		}
-		feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+		lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
 		ui.Text(c, "正在加载更多…").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 	})
 }

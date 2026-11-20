@@ -181,8 +181,9 @@ func (a *app) stopCoinTagWatch() {
 	a.stopCoinRefresh()
 }
 
-// refreshCoinTagBalance 只拉余额接口：标题栏不需要排名、签到与盲盒，后两者
-// 在点开账号菜单时由 ensureCoinBase 按需补。结果写回金币页共用的 a.coins，
+// refreshCoinTagBalance 只拉余额接口：标题栏不需要排名与盲盒，盲盒在点开
+// 账号菜单时按需补；签到状态由 ensureCoinSignSynced 在打开菜单时同步，每天
+// 最多一次。结果写回金币页共用的 a.coins，
 // 这样标题栏与金币窗口的数字始终一致；失败时保留上次的值，标题栏不自作主张
 // 显示错误。
 //

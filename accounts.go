@@ -1554,8 +1554,9 @@ func (b *accountBook) openNotice(id string) {
 // 就在应用内打开那个账号的窗口与消息中心 —— 把站内消息中心交给系统浏览器会
 // 落到浏览器里登录的另一个账号上，多账号时这正是最容易认错的地方。
 //
-// 认不出账号（升级前弹出的旧通知、账号已经退出）或应用还没就绪时，仍然回到
-// 站内消息中心，至少别让这次点击没有反应。
+// 认不出账号（升级前弹出的旧通知、账号已经退出）或应用还没就绪时，仍然在应用
+// 内看消息：优先未登录窗口，其次任意一个已经开着的账号窗口；一个窗口都没有就
+// 把账号面板带上来。无论哪条路都不再退回系统浏览器。
 func (b *accountBook) openNoticeFallback(accountID string) {
 	if accountID != "" && b.afterReady && b.account(accountID) != nil {
 		b.openWindow(accountID)
@@ -1567,9 +1568,19 @@ func (b *accountBook) openNoticeFallback(accountID string) {
 		})
 		return
 	}
-	if err := b.openURL(siteBaseURL + "/notifications"); err != nil {
-		log.Printf("打开消息中心失败：%v", err)
+	if b.guest != nil {
+		b.guest.raiseMainWindow()
+		b.guest.showNotifications()
+		return
 	}
+	for _, acc := range b.snapshotAccounts() {
+		if acc.app != nil {
+			b.raiseAccountWindow(acc.ID)
+			acc.app.showNotifications()
+			return
+		}
+	}
+	b.showPanel()
 }
 
 // onBecameActive 是应用回到前台时：每个开着的窗口都校准一次未读数与金币数。

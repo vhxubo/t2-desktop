@@ -68,7 +68,7 @@ func (a *app) profileAvatarPanel(c *ui.Context, ps *profileState) {
 		}
 		if ps.avatarBusy {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+				lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
 				display.Text(c, "正在上传头像…",
 					display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 			})

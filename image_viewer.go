@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"log"
 	"net/url"
 	"os"
@@ -737,7 +738,7 @@ func (a *app) imageViewerStage(c *ui.Context, v *imageViewer, p articlePicture, 
 	stage.Children(func() {
 		if src == nil {
 			ui.Column(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Spinner(c).Size(20, 20).Label("图片加载中")
+				lobeSpin(c, feedback.SpinProps{CustomSize: 20}).Label("图片加载中")
 				ui.Text(c, imageViewerEmpty).FontSize(13).TextColor(t.TextMuted)
 			})
 			return

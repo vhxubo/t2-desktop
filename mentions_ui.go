@@ -108,7 +108,7 @@ func (a *app) mentionPanel(c *ui.Context, d *detailState, host replySurface) {
 		quick := a.mentionQuickEntries(d, data, all, random)
 
 		if data.PeopleBusy && !st.participantsLoaded {
-			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
 		}
 		if data.PeopleErr != "" {
 			display.Text(c, data.PeopleErr, display.TextProps{

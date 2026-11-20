@@ -3032,3 +3032,142 @@ func TestReplyQuotePointsAtThirdLevelTarget(t *testing.T) {
 		t.Error("二级评论不该走三级回复的引用分支")
 	}
 }
+
+// 11-19 访问限制：可见性只认 access_guard.passed，不从正文是否为空反推。
+// 字段缺失（老响应 / 离线缓存）或非布尔时按可见处理，避免误伤正常帖子。
+func TestDecodeTopicGuardPassed(t *testing.T) {
+	withGuard := func(extra string) string {
+		return `{"short_id":"LOCK","title":"标题","content":"正文","views":7,` +
+			`"author":{"username":"jimmy"},"tags":[{"name":"职场"}],"access_guard":` + extra + `}`
+	}
+	cases := []struct {
+		name, raw string
+		blocked   bool
+		typ       string
+		level     int
+		attr      string
+		attrVal   int
+	}{
+		{"login", withGuard(`{"type":"login","passed":false}`), true, guardLogin, 0, "", 0},
+		{"level", withGuard(`{"type":"level","level":5,"passed":false}`), true, guardLevel, 5, "", 0},
+		{"attribute", withGuard(`{"type":"attribute","attr":"力量","attr_value":3,"passed":false}`),
+			true, guardAttribute, 0, "力量", 3},
+		{"passed true", withGuard(`{"type":"login","passed":true}`), false, guardLogin, 0, "", 0},
+		{"passed missing", withGuard(`{"type":"login"}`), false, guardLogin, 0, "", 0},
+		{"passed not bool", withGuard(`{"type":"login","passed":"false"}`), false, guardLogin, 0, "", 0},
+		{"flat", `{"short_id":"LOCK","title":"标题","content":"正文","views":7,` +
+			`"access_guard_type":"level","access_guard_level":9,"access_guard_passed":false}`,
+			true, guardLevel, 9, "", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := decodeTopic([]byte(tc.raw), "LOCK")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := p.guardBlocks(); got != tc.blocked {
+				t.Errorf("guardBlocks() = %v, 期望 %v", got, tc.blocked)
+			}
+			if p.GuardType != tc.typ || p.GuardLevel != tc.level ||
+				p.GuardAttr != tc.attr || p.GuardAttrValue != tc.attrVal {
+				t.Errorf("门槛字段错误：%+v", p)
+			}
+			// 外壳字段始终保留，访问墙要靠它们显示作者、节点与浏览数。
+			if p.ShortID != "LOCK" || p.Views != 7 {
+				t.Errorf("外壳字段丢失：%+v", p)
+			}
+		})
+	}
+
+	// type=guardian 时服务端连 title / tags 一起清空：解码不能造出空标题。
+	g, err := decodeTopic([]byte(`{"short_id":"G","title":"","content":"","tags":[],`+
+		`"access_guard":{"type":"guardian","passed":false}}`), "G")
+	if err != nil || !g.guardBlocks() || g.Title != "" || len(g.Tags) != 0 {
+		t.Errorf("守护者墙解析错误：%+v %v", g, err)
+	}
+	// 登录 / 等级 / 属性墙的标题是公开信息，照常下发。
+	l, err := decodeTopic([]byte(`{"short_id":"L","title":"登录墙","content":"",`+
+		`"tags":[{"name":"x"}],"access_guard":{"type":"login","passed":false}}`), "L")
+	if err != nil || !l.guardBlocks() || l.Title != "登录墙" || len(l.Tags) != 1 {
+		t.Errorf("登录墙应保留标题与标签：%+v %v", l, err)
+	}
+}
+
+func TestAccessGuardReason(t *testing.T) {
+	cases := []struct {
+		p     topicDetail
+		title string
+	}{
+		{topicDetail{GuardType: guardLogin}, "登录后可见"},
+		{topicDetail{GuardType: guardLevel, GuardLevel: 5}, "达到 5 级可见"},
+		{topicDetail{GuardType: guardAttribute, GuardAttr: "力量", GuardAttrValue: 3}, "力量 属性达到 3 可见"},
+		{topicDetail{GuardType: accessGuardGuardian}, "仅守护者可见"},
+		{topicDetail{GuardType: "unknown"}, "内容不可见"},
+	}
+	for _, tc := range cases {
+		title, detail := accessGuardReason(&tc.p)
+		if title != tc.title || detail == "" {
+			t.Errorf("type=%q 说明错误：%q / %q", tc.p.GuardType, title, detail)
+		}
+	}
+}
+
+// 无权帖要渲染访问墙：给出门槛说明与「去登录」入口，正文一个字都不画。
+func TestAccessWallRenders(t *testing.T) {
+	a := testApp(t) // 无令牌 = 未登录
+	a.openDetail(Item{ShortID: "LOCKED", URL: "https://2libra.com/post/work/LOCKED"})
+	topic, err := decodeTopic([]byte(`{
+		"short_id":"LOCKED","title":"登录墙的标题","content":"这段正文不该被画出来",
+		"views":12,"comment_count":3,"author":{"username":"jimmy","level":4},
+		"node":{"name":"职场","slug":"work"},"tags":[{"name":"职场"}],
+		"access_guard":{"type":"login","passed":false}
+	}`), "LOCKED")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.detail.topic = &topic
+	a.detail.replyLoaded = true
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	if !tt.HasText("登录后可见") {
+		t.Errorf("缺少访问墙说明：%q", tt.Texts())
+	}
+	if !tt.HasText("去登录") {
+		t.Error("未登录时访问墙应给「去登录」入口")
+	}
+	if tt.HasText("这段正文不该被画出来") {
+		t.Error("无权帖不应渲染正文")
+	}
+	if !tt.HasText("评论不可见") {
+		t.Error("无权帖的评论已确认为空，应说明不可见而不是「暂无评论」")
+	}
+	if err := tt.Click("去登录"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !a.authGate.open {
+		t.Error("点「去登录」应打开授权弹窗")
+	}
+}
+
+// 守护者专属节点连标题都被清空：墙上只显示「仅守护者可见」，不露空标题。
+func TestAccessWallGuardianHidesTitle(t *testing.T) {
+	a := testApp(t)
+	a.openDetail(Item{ShortID: "GUARD", URL: "https://2libra.com/post/work/GUARD"})
+	topic, err := decodeTopic([]byte(`{
+		"short_id":"GUARD","title":"","content":"","tags":[],
+		"author":null,"views":9,"access_guard":{"type":"guardian","passed":false}
+	}`), "GUARD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.detail.topic = &topic
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	if !tt.HasText("仅守护者可见") {
+		t.Errorf("守护者墙说明缺失：%q", tt.Texts())
+	}
+	if tt.HasText("内容不可见") {
+		t.Error("守护者墙应给出专属说明，而不是通用文案")
+	}
+}

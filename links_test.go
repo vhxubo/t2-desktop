@@ -85,6 +85,48 @@ func TestParseInAppTopicLink(t *testing.T) {
 	}
 }
 
+// A "follow" notification points at a user profile. It must be recognised as
+// a local profile so clicking the message opens the in-app user card, while a
+// lookalike host stays a foreign link.
+func TestParseUserAboutLink(t *testing.T) {
+	accept := []struct{ raw, name string }{
+		{"https://2libra.com/user/bob/about", "bob"},
+		{"http://2libra.com/user/bob/about", "bob"},
+		{"https://www.2libra.com/user/bob/about", "bob"},
+		{"www.2libra.com/user/bob/about", "bob"},
+		{"//2libra.com/user/bob/about", "bob"},
+		{"/user/bob/about", "bob"},
+		{"https://2libra.com:443/user/bob/about", "bob"},
+		{"https://2libra.com/user/bob/about).", "bob"},
+		{"https://2libra.com/user/%E5%BC%A0%E4%B8%89/about", "张三"},
+	}
+	for _, tc := range accept {
+		name, ok := parseUserAboutLink(tc.raw)
+		if !ok || name != tc.name {
+			t.Errorf("应识别用户主页 %q => %q, %v；期望 %q", tc.raw, name, ok, tc.name)
+		}
+	}
+	reject := []string{
+		"",
+		"https://example.com/user/bob/about",
+		"https://2libra.com.evil.com/user/bob/about",
+		"https://r2.2libra.com/user/bob/about",
+		"https://2libra.com:8080/user/bob/about",
+		"https://2libra.com@evil.com/user/bob/about",
+		"javascript:alert(1)",
+		"https://2libra.com/user/bob",
+		"https://2libra.com/user/bob/about/extra",
+		"https://2libra.com/user//about",
+		"user/bob/about", // 相对当前页面，不是站内根路径
+		"https://2libra.com/post/bob/about",
+	}
+	for _, raw := range reject {
+		if name, ok := parseUserAboutLink(raw); ok {
+			t.Errorf("不该拦截 %q => %q", raw, name)
+		}
+	}
+}
+
 // Comments are rendered as plain text, so their post links need an
 // explicit in-app action. Deduplicate and cap at three buttons per row.
 func TestInAppTopicLinksFromPlainText(t *testing.T) {

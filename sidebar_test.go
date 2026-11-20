@@ -487,6 +487,55 @@ func railInkCenter(im *image.RGBA, y0, y1 int) float32 {
 	return float32(minX+maxX) / 2
 }
 
+// 侧边栏底部的留白与头部一致：顶部开关距窗口上缘 10 DIP，底部最后一项也该
+// 距窗口下缘 10 DIP，不能贴着窗口底边。展开态左右各留 16，和头部的水平内边距
+// 对齐；折叠态图标轨保持零水平内边距，图标仍居中在轨中线上。
+func TestSidebarFooterInsetMatchesHeader(t *testing.T) {
+	const windowWidth, windowHeight = 1100, 760
+	for _, expanded := range []bool{false, true} {
+		a := testApp(t)
+		a.navExpanded = expanded
+		tt := ui.NewTester(a.view, windowWidth, windowHeight)
+		tt.Frame()
+
+		toggleName := "展开侧边栏"
+		if expanded {
+			toggleName = "折叠侧边栏"
+		}
+		toggle, ok := tt.Find(toggleName)
+		if !ok {
+			t.Fatalf("展开=%v 时找不到顶部开关：%q", expanded, tt.Texts())
+		}
+		// 未登录时底部最后一项是「注册」。
+		signup, ok := tt.Find("注册")
+		if !ok {
+			t.Fatalf("展开=%v 时找不到底部「注册」：%q", expanded, tt.Texts())
+		}
+		topGap := toggle.Y
+		bottomGap := float32(windowHeight) - signup.Y - signup.H
+		if bottomGap < topGap-0.5 || bottomGap > topGap+0.5 {
+			t.Errorf("展开=%v 时底部留白 %.1f，与头部距顶 %.1f 不一致", expanded, bottomGap, topGap)
+		}
+		if !expanded {
+			continue
+		}
+		// 展开态底部行的左右内边距与头部同为 16。用导航列表的行右缘量出
+		// 侧边栏右边界（那一行没有右内边距），底部行应比它再收进 16。
+		home, ok := tt.Find("首页")
+		if !ok {
+			t.Fatalf("展开态找不到「首页」：%q", tt.Texts())
+		}
+		navRight := home.X + home.W
+		if signup.X < sidebarInsetX-0.5 {
+			t.Errorf("展开态底部行左边距 %.1f，应至少 %.1f", signup.X, sidebarInsetX)
+		}
+		if right := signup.X + signup.W; right > navRight-sidebarInsetX+1 {
+			t.Errorf("展开态底部行右缘 %.1f，未从侧边栏右缘 %.1f 收进 %.1f",
+				right, navRight, sidebarInsetX)
+		}
+	}
+}
+
 // 顶部开关、导航项与底部项在展开和收起两态必须落在同一条竖线上，否则点开
 // 侧边栏时整列图标会横向跳一下。中心对准的是折叠图标轨的中线 32 DIP。
 func TestSidebarIconsAlignAcrossExpandStates(t *testing.T) {

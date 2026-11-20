@@ -17,6 +17,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	"github.com/lobehub/lobe-mygo/pkg/motion"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
@@ -1134,7 +1135,7 @@ func (a *app) detailRefreshButton(c *ui.Context, d *detailState) {
 	}
 	b.Children(func() {
 		if loading {
-			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
 			return
 		}
 		ink := t.TextMuted
@@ -1161,7 +1162,7 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 	// 正文顶部，只在有话说时才占一点点高度。
 	a.topicNotice(c, d)
 	if d.topicLoading && d.topic == nil {
-		feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small, Tip: "正在加载正文…"}, nil)
+		lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small, Tip: "正在加载正文…"})
 		return
 	}
 	if d.topicErr != "" {
@@ -1195,6 +1196,13 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 		// 作者信息已经在标题下方，这里不再重复。
 		a.topicSubtitle(c, p)
 	})
+	// 无权帖：引擎按 11-19 口径把内容块全部置空，只留外壳。这里据此渲染
+	// 访问墙，绝不从「正文为空」反推受限；标题 / 标签为空时上面的文首已经
+	// 自然不画，不会露出一个空标题。
+	if p.guardBlocks() {
+		a.accessWall(c, d, p)
+		return
+	}
 	// 副标题与正文之间不再画分隔线：这条线在正文顶端显得像多余的一条。
 	// 帖子自己的 emojis 可能包含社区自定义图标；并到全局表情表后一起渲染。
 	emojis := mergeEmojiMaps(a.emojis, p.Emojis)
@@ -1237,6 +1245,61 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 	}
 	// 正文末尾不再画互动行：表态与打赏固定在左栏底部的互动栏里
 	// （见 detailView 的 topicInteractionBar），正文再长也始终可达。
+}
+
+// accessGuardGuardian 是守护者专属节点的门槛类型，与 compose.go 里的
+// guardNone/login/level/attribute 并列；它只在读响应里出现（作者侧不能设）。
+const accessGuardGuardian = "guardian"
+
+// accessGuardReason 把 access_guard 的机器字段翻成两层中文说明：标题一行、
+// 细节一行。文案只按 type / level / attr 生成，不解析服务端的中文 m。
+// type 未知或缺失时给一个通用说法，始终让用户知道「为什么这里是空的」。
+func accessGuardReason(p *topicDetail) (title, detail string) {
+	switch strings.TrimSpace(p.GuardType) {
+	case guardLogin:
+		return "登录后可见", "这篇帖子仅对登录用户开放，登录后即可查看正文与互动。"
+	case guardLevel:
+		return fmt.Sprintf("达到 %d 级可见", p.GuardLevel),
+			"这篇帖子设置了最低等级门槛，达到要求等级后即可查看。"
+	case guardAttribute:
+		attr := strings.TrimSpace(p.GuardAttr)
+		if attr == "" {
+			attr = "指定"
+		}
+		return fmt.Sprintf("%s 属性达到 %d 可见", attr, p.GuardAttrValue),
+			"这篇帖子设置了 D20 属性门槛，属性达标后即可查看。"
+	case accessGuardGuardian:
+		return "仅守护者可见", "这篇帖子属于守护者专属节点，仅守护者可以查看。"
+	default:
+		return "内容不可见", "这篇帖子设置了访问限制，满足条件后即可查看。"
+	}
+}
+
+// accessWall 画无权帖的访问墙。它是正文的主体：说明门槛是什么，未登录时
+// 给「去登录」入口，登录后由 replay 重拉详情与评论，墙随即被真正内容替换。
+// 页面级状态留在页面里（不像一次性操作那样发 toast），所以这里用内联卡片。
+func (a *app) accessWall(c *ui.Context, d *detailState, p *topicDetail) {
+	tk := lobetheme.TokensOf(c)
+	title, detail := accessGuardReason(p)
+	ui.Column(c).FillWidth().Gap(10).Padding(24, 20).Radius(tk.BorderRadiusLG).
+		Background(tk.FillQuaternary).Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, lucide.Lock()).Size(22, 22).TextColor(tk.TextSecondary).Shrink(0)
+			ui.Text(c, title).FontSize(tk.FontSizeLG).Bold().TextColor(tk.TextHeading)
+		})
+		ui.Text(c, detail).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription).MaxLines(3)
+		if !a.auth.loggedIn() {
+			if ui.PrimaryButton(c, "去登录").Clicked() {
+				a.requestLoginFor(a.detailToastFor(d), "登录后才能查看这篇帖子。", func() {
+					if a.detailLive(d) {
+						// 无权时评论接口返回 d:null，登录后要重新拉一次才看得到。
+						a.loadTopicFor(d)
+						a.loadRepliesFor(d, 1)
+					}
+				})
+			}
+		}
+	})
 }
 
 // voteSection 画正文末尾的投票块：单选时点某一项就直接投，多选时先勾选
@@ -1301,7 +1364,7 @@ func (a *app) voteResultSection(c *ui.Context, d *detailState, v *voteBlock) {
 		}
 		a.smallAction(c, label, d.vote.resultLoading, func() { a.toggleVoteResult(d) })
 		if d.vote.resultLoading {
-			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
 			ui.Text(c, "正在读取结果…").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 		} else if d.vote.result != nil && d.vote.result.Total > 0 {
 			ui.Textf(c, "共 %d 票", d.vote.result.Total).FontSize(tk.FontSizeSM).
@@ -1563,7 +1626,7 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 	switch {
 	case d.replyLoading && len(d.replyList) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small, Tip: "正在加载评论…"}, nil)
+			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small, Tip: "正在加载评论…"})
 		})
 	case d.replyErr != "" && len(d.replyList) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Padding(16).Children(func() {
@@ -1575,6 +1638,11 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 		})
 	case len(d.replyList) == 0:
 		ui.Column(c).Grow(1).Center().Children(func() {
+			if d.topic.guardBlocks() && d.replyLoaded {
+				// 无权时评论接口返回 d:null，已经确认过不是「真的没人评论」。
+				ui.Text(c, "评论不可见").FontSize(tk.FontSize).TextColor(tk.TextDescription)
+				return
+			}
 			ui.Text(c, "暂无评论").FontSize(tk.FontSize).TextColor(tk.TextDescription)
 		})
 	default:
@@ -2313,6 +2381,11 @@ func (a *app) replyComposer(c *ui.Context, d *detailState) {
 			ui.Text(c, "评论已关闭").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 			return
 		}
+		if d.topic.guardBlocks() {
+			// 无权帖发帖同样 403，别给一个点了必然失败的入口。
+			ui.Text(c, "正文受限，暂不能评论").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
+			return
+		}
 		a.replyInput(c, d)
 	})
 }
@@ -2546,7 +2619,7 @@ func (a *app) replyFieldActions(c *ui.Context, d *detailState) ui.Element {
 	row := ui.Row(c).AlignItems(ui.Center).Gap(6).Shrink(0)
 	row.Children(func() {
 		if d.posting {
-			ui.Spinner(c).Size(16, 16)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 16})
 		}
 		if !a.auth.loggedIn() {
 			login := ui.Button(c, "").

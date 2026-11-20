@@ -29,6 +29,7 @@ type coinCacheData struct {
 	RankOK      bool              `json:"rank_ok"`
 	Rank        int               `json:"rank,omitempty"`
 	Sign        coinSignStatus    `json:"sign"`
+	SignDate    string            `json:"sign_date,omitempty"`
 	Pandora     coinPandoraStatus `json:"pandora"`
 	PandoraSeen bool              `json:"pandora_seen"`
 
@@ -77,9 +78,14 @@ func (a *app) loadCoinCache() {
 		if data.RankOK {
 			cs.rank, cs.rankOK = data.Rank, true
 		}
-		cs.sign = data.Sign
 		cs.pandora = data.Pandora
 		cs.pandoraSeen = data.PandoraSeen
+	}
+	// 签到状态和「今日」明细一样只对同一个自然日有效：昨天的「已签到」
+	// 不能当成今天的，隔天由账号菜单按需重新拉一次。
+	if data.SignDate == coinTodayDate() {
+		cs.sign = data.Sign
+		cs.signSyncedDate = data.SignDate
 	}
 	// 「今日」只对同一个自然日有效，隔天不能把昨天的明细当成今天的。
 	if data.HasToday && data.TodayDate == coinTodayDate() {
@@ -125,6 +131,12 @@ func (a *app) saveCoinCache() {
 		return
 	}
 	now := time.Now()
+	// 只有今天真正同步过的签到状态才带日期写盘；隔天还没重拉时宁可不写，
+	// 让下次启动把昨天的状态当作无缓存，由账号菜单重新同步。
+	var signDate string
+	if cs.sign.Known && cs.signSyncedDate == coinTodayDate() {
+		signDate = coinTodayDate()
+	}
 	data := coinCacheData{
 		SavedAt:      now,
 		TodayDate:    coinTodayDate(),
@@ -140,6 +152,7 @@ func (a *app) saveCoinCache() {
 		RankOK:      cs.rankOK,
 		Rank:        cs.rank,
 		Sign:        cs.sign,
+		SignDate:    signDate,
 		Pandora:     cs.pandora,
 		PandoraSeen: cs.pandoraSeen,
 

@@ -2,15 +2,26 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/field"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 评分榜窗口：主页 FAB 的「评分榜」入口。数据与解码在 scores.go。
+// 评分榜窗口：侧边栏「动态」下方（分割线之后）的「评分榜」入口（见
+// sidebarNavItems）打开的一扇独立窗口，数据与解码在 scores.go。
 //
+// 界面走 Lobe UI：颜色取 TokensOf(c)，标题、筛选、卡片、空状态与按钮分别由
+// display / field / action / feedback / layout 提供，和其它窗口保持同一套观感。
 // 版式：标题栏（拖动 / 最小化 / 关闭）→ 排序与分类筛选 → 评分列表。
 // 每行是「对象名 + 分数 + 分类 + 短评 + 评分人」，点一下打开对应帖子。
 
@@ -284,14 +295,14 @@ func (a *app) reloadScores() {
 }
 
 /* ------------------------------------------------------------------
-   界面
+   界面（Lobe UI）
 --------------------------------------------------------------- */
 
 func (a *app) scoresWindowView(c *ui.Context) {
 	a.applyTheme(c)
-	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	a.srv = c.Services()
-	c.Root().Background(t.Background)
+	c.Root().Background(tk.BgLayout)
 	c.OnShortcut(0, ui.KeyEscape, a.closeScoresWindow)
 
 	st := a.scores
@@ -299,14 +310,19 @@ func (a *app) scoresWindowView(c *ui.Context) {
 		return
 	}
 	ui.Column(c).Fill().Children(func() {
+		// 自绘标题栏：拖动窗口、最小化与关闭，画法与其它窗口一致。图标仍用
+		// 评分榜的柱状图，文字走 display.Text，配色走 Lobe token。
 		ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
-			Background(t.Surface).DragWindow().Children(func() {
+			Background(tk.BgLayout).DragWindow().Children(func() {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, scoresIcon).Size(15, 15).TextColor(t.Accent)
-				ui.Text(c, "评分榜").FontSize(13).Bold().SingleLine()
+				display.Icon(c, scoresIcon, display.IconProps{Size: display.IconSmall}).
+					TextColor(tk.Primary)
+				display.Text(c, "评分榜", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
 				if st.loaded {
-					ui.Textf(c, "共 %d 条", st.total).FontSize(11).TextColor(t.TextMuted).SingleLine()
+					display.Text(c, fmt.Sprintf("共 %d 条", st.total), display.TextProps{
+						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+					})
 				}
 				a.accountWindowTag(c)
 			})
@@ -317,10 +333,10 @@ func (a *app) scoresWindowView(c *ui.Context) {
 			})
 			titleBarButton(c, titleClose, "关闭", a.closeScoresWindow)
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
 		a.scoresFilters(c, st)
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
 		// 排序 / 分类变了：丢掉旧页，重新拉第 1 页。
 		if st.sort != st.lastSort {
@@ -339,47 +355,83 @@ func (a *app) scoresWindowView(c *ui.Context) {
 	a.ensureScoresLoaded()
 }
 
-func (a *app) scoresFilters(c *ui.Context, st *scoresState) {
-	t := c.Theme()
-	ui.Column(c).FillWidth().Padding(10, 14).Gap(6).Children(func() {
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Segmented(c, &st.sort, scoreSortLabels...)
-			ui.Select(c, &st.category, st.categoryOptions()).
-				Label("评分分类").Width(170)
-			ui.Spacer(c).Grow(1)
-			a.smallAction(c, "刷新", st.loading, a.reloadScores)
+// scoreCategoryLabelMax 是下拉选项展示文案的长度上限。Lobe 的 Select 按最长
+// 选项决定弹层宽度且没有 MaxWidth，分类名太长会把弹层撑出窗口；Value 仍保留
+// 完整分类名，只是显示文案截断。
+const scoreCategoryLabelMax = 10
+
+// scoreCategoryOptions 构造分类下拉的选项：显示文案限长，筛选值保持原样。
+func scoreCategoryOptions(st *scoresState) []field.SelectOption {
+	options := make([]field.SelectOption, 0, len(st.categories)+1)
+	for _, cat := range st.categoryOptions() {
+		options = append(options, field.SelectOption{
+			Value: cat, Label: truncate(cat, scoreCategoryLabelMax),
 		})
-		if st.categoriesErr != "" {
+	}
+	return options
+}
+
+// scoresFilters 用 Lobe 的 Segmented / Select / Button 画筛选条：排序直接绑定
+// st.sort，分类下拉绑定 st.category，改动由 view 里的 lastSort / lastCategory
+// 比对接住并重拉第一页。分类字典单独读，失败不影响评分列表。
+func (a *app) scoresFilters(c *ui.Context, st *scoresState) {
+	card := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
+		FillWidth().Padding(10, 14)
+	card.Children(func() {
+		ui.Column(c).FillWidth().Gap(8).Children(func() {
+			// 窗口缩到最小宽度时，排序、标签、下拉与刷新挤在一行会把「评分分类」
+			// 截成「评…」。标签与下拉都不参与压缩，下拉宽度也按最小窗口留够余量，
+			// 让四个控件在 460 DIP 下仍能完整排在同一行。
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "分类暂时不可用："+st.categoriesErr).FontSize(11).
-					TextColor(t.Danger).MaxLines(2).Grow(1)
-				a.smallAction(c, "重试", st.categoriesLoading, a.loadScoreCategories)
+				action.Segmented(c, &st.sort, scoreSortLabels, action.SegmentedProps{
+					Size: lobetheme.Small,
+				})
+				display.Text(c, "评分分类", display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				}).Shrink(0)
+				field.Select(c, &st.category, field.SelectProps{
+					Options: scoreCategoryOptions(st), Size: lobetheme.Small,
+				}).Label("评分分类").Tooltip("按分类筛选评分").Width(150).Shrink(0)
+				ui.Spacer(c).Grow(1)
+				a.smallAction(c, "刷新", st.loading, a.reloadScores)
 			})
-		}
+			if st.categoriesErr != "" {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+					display.Text(c, "分类暂时不可用："+st.categoriesErr, display.TextProps{
+						Type: display.TextDanger, FontSize: 11, Rows: 2,
+					}).Grow(1).MinWidth(0)
+					a.smallAction(c, "重试", st.categoriesLoading, a.loadScoreCategories)
+				})
+			}
+		})
 	})
 }
 
 func (a *app) scoresBody(c *ui.Context, st *scoresState) {
-	t := c.Theme()
 	switch {
 	case st.loading && len(st.items) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(26, 26)
-			ui.Text(c, "正在读取评分…").FontSize(12).TextColor(t.TextMuted)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 26})
+			display.Text(c, "正在读取评分…", display.TextProps{
+				Type: display.TextSecondary, Rows: 1,
+			})
 		})
 		return
 	case st.err != "" && len(st.items) == 0:
-		ui.Column(c).Grow(1).Center().Gap(10).Children(func() {
-			ui.Text(c, "评分榜加载失败").FontSize(14).Bold()
-			ui.Text(c, st.err).FontSize(12).TextColor(t.Danger).MaxLines(3)
-			if ui.Button(c, "重试").Clicked() {
+		ui.Column(c).Grow(1).Center().Gap(12).Padding(24).Children(func() {
+			feedback.Alert(c, "评分榜加载失败", feedback.AlertProps{
+				Type: feedback.Error, Variant: feedback.Soft,
+				Description: st.err, Selectable: true,
+			})
+			if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
 				a.loadScores(1)
 			}
 		})
 		return
 	case st.loaded && len(st.items) == 0:
-		ui.Column(c).Grow(1).Center().Gap(6).Children(func() {
-			ui.Text(c, "这个筛选下还没有评分。").FontSize(13).TextColor(t.TextMuted)
+		display.Empty(c, display.EmptyProps{
+			Icon:  lucide.ChartNoAxesColumn(),
+			Title: "这个筛选下还没有评分。",
 		})
 		return
 	}
@@ -392,44 +444,48 @@ func (a *app) scoresBody(c *ui.Context, st *scoresState) {
 	}
 	ui.List(c, &st.list, len(st.items), func(i int) {
 		a.scoreRow(c, st.items[i])
-	}).Grow(1).Gap(8)
+	}).Grow(1).MinHeight(0).Gap(8)
 	if a.autoLoad && len(st.items) > 0 && !st.noMore && st.page < st.totalPages && st.list.AtEnd() {
 		a.loadScores(st.page + 1)
 	}
 	switch {
 	case st.moreErr != "":
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "加载更多失败："+st.moreErr).FontSize(11).
-				TextColor(t.Danger).MaxLines(2).Grow(1)
+			display.Text(c, "加载更多失败："+st.moreErr, display.TextProps{
+				Type: display.TextDanger, FontSize: 11, Rows: 2,
+			}).Grow(1).MinWidth(0)
 			a.smallAction(c, "重试", false, func() { a.loadScores(st.page + 1) })
 		})
 	case st.loading:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Spinner(c).Size(13, 13)
-			ui.Text(c, "正在加载更多…").FontSize(11).TextColor(t.TextMuted)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 13})
+			display.Text(c, "正在加载更多…", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
 		})
 	}
 }
 
+// scoreRow 是可点的 Lobe 描边卡片：左侧分值块，右侧对象名、分类、短评与评分人。
+// 无障碍名沿用「评分 <对象名>」，点击仍走 openScorePost 打开对应帖子。
 func (a *app) scoreRow(c *ui.Context, e scoreEntry) {
-	t := c.Theme()
-	row := ui.ButtonBase(c).FillWidth().Padding(10, 12).Radius(10).
-		Background(t.Background).Border(1, t.Border)
-	if row.Hovered() {
-		row.Background(t.SurfaceHover)
-	}
+	row := layout.Block(c, layout.BlockProps{
+		Variant: layout.BlockOutlined, Clickable: true,
+	}).FillWidth().Padding(10, 12)
 	row.Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Start).Children(func() {
 			a.scoreBadge(c, e)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 				ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, e.Target).FontSize(14).Bold().MaxLines(2).Grow(1).MinWidth(0)
+					display.Text(c, e.Target, display.TextProps{
+						Strong: true, FontSize: 14, Rows: 2,
+					}).Grow(1).MinWidth(0)
 					if e.Category != "" {
-						userCardChip(c, e.Category, t.TextMuted)
+						display.Tag(c, e.Category, display.TagProps{Size: lobetheme.Small})
 					}
 				})
 				if comment := strings.TrimSpace(e.Comment); comment != "" {
-					ui.Text(c, comment).FontSize(12).TextColor(t.Text).MaxLines(2)
+					display.Text(c, comment, display.TextProps{FontSize: 12, Rows: 2})
 				}
 				ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 					if e.Author != "" {
@@ -438,10 +494,14 @@ func (a *app) scoreRow(c *ui.Context, e scoreEntry) {
 						})
 					}
 					if e.IsPro {
-						userCardChip(c, "PRO", t.Accent)
+						display.Tag(c, "PRO", display.TagProps{
+							Size: lobetheme.Small, Color: display.TagBlue, Round: true,
+						})
 					}
 					if when := relativeTime(e.CreatedAt); when != "" {
-						ui.Text(c, when).FontSize(10).TextColor(t.TextMuted).SingleLine()
+						display.Text(c, when, display.TextProps{
+							Type: display.TextSecondary, FontSize: 10, Rows: 1,
+						})
 					}
 					ui.Spacer(c).Grow(1)
 				})
@@ -449,31 +509,35 @@ func (a *app) scoreRow(c *ui.Context, e scoreEntry) {
 		})
 	})
 	row.Label("评分 " + e.Target).Tooltip("打开评分对应的帖子")
-	if e.ShortID != "" {
-		row.OnClick(func() { a.openScorePost(e) })
+	if e.ShortID != "" && row.Clicked() {
+		a.openScorePost(e)
 	}
 }
 
 // scoreBadge 是左侧的分值块：高分绿、低分红、中间黄；缺失时不编 0 分。
 func (a *app) scoreBadge(c *ui.Context, e scoreEntry) {
-	t := c.Theme()
-	ink := t.TextMuted
+	tk := lobetheme.TokensOf(c)
+	ink := tk.TextDescription
 	if e.ScoreKnown {
 		switch {
 		case e.Score >= 8:
-			ink = t.Success
+			ink = tk.Success
 		case e.Score <= 4:
-			ink = t.Danger
+			ink = tk.Error
 		default:
-			ink = t.Warning
+			ink = tk.Warning
 		}
 	}
-	ui.Box(c).Width(46).Shrink(0).Padding(6, 4).Radius(8).
-		Background(t.Surface).Border(1, t.Border).Center().Children(func() {
+	ui.Box(c).Width(46).Shrink(0).Padding(6, 4).Radius(tk.BorderRadius).
+		Background(tk.FillTertiary).Border(1, tk.BorderSecondary).Center().Children(func() {
 		ui.Column(c).Gap(0).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, scoreText(e)).FontSize(16).Bold().TextColor(ink).SingleLine()
+			display.Text(c, scoreText(e), display.TextProps{
+				Strong: true, FontSize: 16, Rows: 1,
+			}).TextColor(ink)
 			if e.ScoreKnown {
-				ui.Text(c, "分").FontSize(9).TextColor(t.TextMuted).SingleLine()
+				display.Text(c, "分", display.TextProps{
+					Type: display.TextSecondary, FontSize: 9, Rows: 1,
+				})
 			}
 		})
 	})

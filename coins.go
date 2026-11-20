@@ -53,8 +53,11 @@ const (
 	coinFlowDays     = 30
 
 	// coinSignTimeout 是提交签到的超时。签到本身很轻，和收藏 / 表态一样给
-	// 20 秒，避免网络卡住时按钮一直转圈。
+	// 20 秒，避免网络卡住时按钮一直转圈。查询签到状态也复用这个超时。
 	coinSignTimeout = 20 * time.Second
+	// coinSignSyncRetry 是签到状态静默同步失败后的退避：菜单每帧都可能重开，
+	// 没有退避就会一直重发一个注定失败的请求。
+	coinSignSyncRetry = time.Minute
 )
 
 // 金币历史的时间范围。只作为 query 参数使用，客户端不做二次筛选：
@@ -227,10 +230,20 @@ type coinState struct {
 	rank        int
 	rankOK      bool
 
-	sign        coinSignStatus
-	signErr     string
-	signBusy    bool   // 正在提交签到；按钮据此禁用，避免连点
-	signGen     uint64 // 丢弃过期的签到结果（刷新、重授权、换账号）
+	sign     coinSignStatus
+	signErr  string
+	signBusy bool   // 正在提交签到；按钮据此禁用，避免连点
+	signGen  uint64 // 丢弃过期的签到结果（刷新、重授权、换账号）
+
+	// 账号菜单打开时按需同步的签到状态：signSyncedDate 是最近一次成功读到
+	// 状态的自然日（coinTodayDate），同一天不再重复请求；signSyncing 防止
+	// 一帧内多次构建菜单时并发发请求；signSyncSeq 丢弃过期的同步结果；
+	// signSyncTriedAt 用于失败退避。
+	signSyncedDate  string
+	signSyncing     bool
+	signSyncSeq     uint64
+	signSyncTriedAt time.Time
+
 	pandora     coinPandoraStatus
 	pandoraSeen bool
 

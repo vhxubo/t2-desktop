@@ -430,7 +430,7 @@ func (a *app) notificationsList(c *ui.Context, st *tabState) {
 	switch {
 	case st.loading && len(st.items) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(10).Children(func() {
-			feedback.Spin(c, feedback.SpinProps{CustomSize: 28}, nil)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 28})
 			display.Text(c, "正在加载通知…", display.TextProps{
 				Type: display.TextSecondary, Rows: 1,
 			})

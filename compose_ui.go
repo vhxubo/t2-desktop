@@ -182,14 +182,16 @@ func (a *app) redrawComposeWindow() {
 // composeFab 是主页右下角那一列悬浮按钮里的「发帖」：主操作，放在最下面。
 // 位置由 listFabs 的竖列给（见 fabs.go），这里只管长什么样；公开 tab 与
 // 私人 tab 都能用（未登录时点它先走授权）。图标 + 文案一起显示，任何窗口
-// 宽度下都能看出这是「发帖」。整颗按钮是 Lobe 的 Primary Button。
+// 宽度下都能看出这是「发帖」。整颗按钮是 Lobe 的 Primary Button，图标用
+// Lobe 的 lucide 图标，文案用 Lobe 的字阶。
 func (a *app) composeFab(c *ui.Context) {
 	tk := lobetheme.TokensOf(c)
 	b := action.StyleButton(c, ui.ButtonBase(c), "", action.ButtonProps{Variant: action.Primary})
 	b.Label("发帖").Tooltip("写一篇新帖子").OnClick(a.showCompose)
 	b.Children(func() {
-		ui.Icon(c, composeIcon).Size(15, 15).TextColor(tk.PrimaryForeground)
-		ui.Text(c, "发帖").FontSize(12).Font(sidebarFont).Bold().SingleLine()
+		ui.Icon(c, lucide.SquarePen()).Size(15, 15).TextColor(tk.PrimaryForeground)
+		display.Text(c, "发帖", display.TextProps{FontSize: 12, Strong: true}).
+			Font(sidebarFont).SingleLine().TextColor(tk.PrimaryForeground)
 	})
 }
 
@@ -487,7 +489,7 @@ func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 		// 失败时把原因摆出来，并留一个重试入口。
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			if st.nodeLoading {
-				feedback.Spin(c, feedback.SpinProps{CustomSize: 12}, nil)
+				lobeSpin(c, feedback.SpinProps{CustomSize: 12})
 			}
 			msg := "节点列表还没准备好；留空发布时由 AI 判定分类。"
 			if st.nodeLoading {
@@ -1300,7 +1302,7 @@ func (a *app) composeFooter(c *ui.Context, st *composeState) {
 	}
 	ui.Row(c).FillWidth().Padding(10, 16).Gap(10).AlignItems(ui.Center).Children(func() {
 		if busy {
-			feedback.Spin(c, feedback.SpinProps{CustomSize: 14}, nil)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 14})
 			display.Text(c, "正在发布…", display.TextProps{
 				Type: display.TextSecondary, FontSize: 12, Rows: 1,
 			})

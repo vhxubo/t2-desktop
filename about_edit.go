@@ -167,7 +167,7 @@ func (a *app) userCardAboutEditor(c *ui.Context) {
 			}
 			if cs.aboutBusy {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Spinner(c).Size(13, 13)
+					lobeSpin(c, feedback.SpinProps{CustomSize: 13})
 					ui.Text(c, "正在保存…").FontSize(11).TextColor(t.TextMuted)
 				})
 			}

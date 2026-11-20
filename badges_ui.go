@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -98,7 +99,7 @@ func (a *app) profileBadgesBody(c *ui.Context, ps *profileState) {
 	switch {
 	case ps.badgeLoading && len(ps.badges) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(24, 24)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 24})
 			ui.Text(c, "正在读取我的徽章…").FontSize(12).TextColor(t.TextMuted)
 		})
 		return
@@ -113,7 +114,7 @@ func (a *app) profileBadgesBody(c *ui.Context, ps *profileState) {
 		return
 	case !ps.badgeLoaded:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(24, 24)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 24})
 			ui.Text(c, "正在读取我的徽章…").FontSize(12).TextColor(t.TextMuted)
 		})
 		return
@@ -225,7 +226,7 @@ func (a *app) profileBadgeIcon(c *ui.Context, b badgeWallEntry, size float32) {
 			return
 		}
 		if a.images.state(url) == imageLoading {
-			ui.Spinner(c).Size(size*0.4, size*0.4).Label("徽章图标加载中")
+			lobeSpin(c, feedback.SpinProps{CustomSize: size * 0.4}).Label("徽章图标加载中")
 			return
 		}
 		ui.Text(c, avatarInitials(profileBadgeDisplayName(b))).
@@ -258,7 +259,7 @@ func (a *app) userCardBadgesBody(c *ui.Context, cs *userCardState) {
 	switch {
 	case st.loading && len(st.entries) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(24, 24)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 24})
 			ui.Text(c, "正在读取他的徽章…").FontSize(12).TextColor(t.TextMuted)
 		})
 		return
@@ -273,7 +274,7 @@ func (a *app) userCardBadgesBody(c *ui.Context, cs *userCardState) {
 		return
 	case !st.loaded:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(24, 24)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 24})
 			ui.Text(c, "正在读取他的徽章…").FontSize(12).TextColor(t.TextMuted)
 		})
 		return

@@ -153,7 +153,7 @@ func (a *app) proxySettingsSection(c *ui.Context) {
 		// 结果走 toast，面板里只留「正在做」的进度。
 		if busy {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				feedback.Spin(c, feedback.SpinProps{CustomSize: 12}, nil)
+				lobeSpin(c, feedback.SpinProps{CustomSize: 12})
 				display.Text(c, "正在测试「"+via+"」到 2Libra 的连通性…", display.TextProps{
 					Type: display.TextSecondary, FontSize: 11, Rows: 2,
 				})

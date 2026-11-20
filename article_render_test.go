@@ -260,11 +260,10 @@ func loadingDetailApp(t *testing.T, srv *httptest.Server, picURL string) *app {
 	return a
 }
 
-// hasImageSpinner 报告当前帧里是否还有配图的转圈：Spinner 在 mygo 里是带
-// RoleProgress 的进度指示器，按角色找（不限定名称）比依赖 Min/Max/Now 或标签
-// 文本更稳——无头测试里这些字段默认是 0，而标签又会被渲染成可见文本。
+// hasImageSpinner 报告当前帧里是否还有配图的转圈：Lobe 的 Spin 带 RoleStatus，
+// 按角色找（不限定名称）比依赖标签文本更稳——标签会被渲染成可见文本。
 func hasImageSpinner(tt *ui.Tester) bool {
-	_, ok := tt.AccessByRole(ui.RoleProgress, "")
+	_, ok := tt.AccessByRole(ui.RoleStatus, "")
 	return ok
 }
 

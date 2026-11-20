@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
 // 「关注与粉丝」窗口：数据与请求在 follows.go，这里只负责窗口开关与界面。
@@ -176,7 +177,7 @@ func (a *app) followsListBody(c *ui.Context, fs *followsState) {
 	switch {
 	case !l.loaded || (l.loading && len(l.items) == 0):
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(24, 24)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 24})
 			ui.Text(c, "正在读取"+followsTabLabels[kind]+"…").
 				FontSize(12).TextColor(t.TextMuted)
 		})

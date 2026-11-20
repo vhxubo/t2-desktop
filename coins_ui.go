@@ -120,7 +120,7 @@ func (a *app) coinBalanceCard(c *ui.Context, cs *coinState) {
 					Type: display.TextSecondary, FontSize: 11, Rows: 1,
 				})
 				if cs.baseLoading && !cs.balanceOK {
-					ui.Spinner(c).Size(20, 20)
+					lobeSpin(c, feedback.SpinProps{CustomSize: 20})
 				} else if cs.balanceOK {
 					display.Text(c, coinThousands(cs.balance)+" 金币", display.TextProps{
 						Strong: true, FontSize: 26, Rows: 1,
@@ -141,7 +141,7 @@ func (a *app) coinBalanceCard(c *ui.Context, cs *coinState) {
 				})
 				switch {
 				case cs.todayLoading && !cs.todayLoaded:
-					ui.Spinner(c).Size(18, 18)
+					lobeSpin(c, feedback.SpinProps{CustomSize: 18})
 				case cs.todayErr != "":
 					display.Text(c, "—", display.TextProps{
 						Type: display.TextSecondary, Strong: true, FontSize: 20, Rows: 1,
@@ -171,7 +171,7 @@ func (a *app) coinBalanceCard(c *ui.Context, cs *coinState) {
 						Type: display.TextSuccess, Strong: true, FontSize: 12, Rows: 1,
 					})
 				case cs.signBusy:
-					ui.Spinner(c).Size(16, 16)
+					lobeSpin(c, feedback.SpinProps{CustomSize: 16})
 				case !cs.sign.Known && !cs.baseLoaded:
 					display.Text(c, "加载中…", display.TextProps{
 						Type: display.TextSecondary, FontSize: 12, Rows: 1,
@@ -314,7 +314,7 @@ func (a *app) coinTodayView(c *ui.Context, cs *coinState) {
 			switch {
 			case cs.todayLoading && len(cs.todayItems) == 0:
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Spinner(c).Size(18, 18)
+					lobeSpin(c, feedback.SpinProps{CustomSize: 18})
 					display.Text(c, "正在加载今日金币明细…", display.TextProps{
 						Type: display.TextSecondary, FontSize: 12, Rows: 1,
 					})
@@ -363,7 +363,7 @@ func (a *app) coinHistoryView(c *ui.Context, cs *coinState) {
 	switch {
 	case cs.historyLoading && len(cs.historyItems) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(24, 24)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 24})
 			display.Text(c, "正在加载金币流水…", display.TextProps{
 				Type: display.TextSecondary, Rows: 1,
 			})
@@ -461,7 +461,7 @@ func (a *app) coinDailyCard(c *ui.Context, cs *coinState) {
 			})
 		case cs.dailyLoading && len(cs.dailyItems) == 0:
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Spinner(c).Size(16, 16)
+				lobeSpin(c, feedback.SpinProps{CustomSize: 16})
 				display.Text(c, "正在加载按日收支…", display.TextProps{
 					Type: display.TextSecondary, FontSize: 11, Rows: 1,
 				})
@@ -530,7 +530,7 @@ func (a *app) coinBreakdownCard(c *ui.Context, cs *coinState) {
 			})
 		case cs.breakdownLoading && len(cs.breakdownItems) == 0:
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Spinner(c).Size(16, 16)
+				lobeSpin(c, feedback.SpinProps{CustomSize: 16})
 				display.Text(c, "正在加载分类数据…", display.TextProps{
 					Type: display.TextSecondary, FontSize: 11, Rows: 1,
 				})
@@ -615,7 +615,7 @@ func (a *app) coinRankingView(c *ui.Context, cs *coinState) {
 		return
 	case cs.rankingLoading && len(cs.rankingItems) == 0:
 		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-			ui.Spinner(c).Size(24, 24)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 24})
 			display.Text(c, "正在加载排行榜…", display.TextProps{
 				Type: display.TextSecondary, Rows: 1,
 			})
@@ -929,6 +929,64 @@ func (a *app) ensureCoinBase() {
 	a.loadCoinBase()
 }
 
+// ensureCoinSignSynced 在账号菜单打开时按需同步今日签到状态。
+//
+// 成功结果按自然日缓存（内存与本地缓存）：同一天再开菜单不再发请求，隔天、
+// 换账号或重新登录后重新拉。失败时静默退避，不弹授权也不显示错误——菜单
+// 每帧都可能重建，没有退避就会一直重发一个注定失败的请求。
+func (a *app) ensureCoinSignSynced() {
+	cs := a.coins
+	if cs == nil || !a.autoLoad || !a.auth.loggedIn() || cs.signSyncing {
+		return
+	}
+	today := coinTodayDate()
+	if cs.signSyncedDate == today {
+		return
+	}
+	if !cs.signSyncTriedAt.IsZero() && time.Since(cs.signSyncTriedAt) < coinSignSyncRetry {
+		return
+	}
+	// 昨天的「已签到」不能挂在今天：先清掉，期间菜单回到未同步的初始态。
+	if cs.signSyncedDate != "" && cs.signSyncedDate != today {
+		cs.sign = coinSignStatus{}
+		cs.signErr = ""
+	}
+	cs.signSyncSeq++
+	seq := cs.signSyncSeq
+	cs.signSyncing = true
+	cs.signSyncTriedAt = time.Now()
+	actor := a.auth.username()
+	ctx, cancel := context.WithTimeout(context.Background(), coinSignTimeout)
+	go func() {
+		defer cancel()
+		status, err := a.client.fetchCoinSign(ctx)
+		a.publish(func() {
+			if a.coins != cs || cs.signSyncSeq != seq {
+				return
+			}
+			cs.signSyncing = false
+			// 请求期间换了账号 / 退出了登录：这次结果不属于当前会话。
+			if err != nil || !a.auth.loggedIn() || a.auth.username() != actor {
+				return
+			}
+			a.applyCoinSign(status)
+		})
+	}()
+}
+
+// applyCoinSign 把读到的签到状态落到当前账号的状态与本地缓存里。调用方负责
+// 确认结果仍属于当前会话，并且运行在 UI 线程。
+func (a *app) applyCoinSign(sign coinSignStatus) {
+	cs := a.coins
+	if cs == nil {
+		return
+	}
+	cs.sign = sign
+	cs.signSyncedDate = coinTodayDate()
+	cs.signErr = ""
+	a.saveCoinCache()
+}
+
 func (a *app) loadCoinBase() {
 	cs := a.coins
 	if cs == nil {
@@ -981,8 +1039,8 @@ func (a *app) loadCoinBase() {
 					cs.signErr = friendlyError(signErr)
 				}
 			} else {
-				cs.sign = sign
-				cs.signErr = ""
+				// 金币页和账号菜单共用这一份签到状态：同一天不会再单独同步。
+				a.applyCoinSign(sign)
 			}
 			if pandoraErr == nil {
 				cs.pandora = pandora

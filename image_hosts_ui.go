@@ -199,7 +199,7 @@ func (a *app) imageHostEditor(c *ui.Context) {
 			a.testImageHost(h)
 		}
 		if a.hostTesting == h.ID {
-			feedback.Spin(c, feedback.SpinProps{CustomSize: 11}, nil)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 11})
 			display.Text(c, "正在上传测试图…", display.TextProps{
 				Type: display.TextSecondary, FontSize: 11, Rows: 1,
 			})

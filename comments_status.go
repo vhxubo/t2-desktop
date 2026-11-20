@@ -204,7 +204,7 @@ func (a *app) commentsStatusButton(c *ui.Context, d *detailState) {
 	}
 	b.Children(func() {
 		if busy {
-			ui.Spinner(c).Size(14, 14)
+			lobeSpin(c, feedback.SpinProps{CustomSize: 14})
 			return
 		}
 		ink := t.TextMuted

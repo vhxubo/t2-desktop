@@ -144,8 +144,9 @@ const (
 
 // lobeCfg 是全应用共用的 Lobe UI 主题配置。由它派生的主题会让
 // lobeTheme.TokensOf(c) 命中同一套 token，Lobe 组件与自绘部分因此配色一致。
-// 只覆写三处：浅色背景保持纯白（白色页面语义），两套 Primary 族换成应用
-// 品牌蓝色（浅深各一支），其余 token 全用 Lobe 默认。
+// 只覆写四处：浅色背景保持纯白（白色页面语义），两套 Primary 族换成应用
+// 品牌蓝色（浅深各一支），文本选中高亮改为品牌色的半透明版本，其余 token
+// 全用 Lobe 默认。
 var lobeCfg = func() *lobetheme.Config {
 	light, dark := *lobetheme.Light(), *lobetheme.Dark()
 	light.BgLayout = ui.Hex("#ffffff")
@@ -157,7 +158,15 @@ var lobeCfg = func() *lobetheme.Config {
 	light.PrimaryForeground = ui.Hex("#ffffff")
 	dark.Primary, dark.PrimaryHover, dark.PrimaryActive = ui.Hex("#60A5FA"), ui.Hex("#3B82F6"), ui.Hex("#2563EB")
 	dark.PrimaryForeground = ui.Hex(darkInkBackground)
-	return lobetheme.NewConfig(light, dark)
+
+	cfg := lobetheme.NewConfig(light, dark)
+	// Lobe 默认把选中高亮设成亮黄（Yellow9），和蓝色品牌不搭，在白底上也
+	// 偏淡。改成品牌强调色的半透明版本：选中处的正文仍然清楚，深浅两套
+	// 外观各用自己那支蓝。在这里改派生主题本身而不是复制一份，主题指针
+	// 不变，TokensOf(c) 才能继续命中同一套 token。
+	cfg.Theme(false).Selection = cfg.Theme(false).Accent.Alpha(0.25)
+	cfg.Theme(true).Selection = cfg.Theme(true).Accent.Alpha(0.32)
+	return cfg
 }()
 
 // homeTheme 返回当前帧的 Lobe 主题。深浅由外观模式决定，主题实例直接取自

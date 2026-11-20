@@ -149,11 +149,17 @@ func (a *app) profileTag(c *ui.Context, name string) {
 	tag.Label("我的").Tooltip("打开账号菜单：签到、金币、潘多拉、「我的」与退出登录")
 	// Lobe 的 Popover 点锚点开合、点窗外与 Esc 关闭；气泡挂在账号标识下方。
 	// 锚点本身不再挂 OnClick：点它只开合气泡，进哪个页面在气泡里选。
+	// Popover 没有打开回调，但它在构建期就翻转 open：对比构建前后的值即可
+	// 认出这次是「打开」，趁机同步今日签到状态（同一天只会真正拉一次）。
+	wasOpen := a.profileMenuOpen
 	lobeoverlay.Popover(c, tag, &a.profileMenuOpen, lobeoverlay.PopoverProps{
 		Placement: lobeoverlay.Bottom,
 	}, func() {
 		a.profileMenuPanel(c)
 	})
+	if !wasOpen && a.profileMenuOpen {
+		a.ensureCoinSignSynced()
+	}
 }
 
 // profileTagIdentity 画账号标识里的头像与昵称。两段都不挂 OnClick，让这一帧
@@ -228,6 +234,8 @@ func (a *app) profileMenuSignRow(c *ui.Context) {
 		switch {
 		case cs.signBusy:
 			status = "正在签到…"
+		case cs.signSyncing:
+			status = "正在同步签到状态…"
 		case cs.sign.Known && cs.sign.Signed:
 			status = "今日已签到"
 			if cs.sign.Streak > 0 {
@@ -601,7 +609,7 @@ func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
 	switch {
 	case st.loading && len(st.items) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Large}, nil)
+			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Large})
 			display.Text(c, "正在加载"+profileContentLabels[kind]+"…",
 				display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 1})
 		})
@@ -682,7 +690,7 @@ func (a *app) profileBookmarkRow(c *ui.Context, it Item) {
 		})
 		if busy {
 			b := ui.Box(c).Size(28, 28).Center()
-			b.Children(func() { feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil) })
+			b.Children(func() { lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small}) })
 			b.Label("移除书签").Tooltip("从书签里移除这条评论")
 			return
 		}
@@ -747,7 +755,7 @@ func (a *app) profileMoreContent(c *ui.Context, kind int, st *tabState) {
 		})
 	case st.loading && len(st.items) > 0:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
 			display.Text(c, "正在加载更多…", display.TextProps{
 				Type: display.TextSecondary, FontSize: 11, Rows: 1,
 			})
@@ -802,7 +810,7 @@ func (a *app) profileRepliesBody(c *ui.Context, ps *profileState) {
 	switch {
 	case ps.replyLoading && len(ps.replies) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
-			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Large}, nil)
+			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Large})
 			display.Text(c, "正在加载我的回复…",
 				display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 1})
 		})
@@ -859,7 +867,7 @@ func (a *app) profileMoreReplies(c *ui.Context, ps *profileState, name string) {
 		})
 	case ps.replyLoading:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			feedback.Spin(c, feedback.SpinProps{Size: lobetheme.Small}, nil)
+			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
 			display.Text(c, "正在加载更多…", display.TextProps{
 				Type: display.TextSecondary, FontSize: 11, Rows: 1,
 			})

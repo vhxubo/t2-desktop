@@ -94,6 +94,65 @@ func TestThemeModePersists(t *testing.T) {
 	}
 }
 
+// 文本选中高亮跟随品牌蓝，不再是 Lobe 默认的亮黄；半透明保证选中处的正文
+// 仍可读。除了断言主题色，也在无头窗口里拖选一段文字核对实际绘制的像素。
+func TestTextSelectionUsesBrandColor(t *testing.T) {
+	const text = "这是一段可以拖选的文字"
+	for _, tc := range []struct {
+		name  string
+		dark  bool
+		alpha float32
+	}{
+		{"浅色", false, 0.25},
+		{"深色", true, 0.32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			th := homeTheme(tc.dark)
+			want := th.Accent.Alpha(tc.alpha)
+			if th.Selection != want {
+				t.Errorf("选中高亮 = %v，期望品牌色的半透明版本 %v", th.Selection, want)
+			}
+			if th.Selection == lobeCfg.Tokens(tc.dark).Yellow9 {
+				t.Error("选中高亮还是 Lobe 默认的亮黄")
+			}
+
+			tt := ui.NewTesterWith(func(c *ui.Context) {
+				c.SetTheme(th)
+				ui.Column(c).Selectable().Padding(12).Children(func() {
+					ui.Text(c, text)
+				})
+			}, 320, 80, ui.TesterOptions{Dark: tc.dark})
+			tt.Frame()
+			r, ok := tt.Find(text)
+			if !ok {
+				t.Fatalf("找不到正文：%q", tt.Texts())
+			}
+			// 蓝色高亮：蓝通道明显高于红、绿通道。黄色高亮不会命中这里。
+			bluish := func() int {
+				img, n := tt.Image(), 0
+				for y := int(r.Y); y < int(r.Y+r.H); y++ {
+					for x := int(r.X); x < int(r.X+r.W); x++ {
+						p := img.RGBAAt(x, y)
+						if int(p.B) > int(p.R)+20 && int(p.B) > int(p.G)+5 {
+							n++
+						}
+					}
+				}
+				return n
+			}
+			before := bluish()
+			y := r.Y + r.H/2
+			tt.Press(r.X+2, y)
+			tt.Move(r.X+r.W-2, y)
+			tt.Release(r.X+r.W-2, y)
+			tt.Frame()
+			if after := bluish(); after <= before {
+				t.Errorf("拖选后没有画出蓝色高亮：之前 %d，之后 %d", before, after)
+			}
+		})
+	}
+}
+
 // 外观三档收进设置窗口的「外观」页，侧边栏不再单独摆三个按钮。点选即切换
 // 并落盘，结果用窗口内 toast 说明。测试从深色系统开始，这样选「浅色」是否
 // 真的覆盖系统外观也能一起验证。
