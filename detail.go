@@ -71,8 +71,8 @@ type topicDetail struct {
 	// Restricted 是隐藏内容的门槛（api-read.md 的 extra.restricted）：
 	// 未解锁时只有条件，已解锁时可能带正文，字段按受限内容的容错解码读取。
 	Restricted *restrictedInfo
-	// Redeem 是兑换码块（api-read.md 的 extra.redeem_codes）：只有脱敏值，
-	// 已领取的码才带完整 code。领取入口见 redeem.go。
+	// Redeem 是兑换码块（api-read.md 的 extra.redeem_codes）：每条带 id 与
+	// 脱敏的 code，已领取的还带 redeemed_by。点未领取的码按 id 领取，见 redeem.go。
 	Redeem *redeemBlock
 	// RewardPool 是随帖的金币池状态。线上写在详情顶层 d.reward_pool，
 	// 早期文档写在 d.extra.reward_pool：两处都认，见 decodeTopicRewardPool。
@@ -403,8 +403,8 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 	t.Bet = decodeTopicBet(o)
 	// 受限内容门槛：文档写在 extra.restricted，顶层也认。
 	t.Restricted = decodeTopicRestricted(o)
-	// 兑换码块同样写在 extra.redeem_codes：详情只给脱敏值，领取要用户
-	// 自己粘贴完整码（见 redeem.go）。
+	// 兑换码块同样写在 extra.redeem_codes：每条只有 id 与脱敏值，领取时按
+	// id 请求（见 redeem.go）。
 	t.Redeem = decodeTopicRedeem(o)
 	// 金币池：线上在顶层 d.reward_pool，早期文档在 d.extra.reward_pool。
 	t.RewardPool = decodeTopicRewardPool(o)

@@ -823,6 +823,8 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 		a.detailToolBar(c, d)
 		// 「关闭 / 开启评论」的确认框：作者点了工具条里的图标才展开，盖在整页上。
 		a.commentsStatusDialog(c, d)
+		// 兑换码的领取确认框：点一条未领取的码才展开，领到后切到成功页看完整码。
+		a.redeemDialog(c, d)
 	})
 	// 表态、打赏与明细都是贴着各自入口的气泡（见 interact.go），在互动区
 	// 构建时已经就地挂好，这里不需要再叠一层弹窗。

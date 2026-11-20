@@ -5,42 +5,39 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"net/url"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
 )
 
 // 兑换码（api-read.md 的「我的」与 api-economy.md 的「兑换码」）
 //
-//	GET  /v1/topics/:short_id             详情里的 extra.redeem_codes：只有
-//	                                      masked_code 与 is_redeemed，已领取的
-//	                                      才给完整 code
+//	GET  /v1/topics/:short_id             详情里的 extra.redeem_codes：每项带
+//	                                      id、code（中间用 * 脱敏）、is_redeemed、
+//	                                      redeemed_by、redeemed_at
 //	GET  /v1/me/redeem-codes              我兑换过的兑换码（scope read:me）
 //	POST /v1/redeem-codes/:code/redeem 🔑 scope write:economy，需开通
 //
-// 路径参数是人类可读的兑换码（帖子详情里那个 masked_code 是脱敏值，不能用来
-// 领取；完整码由发帖人另行告知），所以必须按 URL 路径段转义再拼进去。文档说
-// 传内部 uuid 也兼容，但客户端不应该知道 uuid，这里只按用户输入的字符串走。
+// 领取按每条码的 id 走：详情里的 code 是脱敏值，不能用来领取；网页端也是点
+// 一条未领取的码、把它的 id 交给领取接口，成功后响应 d.code 才是完整码。
+// 公开 API 的路径参数同时接受人类可读的完整码和内部 uuid（api-economy.md），
+// 这里用详情给的 id。id 仍是路径段，照旧按 URL 转义拼进去。
 //
 // 已领完 / 已过期 / 不存在是 400 invalid_request 或 409 conflict，两者的 m
 // 都是可以直接展示的原因；逻辑判断只看状态码与 code。每用户可领个数由帖子的
-// max_redeem_per_user 决定，由服务端校验。
+// max_redeem_per_user 决定，客户端先挡一道，服务端仍会校验。
 //
-// 领取是标 🔑 且会改变金币的写操作：同一串码重试（超时、授权后重放）复用
-// 同一个 Idempotency-Key，换一串码就是另一笔，换新键。
+// 领取是标 🔑 且会改变金币的写操作：同一条码重试用同一个 Idempotency-Key，
+// 换一条码就是另一笔，换新键。
 
 const (
 	// redeemTimeout 与打赏 / 竞猜一致：写操作给 20 秒，网络卡住时按钮不会
 	// 一直转圈。
 	redeemTimeout = 20 * time.Second
-	// redeemCodeMax 是单个兑换码的长度上限，取文档给发帖时的 redeem_codes
-	// 每项上限（≤200 字）。按字符计数，与 compose.go 的 composeCodeTextMax
-	// 同口径，避免中文码被按字节误判。
-	redeemCodeMax = 200
 	// redeemedCodesPath 是「我兑换过的兑换码」。只读且只限本人：路径里没有
 	// 任何用户参数，领码仍走 POST /v1/redeem-codes/:code/redeem。
 	redeemedCodesPath = "/v1/me/redeem-codes"
@@ -48,19 +45,24 @@ const (
 	redeemedCodesLimit = 50
 )
 
-// redeemPath 拼领取路径。兑换码里可能有空格、斜杠、中文，整段必须转义，
-// 不能拼成一个多级路径。
+// redeemPath 拼领取路径。兑换码 / id 仍是路径段，整段必须转义，不能拼成
+// 多级路径。
 func redeemPath(code string) string {
 	return "/v1/redeem-codes/" + url.PathEscape(code) + "/redeem"
 }
 
-// redeemCodeEntry 是详情里的一条兑换码。Masked 是脱敏值，任何人都能看到；
-// Code 只有当前用户已经领到它之后服务端才会下发，所以 Code 非空就等于
-// 「我已领取」。
+// redeemCodeEntry 是详情里的一条兑换码。字段口径按线上实测（2026-11-17
+// 的 changelog 已更正文档）：Masked 来自 code，未领取 / 已领取都是脱敏值；
+// ID 是领取用的 uuid；RedeemedByID / RedeemedByName 来自 redeemed_by 对象。
+// Code 只在本机刚领到时才有值——完整码只在领取响应里出现一次。
 type redeemCodeEntry struct {
-	Masked   string
-	Code     string
-	Redeemed bool
+	ID             string
+	Masked         string
+	Code           string
+	Redeemed       bool
+	RedeemedByID   string
+	RedeemedByName string
+	RedeemedAt     string
 }
 
 // redeemBlock 是帖子里的兑换码块：兑换说明、每人可领个数与码列表。
@@ -75,14 +77,15 @@ type redeemBlock struct {
 
 // redeemResult 是 POST 成功后的响应。文档没有给成功响应的字段表，所以只认
 // 认得出来的字段：Message 是服务端说明（可直接展示），Code 是服务端给出的
-// 完整码（没有就用用户输入的那一串），Coins 只在字段明确表示「奖励」时才填
-// —— 名字叫 coins 的字段可能是余额，不能当成这次获得的金币（签到那边有同
-// 一条约定，见 coins.go 的 coinSignStatus.RewardKnown）。
+// 完整码；金额只在字段明确表示「奖励 / 红包」时才填 —— 名字叫 coins 的字段
+// 可能是余额，不能当成这次获得的金币（签到那边有同一条约定，见 coins.go）。
 type redeemResult struct {
-	Message    string
-	Code       string
-	Coins      float64
-	CoinsKnown bool
+	Message        string
+	Code           string
+	Coins          float64
+	CoinsKnown     bool
+	RedPacket      float64
+	RedPacketKnown bool
 }
 
 /* ------------------------------------------------------------------
@@ -127,9 +130,8 @@ func decodeTopicRedeem(o object) *redeemBlock {
 	return b
 }
 
-// decodeRedeemBlock 把一个兑换码块解成结构化数据。线上可能给裸数组，也可能
-// 包一层 { codes, description, max_redeem_per_user }；子字段名文档只给了
-// masked_code / is_redeemed / code 三个，列表字段按几种常见拼写容错。
+// decodeRedeemBlock 把一个兑换码块解成结构化数据。线上给裸数组，早期文档
+// 的包一层写法 { codes, description, max_redeem_per_user } 也认。
 func decodeRedeemBlock(raw json.RawMessage) *redeemBlock {
 	if list := rawArray(raw); len(list) > 0 {
 		return &redeemBlock{Codes: decodeRedeemEntries(list)}
@@ -163,12 +165,21 @@ func decodeRedeemEntries(list []json.RawMessage) []redeemCodeEntry {
 	for _, item := range list {
 		if e := asObject(item); e != nil {
 			entry := redeemCodeEntry{
-				Masked:   e.str("masked_code", "masked", "mask"),
-				Code:     e.str("code", "full_code", "redeem_code"),
-				Redeemed: e.flag("is_redeemed", "redeemed", "used"),
+				ID:         e.str("id", "uuid", "code_id"),
+				Masked:     e.str("code", "masked_code", "masked", "mask"),
+				Code:       e.str("full_code", "redeem_code"),
+				Redeemed:   e.flag("is_redeemed", "redeemed", "used"),
+				RedeemedAt: e.str("redeemed_at"),
 			}
-			// 文档：已领取的才给完整 code。完整码出现即视为已领取，即使
-			// 服务端没带 is_redeemed。
+			// redeemed_by 是带 id / username 的用户对象；也认早期文档里直接
+			// 给用户名字符串的写法。
+			if by := e.sub("redeemed_by"); by != nil {
+				entry.RedeemedByID = by.str("id")
+				entry.RedeemedByName = by.str("username", "name")
+			} else {
+				entry.RedeemedByName = e.str("redeemed_by")
+			}
+			// 完整码出现即视为已领取，即使服务端没带 is_redeemed。
 			if entry.Code != "" {
 				entry.Redeemed = true
 			}
@@ -199,15 +210,19 @@ func decodeRedeemResult(d json.RawMessage) redeemResult {
 	}
 	out.Message = cleanText(o.str("message", "msg", "tip"))
 	out.Code = o.str("code", "full_code", "redeem_code")
-	for _, key := range []string{"reward_coins", "award_coins", "reward_amount", "coins_reward"} {
+	for _, key := range []string{"reward_coins", "award_coins", "reward_amount", "coins_reward",
+		"red_packet_amount", "redPacketAmount", "red_packet", "redPacket", "packet_amount"} {
 		raw, ok := o[key]
 		if !ok {
 			continue
 		}
 		var f float64
 		if json.Unmarshal(raw, &f) == nil {
-			out.Coins, out.CoinsKnown = f, true
-			break
+			if strings.Contains(strings.ToLower(key), "packet") {
+				out.RedPacket, out.RedPacketKnown = f, true
+			} else {
+				out.Coins, out.CoinsKnown = f, true
+			}
 		}
 	}
 	return out
@@ -217,12 +232,13 @@ func decodeRedeemResult(d json.RawMessage) redeemResult {
    请求
 ---------------------------------------------------------------- */
 
-// redeemCode 领取一个兑换码。文档明确没有请求体，所以 payload 传 nil；
+// redeemCode 领取一条兑换码。文档明确没有请求体，所以 payload 传 nil；
 // 领取会改变金币，按标 🔑 的规则必须带 Idempotency-Key（由调用方给）。
-func (c *Client) redeemCode(ctx context.Context, idempotencyKey, code string) (redeemResult, error) {
+// target 优先用详情给的 id，没有 id 时才用完整码。
+func (c *Client) redeemCode(ctx context.Context, idempotencyKey, target string) (redeemResult, error) {
 	var out redeemResult
 	_, err := withAuthRetry(c, ctx, func(token string) (struct{}, error) {
-		d, err := c.postJSON(ctx, c.apiURL(redeemPath(code)), token, idempotencyKey, nil)
+		d, err := c.postJSON(ctx, c.apiURL(redeemPath(target)), token, idempotencyKey, nil)
 		if err != nil {
 			return struct{}{}, err
 		}
@@ -238,46 +254,120 @@ func (c *Client) redeemCode(ctx context.Context, idempotencyKey, code string) (r
 
 // redeemUIState 是详情页兑换码块的界面状态，只在 UI 线程读写。
 type redeemUIState struct {
-	code string // 用户输入的完整兑换码
 	busy bool
 	gen  uint64
 
-	// key / sig 是幂等键与它对应的那一笔（帖子 + 码）：同一串码重试复用，
-	// 换算另一串码就是新的一笔。成功后清空。
+	// key / sig 是幂等键与它对应的那一笔（帖子 + 码 id）：同一条码重试复用，
+	// 换一条码就是新的一笔。成功后清空。
 	key string
 	sig string
 
-	// claimed 是本机刚领到的完整码。详情只给 masked_code，领取成功后完整
-	// 码只在响应里出现一次，记在这里才能继续显示「已领取」，不必重发一次
-	// 详情请求（那会再计一次浏览）。
-	claimed []string
+	// dialogID 非空表示「领取确认框」开着，值是那条码的 id。dialogDone 表示
+	// 已经领到、弹窗切到成功页；claimedFull 是响应里的完整码。
+	dialogID    string
+	dialogDone  bool
+	claimedFull string
+	redPacket   float64
+
+	// full 按码 id 记下本机刚领到的完整码。详情只给脱敏值，领完之后要把
+	// 完整码留在码条上，用户才能复制，且不必重发一次详情请求（那会再计一次
+	// 浏览）。
+	full map[string]string
 }
 
-// submitRedeemCode 提交一次领取。结果（成功、失败、服务端拒绝的原因）一律用
-// 主窗口 toast 报告，块里只留「正在领取」的进度。
-func (a *app) submitRedeemCode(d *detailState) {
+// redeemClaimedByMe 判断一条已领取的码是不是当前账号领的。网页端按
+// redeemed_by.id 与自己的 id 比；桌面端令牌里只有用户名，就用用户名比，
+// 本机刚领到的那条也在领的时候补上了用户名。
+func redeemClaimedByMe(e redeemCodeEntry, me string) bool {
+	return e.Redeemed && me != "" && e.RedeemedByName == me
+}
+
+// redeemMyCount 数已经由我领到的条数，用于每人上限的本地拦截。
+func redeemMyCount(b *redeemBlock, me string) int {
+	if b == nil {
+		return 0
+	}
+	n := 0
+	for _, e := range b.Codes {
+		if redeemClaimedByMe(e, me) {
+			n++
+		}
+	}
+	return n
+}
+
+// redeemOpenDialog 打开某条码的领取确认框。别人领过的、自己领过的、超过
+// 每人上限的都不让再领；未登录先去登录。
+func (a *app) redeemOpenDialog(d *detailState, id string) {
 	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Redeem == nil || d.redeem.busy {
 		return
 	}
-	code := strings.TrimSpace(d.redeem.code)
-	if code == "" {
-		a.toast(a.detailToastFor(d), "请先输入兑换码")
+	b := d.topic.Redeem
+	var e *redeemCodeEntry
+	for i := range b.Codes {
+		if b.Codes[i].ID == id {
+			e = &b.Codes[i]
+			break
+		}
+	}
+	if e == nil || e.Redeemed || e.ID == "" {
 		return
 	}
-	if n := utf8.RuneCountInString(code); n > redeemCodeMax {
-		a.toast(a.detailToastFor(d), fmt.Sprintf("兑换码最多 %d 字，当前 %d 字", redeemCodeMax, n))
+	me := a.auth.username()
+	if b.MaxPerUserKnown && b.MaxPerUser > 0 && redeemMyCount(b, me) >= b.MaxPerUser {
+		a.toast(a.detailToastFor(d), fmt.Sprintf("已达到单个用户最多可领取 %d 个兑换码的限制", b.MaxPerUser))
+		return
+	}
+	if !a.auth.loggedIn() {
+		target := id
+		a.requestLogin("登录后才能领取兑换码。", func() {
+			if a.detailLive(d) {
+				a.redeemOpenDialog(d, target)
+			}
+		})
+		return
+	}
+	st := &d.redeem
+	st.dialogID = id
+	st.dialogDone = false
+	st.claimedFull = ""
+}
+
+// submitRedeemCode 确认领取某一条码。结果（成功、失败、服务端拒绝的原因）
+// 一律用主窗口 toast 报告；请求期间弹窗里只留「正在领取」的进度。
+func (a *app) submitRedeemCode(d *detailState, id string) {
+	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Redeem == nil || d.redeem.busy {
+		return
+	}
+	b := d.topic.Redeem
+	var e *redeemCodeEntry
+	for i := range b.Codes {
+		if b.Codes[i].ID == id {
+			e = &b.Codes[i]
+			break
+		}
+	}
+	if e == nil || e.Redeemed {
+		return
+	}
+	target := e.ID
+	if target == "" {
+		target = e.Code
+	}
+	if target == "" {
+		a.toast(a.detailToastFor(d), "这个兑换码暂时无法领取")
 		return
 	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能领取兑换码。", func() {
 			if a.detailLive(d) {
-				a.submitRedeemCode(d)
+				a.submitRedeemCode(d, id)
 			}
 		})
 		return
 	}
-	// 同一串码重试（超时、授权后重放）复用同一个键；换码即换新键。
-	sig := d.shortID + "|" + code
+	// 同一条码重试（超时、授权后重放）复用同一个键；换码即换新键。
+	sig := d.shortID + "|" + id
 	if d.redeem.key == "" || d.redeem.sig != sig {
 		d.redeem.key = randomURLSafe(24)
 		d.redeem.sig = sig
@@ -290,7 +380,7 @@ func (a *app) submitRedeemCode(d *detailState) {
 	ctx, cancel := context.WithTimeout(context.Background(), redeemTimeout)
 	go func() {
 		defer cancel()
-		res, err := a.client.redeemCode(ctx, key, code)
+		res, err := a.client.redeemCode(ctx, key, target)
 		a.publish(func() {
 			if !a.detailLive(d) || d.redeem.gen != gen {
 				return
@@ -303,7 +393,7 @@ func (a *app) submitRedeemCode(d *detailState) {
 			if err != nil {
 				if a.handleAuthError(err, func() {
 					if a.detailLive(d) {
-						a.submitRedeemCode(d)
+						a.submitRedeemCode(d, id)
 					}
 				}) {
 					return
@@ -313,43 +403,27 @@ func (a *app) submitRedeemCode(d *detailState) {
 			}
 			d.redeem.key = ""
 			d.redeem.sig = ""
-			d.redeem.code = ""
-			full := res.Code
+			full := strings.TrimSpace(res.Code)
 			if full == "" {
-				full = code
+				full = e.Masked
 			}
-			d.redeem.addClaimed(full)
-			markRedeemClaimed(d.topic.Redeem, full)
+			if d.redeem.full == nil {
+				d.redeem.full = make(map[string]string)
+			}
+			d.redeem.full[id] = full
+			// 服务端下次给的详情里这一条仍是脱敏值，本地立刻标成我的，
+			// 码条上就能显示完整码与「已领取」，不必再拉一次详情。
+			e.Redeemed = true
+			e.RedeemedByName = actor
+			e.RedeemedAt = time.Now().UTC().Format(time.RFC3339)
+			e.Code = full
+			d.redeem.dialogDone = true
+			d.redeem.claimedFull = full
+			d.redeem.redPacket = res.RedPacket
 			a.toast(a.detailToastFor(d), redeemSuccessText(res))
 			a.coinsChanged(coinEventRedeem)
 		})
 	}()
-}
-
-func (st *redeemUIState) addClaimed(code string) {
-	if code == "" {
-		return
-	}
-	for _, have := range st.claimed {
-		if have == code {
-			return
-		}
-	}
-	st.claimed = append(st.claimed, code)
-}
-
-// markRedeemClaimed 把本地已知的完整码标成已领取：服务端下次给的详情里会
-// 带上完整 code，到时列表自己就会显示「已领取」，这里只是让当前这一份立刻
-// 跟上，不必等下一次刷新。
-func markRedeemClaimed(b *redeemBlock, code string) {
-	if b == nil || code == "" {
-		return
-	}
-	for i := range b.Codes {
-		if b.Codes[i].Code == code {
-			b.Codes[i].Redeemed = true
-		}
-	}
 }
 
 // redeemErrorText 把领取失败翻成用户能看懂的一句话。已领完 / 已过期 /
@@ -366,11 +440,14 @@ func redeemErrorText(err error) string {
 	return friendlyError(err)
 }
 
-// redeemSuccessText 是成功提示：优先服务端给的说明，其次是认出来的奖励
-// 金额，最后退回一句通用文案。
+// redeemSuccessText 是成功提示：优先服务端给的说明，其次红包 / 奖励金额，
+// 最后退回一句通用文案。
 func redeemSuccessText(res redeemResult) string {
 	if res.Message != "" {
 		return res.Message
+	}
+	if res.RedPacketKnown && res.RedPacket > 0 {
+		return fmt.Sprintf("兑换成功，获得金币红包 %s 金币", coinThousands(int(res.RedPacket)))
 	}
 	if res.CoinsKnown && res.Coins > 0 {
 		return fmt.Sprintf("兑换成功，获得 %s 金币", coinThousands(int(res.Coins)))
@@ -382,8 +459,8 @@ func redeemSuccessText(res redeemResult) string {
    界面
 ---------------------------------------------------------------- */
 
-// redeemSection 画正文末尾的兑换码块：兑换说明、码列表与领取入口。列表里
-// 只有脱敏值，完整码要用户自己粘贴进来；领取结果用主窗口 toast 报告。
+// redeemSection 画正文末尾的兑换码块：每条码是一片。未领取的点开确认框，
+// 领到后码条上显示完整码并可复制；别人领过的、自己领过的都不可再点。
 func (a *app) redeemSection(c *ui.Context, d *detailState) {
 	b := d.topic.Redeem
 	if b == nil {
@@ -402,73 +479,131 @@ func (a *app) redeemSection(c *ui.Context, d *detailState) {
 			ui.Textf(c, "每人可领 %d 个", b.MaxPerUser).
 				FontSize(metaSmallFontSize).TextColor(t.TextMuted)
 		}
-		for _, e := range b.Codes {
-			text := e.Masked
-			if e.Code != "" {
-				text = e.Code
-			}
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, text).FontSize(metaFontSize).SingleLine()
-				if e.Redeemed {
-					ui.Text(c, "已领取").FontSize(metaSmallFontSize).
-						TextColor(t.Success).SingleLine()
-				}
-			})
-		}
-		// 刚在本机领到的完整码：详情还没刷新时也要看得见。
-		for _, code := range redeemUnlistedClaims(b, d.redeem.claimed) {
-			ui.Text(c, "已领取 · "+code).FontSize(metaFontSize).
-				TextColor(t.Success).SingleLine()
+		me := a.auth.username()
+		atLimit := b.MaxPerUserKnown && b.MaxPerUser > 0 && redeemMyCount(b, me) >= b.MaxPerUser
+		for i := range b.Codes {
+			a.redeemCodeChip(c, d, &b.Codes[i], atLimit, me)
 		}
 		if !a.auth.loggedIn() {
-			ui.Text(c, "登录后可以领取兑换码，完整码由发帖人另行告知。").
-				FontSize(metaSmallFontSize).TextColor(t.TextMuted).MaxLines(2)
 			// 登录回来后详情页会整体重建，这里不需要另外登记重跑。
 			if ui.Button(c, "登录后领取").FontSize(11).Clicked() {
 				a.requestLogin("登录后才能领取兑换码。", nil)
 			}
-			return
 		}
-		ui.TextInput(c, &d.redeem.code).Label("兑换码").
-			Placeholder("粘贴发帖人给你的完整兑换码").
-			MaxLength(redeemCodeMax).FillWidth().Disabled(d.redeem.busy)
-		ui.Text(c, "脱敏值不能用，请填发帖人给你的完整兑换码；已领完或已过期时以服务端的说明为准。").
-			FontSize(metaSmallFontSize).TextColor(t.TextMuted).MaxLines(2)
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Spacer(c).Grow(1)
-			if d.redeem.busy {
-				lobeSpin(c, feedback.SpinProps{CustomSize: 13})
-				ui.Text(c, "正在领取…").FontSize(11).TextColor(t.TextMuted)
-				return
-			}
-			if ui.PrimaryButton(c, "领取").
-				Disabled(strings.TrimSpace(d.redeem.code) == "").Clicked() {
-				a.submitRedeemCode(d)
-			}
-		})
 	})
 }
 
-// redeemUnlistedClaims 过滤掉列表里已经显示过的码：服务端刷新后的详情会
-// 给出完整 code，本机记的那一份就不必再重复一行。
-func redeemUnlistedClaims(b *redeemBlock, claimed []string) []string {
-	if len(claimed) == 0 {
-		return nil
+// redeemCodeChip 画一条码。未领取的是可点的芯片，点开领取确认框；已领取的
+// 只展示状态与完整码（本机领到时才知道），自己的那一条带复制按钮。
+func (a *app) redeemCodeChip(c *ui.Context, d *detailState, e *redeemCodeEntry, atLimit bool, me string) {
+	t := c.Theme()
+	display := e.Masked
+	if full := d.redeem.full[e.ID]; full != "" {
+		display = full
+	} else if e.Code != "" {
+		display = e.Code
 	}
-	var out []string
-	for _, code := range claimed {
-		seen := false
-		if b != nil {
-			for _, e := range b.Codes {
-				if e.Code == code {
-					seen = true
-					break
+	mine := redeemClaimedByMe(*e, me)
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		if !e.Redeemed {
+			tip := "点开领取这个兑换码，领取后可看到完整码并复制"
+			if atLimit {
+				tip = "你已达到这个帖子的每人领取上限"
+			}
+			chip := ui.Button(c, display).FontSize(11).Radius(6).
+				Label("领取兑换码 " + display).Tooltip(tip)
+			if chip.Clicked() {
+				a.redeemOpenDialog(d, e.ID)
+			}
+			return
+		}
+		ui.Text(c, display).FontSize(metaFontSize).Selectable().SingleLine().Shrink(1).MinWidth(0)
+		if mine {
+			ui.Text(c, "已领取").FontSize(metaSmallFontSize).
+				TextColor(t.Success).SingleLine()
+			if full := d.redeem.full[e.ID]; full != "" {
+				if iconActionButton(c, lucide.Copy(), "复制兑换码", "把完整兑换码复制到剪贴板").Clicked() {
+					a.copyToClipboard(c, full, a.detailToastFor(d), "已复制兑换码")
 				}
 			}
+			return
 		}
-		if !seen {
-			out = append(out, code)
+		who := e.RedeemedByName
+		if who == "" {
+			who = "他人"
+		}
+		ui.Text(c, "已被 "+who+" 领取").FontSize(metaSmallFontSize).
+			TextColor(t.TextMuted).SingleLine()
+	})
+}
+
+// redeemDialog 是领取确认框：先问一句，领到后切到成功页展示完整码与复制
+// 按钮。确认后由 submitRedeemCode 发请求，结果用窗口 toast 报告。
+func (a *app) redeemDialog(c *ui.Context, d *detailState) {
+	st := &d.redeem
+	if st.dialogID == "" {
+		return
+	}
+	var e *redeemCodeEntry
+	if d.topic != nil && d.topic.Redeem != nil {
+		for i := range d.topic.Redeem.Codes {
+			if d.topic.Redeem.Codes[i].ID == st.dialogID {
+				e = &d.topic.Redeem.Codes[i]
+				break
+			}
 		}
 	}
-	return out
+	if e == nil {
+		st.dialogID = ""
+		return
+	}
+	t := c.Theme()
+	shown := st.claimedFull
+	if shown == "" {
+		shown = e.Masked
+	}
+	okText, cancelText := "领取", "暂不需要"
+	if st.dialogDone {
+		okText, cancelText = "复制", "关闭"
+	}
+	open := true
+	ok := feedback.Modal(c, &open, feedback.ModalProps{
+		Title:      "领取兑换码",
+		Width:      400,
+		OkText:     okText,
+		CancelText: cancelText,
+	}, func() {
+		ui.Column(c).FillWidth().Gap(8).Children(func() {
+			ui.Text(c, shown).FontSize(14).Bold().Selectable().MaxLines(3)
+			if st.dialogDone {
+				ui.Text(c, "该兑换码领取成功。").FontSize(11).TextColor(t.Success)
+				if st.redPacket > 0 {
+					ui.Textf(c, "🧧 恭喜获得金币红包 %s 金币！", coinThousands(int(st.redPacket))).
+						FontSize(11).TextColor(t.Warning)
+				}
+			} else {
+				ui.Text(c, "需要领取这个兑换码吗？").FontSize(11).TextColor(t.TextMuted)
+			}
+			if st.busy {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					lobeSpin(c, feedback.SpinProps{CustomSize: 13})
+					ui.Text(c, "正在领取…").FontSize(11).TextColor(t.TextMuted)
+				})
+			}
+		})
+	})
+	// 点窗外、✕、Esc 与取消都关掉弹窗；成功页的「关闭」也是同一条路。
+	if !open {
+		st.dialogID = ""
+		st.dialogDone = false
+		st.claimedFull = ""
+		return
+	}
+	if ok {
+		if st.dialogDone {
+			a.copyToClipboard(c, shown, a.detailToastFor(d), "已复制兑换码")
+		} else if !st.busy {
+			a.submitRedeemCode(d, st.dialogID)
+		}
+	}
 }
