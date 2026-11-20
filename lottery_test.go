@@ -229,67 +229,37 @@ func TestLotteryFlowPostsTriggerAndShowsWinners(t *testing.T) {
 	}
 }
 
-// 入口只给帖主；开过奖之后变成「抽奖结果」，点了直接看名单而不是重抽。
-func TestLotteryEntryOnlyForAuthor(t *testing.T) {
+// 抽奖只给帖主：canLottery 判断与作者一致，非作者不能展开确认框或发请求。
+func TestLotteryOnlyForAuthor(t *testing.T) {
 	srv := &lotteryServer{}
 	s := httptest.NewServer(srv)
 	defer s.Close()
 	a := lotteryTestApp(t, s)
-	tt := ui.NewTester(a.view, 1100, 760)
-	tt.Frame()
-	if _, ok := tt.Find("发起抽奖"); !ok {
-		t.Fatalf("作者的帖子没有抽奖入口：%q", tt.Texts())
+	if !a.canLottery(a.detail) {
+		t.Fatal("作者的帖子应该允许抽奖")
 	}
 
 	a.detail.topic.Author = "alice"
-	tt.Frame()
-	if _, ok := tt.Find("发起抽奖"); ok {
-		t.Error("别人的帖子不该出现抽奖入口")
+	if a.canLottery(a.detail) {
+		t.Error("别人的帖子不该允许抽奖")
 	}
 	a.askLottery(a.detail)
-	if a.detail.lottery.awaiting {
-		t.Error("非作者不该展开抽奖确认框")
-	}
 	posts, _ := srv.snapshot()
 	if len(posts) != 0 {
 		t.Errorf("非作者不该发出任何请求：%v", posts)
 	}
-
-	a.detail.topic.Author = "jimmy"
-	a.detail.topic.Lottery = &lotteryInfo{Winners: []lotteryWinner{{Username: "jimmy", Floor: 3}}}
-	tt.Frame()
-	if _, ok := tt.Find("抽奖结果"); !ok {
-		t.Errorf("已开奖时应给出查看结果的入口：%q", tt.Texts())
-	}
 }
 
-// 确认框选人数：点「发起抽奖」 → 选 3 → 确认，触发评论用选中的数量。
-func TestLotteryDialogSelectsCount(t *testing.T) {
+// 人数由调用方传入：startLottery 用选中的数量发触发评论。
+func TestLotteryStartUsesSelectedCount(t *testing.T) {
 	srv := &lotteryServer{lotteryFrom: 1}
 	s := httptest.NewServer(srv)
 	defer s.Close()
 	a := lotteryTestApp(t, s)
 	fastLotteryPoll(t)
 
-	tt := ui.NewTester(a.view, 1100, 760)
-	tt.Frame()
-	if err := tt.Click("发起抽奖"); err != nil {
-		t.Fatalf("点不到抽奖入口：%v（%q）", err, tt.Texts())
-	}
-	tt.Frame()
-	if !a.detail.lottery.awaiting || !tt.HasText("中奖人数（1～10）") {
-		t.Fatalf("确认框没有展开：%q", tt.Texts())
-	}
-	if err := tt.Click("3"); err != nil {
-		t.Fatalf("点不到人数 3：%v（%q）", err, tt.Texts())
-	}
-	tt.Frame()
-	if a.detail.lottery.count != 3 {
-		t.Errorf("选中人数 = %d，期望 3", a.detail.lottery.count)
-	}
-	if err := tt.Click("开始抽奖"); err != nil {
-		t.Fatalf("点不到确认按钮：%v（%q）", err, tt.Texts())
-	}
+	a.detail.lottery.count = 3
+	a.startLottery(a.detail)
 	waitFor(t, func() bool { return !a.detail.lottery.busy }, "抽奖流程没有结束")
 	posts, _ := srv.snapshot()
 	if len(posts) != 1 || !strings.Contains(posts[0].body, "@抽奖助手 抽 3 个") {

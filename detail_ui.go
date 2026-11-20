@@ -128,7 +128,7 @@ type detailState struct {
 	coll collectionState
 	// comments 是作者「关闭 / 开启评论」那一次操作的状态（见 comments_status.go）。
 	comments commentsStatusState
-	// lottery 是作者「发起抽奖」的状态：确认框、中奖人数、在途与回包代次
+	// lottery 是作者「发起抽奖」的状态：中奖人数、在途与回包代次
 	// （见 lottery.go）。开奖结果本身存在 topic.Lottery 里。
 	lottery lotteryState
 
@@ -823,8 +823,6 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 		a.detailToolBar(c, d)
 		// 「关闭 / 开启评论」的确认框：作者点了工具条里的图标才展开，盖在整页上。
 		a.commentsStatusDialog(c, d)
-		// 「发起抽奖」的确认框：同样只有作者点了工具条图标才展开。
-		a.lotteryDialog(c, d)
 	})
 	// 表态、打赏与明细都是贴着各自入口的气泡（见 interact.go），在互动区
 	// 构建时已经就地挂好，这里不需要再叠一层弹窗。
@@ -923,7 +921,6 @@ const (
 	detailToolCopy                           // 复制链接要拿构建期的 Context
 	detailToolRefresh                        // 在途时换成转圈并禁用
 	detailToolComments                       // 评论开关有自己的忙碌态
-	detailToolLottery                        // 抽奖有自己的忙碌态与「已开奖」态
 )
 
 // detailToolAction 是右上角工具条里的一枚动作。悬浮条与详情窗口的自定义
@@ -962,8 +959,8 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 			},
 		})
 	}
-	// 作者本人的三个入口：改标题 / 正文、追加附言、关闭 / 开启评论。抽奖
-	// 入口紧随其后，同样只允许作者。接口只认作者，入口也只在昵称对得上时出现。
+	// 作者本人的三个入口：改标题 / 正文、追加附言、关闭 / 开启评论。
+	// 接口只认作者，入口也只在昵称对得上时出现。
 	if a.canEditTopic(d) {
 		acts = append(acts,
 			detailToolAction{
@@ -988,10 +985,6 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 		acts = append(acts, detailToolAction{
 			kind: detailToolComments, icon: icon, label: label, tip: tip, busy: busy,
 		})
-	}
-	// 抽奖也只允许帖主本人：没开过时发起，开过之后点开看结果（见 lottery.go）。
-	if a.canLottery(d) {
-		acts = append(acts, detailToolAction{kind: detailToolLottery, busy: d.lottery.busy})
 	}
 	loading := d.topicLoading || d.replyLoading
 	tip := "重新加载正文与评论"
@@ -1049,8 +1042,6 @@ func (a *app) renderDetailToolAction(c *ui.Context, d *detailState, act detailTo
 		a.detailRefreshButton(c, d)
 	case detailToolComments:
 		a.commentsStatusButton(c, d)
-	case detailToolLottery:
-		a.lotteryButton(c, d)
 	default:
 		a.detailToolButton(c, act.icon, act.label, act.tip, act.onClick)
 	}
