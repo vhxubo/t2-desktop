@@ -38,6 +38,28 @@ func titleRect(t *testing.T, tt *ui.Tester, label string) ui.Rect {
 	return r
 }
 
+// 标题栏横跨窗口顶端，侧边栏放在它下面：开关在标题栏最左侧，侧边栏首行紧跟
+// 标题栏下沿，横向只有标题栏底下那一条分割线，竖分隔线仍在两栏之间。
+func TestCollapseToggleInTitleBarWithoutSidebarHeader(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	toggle, ok := tt.Find("展开侧边栏")
+	if !ok {
+		t.Fatalf("找不到折叠开关：%q", tt.Texts())
+	}
+	if toggle.Y < 0 || toggle.Y+toggle.H > float32(titleBarHeight) {
+		t.Errorf("折叠开关不在标题栏里：%+v", toggle)
+	}
+	home, ok := tt.Find("首页")
+	if !ok {
+		t.Fatalf("侧边栏首行导航不见了：%q", tt.Texts())
+	}
+	if want := float32(titleBarHeight) + 1 + sidebarNavInsetTop; home.Y < want-1 || home.Y > want+1 {
+		t.Errorf("侧边栏首行没有留出顶部内边距：首页 y=%.0f，期望 %.0f", home.Y, want)
+	}
+}
+
 // The title bar is drawn by the view, so it must take the page's colors: the
 // whole app is the white home theme, and a bar painted with the stock light
 // theme's grey surface showed as a grey band across a pure white page.
@@ -116,6 +138,13 @@ func TestTitleBarSearchInput(t *testing.T) {
 	if box.Y < 0 || box.Y+box.H > titleBarHeight {
 		t.Errorf("搜索框不在标题栏里：%+v", box)
 	}
+	// 搜索框上下留出边距，不再贴着标题栏的上下边缘。
+	if top := box.Y; top < titleSearchInsetY-1 || top > titleSearchInsetY+1 {
+		t.Errorf("搜索框上边距 = %.0f，期望约 %d", top, titleSearchInsetY)
+	}
+	if bottom := float32(titleBarHeight) - (box.Y + box.H); bottom < titleSearchInsetY-1 || bottom > titleSearchInsetY+1 {
+		t.Errorf("搜索框下边距 = %.0f，期望约 %d", bottom, titleSearchInsetY)
+	}
 	if box.W < 120 || box.W > 400 {
 		t.Errorf("标题栏搜索框宽度 = %.0f，期望是个正常的输入框宽度", box.W)
 	}
@@ -135,6 +164,44 @@ func TestTitleBarSearchInput(t *testing.T) {
 	}
 }
 
+// 标题栏搜索框聚焦后不该冒出一圈强调色高亮边框：mygo 的 field 默认在聚焦时
+// 把边框改成 Accent 蓝（见 inputBorder），这里用 0 宽边框彻底禁掉描边。
+func TestTitleBarSearchHasNoFocusBorder(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+
+	box, ok := tt.Find("搜索关键词")
+	if !ok {
+		t.Fatalf("标题栏里没有搜索输入框：%q", tt.Texts())
+	}
+	if err := tt.Click("搜索关键词"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+
+	im := tt.Image()
+	// 扫搜索框四条边：不该出现任何强调色（偏蓝）的像素。
+	edges := []struct{ x0, y0, x1, y1 int }{
+		{int(box.X), int(box.Y), int(box.X + box.W), int(box.Y) + 1},
+		{int(box.X), int(box.Y+box.H) - 1, int(box.X + box.W), int(box.Y + box.H)},
+		{int(box.X), int(box.Y), int(box.X) + 1, int(box.Y + box.H)},
+		{int(box.X+box.W) - 1, int(box.Y), int(box.X + box.W), int(box.Y + box.H)},
+	}
+	for _, e := range edges {
+		for y := e.y0; y < e.y1; y++ {
+			for x := e.x0; x < e.x1; x++ {
+				if x < 0 || y < 0 || x >= im.Rect.Max.X || y >= im.Rect.Max.Y {
+					continue
+				}
+				if c := im.RGBAAt(x, y); accentTint(c) {
+					t.Fatalf("聚焦后搜索框出现强调色边框：(%d,%d)=%v", x, y, c)
+				}
+			}
+		}
+	}
+}
+
 // 搜索框的横向位置随窗口宽度切换：窄窗口贴着内容区左缘排，横向足够宽时
 // 落在内容区左缘与通知铃铛的中间——前面补一段伸缩空白，与它后面那段平分
 // 剩余空间（见 titleBar）。铃铛右边的账号气泡不影响这个居中参照。
@@ -151,9 +218,15 @@ func TestTitleBarSearchFollowsWindowWidth(t *testing.T) {
 	if !ok {
 		t.Fatalf("窄窗口里没有通知铃铛：%q", narrow.Texts())
 	}
-	// 贴左：搜索框左缘就在内容区的左内边距处，离右端的铃铛还远。
-	if ns.X > 100 {
-		t.Errorf("窄窗口搜索框没有贴左：x=%.0f", ns.X)
+	// 贴左：搜索框紧跟在标题栏最左侧的折叠开关后面，离右端的铃铛还远。
+	// 位置从折叠开关量，改左内边距或开关宽度时不会误报。
+	nt, ok := narrow.Find("展开侧边栏")
+	if !ok {
+		t.Fatalf("窄窗口里没有折叠开关：%q", narrow.Texts())
+	}
+	if ns.X < nt.X+nt.W-1 || ns.X > nt.X+nt.W+24 {
+		t.Errorf("窄窗口搜索框没有紧跟折叠开关：search.x=%.0f toggle=%.0f+%.0f",
+			ns.X, nt.X, nt.W)
 	}
 	if ns.X+ns.W >= nb.X {
 		t.Errorf("窄窗口搜索框和通知铃铛挤在一起：search=%+v bell=%+v", ns, nb)
@@ -221,19 +294,20 @@ func TestTitleBarWindowButtonsPaintTheirGlyphs(t *testing.T) {
 			dash, dashRow = n, y
 		}
 	}
-	if dash < 8 || dash > 14 {
-		t.Errorf("最小化图标宽 %d 像素（第 %d 行），期望约 10", dash, dashRow)
+	if want := 2 * titleGlyphHalf; dash < want-2 || dash > want+2 {
+		t.Errorf("最小化图标宽 %d 像素（第 %d 行），期望约 %d", dash, dashRow, want)
 	}
 	if dashRow < titleBarHeight/2-3 || dashRow > titleBarHeight/2+3 {
 		t.Errorf("最小化图标在第 %d 行，没有竖向居中", dashRow)
 	}
 
-	// 最大化：方框的四条边在按钮中心之外，中心是空的。
+	// 最大化：方框的四条边在按钮中心之外，中心是空的。坐标跟着矢量图标
+	// 的半边长走，改标题栏尺寸时这条断言不会写死旧的 5px。
 	cx, cy := int(maxR.X+maxR.W/2), int(maxR.Y+maxR.H/2)
-	if !darkAt(im, cx, titleBarHeight/2-5) {
+	if !darkAt(im, cx, cy-titleGlyphHalf) {
 		t.Error("最大化图标的上边没有画出来")
 	}
-	if !darkAt(im, cx-5, cy) {
+	if !darkAt(im, cx-titleGlyphHalf, cy) {
 		t.Error("最大化图标的左边没有画出来")
 	}
 	if darkAt(im, cx, cy) {
@@ -347,5 +421,39 @@ func TestTitleBarShowsAccountAfterLogin(t *testing.T) {
 	// 头像可点，打开「我的」窗口。
 	if _, ok := tt.Find("我的"); !ok {
 		t.Errorf("标题栏头像没有可访问名：%q", tt.Texts())
+	}
+}
+
+// 标题栏的头像与昵称与标准栏高配套：整块标签落在标题栏内，高度与搜索框
+// 同一量级，头像用标题栏这一档的字号，不会在 32 DIP 的栏里显得突兀。
+func TestTitleBarAccountTagScalesWithBar(t *testing.T) {
+	a := testApp(t)
+	if err := a.auth.storeToken(tokenData{AccessToken: "tok", Username: "jimmy", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	a.onAuthChanged(nil)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+
+	tag, ok := tt.Find("我的")
+	if !ok {
+		t.Fatalf("找不到账号标签：%q", tt.Texts())
+	}
+	if tag.Y < 0 || tag.Y+tag.H > float32(titleBarHeight) {
+		t.Errorf("账号标签不在标题栏里：%+v", tag)
+	}
+	search, ok := tt.Find("搜索关键词")
+	if !ok {
+		t.Fatalf("找不到标题栏搜索框：%q", tt.Texts())
+	}
+	if tag.H < search.H-1 {
+		t.Errorf("账号标签高 %.0f，明显矮于搜索框 %.0f", tag.H, search.H)
+	}
+	avatar, ok := tt.Find("jimmy")
+	if !ok {
+		t.Fatalf("找不到标题栏头像：%q", tt.Texts())
+	}
+	if want := userAvatarSize(12); avatar.W < want-0.5 {
+		t.Errorf("标题栏头像宽 %.0f，期望至少 %.0f", avatar.W, want)
 	}
 }

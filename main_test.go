@@ -167,14 +167,14 @@ func TestDecodePageListFields(t *testing.T) {
 		t.Errorf("合集数量错误：%s", res.Items[0].Meta)
 	}
 
-	// 我的帖子：文档没约定字段名，允许 auto 兜底
+	// 我的帖子：公开用户主题端点，列表字段是 posts。
 	var env4 envelope
-	if err := json.Unmarshal([]byte(envelopeJSON(`{"topics":[`+post+`]}`)), &env4); err != nil {
+	if err := json.Unmarshal([]byte(envelopeJSON(`{"posts":[`+post+`]}`)), &env4); err != nil {
 		t.Fatal(err)
 	}
-	res, err = decodePage(env4.D, profileContentSpecs[profileContentTopics], 1)
+	res, err = decodePage(env4.D, profileTopicsSpec("jimmy", 1), 1)
 	if err != nil || len(res.Items) != 1 {
-		t.Fatalf("auto 列表解析失败：%v %+v", err, res.Items)
+		t.Fatalf("帖子列表解析失败：%v %+v", err, res.Items)
 	}
 }
 

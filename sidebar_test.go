@@ -424,13 +424,14 @@ func TestSidebarHasSingleCollapseToggle(t *testing.T) {
 		t.Fatal("前置条件：默认应是折叠态")
 	}
 	only("展开侧边栏")
-	// 开关位于左上角的侧边栏头部，不在底部列表里。
+	// 标题栏横跨整个窗口，开关在它的最左侧（侧边栏正上方），不在底部列表里。
 	toggle, ok := tt.Access("展开侧边栏")
 	if !ok {
 		t.Fatal("顶部开关不可访问")
 	}
-	if toggle.Bounds.X+toggle.Bounds.W > sidebarWidth+1 {
-		t.Errorf("展开开关的 x=%.0f 宽 %.0f，越出了 %d 宽的导航轨", toggle.Bounds.X, toggle.Bounds.W, sidebarWidth)
+	if toggle.Bounds.X < 0 || toggle.Bounds.X+toggle.Bounds.W > float32(navSidebarWidth) ||
+		toggle.Bounds.Y < 0 || toggle.Bounds.Y+toggle.Bounds.H > float32(titleBarHeight) {
+		t.Errorf("折叠开关不在标题栏最左侧：%+v", toggle.Bounds)
 	}
 	only("Resize side nav") // 拖拽调宽的接缝保留，只是不再带开关
 	absent("折叠侧边栏")
@@ -487,10 +488,10 @@ func railInkCenter(im *image.RGBA, y0, y1 int) float32 {
 	return float32(minX+maxX) / 2
 }
 
-// 侧边栏底部的留白与头部一致：顶部开关距窗口上缘 10 DIP，底部最后一项也该
-// 距窗口下缘 10 DIP，不能贴着窗口底边。展开态左右各留 16，和头部的水平内边距
-// 对齐；折叠态图标轨保持零水平内边距，图标仍居中在轨中线上。
-func TestSidebarFooterInsetMatchesHeader(t *testing.T) {
+// 侧边栏底部留白：最后一项距窗口底缘保持 sidebarFooterInsetBottom，不贴边。
+// 展开态左右各留 16，和导航列表对齐；折叠态图标轨保持零水平内边距，图标仍
+// 居中在轨中线上。
+func TestSidebarFooterInset(t *testing.T) {
 	const windowWidth, windowHeight = 1100, 760
 	for _, expanded := range []bool{false, true} {
 		a := testApp(t)
@@ -498,23 +499,14 @@ func TestSidebarFooterInsetMatchesHeader(t *testing.T) {
 		tt := ui.NewTester(a.view, windowWidth, windowHeight)
 		tt.Frame()
 
-		toggleName := "展开侧边栏"
-		if expanded {
-			toggleName = "折叠侧边栏"
-		}
-		toggle, ok := tt.Find(toggleName)
-		if !ok {
-			t.Fatalf("展开=%v 时找不到顶部开关：%q", expanded, tt.Texts())
-		}
 		// 未登录时底部最后一项是「注册」。
 		signup, ok := tt.Find("注册")
 		if !ok {
 			t.Fatalf("展开=%v 时找不到底部「注册」：%q", expanded, tt.Texts())
 		}
-		topGap := toggle.Y
 		bottomGap := float32(windowHeight) - signup.Y - signup.H
-		if bottomGap < topGap-0.5 || bottomGap > topGap+0.5 {
-			t.Errorf("展开=%v 时底部留白 %.1f，与头部距顶 %.1f 不一致", expanded, bottomGap, topGap)
+		if bottomGap < sidebarFooterInsetBottom-0.5 || bottomGap > sidebarFooterInsetBottom+0.5 {
+			t.Errorf("展开=%v 时底部留白 %.1f，期望 %.1f", expanded, bottomGap, sidebarFooterInsetBottom)
 		}
 		if !expanded {
 			continue

@@ -211,18 +211,12 @@ type app struct {
 	// coinShown 表示窗口此刻是否在屏幕上，金币数据此高亮。都只在主线程读写。
 	coinWin   *mygo.Window
 	coinShown bool
-	// coinTagTimer / coinTagGen 维护账号菜单金币数的定时刷新；coinTagSeq 与
-	// coinTagLoading 让过期的余额请求结果被丢弃，coinTagPending 记下刷新期间
-	// 又收到的金币变动事件，等这次请求回来再补一次。都只在主线程读写。
-	coinTagTimer   *time.Timer
-	coinTagGen     uint64
+	// coinTagSeq 与 coinTagLoading 让过期的余额请求结果被丢弃，coinTagPending
+	// 记下刷新期间又收到的请求，等这次请求回来再补一次。金币余额只在展开账号
+	// 菜单 popover 时请求。都只在主线程读写。
 	coinTagSeq     uint64
 	coinTagLoading bool
 	coinTagPending bool
-	// coinRefreshTimer / coinRefreshGen 是金币变动全局事件（见 coin_events.go）
-	// 的合并刷新：短期内多次事件只发一轮请求。都只在主线程读写。
-	coinRefreshTimer *time.Timer
-	coinRefreshGen   uint64
 
 	// pandora 是潘多拉抽卡弹窗的状态：今日盲盒、两次抽奖结果与弹窗开合。
 	// 入口收在标题栏「我的」的账号菜单气泡里（见 profile_ui.go），弹窗画在
@@ -251,8 +245,11 @@ type app struct {
 	emojiTried   bool
 	md           *markdown.Options
 	// commentMd 是评论正文的 Markdown 选项：与正文同一套渲染，字号更小
-	// （commentTextStyle），让评论区比正文紧凑一号。
-	commentMd *markdown.Options
+	// （commentTextStyle），让评论区比正文紧凑一号。浅色主题另有一份
+	// commentMdLight，把引用 / 代码 / 表格这些辅助块铺成 #F6F8FA；两份都
+	// 在启动时建好，渲染时按窗口外观二选一，不复制 Options（它带 sync.Map）。
+	commentMd      *markdown.Options
+	commentMdLight *markdown.Options
 	// bioMd 是资料卡「个人简介」的 Markdown 选项：介绍正文可能带标题、
 	// 列表与表情，字号取 userCardBioFontSize。
 	bioMd *markdown.Options
@@ -424,9 +421,6 @@ type app struct {
 	onSearchDone func(query string, err error)
 	// onInteractDone 是收藏 / 表态完成（成功或失败）后的测试钩子，原因同上。
 	onInteractDone func(err error)
-	// onCoinsChanged 是金币变动全局事件的测试钩子：headless 测试没有窗口，
-	// 靠它确认各写操作确实发出了刷新事件。生产为 nil。
-	onCoinsChanged func(event coinEvent)
 	// onNodesLoaded 是节点表刷新完成（成功或失败）后的测试钩子，原因同上。
 	onNodesLoaded func(err error)
 
@@ -567,7 +561,8 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 	}
 	a.bindAuth()
 	a.md = newMarkdownOptions(a, postTextStyle)
-	a.commentMd = newMarkdownOptions(a, commentTextStyle)
+	a.commentMd = a.newCommentMarkdownOptions(false)
+	a.commentMdLight = a.newCommentMarkdownOptions(true)
 	a.bioMd = newMarkdownOptions(a, bioTextStyle)
 	a.viewer = &imageViewer{}
 	return a
@@ -1012,9 +1007,6 @@ func (a *app) onAuthChanged(err error) {
 		a.startNotificationWatch()
 		// 关注流的未读角标也属于当前账号：登录 / 换账号后重新读一次。
 		a.refreshFollowsUnread()
-		// 标题栏的金币数在登录后立即读一次，之后按间隔刷新；读取结果同时
-		// 写回金币窗口共用的状态。
-		a.startCoinTagWatch()
 		// 潘多拉入口也静默读一次今日状态：首页标题栏要能直接显示抽中的
 		// 事件名，不必先打开潘多拉弹窗。
 		a.loadPandoraEntry()
@@ -1028,7 +1020,7 @@ func (a *app) onAuthChanged(err error) {
 		a.closeNotificationWindow()
 		// 「我的」窗口展示的是当前账号的资料与列表，同样随退出关掉。
 		a.closeProfileWindow()
-		// 金币窗口与标题栏金币数也只属于当前账号：停掉定时刷新并关掉窗口。
+		// 金币窗口与标题栏金币数也只属于当前账号：丢弃在途请求并关掉窗口。
 		a.stopCoinTagWatch()
 		a.closeCoinWindow()
 		// 潘多拉弹窗展示的是当前账号的盲盒与抽奖结果，退出后一并关掉。
@@ -1088,17 +1080,17 @@ func (a *app) view(c *ui.Context) {
 		return
 	}
 
-	// 整页分两栏：左侧是从窗口顶端贯到底的导航栏，右侧是标题栏 + 内容。
-	// 标题栏只盖住内容区，左栏因此没有一条横切过去的深色带。
-	ui.Row(c).Fill().Children(func() {
-		a.sidebar(c)
+	// 标题栏横跨整个窗口顶端，下面才是左右两栏：左侧导航栏、右侧正文。
+	// 横向只有标题栏底下这一条分割线，竖线只出现在两栏之间。
+	ui.Column(c).Fill().Children(func() {
+		a.titleBar(c)
 		ui.Divider(c)
-		ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
-			a.titleBar(c)
+		ui.Row(c).Grow(1).MinHeight(0).Children(func() {
+			a.sidebar(c)
 			ui.Divider(c)
 			// 右侧内容区：正文列表（无限滚动，无底部状态栏）。右下角浮着
 			// 一列 FAB（返回顶部 / 刷新 / 发帖），绝对定位，不占列表的高度。
-			ui.Column(c).Fill().MinHeight(0).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
 				a.body(c)
 				a.listFabs(c)
 			})
@@ -1139,14 +1131,14 @@ func sidebarListInset(nav layout.SideNavState) float32 {
 	return (1 - min(max(nav.Collapse, 0), 1)) * navListInset
 }
 
-// 侧边栏头部与底部共用的内边距。头部是「上 10 / 左右 16 / 下 6」；底部镜像
-// 过来取「上 6 / 左右 16 / 下 10」，最后一项距窗口底缘的留白因此和顶部开关
-// 距顶的留白一致，两侧也和头部对齐。左右在展开态走 sidebarListInset（16），
-// 折叠态归零，保证图标轨仍居中在 32 DIP。
+// 侧边栏内边距。侧边栏在标题栏下方：上半的导航列表距标题栏下沿留出 8 DIP，
+// 下半的底部列表上边留 8、下边留 10，两头都不贴边。左右仍留 16，展开态与列表
+// 对齐，折叠态归零，保证图标轨仍居中在 32 DIP。
 const (
-	sidebarInsetX      float32 = 16
-	sidebarInsetTop    float32 = 10
-	sidebarInsetBottom float32 = 6
+	sidebarInsetX            float32 = 16
+	sidebarNavInsetTop       float32 = 8
+	sidebarFooterInsetTop    float32 = 8
+	sidebarFooterInsetBottom float32 = 10
 )
 
 // sidebarFont 是元信息用的等宽字体：小字号下数字与时序排得整齐，
@@ -1154,48 +1146,22 @@ const (
 const sidebarFont = "monospace"
 
 // sidebar 是 Lobe 风格的可展开侧边栏：layout.DraggableSideNav 提供拖拽调宽，
-// 展开/折叠只走顶部开关（见 sidebarHeader），不再在接缝或底部列表上画重复的
-// 开关。内容与 Lobe 的 display.List 配套——把 nav.Collapse / nav.RailWidth 交给
-// List，收起时行缩成图标方块，展开时显示文字。顶部是开关，中部是浏览页，底部
-// 是外观与账号入口。
+// 展开/折叠只走标题栏最左侧那一个开关（见 titleBarSidebarToggle），侧边栏自己
+// 不再占一行头部，接缝与底部列表也不画重复的开关。内容与 Lobe 的 display.List
+// 配套——把 nav.Collapse / nav.RailWidth 交给 List，收起时行缩成图标方块，
+// 展开时显示文字。首行图标与标题栏开关同高，两栏之间只留标题栏底下那一条
+// 横向分割线。
 func (a *app) sidebar(c *ui.Context) {
 	layout.DraggableSideNav(c, &a.navWidth, &a.navExpanded, layout.DraggableSideNavProps{
 		MinWidth:        navRailWidth,
 		MaxWidth:        280,
 		NoHandle:        true,
 		HighlightHandle: true,
-		Header: func(nav layout.SideNavState) {
-			a.sidebarHeader(c, nav)
-		},
 		Footer: func(nav layout.SideNavState) {
 			a.sidebarFooterList(c, nav)
 		},
 	}, func(nav layout.SideNavState) {
 		a.sidebarNavList(c, nav)
-	})
-}
-
-// sidebarHeader 是可展开侧边栏的顶部：折叠/展开开关 + 品牌名。开关常驻左上角，
-// 折叠时只留图标，展开时并排显示应用名；底部列表不再放重复的开关。
-func (a *app) sidebarHeader(c *ui.Context, nav layout.SideNavState) {
-	name := "展开侧边栏"
-	icon := lucide.PanelLeftOpen()
-	if a.navExpanded {
-		name = "折叠侧边栏"
-		icon = lucide.PanelLeftClose()
-	}
-	ui.Row(c).Gap(10).AlignItems(ui.Center).
-		Padding(sidebarInsetTop, sidebarInsetX, sidebarInsetBottom, sidebarInsetX).Children(func() {
-		b := action.StyleActionIcon(c, ui.ButtonBase(c), icon, action.ActionIconProps{
-			BlockSize: 32, GlyphSize: 16,
-		})
-		b.Label(name).Tooltip(name)
-		if b.Clicked() {
-			a.navExpanded = !a.navExpanded
-		}
-		if nav.Expanded {
-			ui.Text(c, "T2 Desktop").FontSize(13).FontWeight(600).SingleLine()
-		}
 	})
 }
 
@@ -1233,10 +1199,13 @@ func (a *app) sidebarNavItems() []display.ListItem {
 func (a *app) sidebarNavList(c *ui.Context, nav layout.SideNavState) {
 	items := a.sidebarNavItems()
 	if !nav.Expanded {
-		sidebarRail(c, items, a.navSel, a.handleSidebarNavItem)
+		// 折叠态图标轨居中靠左右零内边距，这里只补顶部留白，别把图标推离轨中线。
+		ui.Column(c).Padding(sidebarNavInsetTop, 0, 0, 0).Children(func() {
+			sidebarRail(c, items, a.navSel, a.handleSidebarNavItem)
+		})
 		return
 	}
-	ui.Column(c).Padding(0, 0, 0, sidebarListInset(nav)).Children(func() {
+	ui.Column(c).Padding(sidebarNavInsetTop, 0, 0, sidebarListInset(nav)).Children(func() {
 		clicked := display.List(c, display.ListProps{
 			Items:     items,
 			Active:    a.navSel,
@@ -1341,18 +1310,18 @@ func (a *app) sidebarFooterItems() []display.ListItem {
 
 // sidebarFooterList 展开时用 display.List 画底部入口并留出左侧空白；折叠时
 // 换成带 tooltip 的 ActionIcon 图标轨，点击仍走同一处 handleSidebarAction。
-// 底部内边距镜像头部（见 sidebarInsetX / sidebarInsetTop / sidebarInsetBottom）：
-// 左右与头部同为 16，最后一项距底缘留出头部距顶的 10，不再贴着窗口底边。
+// 上下各留一点呼吸空间：左右与导航列表同为 16，最后一项距底缘留出 10 DIP，
+// 不再贴着窗口底边。
 func (a *app) sidebarFooterList(c *ui.Context, nav layout.SideNavState) {
 	items := a.sidebarFooterItems()
 	if !nav.Expanded {
 		// 折叠态图标轨居中靠左右零内边距，这里只补底部留白，别把图标推离轨中线。
-		ui.Column(c).Padding(0, 0, sidebarInsetTop, 0).Children(func() {
+		ui.Column(c).Padding(0, 0, sidebarFooterInsetBottom, 0).Children(func() {
 			sidebarRail(c, items, "", a.handleSidebarAction)
 		})
 		return
 	}
-	ui.Column(c).Padding(sidebarInsetBottom, sidebarListInset(nav), sidebarInsetTop, sidebarListInset(nav)).Children(func() {
+	ui.Column(c).Padding(sidebarFooterInsetTop, sidebarListInset(nav), sidebarFooterInsetBottom, sidebarListInset(nav)).Children(func() {
 		clicked := display.List(c, display.ListProps{
 			Items:     items,
 			Compact:   true,
@@ -1411,10 +1380,17 @@ func (a *app) showAccounts() {
 }
 
 // 自绘标题栏的尺寸。32 DIP 是 Windows 标题栏的常规高度，窗口按钮 46×32
-// 也与系统按钮同宽同高，文字和图标因此不会被压扁、裁切或挤在一起。
+// 也与系统按钮同宽同高，文字和图标因此不会被压扁、裁切或挤在一起。标题栏
+// 横跨窗口顶端，侧边栏从它下沿开始。
 const (
 	titleBarHeight   = 32
 	titleButtonWidth = 46
+	// titleGlyphHalf 是窗口按钮里矢量图标的半边长（DIP），10×10 的图标在
+	// 32 DIP 高的按钮里比例合适，也不会被按钮边缘裁切。
+	titleGlyphHalf = 5
+	// titleSearchInsetY 是标题栏搜索框上下留出的边距（DIP）：矮一圈后居中
+	// 悬浮，四周更透气。
+	titleSearchInsetY = 5
 	// titleSearchWidthRatio 是标题栏搜索框宽度占窗口宽度的比例：窗口越宽，
 	// 输入框越长，既不在窄窗口里挤到通知铃铛，也不在大窗口里显得局促。
 	titleSearchWidthRatio = 0.24
@@ -1441,7 +1417,7 @@ func titleSearchWidthFor(winW float32) float32 {
 }
 
 // titleBarHeightFor 是本帧标题栏的实际高度：系统按钮占位更高时跟着它走，
-// 至少 32 DIP。左侧导航栏顶端那一行要与它等高，左右两栏的分隔线才对得上。
+// 至少 32 DIP。标题栏横跨整个窗口，下面的左右两栏从它下沿开始。
 func titleBarHeightFor(c *ui.Context) float32 {
 	h := float32(titleBarHeight)
 	if bar := c.TitleBar(); bar.Height > h {
@@ -1450,12 +1426,12 @@ func titleBarHeightFor(c *ui.Context) float32 {
 	return h
 }
 
-// titleBar 是完全自绘的顶部标题栏：可拖拽移动窗口（双击最大化），左端是带
-// 输入框的搜索与通知铃铛，右端是最小化 / 最大化·还原 / 关闭按钮；系统标题栏
+// titleBar 是完全自绘的顶部标题栏：可拖拽移动窗口（双击最大化），左端是折叠
+// 开关与搜索框、通知铃铛，右端是最小化 / 最大化·还原 / 关闭按钮；系统标题栏
 // 与系统按钮已由 TitleBarHidden + HideWindowButtons 隐藏。
 //
-// 标题栏只盖住内容区，底色与页面一致；应用名留在左侧导航栏顶端，展开侧边栏
-// 才显示（见 sidebar），左栏因此从窗口顶端贯到底，顶边不再压着一条深色横带。
+// 标题栏横跨整个窗口顶端，底色与页面一致；下面才是左右两栏，横向只有它底下
+// 一条分割线，两栏之间另有一条竖线。
 func (a *app) titleBar(c *ui.Context) {
 	t := c.Theme()
 	// bar 是系统窗口按钮占用的区域，HideWindowButtons 下为零。保留这段
@@ -1467,11 +1443,13 @@ func (a *app) titleBar(c *ui.Context) {
 	searchW := titleSearchWidthFor(winW)
 	ui.Row(c).Height(h).FillWidth().AlignItems(ui.Stretch).
 		Padding(0, 0, 0, bar.Left).Background(t.Background).DragWindow().Children(func() {
-		// 左段：搜索框、通知铃铛，登录后再加上账号标识，整体可随标题栏拖动。
-		// 金币、盲盒、「我的」与退出登录都收在账号标识的气泡里；设置与未登录时
-		// 的登录 / 注册留在侧边栏底部。
+		// 左段：折叠开关、搜索框、通知铃铛，登录后再加上账号标识，整体可随
+		// 标题栏拖动。侧边栏头部已去掉，折叠开关收在标题栏最左侧，与下面
+		// 侧边栏的图标轨同在 32 DIP 竖中线上。金币、盲盒、「我的」与退出登录
+		// 都收在账号标识的气泡里；设置与未登录时的登录 / 注册留在侧边栏底部。
 		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 16).Gap(10).
 			AlignItems(ui.Center).Children(func() {
+			a.titleBarSidebarToggle(c)
 			// 宽窗口时搜索框前面再加一段可伸缩空白，与它后面的那段对半分，
 			// 于是搜索框落在「左端」与「通知铃铛」的中间；窄窗口省掉这段，
 			// 搜索框贴着左内边距排，不浪费本就有限的横向空间。
@@ -1489,8 +1467,10 @@ func (a *app) titleBar(c *ui.Context) {
 				in := ui.SearchField(c, &a.palette.text).
 					Label("搜索关键词").
 					Placeholder("输入命令关键词，或切到搜索").
-					Width(searchW).Height(titleBarHeight).
-					Background(tk.FillTertiary).Border(1, ui.Transparent).
+					Width(searchW).Height(titleBarHeight-2*titleSearchInsetY).
+					// 边框宽度设 0：mygo 的 field 在聚焦时会把边框改成 Accent 蓝，
+					// 标题栏这条搜索框不要那圈高亮，0 宽让描边始终不画。
+					Background(tk.FillTertiary).Border(0, ui.Transparent).
 					Radius(tk.BorderRadiusSM)
 				in.Bind(&a.palette.input)
 				// 点输入框或聚焦时展开面板；焦点离开（切窗口、Tab 到别的控件）
@@ -1552,6 +1532,25 @@ func (a *app) titleBar(c *ui.Context) {
 	})
 }
 
+// titleBarSidebarToggle 是标题栏最左侧的侧边栏折叠开关。侧边栏头部那一行已
+// 去掉，开关搬到这里，因此整扇窗口只留标题栏底下一条横向分割线；无障碍名与
+// tooltip 沿用原侧边栏开关，读屏和测试都按「展开/折叠侧边栏」找到它。
+func (a *app) titleBarSidebarToggle(c *ui.Context) {
+	name := "展开侧边栏"
+	icon := lucide.PanelLeftOpen()
+	if a.navExpanded {
+		name = "折叠侧边栏"
+		icon = lucide.PanelLeftClose()
+	}
+	b := action.StyleActionIcon(c, ui.ButtonBase(c), icon, action.ActionIconProps{
+		BlockSize: titleBarHeight, GlyphSize: 16,
+	})
+	b.Label(name).Tooltip(name)
+	if b.Clicked() {
+		a.navExpanded = !a.navExpanded
+	}
+}
+
 // titleGlyph 是窗口按钮上要画的图形。
 type titleGlyph int
 
@@ -1584,17 +1583,19 @@ func titleBarButton(c *ui.Context, g titleGlyph, label string, onClick func()) {
 	b.Draw(func(p *ui.Painter, r ui.Rect) {
 		// r 是窗口坐标里的按钮矩形，图形要相对 r 偏移来画。
 		cx, cy := r.X+r.W/2, r.Y+r.H/2
-		const half = 5 // 图标约 10×10 DIP
+		half, step := float32(titleGlyphHalf), float32(2) // 图标约 12×12 DIP
 		switch g {
 		case titleMinimize:
 			p.Line(cx-half, cy+0.5, cx+half, cy+0.5, 1, ink)
 		case titleMaximize:
 			p.Stroke(ui.Rect{X: cx - half, Y: cy - half, W: 2 * half, H: 2 * half}, ink, 0, 1)
 		case titleRestore:
-			// 前面的方框，加上后面方框露出的上边和右边。
-			p.Stroke(ui.Rect{X: cx - half, Y: cy - half + 2, W: 8, H: 8}, ink, 0, 1)
-			p.Line(cx-half+2, cy-half, cx+half, cy-half, 1, ink)
-			p.Line(cx+half, cy-half, cx+half, cy+half-2, 1, ink)
+			// 前面的方框，加上后面方框露出的上边和右边。错位距离随图标
+			// 一起缩放，放大后两个方框仍然是叠在一起的「还原」形。
+			front := 2*half - step
+			p.Stroke(ui.Rect{X: cx - half, Y: cy - half + step, W: front, H: front}, ink, 0, 1)
+			p.Line(cx-half+step, cy-half, cx+half, cy-half, 1, ink)
+			p.Line(cx+half, cy-half, cx+half, cy+half-step, 1, ink)
 		case titleClose:
 			p.StrokePolyline([][2]float32{{cx - half, cy - half}, {cx + half, cy + half}}, 1, ink)
 			p.StrokePolyline([][2]float32{{cx + half, cy - half}, {cx - half, cy + half}}, 1, ink)

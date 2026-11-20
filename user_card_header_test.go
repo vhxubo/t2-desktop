@@ -34,9 +34,10 @@ func TestUserCardHeaderIsCompact(t *testing.T) {
 	if !ok {
 		t.Fatalf("资料头没有昵称：%q", tt.Texts())
 	}
-	// 标题栏 32 + 分隔线 + 资料头的 12 DIP 内边距：昵称应在窗口顶部 60 DIP
-	// 以内。旧版横幅有 96 DIP，昵称落在 121 DIP。
-	if name.Y > 60 {
+	// 标题栏 + 分隔线 + 资料头的 12 DIP 内边距：昵称应紧跟标题栏（旧版横幅
+	// 有 96 DIP，昵称落在 121 DIP）。阈值跟着标题栏高度走，标题栏调高后
+	// 不会被误判成「留白太多」。
+	if name.Y > float32(titleBarHeight)+28 {
 		t.Errorf("昵称下方留了太多空白：y=%.0f", name.Y)
 	}
 
@@ -139,7 +140,7 @@ func TestUserCardHeaderNarrowWindow(t *testing.T) {
 		t.Errorf("头像与关注按钮重叠：头像右边 %.0f，按钮左边 %.0f",
 			avatar.Bounds.X+avatar.Bounds.W, follow.X)
 	}
-	if avatar.Bounds.Y > 60 {
+	if avatar.Bounds.Y > float32(titleBarHeight)+28 {
 		t.Errorf("窄窗口下资料头仍留大片空白：头像 y=%.0f", avatar.Bounds.Y)
 	}
 }
