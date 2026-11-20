@@ -631,9 +631,16 @@ func (a *app) userCardRow(c *ui.Context, it Item, kind userCardListKind) {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 				t := display.Text(c, "· "+it.Title, display.TextProps{FontSize: 12, Rows: 2})
 				t.TextColor(titleColor)
-				if meta := userCardRowMeta(it, kind); meta != "" {
-					display.Text(c, meta, display.TextProps{
-						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				if node, meta := userCardRowMeta(it, kind); node != "" || meta != "" {
+					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+						if node != "" {
+							nodeTag(c, node)
+						}
+						if meta != "" {
+							display.Text(c, meta, display.TextProps{
+								Type: display.TextSecondary, FontSize: 11, Rows: 1,
+							})
+						}
 					})
 				}
 			})
@@ -675,9 +682,9 @@ func (a *app) openUserCardCollection(it Item) {
 	a.loadCollectionTopics(cs.collBrowse, 1)
 }
 
-// userCardRowMeta 是行的次行：主题行给节点与回复 / 浏览数，回复行给它所属
-// 的帖子与楼层。
-func userCardRowMeta(it Item, kind userCardListKind) string {
+// userCardRowMeta 把行的次行拆成两段：节点名单独走 nodeTag，其余（置顶、
+// 楼层、回复数，或回复行所属的帖子与楼层）仍是一段小字。
+func userCardRowMeta(it Item, kind userCardListKind) (node, rest string) {
 	if kind == userCardReplies {
 		parts := make([]string, 0, 3)
 		if x := it.Extra; x != nil {
@@ -688,12 +695,10 @@ func userCardRowMeta(it Item, kind userCardListKind) string {
 				parts = append(parts, fmt.Sprintf("%d 楼", x.Floor))
 			}
 		}
-		return strings.Join(parts, " · ")
+		return "", strings.Join(parts, " · ")
 	}
+	node = strings.TrimSuffix(it.SubtitlePrefix, " · ")
 	parts := make([]string, 0, 2)
-	if prefix := strings.TrimSuffix(it.SubtitlePrefix, " · "); prefix != "" {
-		parts = append(parts, prefix)
-	}
 	// 帖子行同样用新的时效字段：置顶、最高楼层、回复数（只写数字，不写
 	// 「N 回复」）。手工构造的 Item 没有 Stats 时退回旧的 Meta 摘要。
 	if it.Stats != nil {
@@ -707,7 +712,7 @@ func userCardRowMeta(it Item, kind userCardListKind) string {
 	} else if it.Meta != "" {
 		parts = append(parts, it.Meta)
 	}
-	return strings.Join(parts, " · ")
+	return node, strings.Join(parts, " · ")
 }
 
 // userCardWhen 是行右侧的时间：Item 把它放在 SubtitleSuffix 里（形如

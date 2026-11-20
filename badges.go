@@ -468,7 +468,7 @@ func profileBadgeMeta(b badgeWallEntry) string {
 		parts = append(parts, "Lv."+strconv.Itoa(b.Level))
 	}
 	if b.UserPercentage > 0 {
-		parts = append(parts, strconv.FormatFloat(b.UserPercentage, 'f', -1, 64)+"% 的用户拥有")
+		parts = append(parts, strconv.FormatFloat(b.UserPercentage, 'f', 2, 64)+"% 的用户拥有")
 	} else if b.UserCount > 0 {
 		parts = append(parts, fmt.Sprintf("%d 人拥有", b.UserCount))
 	}

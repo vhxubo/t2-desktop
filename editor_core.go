@@ -38,15 +38,8 @@ type mdEditor struct {
 	// emojiOpen / imageOpen 是两个工具面板；两者互斥，打开一个就收起另一个。
 	emojiOpen bool
 	imageOpen bool
-	// emojiQuery 是表情搜索词；emojiOnlyPost 为真时只看当前帖子自带的表情。
-	emojiQuery    string
-	emojiOnlyPost bool
-	// emojiTab 切换社区图片表情（0）与内置系统表情（1）。
-	emojiTab int
-	// emojiCategory 是系统表情的分类筛选，值为中文标签，空串与「全部」同义。
-	emojiCategory string
-	// emojiShown 限制一次画出的表情数，面板用「显示更多」逐批展开。
-	emojiShown int
+	// emojiQuery 是表情面板的全局搜索词：同时过滤社区表情与系统表情。
+	emojiQuery string
 	// base64Open 是「Base64 编码」Modal 的开合；base64Input 是 Modal 里的原文
 	// 输入框。确认后把编码串插进正文，窗口关掉、下次打开都能重来。
 	base64Open  bool
@@ -68,20 +61,23 @@ type mdEditor struct {
 	topicEditAt time.Time
 }
 
-// systemEmojiAll 是系统表情分类筛选的「全部」选项，与选择器里的第一项一致。
-const systemEmojiAll = "全部"
-
-// newMDEditor 给一份默认状态：表情面板每批 40 个。
+// newMDEditor 给一份默认状态。表情面板没有分页/分类状态：社区表情与系统
+// 表情全部平铺在一个滚动区里，搜索是全局的（见 editorEmojiPanel）。
 func newMDEditor() mdEditor {
-	return mdEditor{emojiShown: emojiPageSize, emojiCategory: systemEmojiAll}
+	return mdEditor{}
 }
 
 const (
-	emojiPageSize = 40
-	emojiColumns  = 10
+	emojiColumns = 10
 	// emojiCellSize 是表情格子的边长：图标 20 DIP 加一圈内边距。格子定宽，
 	// 只有两三个表情时不会被均分拉成半屏一个。
 	emojiCellSize float32 = 30
+	// emojiPopoverHeightRatio 是表情面板内容区占窗口高度的比例。搜索框与
+	// 关闭按钮固定在顶部，下面的网格在这个高度的滚动区里展开。
+	emojiPopoverHeightRatio = 0.60
+	// emojiPopoverWidth 是表情面板的宽度：刚好容下 10 列定宽格子与滚动条，
+	// 不留一条空白在右侧。
+	emojiPopoverWidth float32 = 334
 	// uploadPlaceholderPrefix 是图片还没传完时正文里的临时 URL。
 	// 预览会先把这些占位符换成中文说明，绝不会把它们交给 Markdown 渲染器。
 	uploadPlaceholderPrefix = "](upload:"
@@ -217,7 +213,6 @@ func (e *mdEditor) togglePanel(which string) {
 		if e.emojiOpen {
 			e.imageOpen = false
 			e.topicOpen = false
-			e.emojiShown = emojiPageSize
 		}
 	case "image":
 		e.imageOpen = !e.imageOpen
@@ -257,23 +252,11 @@ func editorEmojis(base map[string]emojiInfo, extra map[string]string) []emojiInf
 	return out
 }
 
-// editorCommunityCodes 是「只看本帖表情」时用的短码集合。
-func editorCommunityCodes(extra map[string]string) map[string]bool {
-	out := make(map[string]bool, len(extra))
-	for code := range extra {
-		out[code] = true
-	}
-	return out
-}
-
-// editorFilteredEmojis 按搜索词与「只看本帖」筛选。搜索同时匹配短码与中文名。
-func editorFilteredEmojis(list []emojiInfo, query string, onlyPost bool, community map[string]bool) []emojiInfo {
+// editorFilteredEmojis 按搜索词筛选社区表情：同时匹配短码与中文名。
+func editorFilteredEmojis(list []emojiInfo, query string) []emojiInfo {
 	q := strings.ToLower(strings.TrimSpace(query))
 	out := make([]emojiInfo, 0, len(list))
 	for _, e := range list {
-		if onlyPost && !community[e.Code] {
-			continue
-		}
 		if q != "" && !strings.Contains(strings.ToLower(emojiCode(e)), q) &&
 			!strings.Contains(strings.ToLower(e.Name), q) {
 			continue
@@ -299,32 +282,14 @@ func emojiShortcode(e emojiInfo) string {
 	return ""
 }
 
-// systemEmojiOptions 给分类下拉用：第一项是「全部」。
-func systemEmojiOptions() []string {
-	opts := make([]string, 0, len(systemEmojiCategories)+1)
-	opts = append(opts, systemEmojiAll)
-	for _, cat := range systemEmojiCategories {
-		opts = append(opts, cat.Label)
-	}
-	return opts
-}
-
-// filteredSystemEmojis 按分类与搜索词筛选内置系统表情。搜索匹配英文别名，
-// 与线上 emoji-picker-react 的英文搜索保持一致。
-func filteredSystemEmojis(query, category string) []systemEmoji {
+// filteredSystemEmojis 筛选内置系统表情：categoryID 为空表示全部分类，
+// 否则只取该分组；query 匹配英文别名，与线上 emoji-picker-react 的英文搜索
+// 保持一致。面板按分组平铺时逐组传 categoryID，全局搜索只传 query。
+func filteredSystemEmojis(query, categoryID string) []systemEmoji {
 	q := strings.ToLower(strings.TrimSpace(query))
-	var catID string
-	if category != "" && category != systemEmojiAll {
-		for _, c := range systemEmojiCategories {
-			if c.Label == category {
-				catID = c.ID
-				break
-			}
-		}
-	}
 	out := make([]systemEmoji, 0, len(systemEmojis))
 	for _, e := range systemEmojis {
-		if catID != "" && e.Category != catID {
+		if categoryID != "" && e.Category != categoryID {
 			continue
 		}
 		if q != "" && !strings.Contains(strings.ToLower(e.Names), q) {

@@ -133,7 +133,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 				} else if comment {
 					ui.Text(c, "评论了帖子").FontSize(richAuthorFontSize).TextColor(tk.TextDescription)
 				} else if x.NodeLabel != "" {
-					ui.Text(c, x.NodeLabel).FontSize(richMetaFontSize).TextColor(tk.TextDescription)
+					nodeTag(c, x.NodeLabel)
 				}
 				ui.Spacer(c).Grow(1)
 				if x.When != "" {
@@ -172,8 +172,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 				// 节点名与评论数固定宽度、不折行：这一行要让「原帖」在剩余
 				// 空间里省略，而不是把旁边的短标签挤成两行。
 				if comment && x.NodeLabel != "" {
-					ui.Text(c, x.NodeLabel).FontSize(richMetaFontSize).
-						TextColor(tk.TextDescription).SingleLine().Shrink(0)
+					nodeTag(c, x.NodeLabel).Shrink(0)
 				}
 				if comment && x.PostTitle != "" {
 					a.postLink(c, it, x.PostTitle, open)

@@ -132,8 +132,9 @@ func TestListSubtitleAuthorGetsAvatar(t *testing.T) {
 	if got, want := avatar.W, userAvatarSize(11); got != want {
 		t.Errorf("列表行作者头像宽 %.1f，期望 %.1f", got, want)
 	}
-	if !tt.HasText("职场 · ") || !tt.HasText("bighammer") {
-		t.Errorf("副标题前后缀没有渲染：%q", tt.Texts())
+	// 节点名现在是独立的 Lobe Tag，不再连同「 · 」是一段文本。
+	if _, ok := tt.Find("职场"); !ok || !tt.HasText("bighammer") {
+		t.Errorf("节点标签或作者没有渲染：%q", tt.Texts())
 	}
 }
 

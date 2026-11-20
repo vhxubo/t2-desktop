@@ -365,6 +365,57 @@ func TestBadgeSVGDecodesEmbeddedRaster(t *testing.T) {
 	}
 }
 
+// 徽章大图（/badge/level_10.svg 这类）是「矢量外框 + pattern 内嵌位图」的
+// 混合 SVG：MyGo 不画 pattern，中间的奖牌会丢。解码时必须把内嵌位图合成到
+// pattern 矩形的位置，外框矢量仍在。用一张纯红小 PNG 验证中间像素来自位图、
+// 角落像素来自矢量 path。
+func TestLargeBadgeSVGCompositesPatternRaster(t *testing.T) {
+	raster := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 2; x++ {
+			raster.SetRGBA(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, raster); err != nil {
+		t.Fatal(err)
+	}
+	enc := base64.StdEncoding.EncodeToString(pngBuf.Bytes())
+	svg := []byte(`<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<path d="M0 0h64v64H0z" fill="#000000"/>
+<rect x="16" y="16" width="32" height="32" fill="url(#p)"/>
+<defs><pattern id="p" width="1" height="1"><use xlink:href="#i" transform="scale(0.5)"/></pattern>
+<image id="i" width="2" height="2" xlink:href="data:image/png;base64,` + enc + `"/></defs></svg>`)
+
+	got := compositeBadgeImage(svg, 256)
+	if got == nil {
+		t.Fatal("大徽章 SVG 没有合成出图像")
+	}
+	if w, h := got.Bounds().Dx(), got.Bounds().Dy(); w != 64 || h != 64 {
+		t.Fatalf("合成图像尺寸 = %dx%d，期望 64x64", w, h)
+	}
+	assertPixel := func(x, y int, name string, r, g, b, a uint32) {
+		t.Helper()
+		pr, pg, pb, pa := got.At(x, y).RGBA()
+		if pr != r || pg != g || pb != b || pa != a {
+			t.Errorf("%s 处像素 = (%d,%d,%d,%d)，期望 (%d,%d,%d,%d)", name, pr, pg, pb, pa, r, g, b, a)
+		}
+	}
+	// 角落只有矢量 path 画的黑色。
+	assertPixel(4, 4, "角落", 0, 0, 0, 0xffff)
+	// 中间 pattern 矩形是内嵌的纯红位图。
+	assertPixel(32, 32, "中间", 0xffff, 0, 0, 0xffff)
+
+	// 走完整解码路径时也必须得到合成后的位图，而不是缺中间的 SVG。
+	src, err := decodeImageData("https://r2.2libra.com/badge/test.svg", imageCacheStable, svg)
+	if err != nil {
+		t.Fatalf("大徽章 SVG 解码失败：%v", err)
+	}
+	if _, ok := src.(*ui.Bitmap); !ok {
+		t.Fatalf("大徽章应解码成合成位图，得到 %T", src)
+	}
+}
+
 // 没有内嵌位图的普通 SVG（天气图标、站内线性图标）仍按 SVG 解码。
 func TestPlainSVGStillDecodes(t *testing.T) {
 	svg := []byte(`<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg"><path d="M0 0h22v22H0z"/></svg>`)

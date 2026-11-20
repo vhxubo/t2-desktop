@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -685,6 +686,11 @@ func decodeImageData(raw string, cat imageCategory, data []byte) (ui.ImageSource
 			return src, nil
 		}
 	}
+	// 徽章大图是「矢量外框 + pattern 内嵌位图」的混合 SVG，MyGo 不画
+	// pattern：先把中间的位图合成进矢量底图，再按普通图处理。
+	if src := compositeBadgeSVG(data, imageDecodeMaxSide(cat)); src != nil {
+		return src, nil
+	}
 	return decodeBoundedImage(data, imageDecodeMaxSide(cat))
 }
 
@@ -859,6 +865,157 @@ func embeddedRasterImage(data []byte) ui.ImageSource {
 		return nil
 	}
 	return src
+}
+
+// compositeBadgeSVG 合成「矢量外框 + pattern 内嵌位图」的徽章大图。
+// MyGo 的 SVG 渲染器明确不画 pattern 与内嵌图片，而站内徽章大图
+// （/badge/level_10.svg 这类 256×256 图）正是这种混合结构：外框、等级文字
+// 与放射底纹是 <path>，中间的奖牌是 <pattern> 引用的一张 base64 PNG。直接
+// 交给 ui.DecodeImage 只会得到缺了中间的半成品（外框文字在、奖牌没了）。
+// 这里把两层分别栅格化再叠在一起，还原完整徽章。
+//
+// 小图 /badge/svg/*.svg 整张就是一张内嵌位图，走 embeddedRasterImage 即可，
+// 不进这里；天气等纯矢量 SVG 没有 pattern/base64，也不会误入。
+func compositeBadgeSVG(data []byte, maxSide int) ui.ImageSource {
+	img := compositeBadgeImage(data, maxSide)
+	if img == nil {
+		return nil
+	}
+	return ui.NewBitmap(img)
+}
+
+// compositeBadgeImage 是合成后的像素，拆出来便于无头测试直接断言中间与角落
+// 的颜色。任何一步认不出来（没有 pattern 矩形、没有内嵌位图、viewBox 异常）
+// 都返回 nil，让调用方回退到普通解码。
+func compositeBadgeImage(data []byte, maxSide int) *image.RGBA {
+	if !bytes.Contains(data, []byte("<pattern")) ||
+		!bytes.Contains(data, []byte("base64,")) {
+		return nil
+	}
+	rect, ok := svgPatternRect(data)
+	if !ok {
+		return nil
+	}
+	minX, minY, vbW, vbH, ok := svgViewBox(data)
+	if !ok || vbW <= 0 || vbH <= 0 {
+		return nil
+	}
+	// 栅格化尺寸取 viewBox 的固有尺寸，与 (*ui.SVG).Image 默认的 meet 适配
+	// 一致；徽章 viewBox 为正方形时坐标是 1:1 映射。
+	rw, rh := int(math.Ceil(vbW)), int(math.Ceil(vbH))
+	if rw <= 0 || rh <= 0 {
+		return nil
+	}
+	if maxSide > 0 && (rw > maxSide || rh > maxSide) {
+		scale := float64(maxSide) / float64(max(rw, rh))
+		rw, rh = max(1, int(math.Round(float64(rw)*scale))), max(1, int(math.Round(float64(rh)*scale)))
+	}
+	doc, err := ui.ParseSVG(data)
+	if err != nil {
+		return nil
+	}
+	base := doc.Image(rw, rh, nil)
+
+	m := embeddedRasterPattern.FindSubmatch(data)
+	if len(m) < 2 {
+		return nil
+	}
+	encoded := strings.Join(strings.Fields(string(m[1])), "")
+	raster, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil
+	}
+	rasterImg, _, err := image.Decode(bytes.NewReader(raster))
+	if err != nil {
+		return nil
+	}
+
+	sx, sy := float64(rw)/vbW, float64(rh)/vbH
+	x0 := int(math.Round((rect.x - minX) * sx))
+	y0 := int(math.Round((rect.y - minY) * sy))
+	x1 := int(math.Round((rect.x + rect.w - minX) * sx))
+	y1 := int(math.Round((rect.y + rect.h - minY) * sy))
+	x0, y0 = max(x0, 0), max(y0, 0)
+	x1, y1 = min(x1, rw), min(y1, rh)
+	if x1 <= x0 || y1 <= y0 {
+		return nil
+	}
+	// pattern 里 <use transform="scale(1/512)"> 把内嵌图铺满整个矩形，
+	// preserveAspectRatio="none"，所以这里直接拉伸到矩形大小，透明处保留
+	// 底下的矢量底纹。
+	scaled := image.NewRGBA(image.Rect(0, 0, x1-x0, y1-y0))
+	draw.ApproxBiLinear.Scale(scaled, scaled.Bounds(), rasterImg, rasterImg.Bounds(), draw.Src, nil)
+	draw.Draw(base, image.Rect(x0, y0, x1, y1), scaled, image.Point{}, draw.Over)
+	return base
+}
+
+// svgRect 是 SVG 里引用了 pattern 的矩形，坐标单位是 viewBox 用户单位。
+type svgRect struct{ x, y, w, h float64 }
+
+var (
+	svgRectTagRe = regexp.MustCompile(`(?s)<rect\b([^>]*)>`)
+	svgFillURLRe = regexp.MustCompile(`fill\s*=\s*"url\(#`)
+	svgAttrsRe   = regexp.MustCompile(`([\w:-]+)\s*=\s*"([^"]*)"`)
+	svgViewBoxRe = regexp.MustCompile(`(?s)\bviewBox\s*=\s*"([^"]+)"`)
+)
+
+// svgPatternRect 找第一个 fill="url(#...)" 的 <rect>，读出 x/y/width/height。
+func svgPatternRect(data []byte) (svgRect, bool) {
+	for _, m := range svgRectTagRe.FindAllSubmatch(data, -1) {
+		attrs := string(m[1])
+		if !svgFillURLRe.MatchString(attrs) {
+			continue
+		}
+		kv := make(map[string]string)
+		for _, a := range svgAttrsRe.FindAllStringSubmatch(attrs, -1) {
+			kv[a[1]] = a[2]
+		}
+		x, okX := svgAttrFloat(kv, "x")
+		y, okY := svgAttrFloat(kv, "y")
+		w, okW := svgAttrFloat(kv, "width")
+		h, okH := svgAttrFloat(kv, "height")
+		if !okX {
+			x = 0
+		}
+		if !okY {
+			y = 0
+		}
+		if okW && okH && w > 0 && h > 0 {
+			return svgRect{x: x, y: y, w: w, h: h}, true
+		}
+	}
+	return svgRect{}, false
+}
+
+// svgAttrFloat 读一个 SVG 长度属性，容忍末尾的 px 单位。
+func svgAttrFloat(attrs map[string]string, name string) (float64, bool) {
+	s, ok := attrs[name]
+	if !ok {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(s, "px")), 64)
+	return f, err == nil
+}
+
+// svgViewBox 读 viewBox="minX minY width height"。
+func svgViewBox(data []byte) (minX, minY, w, h float64, ok bool) {
+	m := svgViewBoxRe.FindSubmatch(data)
+	if m == nil {
+		return 0, 0, 0, 0, false
+	}
+	parts := strings.Fields(string(m[1]))
+	if len(parts) != 4 {
+		return 0, 0, 0, 0, false
+	}
+	vals := [4]float64{}
+	for i, p := range parts {
+		f, err := strconv.ParseFloat(p, 64)
+		if err != nil {
+			return 0, 0, 0, 0, false
+		}
+		vals[i] = f
+	}
+	return vals[0], vals[1], vals[2], vals[3], true
 }
 
 // imageFetcher 是图片加载要的外部依赖：怎么取字节、结果到了怎么通知界面

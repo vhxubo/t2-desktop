@@ -368,6 +368,10 @@ type app struct {
 	// closeMode 是「关闭主窗口时」的偏好（见 window_mode.go），落盘在
 	// window.json。只在主线程读写。
 	closeMode *closeModeStore
+	// disclaimer 是首次启动声明的进程级状态（见 disclaimer.go）：全应用一份，
+	// 只弹一次；claim 成功后把 disclaimerOpen 置位，由 dialogs 画出来。
+	disclaimer     *disclaimerStore
+	disclaimerOpen bool
 	// closePromptOpen / closeRemember 是关闭提示弹窗的状态：是否正在询问
 	// 「只关窗口 / 收进托盘 / 退出应用」，以及这次要不要记住选择。只在主线程读写。
 	closePromptOpen bool
@@ -438,13 +442,14 @@ func tabID(i int) string { return "t" + strconv.Itoa(i) }
 // 代理切换只对一个窗口生效，而离线缓存（cache/offline.json）会被几个窗口
 // 各自整份写回，后写的把前面账号的阅读记录覆盖掉。
 type appDeps struct {
-	dir       string
-	proxy     *proxyManager
-	theme     *themeManager
-	images    *imageCache
-	kv        *localKV
-	closeMode *closeModeStore
-	book      *accountBook
+	dir        string
+	proxy      *proxyManager
+	theme      *themeManager
+	images     *imageCache
+	kv         *localKV
+	closeMode  *closeModeStore
+	disclaimer *disclaimerStore
+	book       *accountBook
 }
 
 // newAppDeps 造一份独立的共享依赖：没有账号册（无头测试）时每个 app 自己
@@ -454,25 +459,27 @@ func newAppDeps(dir string) appDeps {
 		dir = configDir()
 	}
 	return appDeps{
-		dir:       dir,
-		proxy:     newProxyManager(dir),
-		theme:     newThemeManager(dir),
-		images:    newImageCache(dir),
-		kv:        newOfflineKV(dir),
-		closeMode: newCloseModeStore(dir),
+		dir:        dir,
+		proxy:      newProxyManager(dir),
+		theme:      newThemeManager(dir),
+		images:     newImageCache(dir),
+		kv:         newOfflineKV(dir),
+		closeMode:  newCloseModeStore(dir),
+		disclaimer: newDisclaimerStore(dir),
 	}
 }
 
 // deps 是账号册那份共享依赖：所有账号窗口都从这里建，不各自造一份。
 func (b *accountBook) deps() appDeps {
 	return appDeps{
-		dir:       b.dir,
-		proxy:     b.proxy,
-		theme:     b.theme,
-		images:    b.images,
-		kv:        b.kv,
-		closeMode: b.closeMode,
-		book:      b,
+		dir:        b.dir,
+		proxy:      b.proxy,
+		theme:      b.theme,
+		images:     b.images,
+		kv:         b.kv,
+		closeMode:  b.closeMode,
+		disclaimer: b.disclaimer,
+		book:       b,
 	}
 }
 
@@ -507,18 +514,19 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 		auth = newAuthManagerAt(d.dir, d.proxy)
 	}
 	a := &app{
-		auth:      auth,
-		book:      d.book,
-		proxy:     d.proxy,
-		theme:     d.theme,
-		client:    &Client{Auth: auth, Proxy: d.proxy},
-		images:    d.images,
-		kv:        d.kv,
-		closeMode: d.closeMode,
-		tabs:      make([]*tabState, len(tabSpecs)),
-		lastTab:   -1,
-		navSel:    tabID(0),
-		pageName:  "list",
+		auth:       auth,
+		book:       d.book,
+		proxy:      d.proxy,
+		theme:      d.theme,
+		client:     &Client{Auth: auth, Proxy: d.proxy},
+		images:     d.images,
+		kv:         d.kv,
+		closeMode:  d.closeMode,
+		disclaimer: d.disclaimer,
+		tabs:       make([]*tabState, len(tabSpecs)),
+		lastTab:    -1,
+		navSel:     tabID(0),
+		pageName:   "list",
 		// 原生通知默认开；多账号时每个账号窗口各自弹自己收到的消息，
 		// 通知里写明是哪个账号（见 notify.go 的 notificationNative）。
 		nativeNotify: true,
@@ -1109,6 +1117,8 @@ func (a *app) dialogs(c *ui.Context) {
 	a.pandoraDialog(c)
 	a.authDialogFor(c, toastMain)
 	a.closePromptDialog(c)
+	// 首次启动声明放最后，盖在其它弹窗之上；确认后本进程不再画。
+	a.disclaimerDialog(c)
 }
 
 // feedMaxWidth 是正文栏的最大宽度：窗口再宽，一行文字也不超过 760 DIP，
@@ -1833,9 +1843,8 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 			case it.Author != "":
 				ui.Row(c).MinWidth(0).AlignItems(ui.Center).Wrap().Font(sidebarFont).
 					Children(func() {
-						if it.SubtitlePrefix != "" {
-							ui.Text(c, it.SubtitlePrefix).FontSize(tk.FontSizeSM).
-								TextColor(tk.TextDescription).SingleLine()
+						if node := strings.TrimSuffix(it.SubtitlePrefix, " · "); node != "" {
+							nodeTag(c, node)
 						}
 						a.userTag(c, userTagSpec{
 							Name:   it.Author,
@@ -1852,8 +1861,21 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 						}
 					})
 			case it.Subtitle != "":
-				ui.Text(c, it.Subtitle).FontSize(tk.FontSizeSM).Font(sidebarFont).
-					TextColor(tk.TextDescription).SingleLine()
+				// 没有作者时 Subtitle 是「节点 · 时间」整段：节点仍拆成 Tag，
+				// 剩下的时间保留原来的「 · 」前缀。
+				if node := strings.TrimSuffix(it.SubtitlePrefix, " · "); node != "" {
+					ui.Row(c).MinWidth(0).AlignItems(ui.Center).Wrap().Font(sidebarFont).
+						Children(func() {
+							nodeTag(c, node)
+							if rest := strings.TrimPrefix(it.Subtitle, node); rest != "" {
+								ui.Text(c, rest).FontSize(tk.FontSizeSM).
+									TextColor(tk.TextDescription).SingleLine()
+							}
+						})
+				} else {
+					ui.Text(c, it.Subtitle).FontSize(tk.FontSizeSM).Font(sidebarFont).
+						TextColor(tk.TextDescription).SingleLine()
+				}
 			}
 			// 帖子行多一行时效信息：最后回复人、更新时间与最高楼层。没人
 			// 回复时没有这一行，右侧的回复数仍显示 0。

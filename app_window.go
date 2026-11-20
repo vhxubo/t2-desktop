@@ -62,6 +62,10 @@ func (a *app) openMainWindow() {
 		}
 	}
 	a.win = mygo.NewWindow(opts)
+	// 首次启动声明只认领一次：几个账号窗口接连打开时也只由第一扇弹。
+	if a.disclaimer.claim() {
+		a.disclaimerOpen = true
+	}
 	// 窗口真的关掉之后才轮到收尾：关闭按钮可能被「收进托盘」拦下来（见
 	// window_mode.go），那种情况下窗口只是藏起来，状态什么都不用丢。
 	a.win.OnClosed(a.onMainWindowClosed)

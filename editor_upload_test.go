@@ -535,14 +535,14 @@ func TestEditorEmojiPanelAndPreview(t *testing.T) {
 		t.Errorf("选中表情后面板没有自动收起：%q", tt.Texts())
 	}
 
-	// 过滤：只看本帖表情时，全局短码不出现。
+	// 全局搜索：社区短码与中文名都能命中，帖子自带表情也一起搜。
 	community := map[string]string{":party:": "/emojis/party.png"}
 	list := editorEmojis(a.emojis, community)
-	if got := editorFilteredEmojis(list, "", true, editorCommunityCodes(community)); len(got) != 1 || got[0].Code != ":party:" {
-		t.Errorf("只看本帖表情过滤失败：%+v", got)
-	}
-	if got := editorFilteredEmojis(list, "sigh", false, nil); len(got) != 1 || got[0].Code != ":sigh:" {
+	if got := editorFilteredEmojis(list, "sigh"); len(got) != 1 || got[0].Code != ":sigh:" {
 		t.Errorf("按短码搜索失败：%+v", got)
+	}
+	if got := editorFilteredEmojis(list, "party"); len(got) != 1 || got[0].Code != ":party:" {
+		t.Errorf("帖子自带表情的短码没搜到：%+v", got)
 	}
 	merged := mergeEmojiMaps(a.emojis, community)
 	if got := replaceEmoji("来 :party: 一下", merged, true); !strings.Contains(got, "https://r2.2libra.com/emojis/party.png") {

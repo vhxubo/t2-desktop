@@ -347,7 +347,7 @@ func TestAboutWindowShowsCredits(t *testing.T) {
 	tt := ui.NewTester(a.aboutWindowView, aboutWindowWidth, aboutWindowHeight)
 	tt.Frame()
 	for _, s := range []string{
-		"关于", "T2 Desktop",
+		"关于", "T2 Desktop", "Third Party 2Libra",
 		"开发者", "vhxubo",
 		"邮箱", "vhxubo@gmail.com",
 		"项目地址", "github.com/vhxubo/t2-desktop",

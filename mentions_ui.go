@@ -8,7 +8,6 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
-	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
@@ -16,8 +15,8 @@ import (
 // 把整块 @前缀 换成 "@名字 "（名字后的空格由拼串补上，服务端只认这个写法）。
 // 名单为空 / 无权 / 超过 50 人时隐藏对应入口，而不是点一下没反应。
 //
-// 界面全用 Lobe 组件：浮层是 BgElevated + BoxShadowSecondary 的面板，行是
-// display.List（头像 / 图标、名称、分身标记、悬浮与键盘选中态都由它画），
+// 浮层是细边框、不投影的精简气泡（见 suggest_popover.go），行是 display.List
+// （头像 / 图标、名称、分身标记、悬浮与键盘选中态都由它画），
 // 转圈、错误与重试走 feedback / display / action。尺寸跟着内容走：宽度由
 // 最长的一行撑开（只兜住上下限），高度由行数决定，超出 @ 上下方的空间才滚。
 //
@@ -29,8 +28,8 @@ const (
 	// 一次铺满面板既慢又没法挑，搜索框可以把范围缩到要找的人。
 	mentionPanelShown = 50
 	// 面板宽度由最长的一行撑开，这两个值只兜住「太窄」与「用户名太长」。
-	mentionPanelMinW float32 = 176
-	mentionPanelMaxW float32 = 300
+	mentionPanelMinW float32 = 140
+	mentionPanelMaxW float32 = 220
 	// mentionPanelMaxH 是内容区的高度上限；@ 上方 / 下方的空间更小时按空间来。
 	mentionPanelMaxH float32 = 232
 	// mentionPanelMargin 是面板与窗口边缘至少留的间距，mentionPanelGap 是
@@ -135,16 +134,16 @@ func (a *app) mentionPopover(c *ui.Context, d *detailState, host replySurface, p
 		left = winW - mentionPanelMargin - width
 	}
 	left = max(left, mentionPanelMargin)
-	placement, anchorY := lobeoverlay.Bottom, at.Y+at.H
+	anchorY := at.Y + at.H
 	if up {
-		placement, anchorY = lobeoverlay.Top, at.Y
+		anchorY = at.Y
 	}
 
 	ui.Overlay(c, func() {
-		// 零尺寸的定位块贴在 @ 上：Lobe 气泡按它摆面板，自己管点窗外 / Esc 关闭。
+		// 零尺寸的定位块贴在 @ 上：气泡按它摆面板，自己管点窗外 / Esc 关闭。
 		// 气泡水平居中于定位块，所以把定位块放在面板中心的水平位置。
 		anchor := ui.Box(c).Absolute().Left(left+width/2).Top(anchorY).Size(0, 0)
-		lobeoverlay.Popover(c, anchor, &st.open, lobeoverlay.PopoverProps{Placement: placement}, func() {
+		suggestPopover(c, anchor, &st.open, !up, func() {
 			// KeepFocus：在面板里点行、点重试都不把焦点从输入框抢走，选完人
 			// 光标还在原处，接着就能打字。
 			ui.Column(c).Width(width).KeepFocus().Label("提及候选面板").Children(func() {

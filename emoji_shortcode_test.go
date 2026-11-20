@@ -84,6 +84,26 @@ func TestEmojiShortcodePanelOpensAndInserts(t *testing.T) {
 	}
 }
 
+// 候选行上下排布：主标题是中文名称，副标题是要插入的短码。名称不再是右侧
+// 的次要信息，点中文名称标题同样能选中并插入对应的短码。
+func TestEmojiShortcodeRowsShowNameAsTitle(t *testing.T) {
+	a, tt := emojiShortcodeUIApp(t)
+	openColon(t, tt)
+	if !tt.HasText("叹气") {
+		t.Fatalf("候选行没把中文名称作为主标题显示：%q", tt.Texts())
+	}
+	if !tt.HasText(":sigh:") {
+		t.Fatalf("候选行没把短码作为副标题显示：%q", tt.Texts())
+	}
+	if err := tt.Click("叹气"); err != nil {
+		t.Fatalf("点不到中文名称标题：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if a.detail.draft != ":sigh:" {
+		t.Errorf("点中文名称后插入的正文 = %q，期望 :sigh:", a.detail.draft)
+	}
+}
+
 // 继续打字按短码过滤；选中时用整个 ":code:" 替换已经敲进去的 ":前缀"，
 // 不会在正文里留下 ":si:sigh:" 这样的残段。
 func TestEmojiShortcodeFiltersAndReplacesWholeToken(t *testing.T) {

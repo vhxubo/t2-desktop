@@ -203,6 +203,10 @@ type composeState struct {
 	// editor_core.go）。匿名嵌入，所以外层仍可直接读写 st.selStart /
 	// st.preview 等字段；正文字符串仍留在这里，方便 payload 与草稿读写。
 	mdEditor
+	// bodySuggest / momentSuggest 是两段正文各自的 @ 提及与 : 表情短码候选
+	// 状态（见 compose_suggest.go）。模式切换、草稿分开存，候选也各存各的。
+	bodySuggest   composeSuggestState
+	momentSuggest composeSuggestState
 
 	// 附加组件：右侧栏常驻，点一项以弹窗编辑。下面每个 xxxOpen 是「这个组件
 	// 随帖一起发送」的开关（不再是折叠面板的展开状态）；moduleOpen 为真时

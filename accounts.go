@@ -145,12 +145,13 @@ type accountLogin struct {
 
 // accountBook 是本机的账号册：共享服务 + 账号列表 + 窗口与托盘的调度。
 type accountBook struct {
-	dir       string
-	proxy     *proxyManager
-	theme     *themeManager
-	images    *imageCache
-	kv        *localKV
-	closeMode *closeModeStore
+	dir        string
+	proxy      *proxyManager
+	theme      *themeManager
+	images     *imageCache
+	kv         *localKV
+	closeMode  *closeModeStore
+	disclaimer *disclaimerStore
 
 	mu       sync.Mutex
 	accounts []*account
@@ -219,13 +220,14 @@ func newAccountBook(dir string) *accountBook {
 		dir = configDir()
 	}
 	b := &accountBook{
-		dir:       dir,
-		proxy:     newProxyManager(dir),
-		theme:     newThemeManager(dir),
-		images:    newImageCache(dir),
-		kv:        newOfflineKV(dir),
-		closeMode: newCloseModeStore(dir),
-		openURL:   func(u string) error { return mygo.Shell.OpenExternal(u) },
+		dir:        dir,
+		proxy:      newProxyManager(dir),
+		theme:      newThemeManager(dir),
+		images:     newImageCache(dir),
+		kv:         newOfflineKV(dir),
+		closeMode:  newCloseModeStore(dir),
+		disclaimer: newDisclaimerStore(dir),
+		openURL:    func(u string) error { return mygo.Shell.OpenExternal(u) },
 	}
 	b.imgHTTP = b.proxy.Client(20 * time.Second)
 	b.quitApp = b.quitProgram

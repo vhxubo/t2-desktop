@@ -1671,7 +1671,7 @@ func (a *app) topicSubtitle(c *ui.Context, p *topicDetail) {
 					})
 				}
 				if path != "" {
-					ui.Text(c, path).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
+					nodeTag(c, path)
 				}
 				if p.Views > 0 {
 					ui.Textf(c, "%d 次浏览", p.Views).FontSize(tk.FontSizeSM).

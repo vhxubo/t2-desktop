@@ -111,8 +111,11 @@ func TestRowHidesMissingAuthor(t *testing.T) {
 	if tt.HasText("匿名") {
 		t.Errorf("帖子行不该显示「匿名」：%q", tt.Texts())
 	}
-	if !tt.HasText("职场 · ") || !tt.HasText(" · "+relativeTime("2026-11-01T10:00:00.000Z")) {
-		t.Errorf("帖子行丢了节点或时间：%q", tt.Texts())
+	if _, ok := tt.Find("职场"); !ok {
+		t.Errorf("帖子行丢了节点标签：%q", tt.Texts())
+	}
+	if !tt.HasText(" · " + relativeTime("2026-11-01T10:00:00.000Z")) {
+		t.Errorf("帖子行丢了时间：%q", tt.Texts())
 	}
 
 	// 评论行（书签）：没有作者就不给作者标识，也不显示「匿名」，但这条评论

@@ -194,9 +194,8 @@ func TestProfileBadgeTabRenders(t *testing.T) {
 	for _, want := range []string{
 		"我的徽章", "共 2 枚 · 佩戴中 1 枚", "徽章",
 		"早起鸟", "全勤", "佩戴中", "取消佩戴", "佩戴",
-		"Lv.2 · 12.3% 的用户拥有", "1234 人拥有",
+		"Lv.2 · 12.30% 的用户拥有", "1234 人拥有",
 		"连续早起签到的社区徽章", "获得 2026-01-01",
-		"首次佩戴免费",
 	} {
 		if !tt.HasText(want) {
 			t.Errorf("徽章页缺少 %q：%q", want, tt.Texts())

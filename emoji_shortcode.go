@@ -168,7 +168,7 @@ func (a *app) syncEmojiShortcodeToken(d *detailState) {
 // 高亮的那一行就是回车会插进去的那一个。
 func (a *app) emojiShortcodeCandidates(d *detailState) []emojiInfo {
 	list := editorEmojis(a.emojis, a.replyCommunityEmojis(d))
-	out := editorFilteredEmojis(list, d.emojiShortcodes.query, false, nil)
+	out := editorFilteredEmojis(list, d.emojiShortcodes.query)
 	if len(out) > emojiShortcodeShown {
 		out = out[:emojiShortcodeShown]
 	}

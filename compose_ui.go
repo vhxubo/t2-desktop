@@ -291,6 +291,8 @@ func (a *app) composeWindowView(c *ui.Context) {
 	// 模式命名。
 	if st.mode != st.lastMode {
 		st.lastMode = st.mode
+		// 切换帖子 / 动态时两块候选面板都收起：草稿各存各的，面板不跟着切。
+		resetComposeSuggest(st)
 		if a.composeWin != nil {
 			a.composeWin.SetTitle(a.subWindowTitle(composeWindowTitle(st.mode)))
 		}
@@ -382,11 +384,17 @@ func (a *app) composeMomentBody(c *ui.Context, st *composeState) {
 			display.Text(c, "写一条动态", display.TextProps{Strong: true, FontSize: 14, Rows: 1})
 			display.Text(c, "短内容，最多 500 字；不需要标题和节点。",
 				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
-			composeTextArea(c, &st.momentDraft, field.TextAreaProps{
+			momentEditor := composeSuggestEditor{
+				body: &st.momentDraft, ed: &st.mdEditor,
+				field: &st.momentField, font: composeSuggestFontSize,
+				s: &st.momentSuggest,
+			}
+			momentArea := composeTextArea(c, &st.momentDraft, field.TextAreaProps{
 				Placeholder: "此刻想说什么？",
 				MinRows:     8,
 				MaxRows:     12,
 			}).Label("动态内容").MaxLength(composeMomentMax).Bind(&st.momentField)
+			a.wireComposeSuggest(c, momentArea, momentEditor, st)
 			count := utf8.RuneCountInString(st.momentDraft)
 			ctype := display.TextSecondary
 			if count >= composeMomentMax {
@@ -612,7 +620,12 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 			area.Label("正文内容").OnPaste(func(text string) bool {
 				return a.pasteIntoEditor(uploadTargetCompose, text)
 			}).Bind(&st.bodyField)
-			a.syncComposeSelection(area, st)
+			bodyEditor := composeSuggestEditor{
+				body: &st.body, ed: &st.mdEditor,
+				field: &st.bodyField, font: composeSuggestFontSize,
+				s: &st.bodySuggest,
+			}
+			a.wireComposeSuggest(c, area, bodyEditor, st)
 		})
 	})
 }
@@ -647,12 +660,6 @@ var markdownButtons = []markdownButton{
 // 发帖草稿只用全局表情表；社区自带的短码也在这张表里。
 func (a *app) composePreview(c *ui.Context, st *composeState) {
 	a.editorPreviewView(c, st.body, a.emojis, a.md, composePreviewHeight)
-}
-
-// syncComposeSelection 现在只是共用编辑器状态的一个薄包装：选区逻辑在
-// editor_core.go 的 mdEditor.syncSelection 里，评论输入框用的是同一个。
-func (a *app) syncComposeSelection(area ui.Element, st *composeState) {
-	st.syncSelection(area)
 }
 
 /* ------------------------------------------------------------------

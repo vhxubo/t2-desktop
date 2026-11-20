@@ -4,25 +4,34 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/lobehub/lobe-mygo/pkg/display"
-	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 表情短码候选面板：一个角贴着正文里那个 ":"，与 @ 候选面板同一套定位与
-// 交互（见 mentions_ui.go）。内容是一列 Lobe List 行（图标 + :code: + 名称），
+// 交互（见 mentions_ui.go）。内容是一列紧凑行（小图标 + 中文名 + 短码），
 // 点行或回车把 ":" 前缀整段换成短码。没有工具栏入口，键入 ":" 才出现。
+// 行自己用 ButtonBase 画而不用 Lobe 的 display.List：List 的 Compact 行仍有
+// 8px 左右内边距与 12px 图文间距，而且 Popover 自带 12px 内边距，在这个
+// 只放短名字和短码的小面板里留白过多。
 
 const (
-	emojiShortcodePanelW    float32 = 280
-	emojiShortcodePanelMinW float32 = 176
+	// 候选行是中文名 + 短码上下排布，文字很短，面板收紧到刚好容下最长的一行。
+	emojiShortcodePanelW    float32 = 150
+	emojiShortcodePanelMinW float32 = 120
 	// emojiShortcodeMaxH 是内容区高度上限； ":" 上方 / 下方的空间更小时按空间来。
 	emojiShortcodeMaxH float32 = 232
 	// emojiShortcodeMargin 是面板与窗口边缘至少留的间距，emojiShortcodeGap
 	// 是面板与 ":" 那一行之间的缝。
 	emojiShortcodeMargin float32 = 8
 	emojiShortcodeGap    float32 = 4
-	// emojiShortcodeRowH 是 List 一行的估计高度，用来估面板高度、决定朝哪边展开。
-	emojiShortcodeRowH float32 = 34
+	// 紧凑行的固定尺寸：小图 18，图文间距 6，左右内边距 4，上下内边距 3。
+	emojiShortcodeLead    float32 = 18
+	emojiShortcodeLeadGap float32 = 6
+	emojiShortcodePadX    float32 = 4
+	emojiShortcodePadY    float32 = 3
+	// emojiShortcodeRowH 是一行的估计高度（小图 18 + 上下内边距 6），用来估
+	// 面板高度、决定朝哪边展开。
+	emojiShortcodeRowH float32 = 26
 )
 
 // emojiShortcodeAtRect 用与输入框一致的排版算出 ":" 本身的矩形。锚的是 ":"
@@ -90,32 +99,22 @@ func (a *app) emojiShortcodePopover(c *ui.Context, d *detailState, host replySur
 		left = winW - emojiShortcodeMargin - width
 	}
 	left = max(left, emojiShortcodeMargin)
-	placement, anchorY := lobeoverlay.Bottom, at.Y+at.H
+	anchorY := at.Y + at.H
 	if up {
-		placement, anchorY = lobeoverlay.Top, at.Y
+		anchorY = at.Y
 	}
 
 	ui.Overlay(c, func() {
-		// 零尺寸的定位块贴在 ":" 上：Lobe 气泡按它摆面板，自己管点窗外 / Esc 关闭。
+		// 零尺寸的定位块贴在 ":" 上：气泡按它摆面板，自己管点窗外 / Esc 关闭。
 		// 气泡水平居中于定位块，所以把定位块放在面板中心的水平位置。
 		anchor := ui.Box(c).Absolute().Left(left+width/2).Top(anchorY).Size(0, 0)
-		lobeoverlay.Popover(c, anchor, &st.open, lobeoverlay.PopoverProps{Placement: placement}, func() {
+		suggestPopover(c, anchor, &st.open, !up, func() {
 			// KeepFocus：在面板里点行不把焦点从输入框抢走，选完光标还在原处。
 			ui.Column(c).Width(width).KeepFocus().Label("表情候选面板").Children(func() {
 				ui.Scroll(c).MaxHeight(maxH).Children(func() {
-					if key := display.List(c, display.ListProps{
-						Items:   a.emojiShortcodeRows(c, cands),
-						Active:  a.emojiShortcodeActiveKey(d),
-						Compact: true,
-					}); key != "" {
-						for _, em := range cands {
-							if "emoji:"+emojiCode(em) != key {
-								continue
-							}
-							st.host = host
-							a.insertEmojiShortcode(d, emojiShortcode(em))
-							break
-						}
+					if code := a.emojiShortcodeRows(c, a.emojiShortcodeActiveKey(d), cands); code != "" {
+						st.host = host
+						a.insertEmojiShortcode(d, code)
 					}
 				})
 			})
@@ -123,27 +122,45 @@ func (a *app) emojiShortcodePopover(c *ui.Context, d *detailState, host replySur
 	})
 }
 
-// emojiShortcodeRows 把候选翻成 Lobe List 的行：左边是表情图（还没下载好时
-// 留一个等大的空位），中间是短码，右边是名称。短码本身就是要插入的正文。
-func (a *app) emojiShortcodeRows(c *ui.Context, cands []emojiInfo) []display.ListItem {
-	tk := c.Theme()
-	out := make([]display.ListItem, 0, len(cands))
+// emojiShortcodeRows 画候选行并返回这一帧被点中的短码，空串表示没点中。
+// 左侧小图（还没下载好时留一个等大的空位），主标题是中文名称，副标题是要
+// 插入的短码，上下排布。行内边距与间距都收到最小，不靠 Lobe List 的默认
+// 留白；键盘上下键的高亮由传入的 activeKey 决定（评论框与发帖框各算一份）。
+func (a *app) emojiShortcodeRows(c *ui.Context, activeKey string, cands []emojiInfo) string {
+	tk := lobetheme.TokensOf(c)
+	picked := ""
 	for _, em := range cands {
 		em := em
-		out = append(out, display.ListItem{
-			Key:   "emoji:" + emojiCode(em),
-			Label: emojiShortcode(em),
-			Extra: em.Name,
-			Avatar: func() {
+		key := "emoji:" + emojiCode(em)
+		ui.Box(c.Key(key)).AlignSelf(ui.Stretch).Children(func() {
+			row := ui.ButtonBase(c).Row().Gap(emojiShortcodeLeadGap).
+				AlignItems(ui.Center).MinHeight(0).
+				PaddingX(emojiShortcodePadX).PaddingY(emojiShortcodePadY).
+				Radius(tk.BorderRadius).AlignSelf(ui.Stretch)
+			if activeKey == key {
+				row.Background(tk.FillSecondary)
+			} else if row.Hovered() {
+				row.Background(tk.FillTertiary)
+			}
+			row.Children(func() {
 				if src := a.articleImage(em.ImgURL, imageCacheStable); src != nil {
-					ui.Image(c, src).Size(20, 20).Fit(ui.Contain)
+					ui.Image(c, src).Size(emojiShortcodeLead, emojiShortcodeLead).Fit(ui.Contain)
 				} else {
-					ui.Box(c).Size(20, 20).Radius(4).Background(tk.SurfaceHover)
+					ui.Box(c).Size(emojiShortcodeLead, emojiShortcodeLead).Radius(4).Background(tk.FillSecondary)
 				}
-			},
+				ui.Column(c).Gap(0).Grow(1).Basis(0).MinWidth(0).Children(func() {
+					ui.Text(c, em.Name).SingleLine().FontSize(13)
+					if code := emojiShortcode(em); code != "" {
+						ui.Text(c, code).SingleLine().FontSize(11).TextColor(tk.TextDescription)
+					}
+				})
+			})
+			if row.Clicked() {
+				picked = emojiShortcode(em)
+			}
 		})
 	}
-	return out
+	return picked
 }
 
 // insertEmojiShortcode 把选中的短码写进正文。键入 ":" 打开的面板不是「插入」

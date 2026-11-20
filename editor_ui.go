@@ -98,17 +98,18 @@ func (a *app) editorPanelButtons(c *ui.Context, e *mdEditor, body *string,
 	emojiBtn := a.editorIconButton(c, reactionIcon, emojiLabel, "插入社区表情")
 	// 气泡关着时每个编辑器都把 Popover 建出来，否则那一次点击传不进去；
 	// 开着时也只画这一个，开合由 Lobe 自己管。
-	lobeoverlay.Popover(c, emojiBtn, &e.emojiOpen, lobeoverlay.PopoverProps{
+	panel := lobeoverlay.Popover(c, emojiBtn, &e.emojiOpen, lobeoverlay.PopoverProps{
 		Placement: lobeoverlay.Bottom,
 	}, func() {
 		a.editorEmojiPanel(c, e, body, extra)
 	})
+	// Lobe 气泡默认 Padding(12)，网格自身留白已够，收紧让内容更贴边。
+	panel.Padding(4)
 	if emojiBtn.Clicked() {
 		// Lobe 在构建期就切了 emojiOpen，这里只收起其它面板。
 		e.imageOpen = false
 		e.topicOpen = false
 		e.base64Open = false
-		e.emojiShown = emojiPageSize
 	}
 	if a.editorIconButton(c, myTopicIcon, "插入帖子", "从自己发过的帖子里选一篇插入链接").Clicked() {
 		e.togglePanel("topic")
@@ -324,73 +325,69 @@ func myTopicPickMeta(p myTopicPick) string {
 // 表情面板
 // ------------------------------------------------------------------
 
-// editorEmojiPanel 是表情气泡的内容：顶部切换「社区表情 / 系统表情」，两边共用
-// 搜索与分页状态，关闭按钮与 Esc / 点窗外关闭由外层 Popover 管。选中的表情直接
-// 插进调用方的正文，面板随即收起，光标留在原处。
+// editorEmojiPanel 是表情气泡的内容：顶部一个搜索框（全局搜索社区与系统表情）
+// 与关闭按钮固定，下面的滚动区把社区表情与系统表情各分组全部平铺。面板内容区
+// 高度固定为窗口高度的 emojiPopoverHeightRatio，超出就滚动；不再有页签、分类
+// 下拉、分页和「只看本帖」。点中的表情直接插进正文，面板随即收起，光标留在原处。
 func (a *app) editorEmojiPanel(c *ui.Context, e *mdEditor, body *string,
 	extra map[string]string) {
-	t := c.Theme()
-	ui.Column(c).Width(420).Padding(8, 10).Gap(6).
-		Background(t.Surface).Children(func() {
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			if ui.Segmented(c, &e.emojiTab, "社区表情", "系统表情").
-				Label("表情类型").Changed() {
-				// 两个页签的搜索词与分类互不通用，切过去先清空，免得上一页的
-				// 关键词在新页里搜出「没有匹配的表情」。
-				e.emojiQuery = ""
-				e.emojiCategory = systemEmojiAll
-				e.emojiShown = emojiPageSize
-			}
-			ui.Spacer(c).Grow(1)
+	// 颜色全部取 Lobe token：气泡面板本身已用 tk.BgElevated 铺底，内容列
+	// 不再另画背景，否则浮层里会出现一层异色的矩形（描边一样的色块）。
+	tk := lobetheme.TokensOf(c)
+	_, winH := c.Size()
+	if winH <= 0 {
+		winH = 900
+	}
+	ui.Column(c).Width(emojiPopoverWidth).Height(winH*emojiPopoverHeightRatio).
+		Padding(4, 6).Gap(4).Children(func() {
+		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.TextInput(c, &e.emojiQuery).Label("搜索表情").
+				Placeholder("输入关键字搜索表情").Grow(1).MinWidth(0)
 			if a.editorIconButton(c, closeIcon, "收起表情", "收起表情气泡").Clicked() {
 				e.emojiOpen = false
 			}
 		})
-		if e.emojiTab == 0 {
-			a.editorCommunityEmojiPanel(c, e, body, extra)
-		} else {
-			a.editorSystemEmojiPanel(c, e, body)
-		}
+		// 滚动区吃满剩余高度：社区表情在上，系统表情按分组平铺在下，
+		// 每组一个小标题，内容多时出滚动条而不是逐批「显示更多」。
+		ui.Scroll(c).FillWidth().Grow(1).MinHeight(0).KeepFocus().
+			Scrollbars(true).Children(func() {
+			a.editorCommunityEmojiSection(c, e, body, extra)
+			for _, cat := range systemEmojiCategories {
+				items := filteredSystemEmojis(e.emojiQuery, cat.ID)
+				if len(items) == 0 {
+					continue
+				}
+				ui.Text(c, cat.Label).FontSize(11).TextColor(tk.TextSecondary).
+					SingleLine()
+				a.editorSystemEmojiGrid(c, e, body, items)
+			}
+		})
 	})
 }
 
-// editorCommunityEmojiPanel 合并全局表情表与当前帖子自带的社区表情，按短码
-// 排序后分批展示。插入的是 :code: 短码而不是图片链接：服务端正文认短码，
-// 预览与详情页正文会用同一套 replaceEmoji 把它换成行内图片。
-func (a *app) editorCommunityEmojiPanel(c *ui.Context, e *mdEditor, body *string,
+// editorCommunityEmojiSection 平铺社区表情（全局表叠上当前帖子自带的）。插入
+// 的是 :code: 短码而不是图片链接：服务端正文认短码，预览与详情页再用同一套
+// replaceEmoji 把它换成行内图片。
+func (a *app) editorCommunityEmojiSection(c *ui.Context, e *mdEditor, body *string,
 	extra map[string]string) {
-	t := c.Theme()
-	list := editorEmojis(a.emojis, extra)
-	community := editorCommunityCodes(extra)
-	filtered := editorFilteredEmojis(list, e.emojiQuery, e.emojiOnlyPost, community)
-	shown := filtered
-	if len(shown) > e.emojiShown {
-		shown = shown[:e.emojiShown]
+	tk := lobetheme.TokensOf(c)
+	list := editorFilteredEmojis(editorEmojis(a.emojis, extra), e.emojiQuery)
+	if len(list) == 0 {
+		return
 	}
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.TextInput(c, &e.emojiQuery).Label("搜索表情").
-			Placeholder("短码或中文名，如 smile / 微笑").Grow(1).MinWidth(0)
-		ui.Checkbox(c, &e.emojiOnlyPost, "只看本帖表情")
-	})
-	if len(shown) == 0 {
-		ui.Text(c, "没有匹配的表情。清空搜索词，或关掉「只看本帖表情」再看。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
-	}
-	for start := 0; start < len(shown); start += emojiColumns {
-		row := shown[start:min(start+emojiColumns, len(shown))]
-		// 网格带 KeepFocus：挑表情时焦点留在输入框里，插入的短码落在
-		// 原来的光标处，挑完接着打字不用再点一次输入框。
+	ui.Text(c, "社区表情").FontSize(11).TextColor(tk.TextSecondary).SingleLine()
+	for start := 0; start < len(list); start += emojiColumns {
+		row := list[start:min(start+emojiColumns, len(list))]
+		// KeepFocus：挑表情时焦点留在输入框里，插入的短码落在原来的光标处。
 		ui.Row(c).FillWidth().Gap(2).KeepFocus().Children(func() {
 			for _, em := range row {
-				// 格子里只画图，不画短码：短码是给人看进正文里的写法，
-				// 摆在图标旁边只是噪声。名字与短码留在悬停提示里。
-				// 格子定宽而不是均分整行：只有两三个表情时不会被拉成
-				// 半屏一个，图标还是挨在一起好挑。
+				// 格子里只画图，不画短码：短码留给悬停提示。格子定宽，
+				// 只有两三个表情时也不会被均分拉成半屏一个。
 				cell := ui.Row(c).Size(emojiCellSize, emojiCellSize).
 					AlignItems(ui.Center).Center().
 					Radius(6).Background(ui.Transparent)
 				if cell.Hovered() {
-					cell.Background(t.SurfaceHover)
+					cell.Background(tk.FillSecondary)
 				}
 				cell.Children(func() {
 					// 缩略图走全应用共用的图片缓存：没下载好时先留一个等大
@@ -398,7 +395,7 @@ func (a *app) editorCommunityEmojiPanel(c *ui.Context, e *mdEditor, body *string
 					if src := a.articleImage(em.ImgURL, imageCacheStable); src != nil {
 						ui.Image(c, src).Size(20, 20).Fit(ui.Contain)
 					} else {
-						ui.Box(c).Size(20, 20).Radius(4).Background(t.SurfaceHover)
+						ui.Box(c).Size(20, 20).Radius(4).Background(tk.FillSecondary)
 					}
 				})
 				cell.Label(em.Name).Tooltip("插入 " + emojiShortcode(em)).
@@ -409,40 +406,15 @@ func (a *app) editorCommunityEmojiPanel(c *ui.Context, e *mdEditor, body *string
 			}
 		})
 	}
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).KeepFocus().Children(func() {
-		ui.Text(c, "共 "+strconv.Itoa(len(filtered))+" 个表情，显示 "+
-			strconv.Itoa(len(shown))+" 个").
-			FontSize(11).TextColor(t.TextMuted).SingleLine().Grow(1)
-		if len(filtered) > e.emojiShown {
-			if a.editorIconButton(c, chevronDownIcon, "显示更多表情",
-				"再显示 "+strconv.Itoa(emojiPageSize)+" 个表情").Clicked() {
-				e.emojiShown += emojiPageSize
-			}
-		}
-	})
 }
 
-// editorSystemEmojiPanel 画内置的 1898 个系统表情：分类筛选 + 英文搜索 +
-// 网格点选。点一格就把 Unicode 字符直接插进正文，跟线上 emoji-picker-react
-// 的行为一致，不依赖网络，也不走 :code: 短码。
-func (a *app) editorSystemEmojiPanel(c *ui.Context, e *mdEditor, body *string) {
-	t := c.Theme()
-	filtered := filteredSystemEmojis(e.emojiQuery, e.emojiCategory)
-	shown := filtered
-	if len(shown) > e.emojiShown {
-		shown = shown[:e.emojiShown]
-	}
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.TextInput(c, &e.emojiQuery).Label("搜索表情").
-			Placeholder("英文名称，如 smile / grin").Grow(1).MinWidth(0)
-		ui.Select(c, &e.emojiCategory, systemEmojiOptions()).Label("分类")
-	})
-	if len(shown) == 0 {
-		ui.Text(c, "没有匹配的表情。换个英文关键词，或把分类切回「全部」。").
-			FontSize(11).TextColor(t.TextMuted).MaxLines(2)
-	}
-	for start := 0; start < len(shown); start += emojiColumns {
-		row := shown[start:min(start+emojiColumns, len(shown))]
+// editorSystemEmojiGrid 平铺一组系统表情：点一格把 Unicode 字符直接插进正文，
+// 跟线上 emoji-picker-react 的行为一致，不依赖网络，也不走 :code: 短码。
+func (a *app) editorSystemEmojiGrid(c *ui.Context, e *mdEditor, body *string,
+	items []systemEmoji) {
+	tk := lobetheme.TokensOf(c)
+	for start := 0; start < len(items); start += emojiColumns {
+		row := items[start:min(start+emojiColumns, len(items))]
 		ui.Row(c).FillWidth().Gap(2).KeepFocus().Children(func() {
 			for _, em := range row {
 				name := strings.SplitN(em.Names, "|", 2)[0]
@@ -450,7 +422,7 @@ func (a *app) editorSystemEmojiPanel(c *ui.Context, e *mdEditor, body *string) {
 					AlignItems(ui.Center).Center().
 					Radius(6).Background(ui.Transparent)
 				if cell.Hovered() {
-					cell.Background(t.SurfaceHover)
+					cell.Background(tk.FillSecondary)
 				}
 				cell.Children(func() {
 					ui.Text(c, em.Char).FontSize(20).SingleLine()
@@ -463,17 +435,6 @@ func (a *app) editorSystemEmojiPanel(c *ui.Context, e *mdEditor, body *string) {
 			}
 		})
 	}
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).KeepFocus().Children(func() {
-		ui.Text(c, "共 "+strconv.Itoa(len(filtered))+" 个表情，显示 "+
-			strconv.Itoa(len(shown))+" 个").
-			FontSize(11).TextColor(t.TextMuted).SingleLine().Grow(1)
-		if len(filtered) > e.emojiShown {
-			if a.editorIconButton(c, chevronDownIcon, "显示更多表情",
-				"再显示 "+strconv.Itoa(emojiPageSize)+" 个表情").Clicked() {
-				e.emojiShown += emojiPageSize
-			}
-		}
-	})
 }
 
 // ------------------------------------------------------------------

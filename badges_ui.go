@@ -117,8 +117,6 @@ func (a *app) profileBadgesBody(c *ui.Context, ps *profileState) {
 		ui.Spacer(c).Grow(1)
 		a.smallRefreshButton(c, ps.badgeLoading || ps.badgeBusyID != "", a.reloadProfileBadges)
 	})
-	ui.Text(c, "点「佩戴」切换徽章；首次佩戴免费，之后每次佩戴可能扣除金币。").
-		FontSize(10).TextColor(t.TextMuted).MaxLines(2)
 
 	switch {
 	case ps.badgeLoading && len(ps.badges) == 0:
@@ -188,7 +186,7 @@ func (a *app) profileBadgeCard(c *ui.Context, ps *profileState, b badgeWallEntry
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 				ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, name).FontSize(12).Bold().SingleLine().
-						Grow(1).MinWidth(0).Tooltip(name)
+						Grow(1).MinWidth(0)
 					if b.Equipped {
 						ui.Text(c, "佩戴中").FontSize(9).TextColor(t.Accent).Shrink(0)
 					}
@@ -199,7 +197,7 @@ func (a *app) profileBadgeCard(c *ui.Context, ps *profileState, b badgeWallEntry
 			})
 		})
 		if desc := strings.TrimSpace(b.Description); desc != "" {
-			ui.Text(c, desc).FontSize(10).TextColor(t.TextMuted).MaxLines(2).Tooltip(desc)
+			ui.Text(c, desc).FontSize(10).TextColor(t.TextMuted).MaxLines(2)
 		}
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 			action := "佩戴"
@@ -215,13 +213,6 @@ func (a *app) profileBadgeCard(c *ui.Context, ps *profileState, b badgeWallEntry
 			// 测试都能点到确定的那一枚。
 			button.Label(action + "「" + name + "」")
 			button.Disabled(ps.badgeBusyID != "" || b.BadgeID == "")
-			if b.BadgeID == "" {
-				button.Tooltip("这枚徽章缺少佩戴所需的标识，暂时无法切换")
-			} else if b.Equipped {
-				button.Tooltip("取消佩戴「" + name + "」")
-			} else {
-				button.Tooltip("佩戴「" + name + "」；首次免费，之后可能扣除金币")
-			}
 			if button.Clicked() {
 				a.toggleProfileBadge(b.BadgeID, name, !b.Equipped, "")
 			}

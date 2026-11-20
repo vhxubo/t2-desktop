@@ -149,7 +149,7 @@ func (a *app) aboutHero(c *ui.Context) {
 				})
 				ui.Column(c).Gap(3).MinWidth(0).Children(func() {
 					display.Text(c, "T2 Desktop", display.TextProps{Strong: true, FontSize: 18, Rows: 1})
-					display.Text(c, "第三方 2Libra 原生桌面端", display.TextProps{
+					display.Text(c, "Third Party 2Libra · 第三方 2Libra", display.TextProps{
 						Type: display.TextSecondary, FontSize: 12, Rows: 1,
 					})
 				})
@@ -230,11 +230,12 @@ func (a *app) aboutTechSection(c *ui.Context) {
 	})
 }
 
-// aboutTermsSection 是第三方接入条款：用户打开应用就能看到本应用与 2Libra
-// 的关系、授权撤回方式与版权说明。整段展示不截断。
+// aboutTermsSection 是第三方接入条款：用户打开应用就能看到 T2 全称、本应用与
+// 2Libra 的关系、授权撤回方式与版权说明。整段展示不截断。
 func (a *app) aboutTermsSection(c *ui.Context) {
 	aboutSection(c, lucide.FileText(), "条款", func() {
-		display.Text(c, "本应用由第三方开发者 vhxubo 独立开发运营，与 2Libra 无隶属或合作关系。"+
+		display.Text(c, "T2 是 Third Party 2Libra（第三方 2Libra）的简称。"+
+			"本应用由第三方开发者 vhxubo 独立开发运营，与 2Libra 无隶属或合作关系。"+
 			"2Libra 仅提供账号授权与接口，不对本应用的可用性、内容与数据处理负责。"+
 			"你可以随时在 2Libra 的「授权应用」页面撤销本应用的授权。"+
 			"应用内展示的内容版权归原作者所有，详情页保留作者昵称与原文链接。",

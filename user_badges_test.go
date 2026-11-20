@@ -128,7 +128,7 @@ func TestUserCardBadgesBody(t *testing.T) {
 	tt.Frame()
 	for _, want := range []string{
 		"他的徽章", "共 1 枚 · 佩戴中 1 枚", "早起鸟", "佩戴中",
-		"Lv.2 · 12.3% 的用户拥有", "连续早起签到的社区徽章", "获得 2026-01-01",
+		"Lv.2 · 12.30% 的用户拥有", "连续早起签到的社区徽章", "获得 2026-01-01",
 	} {
 		if !tt.HasText(want) {
 			t.Errorf("徽章标签页缺少 %q：%q", want, tt.Texts())
