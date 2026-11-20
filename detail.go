@@ -174,9 +174,10 @@ type voteBlock struct {
 	Finished  bool
 	Options   []voteOption
 	MaxChoice int
-	// ResultVisible 是 result_visible：结果是否公开。公开或投票已结束时，
-	// 详情加载后顺手读一次分布（见 vote.go 的 loadVoteResult）。
-	ResultVisible bool
+	// Voted / VotedKnown 是带令牌时详情可能一起下发的「我是否已投」。投过票
+	// 的人有权直接看分布，不必再点「查看投票结果」（见 loadTopicFor）。
+	Voted      bool
+	VotedKnown bool
 }
 
 type voteOption struct {
@@ -220,8 +221,11 @@ type replyItem struct {
 	// 笔保留）。服务端下发 reward_pool_rewards: [{"amount": 53}]，没有命中
 	// 时是空数组。楼中楼不会中奖，所以 children 里通常都是空的。
 	RewardPoolWinnings []int
-	Depth              int
-	Children           []replyItem
+	// UserPKChoice 是 PK 投票里这位评论者选的选项 uuid，和详情 vote.options[].id
+	// 对应（见 replyRow 的队伍标签）。老响应或没投票的评论没有这个字段 / 为空串。
+	UserPKChoice string
+	Depth        int
+	Children     []replyItem
 	// HasChildren 标记这条评论在原始数据里带子树（楼中楼）。flattenReplies
 	// 把树摊平后 Children 被清空，但保留这个标志，供楼层视图在评论旁显示
 	// 折叠 / 展开入口，并据此隐藏被折叠的子回复。
@@ -490,13 +494,13 @@ func decodePostscripts(raw json.RawMessage) []postscript {
 
 func decodeVote(o object) *voteBlock {
 	v := &voteBlock{
-		ID:            o.str("id"),
-		Type:          o.str("type"),
-		Title:         o.str("title"),
-		Finished:      o.flag("voting_finished"),
-		MaxChoice:     o.num("max_choices"),
-		ResultVisible: o.flag("result_visible"),
+		ID:        o.str("id"),
+		Type:      o.str("type"),
+		Title:     o.str("title"),
+		Finished:  o.flag("voting_finished"),
+		MaxChoice: o.num("max_choices"),
 	}
+	v.Voted, v.VotedKnown = voteVotedFlag(o)
 	for _, raw := range rawArray(o["options"]) {
 		opt := asObject(raw)
 		if opt == nil {
@@ -570,6 +574,7 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 		r.Level = depth + 1
 	}
 	r.ReplyCommentID = o.str("reply_comment_id")
+	r.UserPKChoice = o.str("user_pk_choice")
 	if o.has("is_bookmarked", "bookmarked") {
 		r.BookmarkKnown = true
 		r.Bookmarked = o.flag("is_bookmarked", "bookmarked")

@@ -199,7 +199,7 @@ func TestVoteSectionSubmitsSingle(t *testing.T) {
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	if err := tt.Click("甲 · 2 票"); err != nil {
+	if err := tt.Click("甲"); err != nil {
 		t.Fatalf("点投票选项失败：%v（%q）", err, tt.Texts())
 	}
 	if err := waitInteract(t, done); err != nil {
@@ -217,6 +217,60 @@ func TestVoteSectionSubmitsSingle(t *testing.T) {
 	mu.Unlock()
 	if len(got) != 1 || got[0] != "POST /v1/topics/VOTE01/vote" {
 		t.Errorf("请求 = %v", got)
+	}
+}
+
+// 投票成功后直接展开分布：投过票的人不必再点一次「查看投票结果」。
+func TestVoteRevealsCountsAfterVoting(t *testing.T) {
+	var mu sync.Mutex
+	var resultCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/topics/VOTE01" {
+			io.WriteString(w, voteDetailJSON)
+			return
+		}
+		if r.URL.Path == "/v1/topics/VOTE01/vote/result" {
+			mu.Lock()
+			resultCalls++
+			mu.Unlock()
+			io.WriteString(w, envelopeJSON(`{"options":[
+				{"id":"opt-1","text":"甲","vote_count":3},
+				{"id":"opt-2","text":"乙","vote_count":5}],
+				"total_votes":8}`))
+			return
+		}
+		io.WriteString(w, envelopeJSON(`{}`))
+	}))
+	defer srv.Close()
+	a := loginApp(t, srv)
+	a.autoLoad = true
+	voteTestDetail(t, a, voteDetailJSON)
+	done := make(chan error, 1)
+	a.onInteractDone = func(err error) { done <- err }
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if err := tt.Click("甲"); err != nil {
+		t.Fatalf("点投票选项失败：%v（%q）", err, tt.Texts())
+	}
+	if err := waitInteract(t, done); err != nil {
+		t.Fatalf("投票失败：%v", err)
+	}
+	waitFor(t, func() bool {
+		return a.detail.vote.result != nil && !a.detail.vote.resultLoading
+	}, "投票后没有读出结果")
+	tt.Frame()
+	mu.Lock()
+	calls := resultCalls
+	mu.Unlock()
+	if calls == 0 {
+		t.Error("投票后没有读结果端点")
+	}
+	if !a.detail.vote.resultOpen {
+		t.Error("投票后应直接展开结果")
+	}
+	if !tt.HasText("共 8 票") || !tt.HasText("3 票 · 38%") {
+		t.Errorf("投票后没有直接显示票数：%q", tt.Texts())
 	}
 }
 
@@ -266,7 +320,7 @@ func TestVoteConflictMarksVoted(t *testing.T) {
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	if err := tt.Click("甲 · 2 票"); err != nil {
+	if err := tt.Click("甲"); err != nil {
 		t.Fatalf("点投票选项失败：%v（%q）", err, tt.Texts())
 	}
 	readVoteCall(t, got)
@@ -293,7 +347,7 @@ func TestVoteFinishedIsReadOnly(t *testing.T) {
 	if !tt.HasText("投票已结束") {
 		t.Errorf("没有结束说明：%q", tt.Texts())
 	}
-	_ = tt.Click("甲 · 2 票")
+	_ = tt.Click("甲")
 	select {
 	case c := <-got:
 		t.Errorf("已结束的投票不该发请求：%+v", c)
@@ -314,7 +368,7 @@ func TestVoteNeedsLogin(t *testing.T) {
 	voteTestDetail(t, a, voteDetailJSON)
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	if err := tt.Click("甲 · 2 票"); err != nil {
+	if err := tt.Click("甲"); err != nil {
 		t.Fatalf("点投票选项失败：%v（%q）", err, tt.Texts())
 	}
 	tt.Frame()

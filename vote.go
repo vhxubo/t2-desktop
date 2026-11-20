@@ -86,11 +86,12 @@ func (c *Client) sendTopicVote(ctx context.Context, shortID, voteID string, opti
 
 // voteUIState 是详情页投票块的界面状态，只在 UI 线程读写。checks 与
 // topic.Vote.Options 等长，供多选投票的勾选框绑定；busy 时整块禁用。
-// voted 记的是本次会话里提交成功（或服务端回 409 说已投过），详情重新
-// 加载不会把它清掉。gen 用来丢弃切帖子之前的迟到结果。
+// voted 记的是已投过：本次会话里提交成功 / 服务端回 409，或详情与结果端点
+// 明确下发「我已投」。详情重新加载不会把它清掉。gen 用来丢弃切帖子之前的迟到
+// 结果。
 //
-// result / resultOpen / resultLoading / resultErr 是结果分布：只有点开
-// 「查看投票结果」、投票结束后才读一次，不为了一个没人看的分布多发请求。
+// result / resultOpen / resultLoading / resultErr 是结果分布：没投过的人票数默认
+// 藏着，点开「查看投票结果」才读一次；投过票的人加载详情时就会直接展开。
 type voteUIState struct {
 	busy   bool
 	voted  bool
@@ -112,6 +113,29 @@ type voteResult struct {
 	Total        int
 	Visible      bool
 	VisibleKnown bool
+	Voted        bool
+	VotedKnown   bool
+}
+
+// voteVotedFlag 容错读「我是否已投」。详情与 /vote/result 都没有在文档里给出
+// 这个字段的确定形状：可能是布尔的 voted / has_voted，也可能是我选中的选项
+// uuid（my_option_id 一类）。认不出来就返回「未知」，不把没投过当成投过。
+func voteVotedFlag(o object) (bool, bool) {
+	boolKeys := []string{"voted", "has_voted", "is_voted", "my_voted", "participated", "has_participated"}
+	if o.has(boolKeys...) {
+		return o.flag(boolKeys...), true
+	}
+	for _, k := range []string{"my_vote", "my_option_id", "selected_option_id", "my_choice"} {
+		if o.str(k) != "" {
+			return true, true
+		}
+	}
+	for _, k := range []string{"my_option_ids", "my_votes", "my_choices"} {
+		if len(rawArray(o[k])) > 0 || o.str(k) != "" {
+			return true, true
+		}
+	}
+	return false, false
 }
 
 // fetchVoteResult 读一次投票结果。纯读端点，scope 是 read，匿名也能读。
@@ -144,6 +168,7 @@ func decodeVoteResult(d json.RawMessage) voteResult {
 			out.VisibleKnown = true
 			out.Visible = o.flag("result_visible", "visible")
 		}
+		out.Voted, out.VotedKnown = voteVotedFlag(o)
 	}
 	for _, raw := range list {
 		opt := asObject(raw)
@@ -190,7 +215,7 @@ func voteIsMulti(v *voteBlock) bool {
 
 // loadVoteResult 读一次投票结果分布。同一个投票在途时不重复发；gen 丢弃
 // 切帖子之前的迟到结果。失败只把原因留在投票块里（可重试），不弹 toast：
-// 这是一个用户主动点开的只读查询。
+// 这是只读查询，没投过的人点开才读，投过的人加载详情时自动读。
 func (a *app) loadVoteResult(d *detailState) {
 	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Vote == nil || !a.autoLoad {
 		return
@@ -225,23 +250,30 @@ func (a *app) loadVoteResult(d *detailState) {
 				return
 			}
 			d.vote.result = &res
+			// 结果端点也带「我已投」时，按投过票处理：直接展开，不必再点一次。
+			if res.VotedKnown && res.Voted && !d.vote.voted {
+				d.vote.voted = true
+				d.vote.resultOpen = true
+			}
 		})
 	}()
 }
 
-// toggleVoteResult 展开 / 收起结果分布。第一次展开时读一次端点。
+// toggleVoteResult 展开 / 收起结果分布。只有展开时才读端点，收起不读。
 func (a *app) toggleVoteResult(d *detailState) {
 	if d == nil || !a.detailLive(d) {
 		return
 	}
 	d.vote.resultOpen = !d.vote.resultOpen
-	if d.vote.resultOpen && d.vote.result == nil {
+	// 每次展开都重读一次：票数可能已经变了（比如收起后投了票），点开看到的
+	// 该是当下的分布，而不是上次那份过期的。
+	if d.vote.resultOpen {
 		a.loadVoteResult(d)
 	}
 }
 
-// showVoteResult 在投票成功（或已投过）后把结果分布直接摆出来：投完最想
-// 看的就是分布，不必再点一次。票数刚变过，已经读过的那一份要重读。
+// showVoteResult 在投票成功（或已投过）后把结果直接摆出来：投过票的人有权直接
+// 看分布，不必再点一次「查看投票结果」。票数刚变过，已经读过的那份要重读。
 func (a *app) showVoteResult(d *detailState) {
 	if d == nil {
 		return
@@ -251,8 +283,8 @@ func (a *app) showVoteResult(d *detailState) {
 }
 
 // submitVote 提交选中的选项。结果一律走主窗口 toast（见 toasts.go），页面里
-// 只留「正在提交」的进度。成功后重新拉详情，把服务端算出的票数显示出来，
-// 并把结果分布直接展开。
+// 只留「正在提交」的进度。成功后重新拉详情同步状态，并把结果分布直接展开：
+// 投过票的人不用再点一次「查看投票结果」。
 func (a *app) submitVote(d *detailState, optionIDs []string, multi bool) {
 	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Vote == nil {
 		return
@@ -307,7 +339,7 @@ func (a *app) submitVote(d *detailState, optionIDs []string, multi bool) {
 				var ae *apiError
 				if errors.As(err, &ae) && ae.Status == http.StatusConflict {
 					// 409：多半是在网页或别的客户端已经投过，按已投处理，
-					// 并拉一次详情把票数显示对。
+					// 并拉一次详情同步状态。
 					d.vote.voted = true
 					a.toast(a.detailToastFor(d), "你已经投过票了")
 					a.showVoteResult(d)

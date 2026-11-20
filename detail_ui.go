@@ -13,6 +13,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
+	"github.com/egoist/mygo/ui/markdown/parser"
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
@@ -74,6 +75,10 @@ type detailState struct {
 	display     []replyItem
 	hiddenCount map[string]int
 	list        ui.ListState
+	// base64Open 记着评论里哪些 Base64 片段已经被点开成解码态。键是「评论
+	// id | 片段序号 | 编码串」（见 base64RevealKey），所以同一条评论里的多个
+	// 片段互不串扰；它只在这一次浏览里有效，不落盘也不进后台。
+	base64Open map[string]bool
 	// bodyScroll 是左栏正文的滚动偏移：TrackScroll 记下来，供「返回顶部」
 	// 判断正文是不是已经滚离顶部、以及把它直接写回 0 回顶。
 	bodyScroll ui.ScrollState
@@ -166,6 +171,9 @@ type detailState struct {
 	// mentions 是 @ 提及的两份名单（守护者 / 本帖参与人）与气泡状态。名单
 	// 按「帖子 + 回复身份」缓存，只在这里存运行态，不落盘（见 mentions.go）。
 	mentions mentionState
+	// emojiShortcodes 是键入 ":" 弹出的社区表情短码候选面板状态。候选来自
+	// 进程级表情表，没有名单与网络请求（见 emoji_shortcode.go）。
+	emojiShortcodes emojiShortcodeState
 }
 
 func (d *detailState) originURL() string {
@@ -204,6 +212,31 @@ var (
 	opTagBackground = ui.Hex("#00d3bb")
 	opTagText       = ui.Oklch(0.38, 0.063, 188.416)
 )
+
+// PK 投票的队伍标签：所有 PK 帖子统一按选项列表顺序，第一个红队、第二个
+// 蓝队。底色固定不跟主题走，深色字在浅底上始终清楚。
+var (
+	pkTeamNames       = [...]string{"红队", "蓝队"}
+	pkTeamBackgrounds = [...]ui.Color{
+		ui.Hex("#ffa1b1"), // 红队
+		ui.Hex("#66d6fe"), // 蓝队
+	}
+	pkTeamText = ui.Hex("#1f2937")
+)
+
+// commentHelperBG 是浅色主题评论区里「引用 / 辅助块」的底色：Markdown 引用、
+// 代码与表格、楼中楼的父评论引用行都用它，在白色评论区面板上铺出一层淡灰，
+// 与正文区分。深色主题不写死这个颜色，沿用 Markdown 默认主题与透明底。
+var commentHelperBG = ui.Hex("#F6F8FA")
+
+// commentHelperBlockBg 返回一条引用 / 辅助块在当前主题下的底色：浅色用
+// #F6F8FA，深色保持透明（沿用主题原有的淡化处理）。
+func commentHelperBlockBg(t *ui.Theme) ui.Color {
+	if t.Dark {
+		return ui.Transparent
+	}
+	return commentHelperBG
+}
 
 // replyLocateMaxPages 是从评论列表点进来、首屏没找到目标评论时最多自动
 // 续拉的页数：30 条一页，20 页足够覆盖绝大多数帖子，又不会无限请求。
@@ -246,6 +279,75 @@ func newMarkdownOptions(a *app, st mdTextStyle) *markdown.Options {
 			ItemSpacing:  st.item,
 		},
 	}
+}
+
+// newCommentMarkdownOptions 造评论正文的 Markdown 选项：与正文同一套渲染，
+// 字号更小。light 为真时把引用 / 代码 / 表格这些辅助块统一成 #F6F8FA，并
+// 接管引用块的画法（见 commentQuoteBlock）；false 时与原来的选项完全一致，
+// 深色主题照旧由 Markdown 默认主题按外观给色。两份都在启动时建好，渲染时
+// 按窗口外观二选一，避免复制带 sync.Map 的 Options。
+func (a *app) newCommentMarkdownOptions(light bool) *markdown.Options {
+	o := newMarkdownOptions(a, commentTextStyle)
+	if light {
+		o.Theme.CodeBackground = commentHelperBG
+		o.Theme.CodeBlockBackground = commentHelperBG
+		o.Theme.TableHeader = commentHelperBG
+		o.Theme.TableStripe = commentHelperBG
+	}
+	base := o.Block
+	o.Block = func(c *ui.Context, d *parser.Document, i int) bool {
+		if light {
+			if b := d.Block(i); b.Kind == parser.Quote && b.Alert == parser.NoAlert {
+				a.commentQuoteBlock(c, d, i, o)
+				return true
+			}
+		}
+		return base(c, d, i)
+	}
+	return o
+}
+
+// commentMdOptions 返回当前窗口外观该用的评论 Markdown 选项：浅色用铺了
+// #F6F8FA 的 commentMdLight，深色用原来的 commentMd。
+func (a *app) commentMdOptions(c *ui.Context) *markdown.Options {
+	return a.commentMdOptionsForDark(c.Theme().Dark)
+}
+
+func (a *app) commentMdOptionsForDark(dark bool) *markdown.Options {
+	if dark {
+		return a.commentMd
+	}
+	return a.commentMdLight
+}
+
+// commentQuoteBlock 把评论中的 Markdown 引用块画成 #F6F8FA 底色的阅读块。
+// 引用内文去掉每行开头的 > 之后用同一份浅色评论选项重新渲染，表情、配图与
+// 嵌套引用因此仍按原样排版（嵌套引用会再走进这个 Block 回调）。o 即那份
+// 浅色选项，复用它自己的图片缓存。
+func (a *app) commentQuoteBlock(c *ui.Context, d *parser.Document, i int, o *markdown.Options) {
+	b := d.Block(i)
+	raw := d.Source()[b.Start:b.End]
+	tk := lobetheme.TokensOf(c)
+	q := ui.Column(c).Background(commentHelperBG).
+		BorderStartWidth(3).BorderColor(tk.Border).Padding(6, 12)
+	q.Children(func() {
+		a.markdownView(c, unquoteSource(raw), o)
+	})
+}
+
+// unquoteSource 去掉 Markdown 引用块每行开头的 > 前缀，供 commentQuoteBlock
+// 把内文交给嵌套的 Markdown 视图重新排版。没有前缀的惰性续行原样保留。
+func unquoteSource(src string) string {
+	lines := strings.Split(src, "\n")
+	for i, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "> "):
+			lines[i] = line[2:]
+		case strings.HasPrefix(line, ">"):
+			lines[i] = strings.TrimPrefix(line, ">")
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // handleLink is the Markdown OnLink. A link to another post replaces the
@@ -501,20 +603,16 @@ func (a *app) loadTopicFor(d *detailState) {
 			syncFavorite(d, topic, a.auth.username())
 			// 投票选项可能随刷新变化，勾选框的行数跟着对齐。
 			syncVote(d, topic)
+			// 投过票的人直接看分布，没投过的人仍要点「查看投票结果」才看得到。
+			// 详情带令牌时才会有「我已投」，匿名加载不动。
+			if topic.Vote != nil && topic.Vote.VotedKnown && topic.Vote.Voted {
+				d.vote.voted = true
+				a.showVoteResult(d)
+			}
 			// 竞猜选项若已变化，收起指向旧选项的投注面板。
 			syncBets(d, topic)
 			// 池子没了 / 结束了，收起注资气泡。
 			syncRewardPool(d, &topic)
-			// 投票已结束或结果公开时顺手读一次分布：这两类帖子打开就想看
-			// 结果，不必再点一次「查看投票结果」。
-			if topic.Vote != nil {
-				if topic.Vote.Finished {
-					d.vote.resultOpen = true
-				}
-				if topic.Vote.Finished || topic.Vote.ResultVisible {
-					a.loadVoteResult(d)
-				}
-			}
 			// 受限内容 / 竞拍：正文拿到且确实有门槛就自动把三块只读内容拉回来
 			// 直接展示，不必再点「查看内容 / 竞拍状态 / 出价记录」。自动模式未
 			// 登录不发请求、缺 scope 不弹授权，失败原因留在块里可重试（见
@@ -713,6 +811,15 @@ func (a *app) detailView(c *ui.Context, inline bool) {
 // 的 MinSize 共用，免得窗口缩小时接缝被挤进正文里。
 const detailBodyMinWidth float32 = 200
 
+// detailBottomBarHeight 是左右两栏底部条带的总高度（DIP，含各自 1px 分隔线）：
+// 左栏是正文底部的表态 / 打赏互动栏，右栏是折叠态的评论输入框。两栏共用同一
+// 个高度，默认视图里底边齐平；评论框展开后自然往下长，不再受这个值约束。
+const detailBottomBarHeight float32 = 57
+
+// replyComposerPadY 是评论区输入栏外层的上下内边距。折叠态的输入框据此扣掉
+// 外层留白与分隔线，让整条底部条带正好是 detailBottomBarHeight。
+const replyComposerPadY float32 = 5
+
 // detailContent 是详情页真正的内容：左正文、右评论，底部来源与悬浮工具条。
 // 显式收 d，让两扇详情窗口各画各的那篇，不靠游标在帧与帧之间保持一致。
 func (a *app) detailContent(c *ui.Context, d *detailState) {
@@ -760,6 +867,13 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 					a.topicBody(c, d)
 				})
 				a.topicInteractionBar(c, d)
+				// 右栏评论区收起后，评论输入框没有地方可待：把它挪到左栏正文
+				// 底部、表态互动栏下方继续展示，这样收起评论也能直接写回复。
+				// 两种布局互斥，同一帧只会画一份输入框，composerField 的焦点
+				// 身份仍只有一处（见 replyInput）。
+				if d.replyCollapsed {
+					a.replyComposer(c, d)
+				}
 			})
 		}
 		// 评论区用一块底色和白色正文面板分出层次；收起正文时它吃掉整行。
@@ -825,9 +939,15 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 		a.commentsStatusDialog(c, d)
 		// 兑换码的领取确认框：点一条未领取的码才展开，领到后切到成功页看完整码。
 		a.redeemDialog(c, d)
+		// 打赏、合集、注资、竞猜与解锁确认是盖在整页上的 Lobe Modal；表情与
+		// 明细是贴着入口的 Lobe Popover（见 interact.go / collections.go /
+		// reward_pool.go / bets.go / restricted_ui.go / reply_identity.go）。
+		a.rewardDialog(c, d)
+		a.collectionDialog(c, d)
+		a.rewardPoolDialog(c, d)
+		a.betDialog(c, d)
+		a.restrictedUnlockDialog(c, d)
 	})
-	// 表态、打赏与明细都是贴着各自入口的气泡（见 interact.go），在互动区
-	// 构建时已经就地挂好，这里不需要再叠一层弹窗。
 }
 
 var detailSeamFade = ui.Animation{Duration: 160 * time.Millisecond, Ease: motion.EaseOut}
@@ -904,15 +1024,15 @@ func detailExpandToggle(c *ui.Context, tk *lobetheme.Tokens, atRight, atTop bool
 
 // detailReplyStyle 返回评论区面板的圆角与底色。
 //
-// 浅色主题去掉圆角，让评论区成为一块通体的阅读面板；底色用 Lobe 的次级
-// 表面色叠在页面底色上（约 #f0f0f0），与纯白的正文面板拉开一点层次，又
-// 不会像直接混文字色那样发脏。深色主题沿用原来的做法：圆角卡片 + 页面
+// 浅色主题去掉圆角，底色直接用 Lobe 的 BgContainer（#ffffff），与正文面板
+// 完全一致——两栏不再靠底色区分，评论区里的引用 / 辅助块改用 #F6F8FA
+// 铺出层次（见 commentHelperBG）。深色主题沿用原来的做法：圆角卡片 + 页面
 // 底色混一点文字色得到的深灰。
 func detailReplyStyle(t *ui.Theme, tk *lobetheme.Tokens) (float32, ui.Color) {
 	if t.Dark {
 		return tk.BorderRadiusLG, t.Background.Mix(t.Text, 0.05)
 	}
-	return 0, tk.FillSecondary.Over(t.Background)
+	return 0, tk.BgContainer
 }
 
 // detailToolKind 决定一枚工具条动作交给哪支画法。
@@ -1296,7 +1416,9 @@ func (a *app) voteSection(c *ui.Context, d *detailState, v *voteBlock) {
 	}
 	for i, o := range v.Options {
 		i, o := i, o
-		label := fmt.Sprintf("%s · %d 票", o.Text, o.Votes)
+		// 票数默认不展示，免得影响别人怎么投；没投过的人要点开下面的
+		// 「查看投票结果」才看得到，投过票的人会自动展开（见 voteResultSection）。
+		label := o.Text
 		// 勾选框是有状态的控件，构造前用 Context.Key 固定身份。
 		c.Key("vote-option-" + o.ID)
 		if multi {
@@ -1329,9 +1451,11 @@ func (a *app) voteSection(c *ui.Context, d *detailState, v *voteBlock) {
 	a.voteResultSection(c, d, v)
 }
 
-// voteResultSection 是投票块里的结果分布：一行展开 / 收起，展开后每个选项
-// 一条进度条。分布来自 GET /vote/result（见 vote.go）；失败只在这里说明，
-// 不弹 toast —— 这是一次用户主动发起的只读查询。
+// voteResultSection 是投票块里唯一展示票数的地方：一行「查看投票结果」展开
+// / 收起，展开后每个选项一条进度条，显示票数与占比。分布来自 GET /vote/result
+// （见 vote.go）；失败只在这里说明，不弹 toast —— 这是只读查询，没投过的人
+// 主动点开才读。票数默认藏在选项文字后面（见 voteSection），投过票的人则在
+// 详情加载时就自动展开。
 func (a *app) voteResultSection(c *ui.Context, d *detailState, v *voteBlock) {
 	tk := lobetheme.TokensOf(c)
 	if v.ID == "" {
@@ -1346,7 +1470,7 @@ func (a *app) voteResultSection(c *ui.Context, d *detailState, v *voteBlock) {
 		if d.vote.resultLoading {
 			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
 			ui.Text(c, "正在读取结果…").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
-		} else if d.vote.result != nil && d.vote.result.Total > 0 {
+		} else if d.vote.resultOpen && d.vote.result != nil && d.vote.result.Total > 0 {
 			ui.Textf(c, "共 %d 票", d.vote.result.Total).FontSize(tk.FontSizeSM).
 				Font(sidebarFont).TextColor(tk.TextDescription)
 		}
@@ -1839,6 +1963,45 @@ func replyTreeGuides(rows []replyItem) []replyTreeGuide {
 	return out
 }
 
+// pkTeamTag 是一条评论在 PK 投票里挂的队伍标签：底色 + 文案。
+type pkTeamTag struct {
+	Text string
+	Bg   ui.Color
+}
+
+// replyPKTeam 返回评论者选的队伍标签。choice 是评论的 user_pk_choice（选项
+// uuid），与详情 vote.options[].id 对应：命中的选项在列表里的下标决定队伍——
+// 所有 PK 帖子统一按第一个红队、第二个蓝队，文字与底色都固定，不看选项文本。
+// 普通帖子、多选、没投票、选项对不上（老数据 / 投票改过选项）都返回 false，
+// 不挂标签。
+func replyPKTeam(v *voteBlock, choice string) (pkTeamTag, bool) {
+	if v == nil || choice == "" {
+		return pkTeamTag{}, false
+	}
+	if v.Type != "" && v.Type != "pk" {
+		return pkTeamTag{}, false
+	}
+	for i, o := range v.Options {
+		if o.ID == "" || o.ID != choice {
+			continue
+		}
+		if i >= len(pkTeamNames) {
+			return pkTeamTag{}, false
+		}
+		return pkTeamTag{Text: pkTeamNames[i], Bg: pkTeamBackgrounds[i]}, true
+	}
+	return pkTeamTag{}, false
+}
+
+// pkTeamTagView 把队伍标签画成 OP 标签那样的一小枚：淡色底 + 深色字，不占
+// 第一行以外的版面。
+func (a *app) pkTeamTagView(c *ui.Context, tag pkTeamTag) {
+	ui.Text(c, tag.Text).FontSize(10).Bold().
+		TextColor(pkTeamText).Background(tag.Bg).
+		Padding(3, 5).Radius(4).
+		Tooltip("该评论投给了" + tag.Text)
+}
+
 func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID string, isNew bool) {
 	t := c.Theme()
 	tk := lobetheme.TokensOf(c)
@@ -1963,6 +2126,12 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 			// 从帖子金币池里领到过金币的评论，在时间后面标出合计：这是这条
 			// 评论拿到的额外收入，只有它自己有，不必再去翻金币流水。
 			a.replyRewardPoolWinnings(c, r)
+			// PK 投票的评论在作者行挂一枚队伍标签，紧跟身份与时间之后。
+			if a.detail != nil && a.detail.topic != nil {
+				if tag, ok := replyPKTeam(a.detail.topic.Vote, r.UserPKChoice); ok {
+					a.pkTeamTagView(c, tag)
+				}
+			}
 			// 楼层号放在这一行的最右侧：它是每层楼的标识，靠边排列不会把
 			// 作者与时间挤散，长昵称也不会和它抢位置。只有顶层评论才有
 			// floor；楼中楼服务端给的是 null，不能拿 flat_floor 当楼层号，
@@ -2015,11 +2184,16 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 			if a.detail != nil {
 				at = replyIndexByID(a.detail.display, quoteID)
 			}
+			// 浅色主题里引用行铺一层 #F6F8FA，与白色评论区面板区分；文字
+			// 仍和评论正文左对齐（左右 padding 留 0，见 parentJump）。
 			if at >= 0 {
 				// 父评论还在已加载的列表里：点一下跳过去并高亮它。
 				a.parentJump(c, label, quoteID, at)
 			} else {
-				ui.Text(c, label).FontSize(metaFontSize).TextColor(t.TextMuted).MaxLines(2)
+				ui.Column(c).Padding(4, 8, 4, 0).Radius(tk.BorderRadius).
+					Background(commentHelperBlockBg(t)).Children(func() {
+					ui.Text(c, label).FontSize(metaFontSize).TextColor(t.TextMuted).MaxLines(2)
+				})
 			}
 		}
 		content := r.Content
@@ -2029,7 +2203,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 		if strings.TrimSpace(content) == "" {
 			content = "（无内容）"
 		}
-		a.commentText(c, content, mergeEmojiMaps(a.emojis, r.Emojis))
+		a.commentText(c, content, r.ID, mergeEmojiMaps(a.emojis, r.Emojis))
 		// 评论底部固定一行：左边是这条评论拿到的表态 / 打赏汇总，右边是
 		// 「回复」与表态、打赏两个图标入口。这一行始终占位，悬浮或出现气泡
 		// 都不会改变评论高度。
@@ -2276,10 +2450,13 @@ func replyQuoteTarget(d *detailState, r replyItem) (replyItem, bool) {
 // 点一下滚到父评论并把高亮移到它身上，方便顺着对话往上读。
 func (a *app) parentJump(c *ui.Context, label, parentID string, at int) {
 	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// ButtonBase 默认把子元素居中；这条引用是正文的一部分，必须和下面的
 	// 评论正文左对齐。光靠 Column 的拉伸只会让按钮变宽，里面的文字仍然
-	// 居中，所以显式从行首开始排。
-	b := ui.ButtonBase(c).Padding(0, 0).Background(ui.Transparent).Justify(ui.Start)
+	// 居中，所以显式从行首开始排。左侧 padding 留 0，引用文字才不会相对
+	// 评论正文缩进；浅色主题铺一层 #F6F8FA 底色（深色保持透明）。
+	b := ui.ButtonBase(c).Padding(4, 8, 4, 0).Radius(tk.BorderRadius).
+		Background(commentHelperBlockBg(t)).Justify(ui.Start)
 	color := t.TextMuted
 	if b.Hovered() {
 		color = t.Accent
@@ -2344,8 +2521,10 @@ func (a *app) replyComposer(c *ui.Context, d *detailState) {
 	tk := lobetheme.TokensOf(c)
 	layout.Divider(c, layout.DividerProps{})
 	// 输入栏固定在评论卡片底部，不再为右下角的悬浮按钮让出宽度：刷新与
-	// 返回顶部已经收进右上角的悬浮工具条，这里只需要普通的内边距。
-	ui.Column(c).FillWidth().Padding(10, 14).Gap(4).Children(func() {
+	// 返回顶部已经收进右上角的悬浮工具条，这里只需要普通的内边距。折叠态
+	// 的内层输入框会补足高度，让整条和左栏正文互动栏齐平。
+	ui.Column(c).FillWidth().Padding(replyComposerPadY, 14).Gap(4).
+		Label("评论输入栏").Children(func() {
 		if d.replyTo.ID != "" {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				// 回复顶层评论时报楼层；回复楼中楼时它没有楼层，改用作者名。
@@ -2391,13 +2570,16 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	if !focused {
 		d.composerIdle = false // 失焦后再选中，重新展开
 	}
-	// 工具条、视图切换与两个面板都是输入框的一部分：点开它们、在面板里搜索
-	// 表情，都会让文本框失焦。只看焦点决定展开与否，输入框会在点下按钮的
-	// 那一帧缩回一行，刚打开的面板随之消失（评论列表重新占满、页面往下一沉）。
-	// 所以面板打开或切到预览时也保持展开，直到用户自己收起。
+	// 工具条、视图切换与图片面板都是输入框的一部分：点开它们会让文本框失焦。
+	// 只看焦点决定展开与否，输入框会在点下按钮的那一帧缩回一行，刚打开的内联
+	// 面板随之消失（评论列表重新占满、页面往下一沉）。表情、插入帖子与 Base64
+	// 编码是 Lobe Modal，但弹窗盖在页面上时仍保留输入框的展开态，关窗后接着写。
+	// base64Open 必须算进来：Modal 会把焦点从输入框挪走，少这一条会让输入框
+	// 当场缩回、editorPanels 不再构建 Modal，Modal 又随之关闭，来回闪动。
 	expanded := d.replyTo.ID != "" || strings.TrimSpace(d.draft) != "" ||
 		(focused && !d.composerIdle) ||
-		d.emojiOpen || d.imageOpen || d.preview == 1
+		d.emojiOpen || d.imageOpen || d.mdEditor.topicOpen || d.mdEditor.base64Open ||
+		d.preview == 1
 	// 折叠态的输入框是评论区底部的「入口」，不是一块空白的白板：上下留白
 	// 比展开态略收一点，整条撑满卡片宽度，鼠标移上去底色提亮一档，暗示点
 	// 一下就能写。
@@ -2412,6 +2594,11 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	expanded = expanded || strings.TrimSpace(d.draft) != ""
 	if expanded {
 		box = box.FillWidth()
+	} else {
+		// 折叠态是评论区底部的固定条带：外层 replyComposer 已经占了 1px
+		// 分隔线和上下各 replyComposerPadY 的留白，这里补到和左栏正文
+		// 互动栏同一高度，两栏底边才齐平。展开后交回内容自己撑高。
+		box = box.Height(detailBottomBarHeight - 1 - 2*replyComposerPadY)
 	}
 	// 三种状态各自说一件事：拖进图片用强调色，编辑中用强调色描边，折叠态
 	// 只在悬浮时提亮底色（不抢焦点环的颜色）。展开后是正在写字的地方，
@@ -2447,7 +2634,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				a.editorIconToggle(c, d.preview == 1, eyeIcon, "预览", "预览模式",
 					func() { d.preview = 1 })
 				ui.Spacer(c).Grow(1)
-				a.editorPanelButtons(c, &d.mdEditor, "插入表情", "插入图片")
+				a.editorPanelButtons(c, &d.mdEditor, &d.draft, a.replyCommunityEmojis(d), "插入表情", "插入图片")
 				// 独立窗口：把草稿搬到一个单独的 mygo 窗口里写，页面留在
 				// 帖子上，一边看正文一边写回复；文字一直留在 d.draft 里，
 				// 收回来时原样接着写（见 reply_window.go）。
@@ -2470,7 +2657,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				a.replyCommunityEmojis(d))
 			if d.preview == 1 {
 				a.editorPreviewView(c, d.draft, a.replyEmojis(d),
-					a.commentMd, replyPreviewFit(d.draft))
+					a.commentMdOptions(c), replyPreviewFit(d.draft))
 			}
 			// 评论费用状态栏：字数、预计发评金币、可省金币的徽章与「走个面」
 			// 活跃度开关。它和工具条一样带 KeepFocus，按上面的按钮不会让输入框
@@ -2504,6 +2691,8 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 			area.Padding(pad, padX+replySendFloatReserve, pad, padX)
 			// @ 候选面板在插入符处展开，没有工具栏入口（见 mentions_ui.go）。
 			a.mentionPopover(c, d, replySurfaceDetail, padX, pad)
+			// 键入 ":" 时同样的位置弹出社区表情短码候选（见 emoji_shortcode_ui.go）。
+			a.emojiShortcodePopover(c, d, replySurfaceDetail, padX, pad)
 		})
 		// 发送 / 登录后评论浮在右下角：不参与上面那一行的排版，评论框因此
 		// 不再被发送按钮切掉右侧一截。Absolute 按父节点（评论框）的边框内
@@ -2582,15 +2771,20 @@ func (a *app) replyTextArea(c *ui.Context, d *detailState, host replySurface, mo
 	// 自己的选区按到面板头上。
 	if d.composerField.Focused(c) {
 		a.syncMentionToken(d)
+		a.syncEmojiShortcodeToken(d)
 	}
-	// 键入 @ 时自动弹出候选：OnChange 在输入落到正文后、重建前运行，这里
-	// 的 element 仍有效，能读到真实光标位置。OnTextKey 则在帧间运行，只用
-	// 状态与 k.SetText 处理上下键 / 回车 / Escape（见 mentions_ui.go）。
+	// 键入 @ / : 时自动弹出候选：OnChange 在输入落到正文后、重建前运行，
+	// 这里的 element 仍有效，能读到真实光标位置。OnTextKey 则在帧间运行，
+	// 只用状态与 k.SetText 处理上下键 / 回车 / Escape 与整块删除
+	// （见 mentions_ui.go、emoji_shortcode_ui.go）。
 	area.OnChange(func() {
 		_, caret := area.TextSelection()
 		a.onMentionInput(d, host, caret)
+		a.onEmojiShortcodeInput(d, host, caret)
 	})
-	area.OnTextKey(func(k ui.TextKey) bool { return a.mentionTextKey(d, k) })
+	area.OnTextKey(func(k ui.TextKey) bool {
+		return a.emojiShortcodeTextKey(d, k) || a.mentionTextKey(d, k)
+	})
 	return area
 }
 
@@ -2858,9 +3052,6 @@ func (a *app) submitReply() {
 			}
 			d.replyTotal++
 			a.prefetchAvatars(created.Avatar)
-			// 评论会扣金币：扣的是真正发这条评论的账号，通知它自己的窗口刷新
-			//（临时借用别的账号时不能刷新成本窗口的余额，见 reply_identity.go）。
-			a.noteReplyCoins(identity)
 			if a.onReplyPosted != nil {
 				a.onReplyPosted(created, nil)
 			}

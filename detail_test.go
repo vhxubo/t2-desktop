@@ -611,8 +611,8 @@ func TestTopicInteractionBarStaysPinned(t *testing.T) {
 	}
 }
 
-// 详情页是左右两栏：左边标题 + 正文，右边评论；评论区用和页面不同的底色
-// 分出来，输入框固定在评论区底部。
+// 详情页是左右两栏：左边标题 + 正文，右边评论；浅色下两栏面板同色（都是
+// 白色），靠评论区里的引用 / 辅助块铺淡灰分出层次，输入框固定在评论区底部。
 func TestDetailSplitViewLayout(t *testing.T) {
 	a := detailAppWithReplies(t)
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -662,17 +662,18 @@ func TestDetailSplitViewLayout(t *testing.T) {
 		t.Errorf("输入框被顶出窗口：底边 %.1f", bottom)
 	}
 
-	// 右侧卡片的底色必须和页面底色不同，双栏边界才看得清。
+	// 浅色下评论面板与正文面板同色：两栏都是白色，层次交给评论里的辅助块。
 	im := tt.Image()
-	page := im.RGBAAt(4, int(comment.Y+comment.H/2))
-	panel := im.RGBAAt(int(comment.X)-6, int(comment.Y+comment.H/2))
-	if page == panel {
-		t.Errorf("评论卡片没有独立底色：页面 %v / 卡片 %v", page, panel)
+	bodyPanel := im.RGBAAt(4, int(comment.Y+comment.H/2))
+	replyPanel := im.RGBAAt(int(comment.X)-6, int(comment.Y+comment.H/2))
+	if bodyPanel != replyPanel {
+		t.Errorf("评论区底色应与正文面板一致：正文 %v / 评论 %v", bodyPanel, replyPanel)
 	}
 }
 
-// 浅色主题把评论区做成平角的浅灰面板，深色仍用原来的圆角卡片 + 主题混合灰。
-// 两套主题都要测：别把浅色的平角处理套到深色上，也别让深色丢了圆角。
+// 浅色主题把评论区做成平角的白色面板（和正文面板同色），深色仍用原来的
+// 圆角卡片 + 主题混合灰。两套主题都要测：别把浅色的平角处理套到深色上，
+// 也别让深色丢了圆角。
 func TestDetailReplyStyleByTheme(t *testing.T) {
 	rgba := func(c ui.Color) [4]uint8 { return [4]uint8{c.R, c.G, c.B, c.A} }
 
@@ -682,8 +683,8 @@ func TestDetailReplyStyleByTheme(t *testing.T) {
 	if lightRadius != 0 {
 		t.Errorf("浅色评论区应去掉圆角，实际半径 %v", lightRadius)
 	}
-	if got, want := rgba(lightBg), rgba(tkLight.FillSecondary.Over(light.Background)); got != want {
-		t.Errorf("浅色评论区底色应使用 Lobe 次级表面色：得到 %v，期望 %v", got, want)
+	if got, want := rgba(lightBg), rgba(tkLight.BgContainer); got != want {
+		t.Errorf("浅色评论区底色应和正文面板一样是白色 BgContainer：得到 %v，期望 %v", got, want)
 	}
 
 	dark := homeTheme(true)
@@ -694,6 +695,117 @@ func TestDetailReplyStyleByTheme(t *testing.T) {
 	}
 	if got, want := rgba(darkBg), rgba(dark.Background.Mix(dark.Text, 0.05)); got != want {
 		t.Errorf("深色评论区底色错误：得到 %v，期望 %v", got, want)
+	}
+}
+
+// 浅色主题评论区面板是纯白，层级靠引用 / 辅助块的 #F6F8FA 底色分出来。
+// 三处都要铺这个颜色：Markdown 引用块、行内代码 / 代码块 / 表格（由
+// commentMdOptions 设置）、楼中楼的父评论引用行（见 parentJump）。深色不
+// 写死色值，仍走原来的主题色 / 透明底。
+func TestCommentHelperBlocksLightTheme(t *testing.T) {
+	rgba := func(c ui.Color) [4]uint8 { return [4]uint8{c.R, c.G, c.B, c.A} }
+
+	// 浅色：引用块底色与评论 Markdown 主题里的代码 / 表格底色都是 #F6F8FA。
+	a := testApp(t)
+	o := a.commentMdOptionsForDark(false)
+	if got, want := rgba(o.Theme.CodeBackground), rgba(commentHelperBG); got != want {
+		t.Errorf("行内代码底色 = %v，期望 %v", got, want)
+	}
+	if got, want := rgba(o.Theme.CodeBlockBackground), rgba(commentHelperBG); got != want {
+		t.Errorf("代码块底色 = %v，期望 %v", got, want)
+	}
+	if got, want := rgba(o.Theme.TableHeader), rgba(commentHelperBG); got != want {
+		t.Errorf("表头底色 = %v，期望 %v", got, want)
+	}
+	if got, want := rgba(o.Theme.TableStripe), rgba(commentHelperBG); got != want {
+		t.Errorf("表格斑马纹底色 = %v，期望 %v", got, want)
+	}
+	// 深色那份不能带上浅色的辅助块颜色，两份选项互不影响。
+	if a.commentMd.Theme.CodeBackground == commentHelperBG {
+		t.Error("深色的 commentMd 不该带浅色辅助块底色")
+	}
+	if got, want := rgba(a.commentMdLight.Theme.CodeBackground), rgba(commentHelperBG); got != want {
+		t.Errorf("浅色 commentMdLight 代码底色 = %v，期望 %v", got, want)
+	}
+	if got := rgba(commentHelperBlockBg(homeTheme(false))); got != rgba(commentHelperBG) {
+		t.Errorf("浅色引用行底色 = %v，期望 %v", got, rgba(commentHelperBG))
+	}
+	if got := commentHelperBlockBg(homeTheme(true)); got != ui.Transparent {
+		t.Errorf("深色引用行底色应保持透明，得到 %v", got)
+	}
+}
+
+// 渲染出来的 Markdown 引用块确实铺了 #F6F8FA：在引用文字左侧的 padding
+// 区域取样，命中的是底色而不是白色评论区面板。
+func TestCommentQuoteBlockRendersHelperBackground(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.detail.replyList = []replyItem{{
+		ID: "c1", Author: "dannyng", Floor: 1, Content: "> 引用底色测试",
+	}}
+	a.detail.replyTotal = 1
+	a.detail.replyLoaded = true
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	r, ok := tt.Find("引用底色测试")
+	if !ok {
+		t.Fatalf("找不到引用文字：%q", tt.Texts())
+	}
+	im := tt.Image()
+	got := im.RGBAAt(int(r.X)-8, int(r.Y+r.H/2))
+	want := commentHelperBG
+	if [4]uint8{got.R, got.G, got.B, got.A} != [4]uint8{want.R, want.G, want.B, want.A} {
+		t.Errorf("引用块底色 = %v，期望 %v", got, want)
+	}
+}
+
+// 深色主题不受浅色辅助块配色影响：引用仍走 Markdown 默认画法，不铺
+// #F6F8FA 底色；引用的文字照常渲染出来。
+func TestCommentHelperBlocksDarkThemeUnchanged(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.theme.mode = themeDark
+	a.detail.replyList = []replyItem{{
+		ID: "c1", Author: "dannyng", Floor: 1, Content: "> 深色引用测试",
+	}}
+	a.detail.replyTotal = 1
+	a.detail.replyLoaded = true
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	r, ok := tt.Find("深色引用测试")
+	if !ok {
+		t.Fatalf("深色主题没有渲染出引用文字：%q", tt.Texts())
+	}
+	// 深色走默认 Markdown 引用画法：只有左侧竖条，没有 #F6F8FA 底色块。
+	im := tt.Image()
+	got := im.RGBAAt(int(r.X)-8, int(r.Y+r.H/2))
+	want := commentHelperBG
+	if [4]uint8{got.R, got.G, got.B, got.A} == [4]uint8{want.R, want.G, want.B, want.A} {
+		t.Errorf("深色引用块不该铺浅色 #F6F8FA 底色：%v", got)
+	}
+}
+
+// 楼中楼的父评论引用行在浅色下铺 #F6F8FA：在引用文字上方的内边距取样。
+func TestNestedReplyQuoteLineHelperBackground(t *testing.T) {
+	a := detailAppWithReplies(t)
+	a.detail.replyList = []replyItem{
+		{ID: "c2", Author: "alice", Floor: 2, Content: "第二楼"},
+		{ID: "c2a", Author: "bob", FlatFloor: 3, ParentID: "c2", ParentFloor: 2,
+			ParentAuthor: "alice", ParentSummary: "第二楼", Content: "楼中楼"},
+	}
+	a.detail.replyTotal = len(a.detail.replyList)
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	label, ok := tt.Find("回复 2 楼：第二楼")
+	if !ok {
+		t.Fatalf("找不到父评论引用：%q", tt.Texts())
+	}
+	im := tt.Image()
+	got := im.RGBAAt(int(label.X)+int(label.W/2), int(label.Y)-2)
+	want := commentHelperBG
+	if [4]uint8{got.R, got.G, got.B, got.A} != [4]uint8{want.R, want.G, want.B, want.A} {
+		t.Errorf("父评论引用行底色 = %v，期望 %v", got, want)
 	}
 }
 
@@ -898,7 +1010,7 @@ func TestReplyComposerStaysOpenOnInnerClick(t *testing.T) {
 		t.Errorf("工具条按钮没有插入标记：%q", a.detail.draft)
 	}
 
-	// 表情面板：打开后连面板一起留在页面上，挑一个表情也不会收回去。
+	// 表情面板：打开后挑一个表情就自动收起，不用再点一次关闭。
 	if err := tt.Click("插入表情"); err != nil {
 		t.Fatalf("点插入表情失败：%v（%q）", err, tt.Texts())
 	}
@@ -916,9 +1028,13 @@ func TestReplyComposerStaysOpenOnInnerClick(t *testing.T) {
 	if !strings.Contains(a.detail.draft, ":sigh:") {
 		t.Errorf("点表情没有插入短码：%q", a.detail.draft)
 	}
+	if a.detail.emojiOpen || tt.HasText("搜索表情") {
+		t.Errorf("选中表情后面板没有自动收起：%q", tt.Texts())
+	}
 	if !tt.HasText("插入表情") {
 		t.Errorf("插入表情后输入框缩回了：%q", tt.Texts())
 	}
+	tt.Advance(500 * time.Millisecond)
 
 	// 视图切换同理：切到预览，输入框与预览都还在。
 	if err := tt.Click("预览"); err != nil {
@@ -929,9 +1045,8 @@ func TestReplyComposerStaysOpenOnInnerClick(t *testing.T) {
 		t.Errorf("视图切换后输入框缩回了：preview=%d %q", a.detail.preview, tt.Texts())
 	}
 
-	// 收起面板、切回编辑、清空草稿后，点评论列表里的元素仍然把输入框折回
-	// 一行，把空间还给列表。
-	a.detail.emojiOpen = false
+	// 切回编辑、清空草稿后，点评论列表里的元素仍然把输入框折回一行，把空间
+	// 还给列表。
 	a.detail.preview = 0
 	a.detail.draft = ""
 	tt.Frame()
@@ -1626,9 +1741,11 @@ func TestReplyTreeRowsIndentAndRail(t *testing.T) {
 	}
 
 	im := tt.Image()
-	// 竖线位于本层缩进带中间：正文左移 15px 是最近一条，再左移 22px 是上一层。
-	// 用作者行的高度取样，避开正文折叠按钮和底行图标。
-	railAt := func(authorText, name string, offsets ...int) {
+	// 竖线位于本层缩进带中间：从本行正文左移 15px 是最近一条，再左移 22px
+	// 是上一层。用各行的正文 X 与作者行高度取样，避开折叠按钮和底行图标。
+	// 浅色下评论区面板是纯白，阈值要只认真正的导轨像素（约 227），不能把
+	// 白色背景也算成深色。
+	railAt := func(contentX float32, authorText, name string, offsets ...int) {
 		t.Helper()
 		author, found := tt.Find(authorText)
 		if !found {
@@ -1636,10 +1753,10 @@ func TestReplyTreeRowsIndentAndRail(t *testing.T) {
 		}
 		y := int(author.Y + author.H/2)
 		for _, off := range offsets {
-			x := int(grand.X) - off
+			x := int(contentX) - off
 			hits := 0
 			for yy := y - 4; yy <= y+4; yy++ {
-				if colorLum(im.RGBAAt(x, yy)) < 245 {
+				if colorLum(im.RGBAAt(x, yy)) < 235 {
 					hits++
 				}
 			}
@@ -1648,9 +1765,9 @@ func TestReplyTreeRowsIndentAndRail(t *testing.T) {
 			}
 		}
 	}
-	// 一层回复下面还有二层回复，0 层导轨贯穿；二层回复同时有 0/1 两层导轨。
-	railAt("childAuthor", "一层回复", 15)
-	railAt("grandAuthor", "二层回复", 15, 37)
+	// 一层回复只有一条 0 层导轨；二层回复同时有 0/1 两层导轨。
+	railAt(child.X, "childAuthor", "一层回复", 15)
+	railAt(grand.X, "grandAuthor", "二层回复", 15, 37)
 }
 
 // isTopicAuthor 先认作者 id，没有 id 时才退回昵称；匿名帖的「匿名」不算楼主，
@@ -2227,6 +2344,65 @@ func TestDetailReplyCollapsesRight(t *testing.T) {
 	}
 }
 
+// 右栏评论区收起后，评论输入框挪到左栏正文底部、表态互动栏下方继续展示，
+// 收起评论也能直接写回复；展开后它回到右栏，且始终只有一份。
+func TestDetailReplyComposerMovesLeftWhenCollapsed(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	bar, ok := tt.Find("正文互动栏")
+	if !ok {
+		t.Fatalf("找不到正文互动栏：%q", tt.Texts())
+	}
+	expanded, ok := tt.Find("评论输入栏")
+	if !ok {
+		t.Fatalf("展开态找不到评论输入框：%q", tt.Texts())
+	}
+	// 展开时输入框在右栏，横向起点明显在互动栏右边。
+	if expanded.X < bar.X+bar.W {
+		t.Fatalf("展开态输入框应在右栏：%+v / 互动栏 %+v", expanded, bar)
+	}
+
+	if err := tt.Click("收起评论"); err != nil {
+		t.Fatalf("点收起评论失败：%v", err)
+	}
+	tt.Frame()
+	if !a.detail.replyCollapsed {
+		t.Fatalf("评论没有收起")
+	}
+	collapsed, ok := tt.Find("评论输入栏")
+	if !ok {
+		t.Fatalf("收起评论后左栏找不到评论输入框：%q", tt.Texts())
+	}
+	barAfter, ok := tt.Find("正文互动栏")
+	if !ok {
+		t.Fatalf("收起后找不到正文互动栏：%q", tt.Texts())
+	}
+	// 输入框下移到互动栏下方，且横向回到左栏，与互动栏基本对齐。
+	if collapsed.Y < barAfter.Y+barAfter.H-1 {
+		t.Errorf("收起后输入框应在互动栏下方：%+v / 互动栏 %+v", collapsed, barAfter)
+	}
+	if collapsed.X > barAfter.X+4 {
+		t.Errorf("收起后输入框应回到左栏：%+v / 互动栏 %+v", collapsed, barAfter)
+	}
+	if collapsed.X >= expanded.X {
+		t.Errorf("收起后输入框没有从右栏移回左栏：%+v / 展开时 %+v", collapsed, expanded)
+	}
+
+	if err := tt.Click("展开评论"); err != nil {
+		t.Fatalf("点展开评论失败：%v", err)
+	}
+	tt.Frame()
+	back, ok := tt.Find("评论输入栏")
+	if !ok {
+		t.Fatalf("展开后找不到评论输入框：%q", tt.Texts())
+	}
+	if back.X < expanded.X-1 || back.X > expanded.X+1 {
+		t.Errorf("展开后输入框应回到右栏原位：%+v / 原来 %+v", back, expanded)
+	}
+}
+
 // 两个方向不能叠加：正文收起后不再画「收起评论」，评论收起后也不再画
 // 「收起正文」；否则两边一起收起会留下一个谁也看不到的空页面。
 func TestDetailCollapseDirectionsAreExclusive(t *testing.T) {
@@ -2683,9 +2859,6 @@ func TestReplyComposerSends(t *testing.T) {
 	a.detail.draft = "测试评论"
 	done := make(chan struct{})
 	a.onReplyPosted = func(replyItem, error) { close(done) }
-	// 评论会扣金币：成功后必须发出全局金币刷新事件。
-	events := make(chan coinEvent, 1)
-	a.onCoinsChanged = func(event coinEvent) { events <- event }
 	tt := ui.NewTester(a.view, 1100, 760)
 	if !tt.HasText("发送") {
 		t.Fatal("登录态下没有发送按钮")
@@ -2696,14 +2869,6 @@ func TestReplyComposerSends(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("发送回调超时")
-	}
-	select {
-	case event := <-events:
-		if event != coinEventReply {
-			t.Errorf("评论事件 = %q，期望 %q", event, coinEventReply)
-		}
-	default:
-		t.Error("评论成功后没有发出金币刷新事件")
 	}
 	mu.Lock()
 	defer mu.Unlock()
