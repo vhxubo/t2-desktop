@@ -372,6 +372,10 @@ type app struct {
 	// 只弹一次；claim 成功后把 disclaimerOpen 置位，由 dialogs 画出来。
 	disclaimer     *disclaimerStore
 	disclaimerOpen bool
+	// aboutDisclaimerOpen 是「关于」窗口里重看声明弹窗的开合（见
+	// disclaimer_ui.go）。与 disclaimerOpen 分开：重看只读、不写 seen，
+	// 也不会让主窗口跟着画一遍。只在主线程读写。
+	aboutDisclaimerOpen bool
 	// closePromptOpen / closeRemember 是关闭提示弹窗的状态：是否正在询问
 	// 「只关窗口 / 收进托盘 / 退出应用」，以及这次要不要记住选择。只在主线程读写。
 	closePromptOpen bool

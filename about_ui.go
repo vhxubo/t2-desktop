@@ -131,6 +131,8 @@ func (a *app) aboutWindowView(c *ui.Context) {
 		})
 		list.Grow(1).MinHeight(0)
 	})
+	// 重看声明的弹窗叠在内容之上，和主窗口的全局弹窗同一套画法。
+	a.aboutDisclaimerDialog(c)
 }
 
 // aboutHero 是品牌卡片：应用头像、名称与定位，以及版本和检查更新入口。
@@ -166,6 +168,18 @@ func (a *app) aboutHero(c *ui.Context) {
 					Variant: action.Primary, Size: lobetheme.Small,
 				}).Clicked() {
 					a.checkForUpdates()
+				}
+			})
+			// 第三方声明放在卡片顶部、不用滚动就能看到；弹窗只在这个窗口里画，
+			// 不动 seen（见 disclaimer_ui.go 的 aboutDisclaimerDialog）。
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				display.Text(c, "第三方声明", display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 1,
+				}).Grow(1).MinWidth(0)
+				if action.Button(c, "重看声明", action.ButtonProps{
+					Size: lobetheme.Small,
+				}).Clicked() {
+					a.aboutDisclaimerOpen = true
 				}
 			})
 			// 上一次检查若发现有新版本，这里提示一下，点「检查更新」看详情。
