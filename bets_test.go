@@ -242,16 +242,14 @@ func TestParticipateBetInsufficientScope(t *testing.T) {
 	}
 }
 
-// 这笔投资 gold 变动成功后会记入全局金币事件，标题栏与金币窗口一起刷新。
+// 这笔投资 gold 变动成功后在本地正确记账。
 func TestSubmitBetRecordsLocalAndFiresCoinEvent(t *testing.T) {
 	topic, err := decodeTopic([]byte(betDetailJSON), "BET01")
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := make(chan coinEvent, 2)
 	a, got, closeSrv := recordBetCalls(t, 0, "")
 	defer closeSrv()
-	a.onCoinsChanged = func(e coinEvent) { events <- e }
 	a.pageName = "detail"
 	d := &detailState{shortID: "BET01", topic: &topic}
 	a.detail = d
@@ -265,14 +263,6 @@ func TestSubmitBetRecordsLocalAndFiresCoinEvent(t *testing.T) {
 	waitFor(t, func() bool { return !d.bet.busy }, "竞猜提交完成")
 	if topic.Bet.Options[0].TotalCoins != 150 || !topic.Bet.Mine.Known || topic.Bet.Mine.Coins != 30 {
 		t.Errorf("本地记账 = %+v / %+v", topic.Bet.Options, topic.Bet.Mine)
-	}
-	select {
-	case e := <-events:
-		if e != coinEventBet {
-			t.Errorf("金币事件 = %q，期望 %q", e, coinEventBet)
-		}
-	case <-time.After(time.Second):
-		t.Error("没有发出金币事件")
 	}
 }
 

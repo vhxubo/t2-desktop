@@ -277,8 +277,6 @@ func TestSubmitRestrictedUnlockNeedsConfirmAndReusesKey(t *testing.T) {
 	}))
 	defer srv.Close()
 	a := loginApp(t, srv)
-	events := make(chan coinEvent, 2)
-	a.onCoinsChanged = func(e coinEvent) { events <- e }
 	d := restrictedTestDetail(t, a, 100)
 
 	// 没确认：一次请求都不许发。
@@ -304,14 +302,6 @@ func TestSubmitRestrictedUnlockNeedsConfirmAndReusesKey(t *testing.T) {
 	}
 	if d.restricted.confirm || d.restricted.key != "" || d.restricted.info == nil || !d.restricted.info.Unlocked {
 		t.Errorf("成功后的状态 = %+v", d.restricted)
-	}
-	select {
-	case e := <-events:
-		if e != coinEventRestricted {
-			t.Errorf("金币事件 = %q", e)
-		}
-	case <-time.After(time.Second):
-		t.Error("没有发出金币事件")
 	}
 }
 

@@ -52,12 +52,12 @@ type favoriteState struct {
 	gen       uint64
 }
 
-// reactionState 是互动区的界面状态。表态、打赏、明细各用一个贴着入口的
-// 气泡（不是居中弹窗），所以每个气泡只记「开没开、对着谁」：
+// reactionState 是互动区的界面状态。表情与明细是贴着入口的 Lobe 气泡，打赏是
+// 盖在整页上的 Modal；三者都只记「开没开、对着谁」：
 //
-//	reactOpen / reactFor   表态气泡（笑脸图标）
-//	rewardOpen / rewardFor 打赏气泡（金币图标）
-//	detailsOpen / detailsFor 表态明细气泡（点摘要胶囊）
+//	reactOpen / reactFor     表情气泡（笑脸图标）
+//	rewardOpen / rewardFor   打赏弹窗（金币图标）
+//	detailsOpen / detailsFor 表情明细气泡（点摘要胶囊）
 //
 // amount 是打赏金额草稿（1～500）。rewardKey / rewardSig 是打赏的幂等键与它
 // 对应的请求签名：同一笔打赏重试（网络超时、授权后重放）必须用同一个键，
@@ -466,8 +466,8 @@ func (a *app) invalidateFavorites() {
    表态
 -------------------------------------------------------------- */
 
-// openReactionPopup 打开表态气泡。点笑脸入口时走 prepareReactionPopup，让
-// Lobe 的 Popover 自己切换锚点；这里供登录回调与显式打开用，直接把气泡打开。
+// openReactionPopup 打开表情气泡。点笑脸入口时走 prepareReactionPopup 切换
+// 目标；这里供登录回调与显式打开用，直接把气泡打开。
 func (a *app) openReactionPopup(d *detailState, target string) {
 	if d == nil || !a.detailLive(d) {
 		return
@@ -484,15 +484,15 @@ func (a *app) openReactionPopup(d *detailState, target string) {
 	d.react.reactOpen = true
 }
 
-// prepareReactionPopup 把表态目标设为 target，并关掉同屏的其它气泡。
+// prepareReactionPopup 把表态目标设为 target，并关掉同屏的其它弹层。
 func (a *app) prepareReactionPopup(d *detailState, target string) {
 	d.react.rewardOpen = false
 	d.react.detailsOpen = false
 	d.react.reactFor = target
 }
 
-// openRewardPopup 打开打赏气泡（金币入口）。点金币入口时走 prepareRewardPopup
-// 让 Lobe Popover 切换；这里供登录回调与显式打开用。
+// openRewardPopup 打开打赏弹窗（金币入口）。点金币入口时走 prepareRewardPopup
+// 切换目标；这里供登录回调与显式打开用。
 func (a *app) openRewardPopup(d *detailState, target string) {
 	if d == nil || !a.detailLive(d) {
 		return
@@ -509,7 +509,7 @@ func (a *app) openRewardPopup(d *detailState, target string) {
 	d.react.rewardOpen = true
 }
 
-// prepareRewardPopup 记下打赏目标、排掉别的气泡，并把金额与错误复位。
+// prepareRewardPopup 记下打赏目标、排掉别的弹层，并把金额与错误复位。
 func (a *app) prepareRewardPopup(d *detailState, target string) {
 	d.react.reactOpen = false
 	d.react.detailsOpen = false
@@ -520,8 +520,8 @@ func (a *app) prepareRewardPopup(d *detailState, target string) {
 	}
 }
 
-// openReactionDetails 打开表态明细气泡（点摘要胶囊）。明细只读展示也能看，
-// 不要求登录。点胶囊时走 prepareReactionDetails，开合交给 Lobe Popover。
+// openReactionDetails 打开表情明细气泡（点摘要胶囊）。明细只读展示也能看，
+// 不要求登录。点胶囊时走 prepareReactionDetails 切换目标。
 func (a *app) openReactionDetails(d *detailState, target string) {
 	if d == nil || !a.detailLive(d) {
 		return
@@ -530,7 +530,7 @@ func (a *app) openReactionDetails(d *detailState, target string) {
 	d.react.detailsOpen = true
 }
 
-// prepareReactionDetails 记下明细目标并排掉别的气泡，开合交给 Lobe Popover。
+// prepareReactionDetails 记下明细目标并排掉别的弹层。
 func (a *app) prepareReactionDetails(d *detailState, target string) {
 	d.react.reactOpen = false
 	d.react.rewardOpen = false
@@ -573,7 +573,7 @@ func (a *app) canRewardOn(d *detailState, target string) bool {
 	return ok && !a.isOwnReply(r) && r.AuthorID != "" && d.shortID != ""
 }
 
-// reactionEmojisOf 是表态气泡里的表情：节点推荐 + 已有的聚合表情（保证已经
+// reactionEmojisOf 是表态弹层里的表情：节点推荐 + 已有的聚合表情（保证已经
 // 表过的表情还能取消），去重并截断。
 func reactionEmojisOf(d *detailState, target string) []string {
 	if d == nil || d.topic == nil {
@@ -666,9 +666,6 @@ func (a *app) toggleReaction(d *detailState, target, emoji string) {
 			} else {
 				a.toast(a.detailToastFor(d), "已取消表情 "+emoji)
 			}
-			// 表态会改变金币：发送表情扣币，撤销也可能有返还。统一走全局
-			// 金币刷新事件，标题栏与金币窗口一起跟上。
-			a.coinsChanged(coinEventReaction)
 			a.notifyInteractDone(nil)
 		})
 	}()
@@ -797,7 +794,10 @@ func (a *app) topicInteractionBar(c *ui.Context, d *detailState) {
 		return
 	}
 	layout.Divider(c, layout.DividerProps{})
-	ui.Column(c).FillWidth().Padding(12, 20).Children(func() {
+	// 整条和右栏折叠态的评论输入框等高：外层分隔线 1px，这里吃满剩下的
+	// 高度，图标在中间垂直居中，两栏底边因此落在同一条线上。
+	ui.Column(c).FillWidth().Height(detailBottomBarHeight-1).
+		Padding(10, 20).Label("正文互动栏").Children(func() {
 		a.topicInteractionRow(c, d)
 	})
 }
@@ -831,7 +831,7 @@ func (a *app) reactionSummaryInfo(c *ui.Context, d *detailState, target string, 
 					box.MarginStart(-reactionStackOverlap)
 				}
 				box.Children(func() {
-					ui.Text(c, emoji).FontSize(11).SingleLine()
+					ui.Text(c, emoji).FontSize(12).SingleLine()
 				})
 			}
 			ui.Textf(c, "%d", total).FontSize(metaSmallFontSize).TextColor(t.TextMuted)
@@ -858,7 +858,7 @@ func (a *app) reactionSummaryInfo(c *ui.Context, d *detailState, target string, 
 // 表情摘要里那一摞圆片的尺寸：叠放三个也不会比一个数字宽太多。
 const (
 	reactionStackMax     = 3
-	reactionStackSize    = 17
+	reactionStackSize    = 18
 	reactionStackOverlap = 6
 )
 
@@ -875,8 +875,9 @@ type interactEntryStyle struct {
 var (
 	// interactEntryCompact 是评论底行的尺寸，和评论正文同一档。
 	interactEntryCompact = interactEntryStyle{box: 20, icon: 14, radius: 6}
-	// interactEntryComfy 是正文互动栏的尺寸：比汇总胶囊略高，点起来不费劲。
-	interactEntryComfy = interactEntryStyle{box: 28, icon: 18, radius: 7}
+	// interactEntryComfy 是正文互动栏的尺寸：表情与打赏入口在主帖底部是
+	// 一眼就能找到的主操作，画得比评论底行明显大一档。
+	interactEntryComfy = interactEntryStyle{box: 36, icon: 22, radius: 9}
 )
 
 // reactionEntries 画右侧两个图标入口（表态 / 打赏）；两个都不可用时什么
@@ -931,8 +932,8 @@ func reactionSummaryTip(stats []reactionStat) string {
 	return strings.Join(parts, " ")
 }
 
-// reactionEntry 是表态入口：一个笑脸图标，点开贴着它的气泡选表情。图标比
-// 文字入口更紧凑，也不会把右侧挤成一条长标签。
+// reactionEntry 是表情入口：一个笑脸图标，点开贴着它的 Lobe Popover 选表情。
+// 图标比文字入口更紧凑，也不会把右侧挤成一条长标签。
 func (a *app) reactionEntry(c *ui.Context, d *detailState, target string, style interactEntryStyle) {
 	t := c.Theme()
 	active := d.react.reactOpen && d.react.reactFor == target
@@ -978,7 +979,8 @@ func (a *app) reactionEntry(c *ui.Context, d *detailState, target string, style 
 	}
 }
 
-// rewardEntry 是打赏入口：一个金币图标，点开贴着它的气泡填金额。
+// rewardEntry 是打赏入口：一个金币图标，点开 Lobe Modal 填金额。弹窗本身挂在
+// detailContent 上（见 rewardDialog），这里只负责挑目标、做登录检查并把开关打开。
 func (a *app) rewardEntry(c *ui.Context, d *detailState, target string, style interactEntryStyle) {
 	t := c.Theme()
 	active := d.react.rewardOpen && d.react.rewardFor == target
@@ -1000,13 +1002,6 @@ func (a *app) rewardEntry(c *ui.Context, d *detailState, target string, style in
 		ui.Icon(c, rewardIcon).Size(style.icon, style.icon).TextColor(ink)
 	})
 	b.Label("打赏").Tooltip("打赏作者金币")
-	if !d.react.rewardOpen || d.react.rewardFor == target {
-		lobeoverlay.Popover(c, b, &d.react.rewardOpen, lobeoverlay.PopoverProps{
-			Placement: lobeoverlay.Bottom,
-		}, func() {
-			a.rewardPanel(c, d, target)
-		})
-	}
 	if b.Clicked() {
 		if !a.auth.loggedIn() {
 			d.react.rewardOpen = false
@@ -1018,14 +1013,31 @@ func (a *app) rewardEntry(c *ui.Context, d *detailState, target string, style in
 			return
 		}
 		a.prepareRewardPopup(d, target)
+		d.react.rewardOpen = true
 	}
 }
 
+// rewardDialog 是打赏弹窗：点金币入口后盖在整页上，填金额或点常用金额，确认后
+// 才扣币。它走 Lobe 的 Modal，标题栏与 Esc / 点窗外关闭由 Modal 提供。
+func (a *app) rewardDialog(c *ui.Context, d *detailState) {
+	if !d.react.rewardOpen {
+		return
+	}
+	target := d.react.rewardFor
+	feedback.Modal(c, &d.react.rewardOpen, feedback.ModalProps{
+		Title:    "打赏金币",
+		Width:    380,
+		NoFooter: true,
+	}, func() {
+		a.rewardPanel(c, d, target)
+	})
+}
+
 /* ------------------------------------------------------------------
-   气泡内容：表态 / 打赏 / 明细
+   弹层内容：表情 / 打赏 / 明细
 -------------------------------------------------------------- */
 
-// reactionPanel 是笑脸气泡里的内容：节点推荐表情。点一个就提交并收起气泡。
+// reactionPanel 是表情气泡里的内容：节点推荐表情。点一个就提交并收起气泡。
 func (a *app) reactionPanel(c *ui.Context, d *detailState, target string) {
 	t := c.Theme()
 	ui.Column(c).Width(230).Gap(8).Children(func() {
@@ -1061,16 +1073,15 @@ func (a *app) reactionPanel(c *ui.Context, d *detailState, target string) {
 	})
 }
 
-// rewardPresetAmounts 是打赏气泡里的常用金额：打赏多数是整数，手打一串数字
+// rewardPresetAmounts 是打赏弹层里的常用金额：打赏多数是整数，手打一串数字
 // 容易点错，点一下芯片就填进输入框。上限是 500，所以预设值到 500 为止。
 var rewardPresetAmounts = []int{100, 150, 200, 300, 350, 400, 500}
 
-// rewardPanel 是金币气泡里的内容：金额、常用金额、余额与确认按钮。金额由用户
+// rewardPanel 是打赏弹窗里的内容：金额、常用金额、余额与确认按钮。金额由用户
 // 填或点常用金额，按钮上写着具体数字，点下去才会扣币。
 func (a *app) rewardPanel(c *ui.Context, d *detailState, target string) {
 	t := c.Theme()
-	ui.Column(c).Width(288).Gap(8).Children(func() {
-		ui.Text(c, "打赏金币").FontSize(metaFontSize).TextColor(t.TextMuted)
+	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		if !a.auth.loggedIn() {
 			a.loginHint(c, "登录后才能打赏。")
 			return
@@ -1111,7 +1122,7 @@ func (a *app) rewardPanel(c *ui.Context, d *detailState, target string) {
 	})
 }
 
-// rewardAmountChip 是打赏气泡里的一枚常用金额：数字即金额，当前金额高亮，
+// rewardAmountChip 是打赏弹层里的一枚常用金额：数字即金额，当前金额高亮，
 // 点一下填进金额输入框。读屏名写成「常用金额 200 金币」，免得一串裸数字说不清
 // 是什么，也不会和下方「打赏 200 金币」的确认按钮撞名。
 func (a *app) rewardAmountChip(c *ui.Context, d *detailState, amount int) {
@@ -1168,8 +1179,8 @@ func (a *app) detailsPanel(c *ui.Context, d *detailState, target string) {
 	})
 }
 
-// loginHint 是气泡里的登录提示：未登录时用户已经点开了入口，就地给一个
-// 去登录的出口，不在弹窗里再套一层弹窗。owner 是气泡所在的窗口。
+// loginHint 是弹层里的登录提示：未登录时用户已经点开了入口，就地给一个
+// 去登录的出口，不在弹窗里再套一层弹窗。owner 是弹层所在的窗口。
 func (a *app) loginHintFor(c *ui.Context, owner toastTarget, message string) {
 	t := c.Theme()
 	ui.Text(c, message).FontSize(12).TextColor(t.TextMuted).MaxLines(2)
@@ -1178,7 +1189,7 @@ func (a *app) loginHintFor(c *ui.Context, owner toastTarget, message string) {
 	}
 }
 
-// loginHint 是主窗口气泡里的登录提示。
+// loginHint 是主窗口弹层里的登录提示。
 func (a *app) loginHint(c *ui.Context, message string) {
 	a.loginHintFor(c, a.detailToast(), message)
 }
@@ -1193,7 +1204,7 @@ func (a *app) rewardBadge(c *ui.Context, rewards rewardStat) {
 		Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center)
 	chip.Tooltip(rewardBadgeTip(rewards))
 	chip.Children(func() {
-		ui.Text(c, "💰").FontSize(11)
+		ui.Text(c, "💰").FontSize(12)
 		ui.Textf(c, "%d", rewards.Total).FontSize(metaSmallFontSize).TextColor(t.Warning)
 	})
 }
@@ -1314,12 +1325,9 @@ func (a *app) submitReward(d *detailState, target string) {
 			d.react.rewardSig = ""
 			a.applyReward(d, target, amount, actor)
 			a.toast(a.detailToastFor(d), fmt.Sprintf("已打赏 %d 金币", amount))
-			// 收起打赏气泡，让用户看到刚记上的总数。
+			// 收起打赏弹层，让用户看到刚记上的总数。
 			d.react.rewardOpen = false
 			d.react.rewardErr = ""
-			// 余额变了：标题栏与金币窗口共用同一份余额状态，走全局金币
-			// 刷新事件，已经加载过的流水、统计与排行也一起重拉。
-			a.coinsChanged(coinEventReward)
 			a.notifyInteractDone(nil)
 		})
 	}()

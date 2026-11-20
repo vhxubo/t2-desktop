@@ -270,13 +270,14 @@ func (c *Client) participateBet(ctx context.Context, key, shortID, optionID stri
 // 进度；key/sig 是这笔投注的幂等键与签名，内容不变就复用。gen/loadGen 丢弃
 // 切帖子之前在途的迟到结果。
 type betUIState struct {
-	busy     bool
-	gen      uint64
-	key      string
-	sig      string
-	selected string
-	amount   float64
-	panelFor string
+	busy      bool
+	gen       uint64
+	key       string
+	sig       string
+	selected  string
+	amount    float64
+	panelFor  string
+	panelOpen bool // Lobe Modal 的开合标志，由 panelFor 指定投注的选项
 
 	info    *betInfo
 	loading bool
@@ -301,9 +302,10 @@ func syncBets(d *detailState, t topicDetail) {
 	}
 	d.bet.panelFor = ""
 	d.bet.selected = ""
+	d.bet.panelOpen = false
 }
 
-// openBetPanel 打开 / 收起某个选项的投注面板。金额给一个默认值，避免用户
+// openBetPanel 打开 / 收起某个选项的投注弹窗。金额给一个默认值，避免用户
 // 一进来就是 0 再报错。
 func (a *app) openBetPanel(d *detailState, optionID string) {
 	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Bet == nil {
@@ -315,10 +317,12 @@ func (a *app) openBetPanel(d *detailState, optionID string) {
 	if d.bet.panelFor == optionID {
 		d.bet.panelFor = ""
 		d.bet.selected = ""
+		d.bet.panelOpen = false
 		return
 	}
 	d.bet.panelFor = optionID
 	d.bet.selected = optionID
+	d.bet.panelOpen = true
 	if d.bet.amount < betCoinsMin {
 		d.bet.amount = 10
 	}
@@ -377,7 +381,7 @@ func betDisplay(d *detailState) *betInfo {
 }
 
 // submitBet 提交一笔投注。结果一律用主窗口 toast 报告，面板里只留「正在
-// 参与」的进度。成功后本地把金额记进选项，刷新标题栏与金币窗口的余额。
+// 参与」的进度。成功后本地把金额记进选项。
 func (a *app) submitBet(d *detailState, optionID string) {
 	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Bet == nil || d.bet.busy {
 		return
@@ -446,10 +450,10 @@ func (a *app) submitBet(d *detailState, optionID string) {
 			d.bet.sig = ""
 			d.bet.panelFor = ""
 			d.bet.selected = ""
+			d.bet.panelOpen = false
 			d.bet.info = nil // 本地这份已过期，下次「我的参与」重新读
 			applyBet(d, optionID, coins, actor)
 			a.toast(a.detailToastFor(d), fmt.Sprintf("已投入 %d 金币", coins))
-			a.coinsChanged(coinEventBet)
 		})
 	}()
 }
@@ -477,7 +481,7 @@ func applyBet(d *detailState, optionID string, coins int, actor string) {
    竞猜块的界面
 -------------------------------------------------------------- */
 
-// betSection 画正文末尾的竞猜块：每个选项一行，显示累计投入，点开后在下方
+// betSection 画正文末尾的竞猜块：每个选项一行，显示累计投入，点开 Modal
 // 填金币数并确认。已结算时标出中奖选项、禁用参与；「我的参与」是一次用户
 // 主动发起的只读查询（见 loadBets）。
 func (a *app) betSection(c *ui.Context, d *detailState) {
@@ -518,9 +522,6 @@ func (a *app) betSection(c *ui.Context, d *detailState) {
 			if !closed && row.Clicked() {
 				a.openBetPanel(d, o.ID)
 			}
-			if d.bet.panelFor == o.ID && !closed {
-				a.betPanel(c, d, o)
-			}
 		}
 		// 我的参与 + 状态刷新：只有登录用户、且详情里确认有竞猜时才给入口。
 		if a.auth.loggedIn() {
@@ -533,11 +534,51 @@ func (a *app) betSection(c *ui.Context, d *detailState) {
 	})
 }
 
-// betPanel 是某个选项下方的投注面板：金额、余额与确认按钮，和打赏面板一样
-// 把「会扣币」说清楚。
+// betDialog 是竞猜投注弹窗：点某个选项后盖在整页上填金额并确认。标题带上所
+// 选选项，免得关掉面板后不知道投的是哪一项。它走 Lobe 的 Modal。
+func (a *app) betDialog(c *ui.Context, d *detailState) {
+	if d == nil || !d.bet.panelOpen || d.bet.panelFor == "" {
+		return
+	}
+	b := betDisplay(d)
+	if b == nil || betParticipationClosed(b) {
+		return
+	}
+	var target betOption
+	found := false
+	for _, o := range b.Options {
+		if o.ID == d.bet.panelFor {
+			target, found = o, true
+			break
+		}
+	}
+	if !found {
+		return
+	}
+	title := "参与竞猜"
+	if target.Text != "" {
+		title = "竞猜 · " + target.Text
+	}
+	feedback.Modal(c, &d.bet.panelOpen, feedback.ModalProps{
+		Title:    title,
+		Width:    380,
+		NoFooter: true,
+	}, func() {
+		a.betPanel(c, d, target)
+	})
+	// 点窗外 / Esc 关窗时 Modal 只清 open，这里把目标也清掉，下次点同一
+	// 选项才是「打开」而不是「再点一次收起」。
+	if !d.bet.panelOpen {
+		d.bet.panelFor = ""
+		d.bet.selected = ""
+	}
+}
+
+// betPanel 是投注弹窗里的内容：金额、余额与确认按钮，和打赏面板一样把「会
+// 扣币」说清楚。
 func (a *app) betPanel(c *ui.Context, d *detailState, o betOption) {
 	t := c.Theme()
-	ui.Column(c).FillWidth().Gap(6).Padding(8, 10).Radius(8).Background(t.SurfaceHover).Children(func() {
+	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.NumberInput(c, &d.bet.amount, betCoinsMin, betCoinsMax, 1).
 				Label("投入金币").Width(120).Disabled(d.bet.busy)

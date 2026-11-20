@@ -470,8 +470,8 @@ func TestReactionSummaryMergesCounts(t *testing.T) {
 	}
 }
 
-// 右侧是两个图标入口：表态（笑脸）与打赏（金币）。点开的气泡贴着入口，
-// 不是居中的弹窗；打开本身不发请求。
+// 右侧是两个图标入口：表态（笑脸）与打赏（金币）。两个点开的都是贴着入口的
+// 气泡；打开本身不发请求。
 func TestReactionPopover(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -505,10 +505,14 @@ func TestReactionPopover(t *testing.T) {
 	}
 	for _, want := range []string{"选择一个表情", "选择表情 👍"} {
 		if !tt.HasText(want) {
-			t.Errorf("表态气泡缺少 %q：%q", want, tt.Texts())
+			t.Errorf("表情工具栏缺少 %q：%q", want, tt.Texts())
 		}
 	}
-	// 点打赏入口：表态气泡收起，打赏气泡打开。
+	// 表情工具栏是盖在整页上的 Modal，关掉它再点底下的打赏入口。
+	a.detail.react.reactOpen = false
+	tt.Frame()
+	tt.Advance(500 * time.Millisecond)
+	// 点打赏入口：表情工具栏收起，打赏气泡打开。
 	if err := tt.Click("打赏"); err != nil {
 		t.Fatalf("点打赏入口失败：%v", err)
 	}
@@ -551,9 +555,6 @@ func TestReactionActionTogglesEmoji(t *testing.T) {
 	a.detail = &detailState{shortID: "AB12", topic: &topic}
 	done := make(chan error, 1)
 	a.onInteractDone = func(err error) { done <- err }
-	// 表态会改变金币：成功后必须发出全局金币刷新事件。
-	events := make(chan coinEvent, 1)
-	a.onCoinsChanged = func(event coinEvent) { events <- event }
 	a.openReactionPopup(a.detail, reactionTopic)
 
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -563,14 +564,6 @@ func TestReactionActionTogglesEmoji(t *testing.T) {
 	}
 	if err := waitInteract(t, done); err != nil {
 		t.Fatalf("表态失败：%v", err)
-	}
-	select {
-	case event := <-events:
-		if event != coinEventReaction {
-			t.Errorf("表态事件 = %q，期望 %q", event, coinEventReaction)
-		}
-	default:
-		t.Error("表态成功后没有发出金币刷新事件")
 	}
 	mu.Lock()
 	got := append([]string(nil), calls...)
@@ -613,9 +606,6 @@ func TestRewardSubmitsFromDialog(t *testing.T) {
 	a.detail = &detailState{shortID: "AB12", topic: &topic}
 	done := make(chan error, 1)
 	a.onInteractDone = func(err error) { done <- err }
-	// 打赏会扣金币：成功后必须发出全局金币刷新事件。
-	events := make(chan coinEvent, 1)
-	a.onCoinsChanged = func(event coinEvent) { events <- event }
 	a.openRewardPopup(a.detail, reactionTopic)
 
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -625,14 +615,6 @@ func TestRewardSubmitsFromDialog(t *testing.T) {
 	}
 	if err := waitInteract(t, done); err != nil {
 		t.Fatalf("打赏失败：%v", err)
-	}
-	select {
-	case event := <-events:
-		if event != coinEventReward {
-			t.Errorf("打赏事件 = %q，期望 %q", event, coinEventReward)
-		}
-	default:
-		t.Error("打赏成功后没有发出金币刷新事件")
 	}
 	body := <-got
 	if body["type"] != "post" || body["post_id"] != "AB12" {

@@ -9,7 +9,6 @@ import (
 	"strconv"
 
 	"github.com/egoist/mygo/ui"
-	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 )
 
 // 金币池（api-read.md 的 extra.reward_pool、api-economy.md 的「金币池」）
@@ -22,7 +21,7 @@ import (
 //
 // 领取由服务端在浏览帖子时按概率完成，客户端不调接口；发帖时可以随帖带上
 // 初始金币（见 compose.go 的金币池块）。已存在的池子可以从详情页的「投入
-// 金币」补币：金额 200～1000，带幂等键，成功后才刷新余额与池子状态。
+// 金币」补币：金额 200～1000，带幂等键，成功后更新池子状态。
 
 // 金币池注资金额范围（文档：200～1000）。
 const (
@@ -30,7 +29,7 @@ const (
 	rewardPoolCoinsHi = 1000
 )
 
-// rewardPoolUIState 是详情页金币池注资气泡的状态。只在 UI 线程读写；网络
+// rewardPoolUIState 是详情页金币池注资弹窗的状态。只在 UI 线程读写；网络
 // 结果经 publish 回来。key / sig 与打赏同一套规则：金额不变的重试复用同一个
 // 幂等键，金额变了才换键。
 type rewardPoolUIState struct {
@@ -109,7 +108,7 @@ func (c *Client) fundRewardPool(ctx context.Context, shortID, key string, coins 
 	return err
 }
 
-// syncRewardPool 在详情刷新后收掉指向旧池子的注资气泡：池子没了、结束或过期，
+// syncRewardPool 在详情刷新后收掉指向旧池子的注资弹窗：池子没了、结束或过期，
 // 就不该还留着一颗可以继续投入的按钮。
 func syncRewardPool(d *detailState, t *topicDetail) {
 	if d == nil || t == nil {
@@ -203,11 +202,6 @@ func (a *app) rewardPoolSection(c *ui.Context, d *detailState, p *rewardPoolInfo
 				if btn.Clicked() {
 					a.openRewardPoolPopup(d)
 				}
-				lobeoverlay.Popover(c, btn, &d.pool.open, lobeoverlay.PopoverProps{
-					Placement: lobeoverlay.Bottom,
-				}, func() {
-					a.rewardPoolPanel(c, d)
-				})
 			}
 		})
 		if ended {
@@ -218,12 +212,11 @@ func (a *app) rewardPoolSection(c *ui.Context, d *detailState, p *rewardPoolInfo
 }
 
 /* ------------------------------------------------------------------
-   注资气泡
+   注资弹窗
 --------------------------------------------------------------- */
 
-// openRewardPoolPopup 给金币池注资气泡做准备。气泡的开合由 Lobe 的 Popover
-// 自己处理（点锚点切换、点窗外与 Esc 关闭），这里只负责未登录时先走授权，
-// 并在授权回来后打开气泡；金额为空或越界时先夹到合法区间。
+// openRewardPoolPopup 打开给金币池注资的 Lobe Modal。未登录时先走授权，回来后
+// 再打开；金额为空或越界时先夹到合法区间。弹窗本身挂在 detailContent 上。
 func (a *app) openRewardPoolPopup(d *detailState) {
 	if d == nil || !a.detailLive(d) {
 		return
@@ -231,13 +224,28 @@ func (a *app) openRewardPoolPopup(d *detailState) {
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能给金币池注资。", func() {
 			if a.detailLive(d) {
-				d.pool.open = true
-				a.prepareRewardPoolAmount(d)
+				a.openRewardPoolPopup(d)
 			}
 		})
 		return
 	}
 	a.prepareRewardPoolAmount(d)
+	d.pool.open = true
+}
+
+// rewardPoolDialog 是金币池注资弹窗：点「投入金币」后盖在整页上，填金额或点
+// 常用金额，确认后才扣币。标题栏与 Esc / 点窗外关闭由 Lobe Modal 提供。
+func (a *app) rewardPoolDialog(c *ui.Context, d *detailState) {
+	if !d.pool.open {
+		return
+	}
+	feedback.Modal(c, &d.pool.open, feedback.ModalProps{
+		Title:    "给金币池注资",
+		Width:    380,
+		NoFooter: true,
+	}, func() {
+		a.rewardPoolPanel(c, d)
+	})
 }
 
 // prepareRewardPoolAmount 把注资金额夹到 200～1000，并清掉上一次的错误。
@@ -251,12 +259,11 @@ func (a *app) prepareRewardPoolAmount(d *detailState) {
 	}
 }
 
-// rewardPoolPanel 是注资气泡：金额、常用金额、余额与确认按钮。金额由用户填
-// 或点常用金额，按钮上写着具体数字，点下去才会扣币。
+// rewardPoolPanel 是注资弹窗里的内容：金额、常用金额、余额与确认按钮。金额由
+// 用户填或点常用金额，按钮上写着具体数字，点下去才会扣币。
 func (a *app) rewardPoolPanel(c *ui.Context, d *detailState) {
 	t := c.Theme()
-	ui.Column(c).Width(300).Gap(8).Children(func() {
-		ui.Text(c, "给金币池注资").FontSize(metaFontSize).TextColor(t.TextMuted)
+	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		if d == nil || d.topic == nil || d.topic.RewardPool == nil {
 			return
 		}
@@ -335,7 +342,7 @@ func rewardPoolAmount(amount float64) int {
 }
 
 // submitRewardPool 提交一笔金币池注资。同一笔（金额不变）的超时重试与授权后
-// 重放复用同一个幂等键；金额变了才换新键。成功后收起气泡、刷新余额并重读详情，
+// 重放复用同一个幂等键；金额变了才换新键。成功后关掉弹窗、刷新余额并重读详情，
 // 让池子的余额以服务端为准。
 func (a *app) submitRewardPool(d *detailState) {
 	if d == nil || !a.detailLive(d) || d.pool.busy || d.topic == nil || d.topic.RewardPool == nil {
@@ -384,7 +391,7 @@ func (a *app) submitRewardPool(d *detailState) {
 				d.pool.err = friendlyError(err)
 				return
 			}
-			// 成功才清键与收起气泡：失败时界面停在原金额，重试仍用同一个键。
+			// 成功才清键与收起弹窗：失败时界面停在原金额，重试仍用同一个键。
 			d.pool.key = ""
 			d.pool.sig = ""
 			d.pool.open = false
@@ -393,7 +400,6 @@ func (a *app) submitRewardPool(d *detailState) {
 				p.CurrentCoins += amount
 			}
 			a.toast(a.detailToastFor(d), fmt.Sprintf("已向金币池投入 %d 金币", amount))
-			a.coinsChanged(coinEventRewardPool)
 			a.loadTopic()
 		})
 	}()

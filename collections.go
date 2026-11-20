@@ -13,7 +13,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
-	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 )
 
 // 合集（api-write.md / api-read.md 的「合集」）
@@ -112,7 +111,7 @@ func decodeCollections(d json.RawMessage) []collectionItem {
 	var out []collectionItem
 	for _, raw := range list {
 		item, ok := decodeCollectionObject(raw)
-		// 没有 id 或名字的项跳过：气泡里点不了，也不该显示成「未命名」。
+		// 没有 id 或名字的项跳过：弹窗里点不了，也不该显示成「未命名」。
 		if ok && item.ID != "" {
 			out = append(out, item)
 		}
@@ -214,10 +213,10 @@ func (c *Client) assignTopicCollection(ctx context.Context, shortID, collectionI
 }
 
 /* ------------------------------------------------------------------
-   详情页状态：合集气泡
+   详情页状态：合集弹窗
 -------------------------------------------------------------- */
 
-// collectionState 是详情页合集气泡的状态，只在 UI 线程读写。busy 表示正在
+// collectionState 是详情页合集弹窗的状态，只在 UI 线程读写。busy 表示正在
 // 提交一次归入 / 移出；creating 表示正在新建。gen 丢弃切换帖子之前的迟到
 // 结果。
 type collectionState struct {
@@ -232,7 +231,7 @@ type collectionState struct {
 	gen      uint64
 }
 
-// ensureCollections 在气泡第一次打开时读一次合集列表。失败不清 loaded，
+// ensureCollections 在弹窗第一次打开时读一次合集列表。失败不清 loaded，
 // 下次打开会再试。
 func (a *app) ensureCollections(d *detailState) {
 	if d == nil || !a.detailLive(d) || !a.autoLoad || !a.auth.loggedIn() {
@@ -281,9 +280,8 @@ func (a *app) canCollectTopic(d *detailState) bool {
 	return d != nil && d.topic != nil && a.isMine(d.topic.Author)
 }
 
-// toggleCollectionPicker 开 / 关合集气泡（显式入口，登录回调与测试用）。
-// 打开时顺手读一次列表，第一帧里就能看到自己的合集。点按钮时走
-// prepareCollectionPicker，开合交给 Lobe Popover。
+// toggleCollectionPicker 开 / 关合集弹窗（显式入口，登录回调与测试用）。
+// 打开时顺手读一次列表，第一帧里就能看到自己的合集。
 func (a *app) toggleCollectionPicker(d *detailState) {
 	if d == nil || !a.detailLive(d) || !a.canCollectTopic(d) {
 		return
@@ -294,17 +292,8 @@ func (a *app) toggleCollectionPicker(d *detailState) {
 	}
 }
 
-// prepareCollectionPicker 准备合集气泡：先把列表读起来，开合由 Lobe Popover
-// 在处理点击时切换，这里不能再碰 coll.open。
-func (a *app) prepareCollectionPicker(d *detailState) {
-	if d == nil || !a.detailLive(d) || !a.canCollectTopic(d) {
-		return
-	}
-	a.ensureCollections(d)
-}
-
 // assignTopicCollection 归入（add=true）或移出（add=false）当前帖子。
-// 成功后把状态写回详情，页面里的按钮与气泡都跟着变；「我的 - 合集」的
+// 成功后把状态写回详情，页面里的按钮与弹窗都跟着变；「我的 - 合集」的
 // 帖子数已经过期，清掉缓存。
 func (a *app) assignTopicCollection(d *detailState, item collectionItem, add bool) {
 	if d == nil || !a.detailLive(d) || d.topic == nil || d.coll.busy || !a.canCollectTopic(d) {
@@ -411,7 +400,7 @@ func (a *app) createCollectionForTopic(d *detailState) {
 			d.coll.draft = ""
 			a.invalidateCollections()
 			if item.ID == "" {
-				// 服务端没回创建结果：重新读一次列表，让新合集出现在气泡里。
+				// 服务端没回创建结果：重新读一次列表，让新合集出现在弹窗里。
 				d.coll.loaded = false
 				a.ensureCollections(d)
 				a.toast(a.detailToastFor(d), "已新建合集「"+item.Name+"」")
@@ -445,8 +434,8 @@ func (a *app) invalidateCollections() {
 	st.moreErr = ""
 }
 
-// invalidateDetailCollectionPicker 让详情页的合集气泡下次打开时重读：改名或
-// 删除之后，气泡里留着的旧名字不能再点，否则点下去就是一次注定失败的归入。
+// invalidateDetailCollectionPicker 让详情页的合集弹窗下次打开时重读：改名或
+// 删除之后，弹窗里留着的旧名字不能再点，否则点下去就是一次注定失败的归入。
 func (a *app) invalidateDetailCollectionPicker() {
 	if a.detail == nil || !a.detail.coll.loaded {
 		return
@@ -457,10 +446,10 @@ func (a *app) invalidateDetailCollectionPicker() {
 }
 
 /* ------------------------------------------------------------------
-   界面：合集按钮与气泡
+   界面：合集按钮与弹窗
 -------------------------------------------------------------- */
 
-// collectionButton 是作者行上收藏左侧的「合集」胶囊：点开气泡，选择把帖子
+// collectionButton 是作者行上收藏左侧的「合集」胶囊：点开 Modal，选择把帖子
 // 归入哪个合集，或者新建一个。详情里带当前合集时按钮直接说明「已在合集」。
 // 只在帖子属于当前账号时出现（见 canCollectTopic）。
 func (a *app) collectionButton(c *ui.Context, d *detailState) {
@@ -508,24 +497,31 @@ func (a *app) collectionButton(c *ui.Context, d *detailState) {
 				})
 				return
 			}
-			a.prepareCollectionPicker(d)
+			a.toggleCollectionPicker(d)
 		})
 	}
-	// Lobe 的 Popover 在点按钮时切换开合；关着时也要建出来，否则那一次点击
-	// 传不到 Popover，气泡就打不开。
-	lobeoverlay.Popover(c, b, &d.coll.open, lobeoverlay.PopoverProps{
-		Placement: lobeoverlay.Bottom,
+}
+
+// collectionDialog 是合集弹窗：点作者行的「合集」胶囊后盖在整页上，选一行归入
+// 或新建。它走 Lobe 的 Modal，标题栏与 Esc / 点窗外关闭由 Modal 提供。
+func (a *app) collectionDialog(c *ui.Context, d *detailState) {
+	if !d.coll.open {
+		return
+	}
+	feedback.Modal(c, &d.coll.open, feedback.ModalProps{
+		Title:    "加入合集",
+		Width:    380,
+		NoFooter: true,
 	}, func() {
 		a.collectionPanel(c, d)
 	})
 }
 
-// collectionPanel 是合集气泡的内容：我的合集（点一行就归入）、新建入口，
+// collectionPanel 是合集弹窗里的内容：我的合集（点一行就归入）、新建入口，
 // 以及「移出合集」。请求在途时只留一行进度，结果由主窗口 toast 报告。
 func (a *app) collectionPanel(c *ui.Context, d *detailState) {
 	t := c.Theme()
-	ui.Column(c).Width(250).Gap(6).Children(func() {
-		ui.Text(c, "加入合集").FontSize(metaFontSize).TextColor(t.TextMuted)
+	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		switch {
 		case d.coll.loading && len(d.coll.items) == 0:
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
@@ -570,7 +566,7 @@ func (a *app) collectionPanel(c *ui.Context, d *detailState) {
 	})
 }
 
-// collectionRow 是气泡里的一行合集：点一下归入；当前所在的合集点一下移出。
+// collectionRow 是弹窗里的一行合集：点一下归入；当前所在的合集点一下移出。
 func (a *app) collectionRow(c *ui.Context, d *detailState, item collectionItem) {
 	t := c.Theme()
 	current := d.topic != nil && d.topic.CollectionKnown && d.topic.CollectionID == item.ID

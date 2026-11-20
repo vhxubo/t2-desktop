@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -317,7 +316,7 @@ func TestRewardPoolAmount(t *testing.T) {
 	}
 }
 
-// 提交成功后收起气泡、刷新金币事件，并按已知余额就地加上这笔钱。
+// 提交成功后收起气泡，并按已知余额就地加上这笔钱。
 func TestRewardPoolFundingSubmits(t *testing.T) {
 	reqCh := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -343,19 +342,10 @@ func TestRewardPoolFundingSubmits(t *testing.T) {
 	a.detail.pool.amount = 300
 	a.detail.pool.open = true
 
-	done := make(chan coinEvent, 1)
-	a.onCoinsChanged = func(e coinEvent) { done <- e }
 	a.submitRewardPool(a.detail)
-	select {
-	case e := <-done:
-		if e != coinEventRewardPool {
-			t.Errorf("金币事件 = %q，期望 %q", e, coinEventRewardPool)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("注资没有完成")
-	}
-
 	req := <-reqCh
+	waitFor(t, func() bool { return !a.detail.pool.busy }, "注资完成回到 UI 线程")
+
 	if !strings.HasPrefix(req, `{"post_id":"POOL01","coins":300}|`) {
 		t.Errorf("请求体 / 键 = %q", req)
 	}

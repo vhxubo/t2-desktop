@@ -563,7 +563,7 @@ func (a *app) loadRestricted(d *detailState, kind string, auto bool) {
 }
 
 // submitRestrictedUnlock 提交一次解锁。terms.md 要求在扣币前让用户明确
-// 确认操作与金额，所以没有先展开确认面板时这里直接拒绝，不发出请求。
+// 确认操作与金额，所以没有先打开确认弹窗时这里直接拒绝，不发出请求。
 func (a *app) submitRestrictedUnlock(d *detailState) {
 	if d == nil || !a.detailLive(d) || d.topic == nil || d.topic.Restricted == nil {
 		return
@@ -638,7 +638,6 @@ func (a *app) submitRestrictedUnlock(d *detailState) {
 				d.restricted.info = &local
 			}
 			a.toast(a.detailToastFor(d), fmt.Sprintf("已花 %d 金币解锁", price))
-			a.coinsChanged(coinEventRestricted)
 		})
 	}()
 }

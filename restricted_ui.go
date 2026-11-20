@@ -91,9 +91,23 @@ func (a *app) restrictedSection(c *ui.Context, d *detailState) {
 		if bids := d.restricted.bids; bids != nil {
 			a.restrictedBidsView(c, bids)
 		}
-		if d.restricted.confirm && !unlocked {
-			a.restrictedUnlockPanel(c, d, gate.Coins)
-		}
+	})
+}
+
+// restrictedUnlockDialog 是扣币解锁前的最后一步：点「花 N 金币解锁」后盖在
+// 整页上，写明价格与不可撤销，确认后才发 POST /unlock。Lobe Modal 提供标题栏
+// 与 Esc / 点窗外关闭；结果仍由 submitRestrictedUnlock 用 toast 报告。
+func (a *app) restrictedUnlockDialog(c *ui.Context, d *detailState) {
+	if d == nil || !d.restricted.confirm || d.topic == nil ||
+		d.topic.Restricted == nil || restrictedUnlocked(d) {
+		return
+	}
+	feedback.Modal(c, &d.restricted.confirm, feedback.ModalProps{
+		Title:    "解锁受限内容",
+		Width:    380,
+		NoFooter: true,
+	}, func() {
+		a.restrictedUnlockPanel(c, d, d.topic.Restricted.Coins)
 	})
 }
 
