@@ -383,7 +383,7 @@ func (a *app) notificationActions(c *ui.Context, st *tabState) {
 			a.smallAction(c, fmt.Sprintf("已读选中 %d", n), false,
 				func() { a.markSelectedNotificationsRead(toastNotifications) })
 		}
-		a.smallAction(c, "刷新", st.loading, func() { a.reloadNotifications() })
+		a.smallRefreshButton(c, st.loading, func() { a.reloadNotifications() })
 		switch {
 		case a.notify == nil:
 			display.Text(c, "原生通知不可用", display.TextProps{
@@ -406,6 +406,25 @@ func (a *app) smallAction(c *ui.Context, label string, disabled bool, onClick fu
 	if b.Clicked() {
 		onClick()
 	}
+}
+
+// smallRefreshButton 是各窗口标题行共用的图标式「刷新」：平时只画一枚
+// lucide.RefreshCw，鼠标扫过时给 Lobe ActionIcon 的浅底与说明；请求在途时
+// 退成同尺寸的禁用转圈，避免连点。label 仍是「刷新」，读屏和点击测试照此命中。
+func (a *app) smallRefreshButton(c *ui.Context, busy bool, onClick func()) {
+	const label, tip = "刷新", "重新加载"
+	if busy {
+		b := ui.ButtonBase(c).Size(24, 24).Center().Disabled(true).
+			Radius(6).Background(ui.Transparent).Border(1, ui.Transparent)
+		b.Label(label).Tooltip(tip)
+		b.Children(func() { lobeSpin(c, feedback.SpinProps{CustomSize: 14}) })
+		return
+	}
+	b := action.ActionIcon(c, lucide.RefreshCw(), action.ActionIconProps{
+		Size: lobetheme.Small,
+	})
+	b.Label(label).Tooltip(tip)
+	b.OnClick(onClick)
 }
 
 // notificationFilterRow 用 Lobe 的 Segmented 画分段筛选：选项直接来自

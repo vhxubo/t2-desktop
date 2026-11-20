@@ -156,7 +156,7 @@ func (a *app) followsWindowView(c *ui.Context) {
 				ui.Tabs(c, &fs.tab, followsTabLabels[:]...)
 				ui.Spacer(c).Grow(1)
 				if l := fs.list(fs.tab); l.loaded {
-					a.smallAction(c, "刷新", l.loading, func() { a.loadFollows(fs.tab, 1) })
+					a.smallRefreshButton(c, l.loading, func() { a.loadFollows(fs.tab, 1) })
 				}
 			})
 			a.followsListBody(c, fs)

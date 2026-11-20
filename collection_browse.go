@@ -104,7 +104,7 @@ func (a *app) collectionTopicsBody(c *ui.Context, b *collectionBrowse, open func
 				TextColor(t.TextMuted).Shrink(0)
 		}
 		ui.Spacer(c).Grow(1)
-		a.smallAction(c, "刷新", st.loading, func() { a.reloadCollectionTopics(b) })
+		a.smallRefreshButton(c, st.loading, func() { a.reloadCollectionTopics(b) })
 	})
 
 	switch {
