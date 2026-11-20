@@ -449,6 +449,189 @@ func TestMentionBlocks(t *testing.T) {
 	}
 }
 
+// 选中候选要换掉的是整个 @名字（含后面那个空格），不是「@ 到光标」那一段：
+// 光标停在名字中间时只换前半段，会留下 "@Jimmyimmy" 这样的残字。
+func TestMentionWordRange(t *testing.T) {
+	cases := []struct {
+		body  string
+		start int
+		from  int
+		to    int
+	}{
+		{"@jimmy", 0, 0, 6},    // 名字后面没有空格
+		{"@jimmy 你好", 0, 0, 7}, // 连带吃掉后面那个空格
+		{"hi @jimmy", 3, 3, 9}, // @ 前面有字
+		{"@jimmy  x", 0, 0, 7}, // 只吃一个空格，不留双空格
+		{"@", 0, 0, 1},         // 只打了 @
+		{"@jimmy", 1, 1, 1},    // 不在 @ 上，不扩
+	}
+	for _, tc := range cases {
+		from, to := mentionWordRange(tc.body, tc.start)
+		if from != tc.from || to != tc.to {
+			t.Errorf("mentionWordRange(%q, %d) = (%d, %d)，期望 (%d, %d)",
+				tc.body, tc.start, from, to, tc.from, tc.to)
+		}
+	}
+}
+
+// 光标停回名字中间再挑候选：整块替换，光标后面的字母不能留下。
+func TestMentionPickFromMiddleReplacesWholeWord(t *testing.T) {
+	var calls atomic.Int32
+	srv := mentionTestServer(t,
+		`{"items":[],"total":0}`,
+		`{"items":[{"id":"u1","username":"Jimmy"},{"id":"u2","username":"alice"}],"total":2}`, &calls)
+	defer srv.Close()
+	// 窗口账号是 me，参与人里的 Jimmy 才不会因为「是自己」被排掉。
+	a := openTestDetail(singleAccountWindow(t, "me"))
+	a.autoLoad = true
+	a.client = &Client{HTTP: srv.Client(), Base: srv.URL + "/api", Auth: a.auth}
+	a.detail.replyTo.ID = "r1"
+	tt := ui.NewTester(a.view, 1100, 900)
+	tt.Frame()
+
+	if err := tt.Click("写评论"); err != nil {
+		t.Fatalf("点不到评论输入框：%v", err)
+	}
+	tt.Type("@jimmy")
+	tt.Frame()
+	waitMentionLoaded(t, a)
+	tt.Frame()
+	if a.detail.draft != "@jimmy" {
+		t.Fatalf("正文 = %q，期望 @jimmy", a.detail.draft)
+	}
+
+	// 光标回到 j 后面（名字中间），面板跟着光标按 "j" 过滤。
+	for i := 0; i < 4; i++ {
+		tt.Key(0, ui.KeyLeft)
+	}
+	tt.Frame()
+	if a.detail.mentions.tokenStart != 0 || a.detail.mentions.tokenEnd != 2 {
+		t.Fatalf("@前缀 没跟着光标走：%d..%d",
+			a.detail.mentions.tokenStart, a.detail.mentions.tokenEnd)
+	}
+	if err := tt.Click("@Jimmy"); err != nil {
+		t.Fatalf("点不到候选行：%v", err)
+	}
+	tt.Frame()
+	if a.detail.draft != "@Jimmy " {
+		t.Errorf("从中间选中后的正文 = %q，期望 @Jimmy （整块替换）", a.detail.draft)
+	}
+}
+
+// 光标落在 @名字 里任何位置，按退格 / Delete 都整块清掉（含后面的空格），
+// 不会一个字一个字往回啃。
+func TestMentionBlockDeletedFromInsideName(t *testing.T) {
+	for _, key := range []ui.Key{ui.KeyBackspace, ui.KeyDelete} {
+		var calls atomic.Int32
+		srv := mentionTestServer(t,
+			`{"items":[],"total":0}`,
+			`{"items":[{"id":"u2","username":"alice"}],"total":1}`, &calls)
+		a, tt := mentionUIApp(t, srv)
+		if err := tt.Click("写评论"); err != nil {
+			t.Fatal(err)
+		}
+		tt.Type("@")
+		tt.Frame()
+		waitMentionLoaded(t, a)
+		tt.Frame()
+		if err := tt.Click("@alice"); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+		if a.detail.draft != "@alice " {
+			t.Fatalf("选中候选后正文 = %q，期望 @alice ", a.detail.draft)
+		}
+		// 光标从尾随空格后回到名字中间（"@ali|ce "）。
+		for i := 0; i < 4; i++ {
+			tt.Key(0, ui.KeyLeft)
+		}
+		tt.Frame()
+		tt.Key(0, key)
+		tt.Frame()
+		if a.detail.draft != "" {
+			t.Errorf("按 %v 没有整块清除，正文 = %q", key, a.detail.draft)
+		}
+		srv.Close()
+	}
+}
+
+// 点候选行不能把焦点从输入框抢走：选完人光标还在原处，接着就能打字。
+func TestMentionPickKeepsComposerFocus(t *testing.T) {
+	var calls atomic.Int32
+	srv := mentionTestServer(t,
+		`{"items":[],"total":0}`,
+		`{"items":[{"id":"u2","username":"alice"}],"total":1}`, &calls)
+	defer srv.Close()
+	a, tt := mentionUIApp(t, srv)
+	if err := tt.Click("写评论"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("@")
+	tt.Frame()
+	waitMentionLoaded(t, a)
+	tt.Frame()
+	if err := tt.Click("@alice"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Type("hi")
+	tt.Frame()
+	if a.detail.draft != "@alice hi" {
+		t.Errorf("选完候选后接着打的字没进正文：%q", a.detail.draft)
+	}
+}
+
+// 面板尺寸跟着内容走：名字短就窄，名字长才到上限；行少就矮，行多到上限
+// 再滚动。旧版是固定 232 宽、固定 180 高，短名单右边会空出一大条。
+func TestMentionPanelFitsContent(t *testing.T) {
+	panelSize := func(t *testing.T, participants string) (float32, float32) {
+		t.Helper()
+		var calls atomic.Int32
+		srv := mentionTestServer(t, `{"items":[],"total":0}`, participants, &calls)
+		defer srv.Close()
+		a, tt := mentionUIApp(t, srv)
+		typeAt(t, tt)
+		waitMentionLoaded(t, a)
+		tt.Frame()
+		panel, ok := tt.Find("提及候选面板")
+		if !ok {
+			t.Fatalf("找不到候选面板：%q", tt.Texts())
+		}
+		return panel.W, panel.H
+	}
+
+	shortW, shortH := panelSize(t, `{"items":[{"id":"u1","username":"ab"}],"total":1}`)
+	if shortW > 232 {
+		t.Errorf("短名单的面板仍偏宽：%v", shortW)
+	}
+	if shortW < mentionPanelMinW || shortW > mentionPanelMaxW {
+		t.Errorf("面板宽度没有夹在上下限里：%v", shortW)
+	}
+	if shortH > mentionPanelMaxH {
+		t.Errorf("短名单的面板仍偏高：%v", shortH)
+	}
+
+	longW, _ := panelSize(t, `{"items":[{"id":"u1","username":"一个特别特别长的用户名真的很长很长很长"}],"total":1}`)
+	if longW <= shortW {
+		t.Errorf("长名字没有把面板撑宽：短 %v / 长 %v", shortW, longW)
+	}
+	if longW > mentionPanelMaxW {
+		t.Errorf("面板宽度超过上限：%v", longW)
+	}
+
+	var items []string
+	for i := 0; i < 30; i++ {
+		items = append(items, fmt.Sprintf(`{"id":"u%d","username":"user%02d"}`, i, i))
+	}
+	_, tallH := panelSize(t, `{"items":[`+strings.Join(items, ",")+`],"total":30}`)
+	if tallH <= shortH {
+		t.Errorf("长名单的面板没有变高：短 %v / 长 %v", shortH, tallH)
+	}
+	if tallH > mentionPanelMaxH+mentionPanelPad*2+8 {
+		t.Errorf("长名单的面板超过高度上限：%v", tallH)
+	}
+}
+
 // 选中候选后，光标停在 @名字 的空格之后；按一次退格应把整块清掉，
 // 而不是一个字符一个字符往回删。
 func TestMentionBlockDeletedWithOneBackspace(t *testing.T) {

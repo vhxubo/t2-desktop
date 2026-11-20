@@ -146,6 +146,28 @@ func mentionBlocks(body string) []mentionBlock {
 	return out
 }
 
+// mentionWordRange 把 start 处的 @ 起、到这段用户名末尾（下一个空白为止）
+// 扩成一整块，并连带吃掉后面那一个空格。
+//
+// 选中候选时要换掉的是整块，而不是「@ 到光标」：用户把光标放回 @jimmy 中间
+// 的 j 后面再挑 Jimmy，只换光标前那一段会留下 "@Jimmyimmy"。
+func mentionWordRange(body string, start int) (int, int) {
+	rs := []rune(body)
+	start = max(0, min(start, len(rs)))
+	if start >= len(rs) || rs[start] != '@' {
+		return start, start
+	}
+	end := start + 1
+	for end < len(rs) && !unicode.IsSpace(rs[end]) {
+		end++
+	}
+	// 后面已经有一个空格就一并吃掉：mentionAt 自己会补一个，不然会出现两个。
+	if end < len(rs) && (rs[end] == ' ' || rs[end] == '\t') {
+		end++
+	}
+	return start, end
+}
+
 // mentionTokenAt 找光标处正在输入的 @前缀，返回它在正文里的 rune 范围。
 // 口径与服务端一致：@ 前是开头或空白、@ 后直到空白是一整个用户名；
 // 邮箱里的 @ 不算。光标不在 @ 后面（已输入空格、或 @ 在词中）时返回 false。
@@ -194,16 +216,15 @@ func (a *app) onMentionInput(d *detailState, host replySurface, caret int) {
 	a.ensureMentionParticipants(d)
 }
 
-// mentionCandidates 是键盘上下键 / 回车要用的候选用户名：参与人名单排掉自己、
-// 按当前 @前缀 过滤、去重。与面板里画出来的逐人列表同一份口径。
-func (a *app) mentionCandidates(d *detailState) []string {
-	st := &d.mentions
-	data := a.mentionData(d, d.draft)
-	exclude := a.mentionExclude(d)
-	q := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(st.query, "@")))
-	out := make([]string, 0, len(data.Participants))
-	seen := make(map[string]bool, len(data.Participants))
-	for _, p := range data.Participants {
+// mentionPeople 是面板里的逐人列表与键盘上下键共用的口径：排掉自己（含临时
+// 换用的回复身份）、按当前 @前缀 过滤、按用户名去重，顺序与名单一致。
+//
+// 两处必须是同一份：键盘高亮的那一行就是回车会选的那一个，各筛各的会错位。
+func mentionPeople(people []mentionPerson, exclude map[string]bool, query string) []mentionPerson {
+	q := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(query, "@")))
+	out := make([]mentionPerson, 0, len(people))
+	seen := make(map[string]bool, len(people))
+	for _, p := range people {
 		key := mentionKey(p.Username)
 		if key == "" || exclude[key] || seen[key] {
 			continue
@@ -212,6 +233,44 @@ func (a *app) mentionCandidates(d *detailState) []string {
 			continue
 		}
 		seen[key] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+// syncMentionToken 每帧按当前光标复核一次正在输入的 @前缀：光标移出这个词
+// （点别处、方向键走到词外）就收起面板，移到词中间就按光标前那几个字母重新
+// 过滤。只看 OnChange 的话，光标动了而正文没变，面板会停在旧位置、按旧前缀
+// 过滤，看着就不跟手。
+func (a *app) syncMentionToken(d *detailState) {
+	st := &d.mentions
+	if !st.typing || !st.open {
+		return
+	}
+	start, end, ok := mentionTokenAt(d.draft, d.mdEditor.selEnd)
+	if !ok {
+		st.typing = false
+		st.open = false
+		st.tokenStart, st.tokenEnd = -1, -1
+		st.query = ""
+		st.active = 0
+		return
+	}
+	if start == st.tokenStart && end == st.tokenEnd {
+		return
+	}
+	st.tokenStart, st.tokenEnd = start, end
+	st.query = string([]rune(d.draft)[start+1 : end])
+	st.active = 0
+}
+
+// mentionCandidates 是键盘上下键 / 回车要用的候选用户名。与面板逐人列表同一
+// 份口径（见 mentionPeople），因此下标就是列表里的顺序。
+func (a *app) mentionCandidates(d *detailState) []string {
+	data := a.mentionData(d, d.draft)
+	people := mentionPeople(data.Participants, a.mentionExclude(d), d.mentions.query)
+	out := make([]string, 0, len(people))
+	for _, p := range people {
 		out = append(out, p.Username)
 	}
 	return out
@@ -356,6 +415,24 @@ type mentionState struct {
 	shapeText  string
 	shapeWidth float32
 	shape      *ui.TextLayout
+	// blocksText / blocks 缓存这份正文扫出来的提及块：编辑器每帧要按它给提及
+	// 上色，按键时要按它判断是否命中整块，同一份正文不必扫两遍。
+	blocksText  string
+	blocksValid bool
+	blocks      []mentionBlock
+	// sizeKey / sizeW 缓存按行内容量出来的面板宽度，行集合不变时不重复整形。
+	sizeKey string
+	sizeW   float32
+}
+
+// blocksFor 返回这份正文里的提及块，同一份正文只扫一次。
+func (st *mentionState) blocksFor(text string) []mentionBlock {
+	if !st.blocksValid || st.blocksText != text {
+		st.blocks = mentionBlocks(text)
+		st.blocksText = text
+		st.blocksValid = true
+	}
+	return st.blocks
 }
 
 func mentionRetryAfter(failures int) time.Duration {

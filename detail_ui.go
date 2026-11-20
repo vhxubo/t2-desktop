@@ -2578,7 +2578,7 @@ func (a *app) replyTextArea(c *ui.Context, d *detailState, host replySurface, mo
 	// 写完的 @名字 在编辑区里上色加粗成一块（mygo 的 TextRange 正是以
 	// mentions 为例设计的）；提交给服务端的仍是纯文本 "@名字 "。
 	var ranges []ui.TextRange
-	for _, b := range mentionBlocks(d.draft) {
+	for _, b := range d.mentions.blocksFor(d.draft) {
 		ranges = append(ranges, ui.TextRange{
 			Start: b.Start, End: b.End, Color: t.Accent, Weight: 600,
 		})
@@ -2587,6 +2587,13 @@ func (a *app) replyTextArea(c *ui.Context, d *detailState, host replySurface, mo
 		area.TextRanges(ranges...)
 	}
 	d.syncSelection(area)
+	// 光标每帧都在动（点一下、按方向键），@前缀 跟着光标重新认一次：面板
+	// 因此贴在光标所在的那个 @ 上，而不是上一次打字的位置。只在焦点就在这个
+	// 输入框里时做——页面与独立写评论窗口共用一份状态，没焦点的那一边别把
+	// 自己的选区按到面板头上。
+	if d.composerField.Focused(c) {
+		a.syncMentionToken(d)
+	}
 	// 键入 @ 时自动弹出候选：OnChange 在输入落到正文后、重建前运行，这里
 	// 的 element 仍有效，能读到真实光标位置。OnTextKey 则在帧间运行，只用
 	// 状态与 k.SetText 处理上下键 / 回车 / Escape（见 mentions_ui.go）。

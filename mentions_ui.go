@@ -11,12 +11,14 @@ import (
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 评论输入框里的 @ 候选面板。面板固定在窗口右下角，不跟随光标、也没有
-// 工具栏入口；键入 @ 即打开，名字后自动补空格，拼串前排掉自己，最多 50 个 @。
+// 评论输入框里的 @ 候选面板：一个角贴着正文里那个 @，键入 @ 即打开，选中后
+// 把整块 @前缀 换成 "@名字 "（名字后的空格由拼串补上，服务端只认这个写法）。
 // 名单为空 / 无权 / 超过 50 人时隐藏对应入口，而不是点一下没反应。
 //
-// 界面用 Lobe 组件：搜索框、按钮、标签、转圈与空 / 错误状态，配色取 Lobe
-// token。文案保持中文，点击测试按无障碍名（Label）命中。
+// 界面全用 Lobe 组件：浮层是 BgElevated + BoxShadowSecondary 的面板，行是
+// display.List（头像 / 图标、名称、分身标记、悬浮与键盘选中态都由它画），
+// 转圈、错误与重试走 feedback / display / action。尺寸跟着内容走：宽度由
+// 最长的一行撑开（只兜住上下限），高度由行数决定，超出 @ 上下方的空间才滚。
 //
 // 页面评论框和独立写评论窗口共用 detailState，所以面板状态带 host：只有
 // 点开它的那扇窗口画内容。
@@ -25,15 +27,39 @@ const (
 	// mentionPanelShown 限制一次画出的参与人行数：名单全量不分页，几百人
 	// 一次铺满面板既慢又没法挑，搜索框可以把范围缩到要找的人。
 	mentionPanelShown = 50
-	// mentionPanelWidth 是候选面板宽度，尽量窄，只放得下名字与两个拼串按钮。
-	mentionPanelWidth = 232
-	// mentionPanelMaxH 是判断下方空间够不够放面板的估计高度。
-	mentionPanelMaxH = 240
+	// 面板宽度由最长的一行撑开，这两个值只兜住「太窄」与「用户名太长」。
+	mentionPanelMinW float32 = 176
+	mentionPanelMaxW float32 = 300
+	// mentionPanelMaxH 是内容区的高度上限；@ 上方 / 下方的空间更小时按空间来。
+	mentionPanelMaxH float32 = 232
+	// mentionPanelMargin 是面板与窗口边缘至少留的间距，mentionPanelGap 是
+	// 面板与 @ 那一行之间的缝。
+	mentionPanelMargin float32 = 8
+	mentionPanelGap    float32 = 4
+	// mentionPanelPad 是面板内边距，也是面板与行之间露出的那一圈底。
+	mentionPanelPad float32 = 4
+	// 下面几个是 List 一行的固定尺寸，用来估高度与宽度：头像槽 22、行上下
+	// 内边距 6、行左右内边距 8（Compact）、文字前的间距 12。
+	mentionRowH       float32 = 34
+	mentionRowGap     float32 = 2
+	mentionDividerH   float32 = 9
+	mentionRowLead    float32 = 22
+	mentionRowLeadGap float32 = 12
+	mentionRowPadX    float32 = 8
+	// mentionRowChrome 是一行的固定开销：面板内边距、行内边距、头像槽与间距。
+	mentionRowChrome = mentionPanelPad*2 + mentionRowPadX*2 + mentionRowLead + mentionRowLeadGap
+	// 行里文字的字号，与 List 的行一致；分身标记走 Extra，小一号。
+	mentionFontSize  float32 = 14
+	mentionExtraSize float32 = 12
+	mentionExtraGap  float32 = 12
+	// mentionStatusH 是列表上方状态行（转圈 / 错误 + 重试）的估计高度。
+	mentionStatusH float32 = 34
 )
 
 // mentionAtRect 用与输入框一致的排版算出 @ 符号本身的矩形。锚的是 @ 字符
 // （tokenStart），不是会继续移动的输入光标：用户 typing 时面板稳稳钉在那个
-// @ 上。正文或宽度没变时复用排版，长草稿不每帧重算。
+// @ 上，不会每敲一个字就往右滑一格。正文或宽度没变时复用排版，长草稿不每帧
+// 重算。
 func mentionAtRect(c *ui.Context, d *detailState, padX, padY float32) ui.Rect {
 	field := d.composerField.Bounds(c)
 	width := max(40, field.W-padX*2)
@@ -59,211 +85,300 @@ func mentionAtRect(c *ui.Context, d *detailState, padX, padY float32) ui.Rect {
 	return ui.Rect{X: field.X + padX + r.X, Y: field.Y + padY + r.Y, W: r.W, H: r.H}
 }
 
-// mentionPopover 让面板的一个角紧贴 @ 符号：下方放得下就从 @ 的左下角向下
-// 展开，放不下就把面板下沿贴到 @ 上方。没有工具栏入口，也不在窗口里乱定位。
+// mentionPopover 让面板的一个角紧贴 @：下方放得下就从 @ 的左下角向下展开，
+// 放不下就把面板下沿贴到 @ 上方；两边都不够时选大的那一边，内容自己滚。
+// 面板不超出窗口左右边缘（@ 在行尾时往左让），也不会盖住窗口标题栏。
 func (a *app) mentionPopover(c *ui.Context, d *detailState, host replySurface, padX, padY float32) {
 	st := &d.mentions
 	if !st.open || st.host != host {
 		return
 	}
+	data := a.mentionData(d, d.draft)
+	rows := a.mentionRows(d, data)
+	status := mentionPanelStatus(data, st)
+	if len(rows) == 0 && !status {
+		// 一个可 @ 的人都没有：不摆一块空面板，等名单回来或用户改搜索词。
+		return
+	}
+	tk := lobetheme.TokensOf(c)
 	at := mentionAtRect(c, d, padX, padY)
-	_, winH := c.Size()
+	winW, winH := c.Size()
+	width := st.panelWidth(rows)
+
+	chrome := float32(0)
+	if status {
+		chrome = mentionStatusH
+	}
+	// 上下各能让出多少：扣掉与窗口边缘的间距、与 @ 之间的缝。
+	above := at.Y - mentionPanelMargin - mentionPanelGap
+	below := winH - at.Y - at.H - mentionPanelMargin - mentionPanelGap
+	want := mentionRowsHeight(rows) + chrome
+	up := below < want && above > below
+	space := below
+	if up {
+		space = above
+	}
+	// 高度上限取「内容高度」与「这一侧的空间」里更小的那个：行数少时面板就
+	// 矮，行数多时正好铺到窗口边缘再滚动。
+	maxH := min(mentionPanelMaxH, max(mentionRowH, space-chrome))
+
+	left := at.X
+	if left+width > winW-mentionPanelMargin {
+		left = winW - mentionPanelMargin - width
+	}
+	left = max(left, mentionPanelMargin)
+
 	ui.Overlay(c, func() {
 		dismiss := ui.Box(c).Absolute().Left(0).Top(0).Fill()
 		dismiss.Label("收起提及候选").OnClick(func() { st.open = false })
 
-		tk := lobetheme.TokensOf(c)
-		panel := ui.Column(c).Width(mentionPanelWidth).Padding(10).Radius(tk.BorderRadius).
-			Background(tk.BgElevated).TextColor(tk.Text).FontSize(tk.FontSize).
-			Label("提及候选面板")
-		if winH-at.Y < mentionPanelMaxH {
-			// 下方不够：面板下沿贴住 @ 的上方。
-			panel.Absolute().Left(at.X).Bottom(winH - at.Y)
+		// KeepFocus：在面板里点行、点重试都不把焦点从输入框抢走，选完人
+		// 光标还在原处，接着就能打字。
+		panel := ui.Column(c).Width(width).Padding(mentionPanelPad).Gap(mentionPanelGap).
+			Radius(tk.BorderRadius).Background(tk.BgElevated).TextColor(tk.Text).
+			FontSize(tk.FontSize).KeepFocus().Label("提及候选面板")
+		if up {
+			panel.Absolute().Left(left).Bottom(winH - at.Y + mentionPanelGap)
 		} else {
-			// 下方够：面板左上角贴住 @ 的左下角。
-			panel.Absolute().Left(at.X).Top(at.Y + at.H)
+			panel.Absolute().Left(left).Top(at.Y + at.H + mentionPanelGap)
 		}
 		tk.Elevate(panel, lobetheme.BoxShadowSecondary)
 		if panel.OverlayShortcut(0, ui.KeyEscape) {
 			st.open = false
 		}
-		panel.Children(func() { a.mentionPanel(c, d, host) })
+		panel.Children(func() { a.mentionPanel(c, d, host, rows, data, maxH) })
 	})
 }
 
-// mentionPanel 只放可操作的项：三个快捷拼串行与参与人列表共用同一份滚动
-// 列表（快捷行固定排在最前面三行），上面留加载转圈与失败重试。没有任何
-// 说明性文案；各项的写法放在 tooltip 里，不占面板版面。
-func (a *app) mentionPanel(c *ui.Context, d *detailState, host replySurface) {
+// mentionPanelStatus 表示列表上方要不要画一行状态（转圈或错误 + 重试）。
+func mentionPanelStatus(data mentionResult, st *mentionState) bool {
+	if data.PeopleBusy && !st.participantsLoaded {
+		return true
+	}
+	if data.PeopleErr != "" {
+		return true
+	}
+	return st.guardiansErr != "" && !st.guardiansLoaded && !data.GuardiansBusy
+}
+
+// mentionPanel 只放可操作的项：快捷拼串行与参与人行共用一份 Lobe List（快捷
+// 行固定排在最前面），上面留加载转圈与失败重试。没有任何说明性文案。
+func (a *app) mentionPanel(c *ui.Context, d *detailState, host replySurface,
+	rows []mentionRow, data mentionResult, maxH float32) {
 	st := &d.mentions
-	data := a.mentionData(d, d.draft)
-	exclude := a.mentionExclude(d)
-
-	ui.Column(c).Width(mentionPanelWidth).Gap(4).Children(func() {
-		random := ""
-		if data.Slots > 0 {
-			random = pickRandomMention(data.Guardians, exclude)
-		}
-		all := buildMentions(data.Participants, exclude, data.Slots)
-		quick := a.mentionQuickEntries(d, data, all, random)
-
-		if data.PeopleBusy && !st.participantsLoaded {
-			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
-		}
-		if data.PeopleErr != "" {
-			display.Text(c, data.PeopleErr, display.TextProps{
-				Type: display.TextWarning, FontSize: 11, Rows: 2,
-			})
-			if !data.PeopleBusy && !data.PeopleDenied {
-				if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
-					a.reloadMentionParticipants(d)
-				}
-			}
-		}
-		if st.guardiansErr != "" && !st.guardiansLoaded && !data.GuardiansBusy {
+	if data.PeopleBusy && !st.participantsLoaded {
+		lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
+	}
+	if data.PeopleErr != "" {
+		display.Text(c, data.PeopleErr, display.TextProps{
+			Type: display.TextWarning, FontSize: 11, Rows: 2,
+		})
+		if !data.PeopleBusy && !data.PeopleDenied {
 			if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
-				a.reloadMentionGuardians(d)
+				a.reloadMentionParticipants(d)
 			}
 		}
-
-		shown := mentionFiltered(data.Participants, st.query)
-		if len(shown) > mentionPanelShown {
-			shown = shown[:mentionPanelShown]
+	}
+	if st.guardiansErr != "" && !st.guardiansLoaded && !data.GuardiansBusy {
+		if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+			a.reloadMentionGuardians(d)
 		}
-		if len(quick) == 0 && len(shown) == 0 {
-			return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	// 列表高度跟着内容：行少时面板就矮，行多时到上限再滚动。
+	ui.Scroll(c).MaxHeight(maxH).Children(func() {
+		if key := display.List(c, display.ListProps{
+			Items:   a.mentionListItems(c, rows),
+			Active:  a.mentionActiveKey(d),
+			Compact: true,
+		}); key != "" {
+			for _, row := range rows {
+				if row.Key != key {
+					continue
+				}
+				st.host = host
+				a.insertMention(d, row.Text)
+				break
+			}
 		}
-		ui.Scroll(c).Height(180).Children(func() {
-			ui.Column(c).FillWidth().Gap(2).Children(func() {
-				// 快捷行不受搜索词过滤：它们是固定动作，排在用户列表最前面。
-				for _, q := range quick {
-					a.mentionQuickRow(c, d, host, q)
-				}
-				for _, p := range shown {
-					a.mentionPersonRow(c, d, host, p)
-				}
-			})
-		})
 	})
 }
 
-// mentionQuickEntry 是列表最前面的快捷拼串行：@所有人、@随机守护者、抽奖
-// 助手。图标只作装饰，无障碍名与 tooltip 挂在整行上，点击按无障碍名命中。
-type mentionQuickEntry struct {
-	Label string
-	Tip   string
-	Text  string
-	Icon  *ui.SVG
+// mentionRow 是面板里的一行。快捷拼串行与参与人行只差左边是图标还是头像，
+// 点一下都把 Text 写进正文。
+type mentionRow struct {
+	Key     string
+	Label   string
+	Icon    *ui.SVG
+	Person  mentionPerson
+	Extra   string
+	Text    string
+	Divider bool
 }
 
-// mentionQuickEntries 按固定顺序生成当前可用的快捷行。名单还没回来或名额
-// 已满时对应项不出现，不摆一个点了没反应的入口。抽奖助手只在自己的帖子里
-// 出现：服务端只认帖主发的一级评论，换账号回复或别人的帖子写了也不开奖，
-// 所以入口与工具条用同一套作者判断（见 canLottery）。抽奖助手是系统账号，
-// 不在两份名单里，默认补全「抽 1 个」，改正文里的数字就能改中奖人数。
-func (a *app) mentionQuickEntries(d *detailState, data mentionResult, all, random string) []mentionQuickEntry {
-	out := make([]mentionQuickEntry, 0, 3)
-	if all != "" && data.Total <= mentionNotifyLimit {
-		out = append(out, mentionQuickEntry{
-			Label: "@所有人", Tip: "把参与人拼成 @ 列表，排掉自己",
-			Text: all, Icon: accountsIcon,
-		})
-	}
-	if random != "" {
-		out = append(out, mentionQuickEntry{
-			Label: "@随机守护者", Tip: "随机挑一位守护者 @ 一下",
-			Text: mentionAt(random), Icon: profileIcon,
-		})
-	}
-	if data.Slots > 0 && a.canLottery(d) &&
-		!a.replyIdentityFor(d).Switched {
-		out = append(out, mentionQuickEntry{
-			Label: "@" + lotteryName, Tip: "插入抽奖指令，默认抽 1 个；把正文里的数字改掉即可改人数",
-			Text: lotteryCommand(lotteryDefaultWinners) + " ", Icon: lotteryIcon,
-		})
-	}
-	return out
-}
+// mentionPersonKey 是参与人行的键：按归一后的用户名取，名单里重名的只留一行。
+func mentionPersonKey(p mentionPerson) string { return "person:" + mentionKey(p.Username) }
 
-// mentionQuickRow 与参与人行走同一套按钮样式：左侧 22 高的图标槽与头像对齐，
-// 右侧名称，点一下把拼好的串插进光标处。
-func (a *app) mentionQuickRow(c *ui.Context, d *detailState, host replySurface, q mentionQuickEntry) {
-	t := c.Theme()
-	row := ui.ButtonBase(c).FillWidth().Padding(4, 8).Radius(8).Gap(8).
-		AlignItems(ui.Center).KeepFocus()
-	row.Background(ui.Transparent)
-	if row.Hovered() {
-		row.Background(t.SurfaceHover)
+// mentionRows 生成面板里的行：三条快捷拼串在前，参与人按当前 @前缀 过滤在后。
+// 名单还没回来或名额已满时对应项不出现，不摆一个点了没反应的入口。抽奖助手
+// 只在自己的帖子里出现：服务端只认帖主发的一级评论，换账号回复或别人的帖子
+// 写了也不开奖，所以入口与工具条用同一套作者判断（见 canLottery）。
+func (a *app) mentionRows(d *detailState, data mentionResult) []mentionRow {
+	exclude := a.mentionExclude(d)
+	out := make([]mentionRow, 0, 8)
+	if data.Slots > 0 {
+		if all := buildMentions(data.Participants, exclude, data.Slots); all != "" &&
+			data.Total <= mentionNotifyLimit {
+			out = append(out, mentionRow{Key: "quick:all", Label: "@所有人",
+				Icon: accountsIcon, Text: all})
+		}
+		if random := pickRandomMention(data.Guardians, exclude); random != "" {
+			out = append(out, mentionRow{Key: "quick:random", Label: "@随机守护者",
+				Icon: profileIcon, Text: mentionAt(random)})
+		}
+		if a.canLottery(d) && !a.replyIdentityFor(d).Switched {
+			out = append(out, mentionRow{Key: "quick:lottery", Label: "@" + lotteryName,
+				Icon: lotteryIcon, Text: lotteryCommand(lotteryDefaultWinners) + " "})
+		}
 	}
-	row.Children(func() {
-		ui.Box(c).Size(22, 22).Center().Children(func() {
-			ui.Icon(c, q.Icon).Size(14, 14).TextColor(t.TextMuted)
-		})
-		ui.Text(c, q.Label).FontSize(12).TextColor(t.Text).
-			SingleLine().Grow(1).MinWidth(0)
-	})
-	row.Label(q.Label).Tooltip(q.Tip)
-	if row.Clicked() {
-		st := &d.mentions
-		st.host = host
-		a.insertMention(d, q.Text)
+	people := mentionPeople(data.Participants, exclude, d.mentions.query)
+	if len(people) > mentionPanelShown {
+		people = people[:mentionPanelShown]
 	}
-}
-
-// mentionFiltered 按用户名筛选名单，忽略大小写；空词返回全部。
-func mentionFiltered(people []mentionPerson, query string) []mentionPerson {
-	q := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(query, "@")))
-	if q == "" {
-		return people
+	if len(people) > 0 && len(out) > 0 {
+		out = append(out, mentionRow{Divider: true})
 	}
-	out := make([]mentionPerson, 0, len(people))
 	for _, p := range people {
-		if strings.Contains(strings.ToLower(p.Username), q) {
-			out = append(out, p)
+		row := mentionRow{
+			Key: mentionPersonKey(p), Label: "@" + p.Username, Person: p,
+			Text: mentionAt(p.Username),
 		}
+		if p.IsAlias {
+			row.Extra = "分身"
+		}
+		out = append(out, row)
 	}
 	return out
 }
 
-// mentionPersonRow 是名单里的一行：头像、用户名、分身标记，点一下把
-// "@名字 " 插进正文。无障碍名带 @，和拼串入口区分得开。
-func (a *app) mentionPersonRow(c *ui.Context, d *detailState, host replySurface, p mentionPerson) {
-	t := c.Theme()
-	a.prefetchAvatars(p.Avatar)
-	row := ui.ButtonBase(c).FillWidth().Padding(4, 8).Radius(8).Gap(8).
-		AlignItems(ui.Center).KeepFocus()
-	row.Background(ui.Transparent)
-	if row.Hovered() {
-		row.Background(t.SurfaceHover)
-	}
-	row.Children(func() {
-		avatarView(c, p.Username, a.avatarBitmap(p.Avatar), 22)
-		ui.Text(c, "@"+p.Username).FontSize(12).TextColor(t.Text).
-			SingleLine().Grow(1).MinWidth(0)
-		if p.IsAlias {
-			display.Tag(c, "分身", display.TagProps{Size: lobetheme.Small})
+// mentionListItems 把行翻成 Lobe List 的行：快捷行画图标、参与人画头像，都在
+// 同一个 22 宽的槽里，两类行的文字因此对齐；分身标记走 Extra，不另造标签。
+func (a *app) mentionListItems(c *ui.Context, rows []mentionRow) []display.ListItem {
+	tk := lobetheme.TokensOf(c)
+	out := make([]display.ListItem, 0, len(rows))
+	for _, row := range rows {
+		if row.Divider {
+			out = append(out, display.ListItem{Divider: true})
+			continue
 		}
-	})
-	row.Label("@" + p.Username)
-	if row.Clicked() {
-		st := &d.mentions
-		st.host = host
-		a.insertMention(d, mentionAt(p.Username))
+		item := display.ListItem{Key: row.Key, Label: row.Label, Extra: row.Extra}
+		if row.Person.Username != "" {
+			a.prefetchAvatars(row.Person.Avatar)
+			item.Avatar = func() {
+				avatarView(c, row.Person.Username, a.avatarBitmap(row.Person.Avatar), 22)
+			}
+		} else {
+			item.Avatar = func() {
+				ui.Box(c).Size(22, 22).Center().Children(func() {
+					ui.Icon(c, row.Icon).Size(14, 14).TextColor(tk.TextTertiary)
+				})
+			}
+		}
+		out = append(out, item)
 	}
+	return out
 }
 
-// insertMention 把拼好的提及插进光标处。insertText 会记下插入后的选区，
-// replyTextArea 下一帧 syncSelection 把它还给输入框；这里顺手收起气泡并
-// 切回编辑视图，免得在预览里插入了却看不见。
+// mentionActiveKey 是键盘上下键当前指着的那一行：面板里高亮它，回车选的就是
+// 它。快捷行不参与键盘循环——打了 "@ali" 还让回车先撞上 @所有人 会很意外。
+func (a *app) mentionActiveKey(d *detailState) string {
+	st := &d.mentions
+	if !st.typing || !st.open {
+		return ""
+	}
+	people := mentionPeople(a.mentionData(d, d.draft).Participants,
+		a.mentionExclude(d), st.query)
+	if st.active < 0 || st.active >= len(people) {
+		return ""
+	}
+	return mentionPersonKey(people[st.active])
+}
+
+// mentionRowsHeight 估出行集合的高度，用来决定向上还是向下展开。
+func mentionRowsHeight(rows []mentionRow) float32 {
+	h, n := float32(0), 0
+	for _, r := range rows {
+		if r.Divider {
+			h += mentionDividerH
+			continue
+		}
+		if n > 0 {
+			h += mentionRowGap
+		}
+		h += mentionRowH
+		n++
+	}
+	return h
+}
+
+// panelWidth 按最长的一行算面板宽度：宽度由内容撑开，名单里名字都短时面板
+// 就窄，不会留出一条空白的右边；只兜住「太窄」与「长到离谱」两端。行集合
+// （名单 + 搜索词）没变时复用上一次的量法，不每帧整形文字。
+func (st *mentionState) panelWidth(rows []mentionRow) float32 {
+	var key strings.Builder
+	for _, r := range rows {
+		key.WriteString(r.Label)
+		key.WriteByte('\t')
+		key.WriteString(r.Extra)
+		key.WriteByte('\n')
+	}
+	if k := key.String(); k == st.sizeKey && k != "" {
+		return st.sizeW
+	}
+	labels := make([]string, 0, len(rows))
+	extras := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.Divider {
+			continue
+		}
+		labels = append(labels, r.Label)
+		if r.Extra != "" {
+			extras = append(extras, r.Extra)
+		}
+	}
+	w := mentionRowChrome + mentionTextWidth(labels, mentionFontSize)
+	if len(extras) > 0 {
+		w += mentionExtraGap + mentionTextWidth(extras, mentionExtraSize)
+	}
+	// 多留 2 DIP：排版宽度是小数，贴着算出来的宽度画会把最后一笔压掉。
+	w = min(max(w+2, mentionPanelMinW), mentionPanelMaxW)
+	st.sizeKey, st.sizeW = key.String(), w
+	return w
+}
+
+// mentionTextWidth 量一组单行文字里最宽的那一行，宽度零表示只按换行断行。
+func mentionTextWidth(lines []string, size float32) float32 {
+	if len(lines) == 0 {
+		return 0
+	}
+	w, _ := ui.ShapeText(strings.Join(lines, "\n"), ui.Font{Size: size}, 0).Size()
+	return w
+}
+
+// insertMention 把拼好的提及写进正文。键入 @ 打开的面板不是「插入」而是
+// 「整块替换」：从 @ 起、到这段用户名的末尾（连带后面那个空格）全换成
+// "@名字 "。光标停在名字中间挑候选也换整块——只换光标前那一段会留下
+// "@Jimmyimmy" 这样的残字。
 func (a *app) insertMention(d *detailState, text string) {
 	if text == "" {
 		return
 	}
 	st := &d.mentions
-	if st.typing && st.tokenStart >= 0 && st.tokenEnd >= st.tokenStart {
-		// 键入 @ 触发的面板：替换掉正文里正在输入的 @前缀，而不是在后面
-		// 再追加一个 @名字（那会留下 "@jim @jimmy " 这样的重复串）。
-		d.mdEditor.replaceMentionToken(&d.draft, st.tokenStart, st.tokenEnd, text)
+	if st.typing && st.tokenStart >= 0 {
+		start, end := mentionWordRange(d.draft, st.tokenStart)
+		d.mdEditor.replaceMentionToken(&d.draft, start, max(end, st.tokenEnd), text)
 	} else {
 		d.mdEditor.insertText(&d.draft, text)
 	}
@@ -275,7 +390,8 @@ func (a *app) insertMention(d *detailState, text string) {
 	st.active = 0
 }
 
-// mentionDeleteBlock 让写完的 @名字 像一个整体：退格 / Delete 一次清掉整块。
+// mentionDeleteBlock 让写完的 @名字 像一个整体：光标落在名字里任何一个位置
+// 按退格 / Delete，一次清掉整块（含后面那个空格），而不是一个字一个字往回删。
 // k.Text() 是按键到来时输入控件里最新的文本（可能比绑定值还新），光标取
 // 上一帧提交到状态的选区；命中整块后用 k.SetText 同步回输入控件。
 func (a *app) mentionDeleteBlock(d *detailState, k ui.TextKey, backspace bool) bool {
@@ -288,14 +404,18 @@ func (a *app) mentionDeleteBlock(d *detailState, k ui.TextKey, backspace bool) b
 	if caret < 0 || caret > len(rs) {
 		caret = len(rs)
 	}
-	blocks := mentionBlocks(text)
+	blocks := d.mentions.blocksFor(text)
 	var hit *mentionBlock
 	for i := range blocks {
+		b := blocks[i]
 		if backspace {
-			if blocks[i].End == caret {
+			// 光标在块内任意位置（含尾随空格之后）：整块删掉。块首按退格
+			// 是删前一个字，不算命中。
+			if caret > b.Start && caret <= b.End {
 				hit = &blocks[i]
+				break
 			}
-		} else if blocks[i].Start == caret {
+		} else if caret >= b.Start && caret < b.End {
 			hit = &blocks[i]
 			break
 		}
@@ -316,8 +436,8 @@ func (a *app) mentionDeleteBlock(d *detailState, k ui.TextKey, backspace bool) b
 // 采纳，Escape 收起。面板没由输入打开时不消费按键，Ctrl+Enter 发送照旧。
 // OnTextKey 在帧间运行，Element 已失效，所以改正文必须走 k.SetText。
 func (a *app) mentionTextKey(d *detailState, k ui.TextKey) bool {
-	// 提及块整体删除：与面板是否打开无关。光标紧跟在 @名字 的尾随空格后
-	// 按退格（或停在块首按 Delete），一次删掉整块，而不是一个字一个字退。
+	// 提及块整体删除：与面板是否打开无关。光标在 @名字 里任何位置按退格
+	//（或 Delete），一次删掉整块，而不是一个字一个字退。
 	if k.Key == ui.KeyBackspace || k.Key == ui.KeyDelete {
 		return a.mentionDeleteBlock(d, k, k.Key == ui.KeyBackspace)
 	}

@@ -262,7 +262,9 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 				Background(t.Background).Children(func() {
 				c.Key("reply-window-field")
 				a.replyTextArea(c, d, replySurfaceWindow, replyFieldWindow, true)
-				a.mentionPopover(c, d, replySurfaceWindow, 0, 0)
+				// 面板要贴着 @：输入框自己有 8 / 4 的内边距，@ 的矩形要按
+				// 同一份内边距算，否则面板会偏到输入框边框上。
+				a.mentionPopover(c, d, replySurfaceWindow, 8, 4)
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 					// 窄窗口只留手势说明：两栏一分，页脚放不下整句
 					// 「支持 Markdown 与 :短码: 表情」，截成省略号更难看。
