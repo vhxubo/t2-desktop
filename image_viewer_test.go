@@ -706,6 +706,113 @@ func TestImageViewerCloseWorksAfterZoom(t *testing.T) {
 	}
 }
 
+// viewerMaxLum 取一块矩形里最亮的像素，用来判断图标画成了哪种墨色：深色底上
+// 的亮色图标、弱化一档的窗口控制图标与禁用图标亮度依次拉开。
+func viewerMaxLum(im *image.RGBA, r ui.Rect) float64 {
+	max := 0.0
+	for y := int(r.Y) + 2; y < int(r.Y+r.H)-2; y++ {
+		for x := int(r.X) + 2; x < int(r.X+r.W)-2; x++ {
+			if v := lum(im, x, y); v > max {
+				max = v
+			}
+		}
+	}
+	return max
+}
+
+// viewerRect 找到工具条上的图标按钮；找不到就让测试直接失败。
+func viewerRect(t *testing.T, vt *ui.Tester, label string) ui.Rect {
+	t.Helper()
+	r, ok := vt.Find(label)
+	if !ok {
+		t.Fatalf("工具条里找不到「%s」：%q", label, vt.Texts())
+	}
+	return r
+}
+
+// 预览窗口是固定的深色底：应用切到浅色主题时，工具条不能翻成一条浅色横幅，
+// 底栏与图标也不能跟着变暗。四种主题组合下都该是同一套深色配色。
+func TestImageViewerToolbarUsesDarkPaletteAcrossThemes(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		mode       int
+		systemDark bool
+	}{
+		{"应用浅色", themeLight, false},
+		{"应用深色", themeDark, false},
+		{"跟随系统·系统浅色", themeFollowSystem, false},
+		{"跟随系统·系统深色", themeFollowSystem, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := viewerDetailApp(t, 0)
+			if err := a.theme.Save(tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			a.openImageGroup([]articlePicture{{URL: viewerPicPrefix + "p1.png"}}, viewerPicPrefix+"p1.png")
+			vt := ui.NewTesterWith(a.imageViewerWindowView, 1100, 760, ui.TesterOptions{Dark: tc.systemDark})
+			vt.Frame()
+			im := vt.Image()
+			// x=6 落在工具条与底栏的左右留白里，取到的就是它们的底色。
+			if got := lum(im, 6, int(imageViewerToolbarH/2)); got > 100 {
+				t.Errorf("工具条底色亮度 %.0f，期望深色（<100）", got)
+			}
+			if got := lum(im, 6, 760-int(imageViewerFooterH/2)); got > 100 {
+				t.Errorf("底栏底色亮度 %.0f，期望深色（<100）", got)
+			}
+			// 图标在深色工具条上必须是亮色：若随应用浅色主题翻成深色，
+			// 这些按钮在深色底上就几乎看不见了。
+			for _, label := range []string{imageViewerZoomIn, imageViewerSave, imageViewerClose} {
+				if got := viewerMaxLum(im, viewerRect(t, vt, label)); got < 200 {
+					t.Errorf("「%s」图标亮度 %.0f，期望亮色（>=200）", label, got)
+				}
+			}
+		})
+	}
+}
+
+// 工具条兼作标题栏：操作键、窗口控制键与关闭键的图标要一眼能分辨——
+// 操作键最亮、最小化弱一档、禁用的翻页键明显发灰；关闭键悬停时红底白叉，
+// 与旁边只给中性浅底的最小化键区分开。
+func TestImageViewerToolbarIconColorsAreDistinguished(t *testing.T) {
+	a := viewerDetailApp(t, 0)
+	a.openImageGroup([]articlePicture{
+		{URL: viewerPicPrefix + "p1.png"},
+		{URL: viewerPicPrefix + "p2.png"},
+	}, viewerPicPrefix+"p1.png")
+	vt := ui.NewTesterWith(a.imageViewerWindowView, 1100, 760, ui.TesterOptions{Dark: false})
+	vt.Frame()
+	im := vt.Image()
+	prev := viewerRect(t, vt, imageViewerPrev)
+	next := viewerRect(t, vt, imageViewerNext)
+	min := viewerRect(t, vt, imageViewerMinimize)
+	action, window, disabled := viewerMaxLum(im, next), viewerMaxLum(im, min), viewerMaxLum(im, prev)
+	if action <= window+30 || window <= disabled+30 {
+		t.Errorf("图标亮度没有拉开档次：操作 %.0f，窗口控制 %.0f，禁用 %.0f", action, window, disabled)
+	}
+
+	// 最小化悬停：中性底色，不能和关闭一样变红。
+	vt.Move(min.X+min.W/2, min.Y+min.H/2)
+	vt.Frame()
+	im = vt.Image()
+	c := im.RGBAAt(int(min.X)+3, int(min.Y)+3)
+	if c.R > 0xf0 && c.G < 0x40 {
+		t.Errorf("最小化悬停底色成了红色：#%02x%02x%02x", c.R, c.G, c.B)
+	}
+
+	// 关闭悬停：系统红底 + 白叉，与标题栏窗口按钮一致。
+	close := viewerRect(t, vt, imageViewerClose)
+	vt.Move(close.X+close.W/2, close.Y+close.H/2)
+	vt.Frame()
+	im = vt.Image()
+	c = im.RGBAAt(int(close.X)+3, int(close.Y)+3)
+	if c.R != 0xe8 || c.G != 0x11 || c.B != 0x23 {
+		t.Errorf("关闭悬停底色 = #%02x%02x%02x，期望 #e81123", c.R, c.G, c.B)
+	}
+	if got := viewerMaxLum(im, close); got < 220 {
+		t.Errorf("关闭悬停时叉子应为白色，最亮像素只有 %.0f", got)
+	}
+}
+
 // waitViewerIdle 等到这一次另存为结束（成功、失败或取消）：状态都写回界面之后，
 // 后台那段才关掉 savingDone，所以等它就等于等结果落定，不会和 UI 线程抢着读写。
 func waitViewerIdle(t *testing.T, a *app) {

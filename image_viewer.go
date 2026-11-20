@@ -14,6 +14,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown/parser"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 )
 
 // 多图预览窗口
@@ -215,7 +216,13 @@ func (a *app) redrawViewerWindow() {
 // imageViewerWindowView 是预览窗口的 view：整扇窗口就是预览，顶部工具条兼作
 // 标题栏（可拖动窗口，右侧最小化与关闭），底部一行操作提示。
 func (a *app) imageViewerWindowView(c *ui.Context) {
-	a.applyTheme(c)
+	// 预览窗口是一块固定的深色底（黑遮罩 + #101012 窗口底色）。工具条、
+	// 底栏和图标必须跟着这块底走深色 token：照搬应用的浅色主题会把工具条
+	// 翻成一条浅色横幅，图标也跟着变成深色，和深色舞台上的大图格格不入。
+	// 这里锁定 Lobe 的深色主题（仍出自 lobeCfg，Lobe 组件照常能取到匹配的
+	// token），于是无论应用选浅色、深色还是跟随系统，预览窗口都保持同一套
+	// 深色配色。主题要在读根背景之前定好，见 theme.go 的 applyTheme 约定。
+	c.SetTheme(homeTheme(true))
 	a.srv = c.Services()
 	c.Root().Background(ui.Hex("#101012"))
 	a.drainToasts(c, a.claimsToasts(toastViewer))
@@ -567,22 +574,26 @@ func (a *app) viewerKeyLayer(c *ui.Context, v *imageViewer, fit float32) {
 	keys.Bind(&v.keys)
 }
 
-// imageViewerMenu 是图片上的右键菜单：一张藏在光标位置的定位块负责弹出系统
-// 菜单（与别处一致），菜单项「另存为」「实际大小」「关闭预览」。
+// imageViewerMenu 是图片上的右键菜单：一张藏在光标位置的定位块负责弹出 Lobe
+// 菜单，菜单项「另存为」「实际大小」「关闭预览」。Ctrl+S 由 viewerKeys 单独绑定，
+// 这里的 Hotkey 只负责在菜单里显示。
 func (a *app) imageViewerMenu(c *ui.Context, v *imageViewer, p articlePicture) {
 	at := ui.Box(c).Absolute().Left(v.menuAt.X).Top(v.menuAt.Y).Size(1, 1)
-	at.ContextMenu(func(m *ui.Menu) {
-		if m.Item(imageViewerSave).Shortcut(ui.Cmd, ui.KeyS).Chosen() {
-			a.saveImage(p.URL)
-		}
-		m.Separator()
-		if m.Item(imageViewerActual).Chosen() {
-			v.zoom = 0
-		}
-		if m.Item(imageViewerClose).Chosen() {
-			a.startViewerClose()
-		}
-	})
+	switch lobeoverlay.ContextMenu(c, at, lobeoverlay.DropdownMenuProps{
+		Items: []lobeoverlay.MenuItem{
+			{Key: "save", Label: imageViewerSave, Hotkey: "mod+s"},
+			{Divider: true},
+			{Key: "actual", Label: imageViewerActual},
+			{Key: "close", Label: imageViewerClose},
+		},
+	}) {
+	case "save":
+		a.saveImage(p.URL)
+	case "actual":
+		v.zoom = 0
+	case "close":
+		a.startViewerClose()
+	}
 }
 
 // viewerInput 处理窗口里的滚轮、触控板缩放与指针，返回是否吃掉了这个事件。
@@ -693,8 +704,8 @@ func (a *app) imageViewerToolbar(c *ui.Context, v *imageViewer, lay viewerLayout
 			}
 		})
 		ui.Box(c).Width(1).Height(18).Background(t.Border).Shrink(0)
-		a.viewerButton(c, minimizeIcon, imageViewerMinimize, "把预览窗口最小化", false, a.minimizeViewerWindow)
-		a.viewerButton(c, closeIcon, imageViewerClose, "关闭预览（Esc）", false, a.startViewerClose)
+		a.viewerWindowButton(c, minimizeIcon, imageViewerMinimize, "把预览窗口最小化", a.minimizeViewerWindow)
+		a.viewerCloseButton(c, closeIcon, imageViewerClose, "关闭预览（Esc）", a.startViewerClose)
 	})
 }
 
@@ -705,23 +716,64 @@ func (a *app) minimizeViewerWindow() {
 	}
 }
 
-// viewerButton 是工具条上的一枚图标按钮：悬停给浅底，禁用时变淡。label 供
-// 读屏与测试识别，tip 是悬浮说明。
+// viewerButtonTone 区分工具条上图标的角色。工具条兼作窗口标题栏，操作键、
+// 窗口控制键与关闭键不能一律同一个墨色，否则一眼看不出哪个是「关闭」。
+type viewerButtonTone int
+
+const (
+	viewerToneAction viewerButtonTone = iota // 翻页、缩放、另存为：亮色图标，悬停品牌蓝
+	viewerToneWindow                         // 最小化：常态弱一档，悬停中性浅底
+	viewerToneClose                          // 关闭：悬停红底白叉，与系统窗口按钮一致
+)
+
+// viewerButton 画工具条上的一枚操作图标：常态亮色、悬停给浅底并转成品牌蓝、
+// 禁用时明显变淡。label 供读屏与测试识别，tip 是悬浮说明。
 func (a *app) viewerButton(c *ui.Context, icon *ui.SVG, label, tip string, disabled bool, onClick func()) {
+	a.viewerIconButton(c, icon, label, tip, disabled, viewerToneAction, onClick)
+}
+
+// viewerWindowButton 是「最小化」这类窗口控制键：常态比操作键弱一档，悬停
+// 只给中性浅底，不与操作键的品牌蓝混淆。
+func (a *app) viewerWindowButton(c *ui.Context, icon *ui.SVG, label, tip string, onClick func()) {
+	a.viewerIconButton(c, icon, label, tip, false, viewerToneWindow, onClick)
+}
+
+// viewerCloseButton 是「关闭」键：和系统标题栏一样，悬停时红底白叉。
+func (a *app) viewerCloseButton(c *ui.Context, icon *ui.SVG, label, tip string, onClick func()) {
+	a.viewerIconButton(c, icon, label, tip, false, viewerToneClose, onClick)
+}
+
+// viewerIconButton 是三类工具条图标按钮的共同画法：底色与图标颜色按角色和
+// 状态分别给，保证常态、悬停、禁用、窗口控制与关闭各有可辨的颜色。
+func (a *app) viewerIconButton(c *ui.Context, icon *ui.SVG, label, tip string, disabled bool, tone viewerButtonTone, onClick func()) {
 	t := c.Theme()
 	b := ui.Box(c).Size(imageViewerButton, imageViewerButton).Radius(8).Shrink(0).Center().
 		Background(ui.Transparent)
 	hovered := b.Hovered()
-	if hovered && !disabled {
-		b.Background(t.SurfaceHover)
-	}
-	ink := t.Text
+	closeHover := tone == viewerToneClose && hovered && !disabled
 	switch {
 	case disabled:
 		b.Disabled(true)
+	case closeHover:
+		b.Background(ui.Hex("#e81123")) // 关闭：红底白叉，与系统窗口按钮一致
+	case hovered:
+		b.Background(t.SurfaceHover)
+	}
+	var ink ui.Color
+	switch {
+	case disabled:
 		ink = t.TextMuted.Alpha(0.45)
+	case closeHover:
+		ink = ui.Hex("#ffffff")
+	case tone == viewerToneWindow:
+		ink = t.TextMuted
+		if hovered {
+			ink = t.Text
+		}
 	case hovered:
 		ink = t.Accent
+	default:
+		ink = t.Text
 	}
 	b.Children(func() {
 		ui.Icon(c, icon).Size(17, 17).TextColor(ink)
