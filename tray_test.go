@@ -34,7 +34,7 @@ func trayItem(t *testing.T, menu *mygo.Menu, id string) *mygo.MenuItem {
 func TestTrayMenuOffersLoginWhenNoAccounts(t *testing.T) {
 	b := testBook(t)
 	menu := b.trayMenu()
-	want := []string{"未登录", "登录", "注册", "", "账号管理", "", "退出"}
+	want := []string{"未登录", "登录", "注册", "", "账号管理", "关闭全部", "", "退出"}
 	if got := trayLabels(menu); !reflect.DeepEqual(got, want) {
 		t.Fatalf("没有账号时的托盘菜单 %q，期望 %q", got, want)
 	}
@@ -56,7 +56,7 @@ func TestTrayMenuItemsCarryIcons(t *testing.T) {
 	b := testBook(t)
 	addTestAccount(t, b, "jimmy")
 	menu := b.trayMenu()
-	ids := []string{trayAccountIDPrefix + b.accountsView()[0].ID, trayAccountsID, trayQuitID}
+	ids := []string{trayAccountIDPrefix + b.accountsView()[0].ID, trayAccountsID, trayCloseAllID, trayQuitID}
 	for _, id := range ids {
 		if it := trayItem(t, menu, id); it.Icon == nil {
 			t.Errorf("托盘菜单项 %q 没有图标", id)
@@ -83,7 +83,7 @@ func TestTrayMenuListsEveryAccountWithUnread(t *testing.T) {
 	want := []string{
 		"jimmy（3 条未读）",
 		"amy（需要重新登录）",
-		"", "账号管理", "", "退出",
+		"", "账号管理", "关闭全部", "", "退出",
 	}
 	if got := trayLabels(menu); !reflect.DeepEqual(got, want) {
 		t.Fatalf("托盘菜单 %q，期望 %q", got, want)
@@ -100,6 +100,25 @@ func TestTrayAccountEntryRemembersTheAccount(t *testing.T) {
 	it.Click(it, nil)
 	if got := b.activeAccountID(); got != jimmy.ID {
 		t.Fatalf("点过 %q 之后最近使用的账号是 %q", amy.ID, got)
+	}
+}
+
+// 托盘里的「关闭全部」把窗口收进托盘，但应用继续在后台跑；它和「退出」
+// 是两条不同的路子，点一下只调一次收窗动作。
+func TestTrayCloseAllWindowsHidesWindowsWithoutQuitting(t *testing.T) {
+	b := testBook(t)
+	addTestAccount(t, b, "jimmy")
+	closed := 0
+	quits := 0
+	b.closeAllWindows = func() { closed++ }
+	b.quitApp = func() { quits++ }
+	it := trayItem(t, b.trayMenu(), trayCloseAllID)
+	it.Click(it, nil)
+	if closed != 1 {
+		t.Fatalf("点「关闭全部」调用了 %d 次收窗，期望 1 次", closed)
+	}
+	if quits != 0 {
+		t.Fatalf("点「关闭全部」不该退出应用，却退出了 %d 次", quits)
 	}
 }
 

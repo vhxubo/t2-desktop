@@ -11,7 +11,7 @@ import (
 
 // 系统托盘：Windows 是任务栏通知区域，macOS 是菜单栏。左键点图标把最近用过
 // 的账号窗口带回前台；右键弹出菜单，列出挂着的每个账号（带未读数）、账号
-// 管理入口与退出。
+// 管理入口、关闭全部（收进托盘，应用继续在后台跑）与退出。
 //
 // 托盘是进程级资源：多账号共用这一个图标，菜单每次右键现建一份，账号列表、
 // 未读数因此不会落后于应用内的状态；菜单挂着时左键也会弹出菜单，所以弹出后
@@ -29,6 +29,7 @@ const (
 
 	trayAccountIDPrefix = "tray-account-"
 	trayAccountsID      = "tray-accounts"
+	trayCloseAllID      = "tray-close-all"
 	trayLoginID         = "tray-login"
 	traySignupID        = "tray-signup"
 	trayQuitID          = "tray-quit"
@@ -42,6 +43,7 @@ var (
 	traySignupMI   *mygo.MenuIcon
 	trayAccountsMI *mygo.MenuIcon
 	trayAccountMI  *mygo.MenuIcon
+	trayCloseAllMI *mygo.MenuIcon
 	trayQuitMI     *mygo.MenuIcon
 )
 
@@ -57,6 +59,7 @@ func init() {
 	traySignupMI = makeMI(signupIcon)
 	trayAccountsMI = makeMI(accountsIcon)
 	trayAccountMI = makeMI(profileIcon)
+	trayCloseAllMI = makeMI(collapseIcon)
 	trayQuitMI = makeMI(closeIcon)
 }
 
@@ -172,6 +175,12 @@ func (b *accountBook) trayMenu() *mygo.Menu {
 			Label: "账号管理",
 			Icon:  trayAccountsMI,
 			Click: func(*mygo.MenuItem, *mygo.Window) { b.showPanel() },
+		},
+		&mygo.MenuItem{
+			ID:    trayCloseAllID,
+			Label: "关闭全部",
+			Icon:  trayCloseAllMI,
+			Click: func(*mygo.MenuItem, *mygo.Window) { b.closeAllWindows() },
 		},
 		mygo.Separator(),
 		&mygo.MenuItem{

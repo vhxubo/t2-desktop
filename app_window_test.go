@@ -52,6 +52,26 @@ func TestMainWindowCloseKeepsOtherWindowsAndAccountAlive(t *testing.T) {
 	}
 }
 
+// 托盘「关闭全部」收掉详情等附属窗口，但账号仍挂在账号册上 —— 窗口只是
+// 收进托盘，不是退出登录；点托盘图标还能回到它。
+func TestHideAllWindowsToTrayKeepsAccountAlive(t *testing.T) {
+	b := testBook(t)
+	acc := addTestAccount(t, b, "jimmy")
+	a := newAppWithDeps(b.deps(), acc)
+	acc.app = a
+	a.openDetailWindow(itemForWindow("POST001"))
+	a.openDetailWindow(itemForWindow("POST002"))
+
+	a.hideAllWindowsToTray()
+
+	if got := a.detailWindowCount(); got != 0 {
+		t.Fatalf("附属窗口该收干净，实际剩 %d 扇", got)
+	}
+	if a.finalized || acc.app != a {
+		t.Fatal("收进托盘不该收掉账号界面状态")
+	}
+}
+
 // 没有任何其它窗口时，关主窗口就立刻收尾（单窗口场景）。
 func TestMainWindowCloseWithNoOtherWindowsFinalizes(t *testing.T) {
 	a := testApp(t)

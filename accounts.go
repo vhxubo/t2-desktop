@@ -182,11 +182,12 @@ type accountBook struct {
 	webview bool
 	// imgHTTP 是账号面板预取头像用的客户端：与窗口里的图片一样走配置的代理。
 	imgHTTP *http.Client
-	// notify / openURL / quitApp 是可以替换的系统动作：无头测试里换成记录
-	// 调用，不碰原生窗口、浏览器与主循环。
-	notify  func(nativeNotice) error
-	openURL func(string) error
-	quitApp func()
+	// notify / openURL / quitApp / closeAllWindows 是可以替换的系统动作：无头测试里
+	// 换成记录调用，不碰原生窗口、浏览器与主循环。
+	notify          func(nativeNotice) error
+	openURL         func(string) error
+	quitApp         func()
+	closeAllWindows func()
 	// mainLoop 表示应用主循环已经跑起来了：只有这时才能把工作投到主线程。
 	mainLoop bool
 	// afterReady 表示 mygo 应用已经就绪，可以创建原生窗口了。
@@ -228,6 +229,7 @@ func newAccountBook(dir string) *accountBook {
 	}
 	b.imgHTTP = b.proxy.Client(20 * time.Second)
 	b.quitApp = b.quitProgram
+	b.closeAllWindows = b.closeAllWindowsToTray
 	b.bgClient = func(acc *account) *Client {
 		return &Client{Auth: acc.auth, Proxy: b.proxy}
 	}

@@ -200,6 +200,69 @@ func (a *app) hideMainWindowToTray() {
 	a.closeViewerWindow()
 }
 
+// hideAllWindowsToTray 把这个账号的全部窗口收进托盘：主窗口 Hide，其余窗口
+// （详情、设置、金币、编辑等）一律关掉。比 hideMainWindowToTray 多收的是详情
+// 窗口与关于 / 网络日志 / 评分这些相对独立的窗口 —— 托盘里点「关闭全部」
+// 就是要屏幕上什么都不留，只留一个托盘图标。
+// 只在主线程调用。
+func (a *app) hideAllWindowsToTray() {
+	a.hideMainWindowToTray()
+	a.closePandora()
+	a.closeReplyWindow()
+	a.closeEditWindow()
+	a.closeAboutWindow()
+	a.closeNetLogWindow()
+	a.closeScoresWindow()
+	a.closeAllDetailWindows()
+}
+
+// hasOpenMainWindow 报告是否还有一扇开着的主窗口。收全部窗口时主窗口只 Hide
+// 不 Destroy，必须留这么一扇当锚点，否则附属窗口一关完，mygo 会因为「最后一
+// 扇窗口关了」直接退出应用。
+func (b *accountBook) hasOpenMainWindow() bool {
+	for _, acc := range b.snapshotAccounts() {
+		if acc.app != nil && !acc.app.mainClosed && acc.app.win != nil {
+			return true
+		}
+	}
+	if guest := b.guest; guest != nil && !guest.mainClosed && guest.win != nil {
+		return true
+	}
+	return false
+}
+
+// closeAllWindowsToTray 是托盘「关闭全部」的动作：把每个账号的主窗口连同
+// 附属窗口一起收进托盘，未登录窗口、账号面板与内置授权窗口也一并关掉。主窗口
+// 只 Hide 不 Destroy，窗口对象还在，应用不会因为「最后一个窗口关了」退出；
+// 点托盘图标就能回到最近用过的账号。
+// 只在主线程调用（托盘菜单的 Click 回调本就在主线程）。
+func (b *accountBook) closeAllWindowsToTray() {
+	// 主窗口都关着、只剩详情等附属窗口时，先开一扇主窗口当锚点。否则下面
+	// 关掉最后一扇附属窗口就会退出应用 —— 那就和「退出」重复了。
+	if !b.hasOpenMainWindow() {
+		accounts := b.snapshotAccounts()
+		if len(accounts) > 0 {
+			id := b.activeAccountID()
+			if b.account(id) == nil {
+				id = accounts[0].ID
+			}
+			b.openWindowNow(id)
+		} else {
+			b.openGuestWindowNow()
+		}
+	}
+	for _, acc := range b.snapshotAccounts() {
+		if acc.app != nil {
+			acc.app.hideAllWindowsToTray()
+		}
+	}
+	if guest := b.guest; guest != nil {
+		guest.hideAllWindowsToTray()
+	}
+	b.closePanelWindow()
+	b.closeLoginWindow()
+}
+
 // closePromptDialog 是关闭主窗口时的询问框。放在主窗口里而不是另开一个
 // 窗口：它只在这次关闭时用一下，开新窗口反而会挡住主窗口的样子。三个选项
 // 并列，Lobe Modal 自带的两按钮页脚放不下，所以用 NoFooter 自己排一行按钮。
