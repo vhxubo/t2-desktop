@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
 // 窗口内提示。操作的结果（成功或者失败）不再用内联文字占版面，而是在窗口
@@ -10,9 +11,9 @@ import (
 // 失败多出一行红字，也不会一直留着。
 //
 // toast 只能在构建期通过 *ui.Context 发出，而后台结果是在 publish 回到 UI
-// 线程时产生的，所以先按窗口排队，等那个窗口下一次重建时再交给 c.Toast。
-// c.Toast 画在窗口的 overlay 上，也就是内容、悬浮按钮与授权 / 询问弹窗之上，
-// 所以提示不会被页面里的任何一层挡住。
+// 线程时产生的，所以先按窗口排队，等那个窗口下一次重建时再交给 Lobe 的
+// feedback.ShowToast。它画在窗口的 overlay 上，也就是内容、悬浮按钮与授权 /
+// 询问弹窗之上，所以提示不会被页面里的任何一层挡住。
 
 // toastTarget 是提示该出现在哪个窗口：操作发生在哪个窗口就提示在哪个窗口；
 // 那个窗口不在了就退回主窗口，结果总有人看见。主窗口之外的每个窗口的 view
@@ -99,29 +100,33 @@ func (a *app) toast(target toastTarget, text string) {
 	}
 }
 
-// drainToasts 把这一帧归本窗口的提示交给 c.Toast，其余留在队列里等自己的
-// 窗口。claims 回答「这条提示归不归本窗口」。
+// drainToasts 把这一帧归本窗口的提示交给 Lobe 的 feedback.ShowToast，其余
+// 留在队列里等自己的窗口。claims 回答「这条提示归不归本窗口」。
+// 各窗口的 view 都用 defer 调它：overlay 按建树顺序叠放，feedback.ToastHost
+// 必须在弹窗、浮层之后建，toast 才会盖在它们上面（mygo 的 z-index 不改
+// overlay 之间的顺序）。
 func (a *app) drainToasts(c *ui.Context, claims func(toastTarget) bool) {
 	a.toastMu.Lock()
-	if len(a.toasts) == 0 {
-		a.toastMu.Unlock()
-		return
-	}
-	kept := a.toasts[:0]
 	var show []string
-	for _, n := range a.toasts {
-		if claims(n.target) {
-			show = append(show, n.text)
-			continue
+	if len(a.toasts) > 0 {
+		kept := a.toasts[:0]
+		for _, n := range a.toasts {
+			if claims(n.target) {
+				show = append(show, n.text)
+				continue
+			}
+			kept = append(kept, n)
 		}
-		kept = append(kept, n)
+		clear(a.toasts[len(kept):])
+		a.toasts = kept
 	}
-	clear(a.toasts[len(kept):])
-	a.toasts = kept
 	a.toastMu.Unlock()
 	for _, text := range show {
-		c.Toast(text)
+		feedback.ShowToast(c, feedback.ToastProps{Title: text})
 	}
+	// 底部居中，沿用原来 mygo toast 的位置：右下角会压住详情页的回复身份
+	// 标签等控件，弹提示时用户就点不到了。
+	feedback.ToastHost(c, feedback.ToastHostProps{Placement: feedback.ToastBottom})
 }
 
 // mainClaimsToasts 说主窗口该不该显示这条提示：主窗口自己的当然显示；其它

@@ -191,7 +191,7 @@ type app struct {
 	readFor    string
 	readLoaded bool
 	// toasts 是等着显示的窗口内提示（见 toasts.go）：操作结果先排队，等到
-	// 对应窗口下一次重建时再交给 c.Toast。可能由后台 goroutine（经 publish）
+	// 对应窗口下一次重建时再交给 Lobe 的 feedback.ShowToast。可能由后台 goroutine（经 publish）
 	// 写入，也由渲染帧读取，所以用 toastMu 保护，避免竞态。
 	toasts  []toastNote
 	toastMu sync.Mutex
@@ -1079,7 +1079,7 @@ func (a *app) view(c *ui.Context) {
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
 	// 操作结果以 toast 显示：主窗口、登录页与详情页都走这里。
-	a.drainToasts(c, a.mainClaimsToasts)
+	defer a.drainToasts(c, a.mainClaimsToasts)
 
 	switch a.pageName {
 	case "login":
@@ -1405,17 +1405,20 @@ const (
 	// titleSearchInsetY 是标题栏搜索框上下留出的边距（DIP）：矮一圈后居中
 	// 悬浮，四周更透气。
 	titleSearchInsetY = 5
+	// titleSearchIconInset 是放大镜图标连同它右侧间距占的宽度。hint 要
+	// 居中在图标右边的文字区，而不是整条输入框，否则视觉上会偏右。
+	titleSearchIconInset = 21
 	// titleSearchWidthRatio 是标题栏搜索框宽度占窗口宽度的比例：窗口越宽，
 	// 输入框越长，既不在窄窗口里挤到通知铃铛，也不在大窗口里显得局促。
 	titleSearchWidthRatio = 0.24
-	// 宽度的上下限：再窄放不下「输入命令关键词」这个提示，再宽会占满
-	// 左端与铃铛之间的一整条空白，都不合适。
-	titleSearchWidthMin = 180
+	// 宽度的上下限：下限要放得下居中的提示文案加左右内边距，上限免得
+	// 盖住标题栏大半条。
+	titleSearchWidthMin = 240
 	titleSearchWidthMax = 420
-	// titleSearchCenterMinWidth 是搜索框由「贴左」改为「在左端与通知铃铛之间
-	// 居中」的窗口宽度下限。窄窗口里居中会在左边留一大块空，先贴左；只有
-	// 横向足够宽时才把它放到左端与通知铃铛的中间。
-	titleSearchCenterMinWidth = 960
+	// titleSearchHint 是输入框为空时显示的居中提示文案。它是一层覆盖在
+	// 输入框上的文字，不用输入框自带 Placeholder：那个提示跟着输入内容
+	// 左对齐，而这里要让 hint 居中、用户输入仍从左边开始。
+	titleSearchHint = "命令面板"
 )
 
 // titleSearchWidthFor 按窗口宽度算出本帧搜索框的宽度，上下限之间线性缩放。
@@ -1440,12 +1443,14 @@ func titleBarHeightFor(c *ui.Context) float32 {
 	return h
 }
 
-// titleBar 是完全自绘的顶部标题栏：可拖拽移动窗口（双击最大化），左端是折叠
-// 开关与搜索框、通知铃铛，右端是最小化 / 最大化·还原 / 关闭按钮；系统标题栏
-// 与系统按钮已由 TitleBarHidden + HideWindowButtons 隐藏。
+// titleBar 是完全自绘的顶部标题栏：可拖拽移动窗口（双击最大化）。折叠开关在
+// 最左端，搜索输入框居中在整扇窗口的水平中线上，通知铃铛 / 账号标识与自绘的
+// 最小化 / 最大化·还原 / 关闭按钮贴在右端；系统标题栏与系统按钮已由
+// TitleBarHidden + HideWindowButtons 隐藏。
 //
 // 标题栏横跨整个窗口顶端，底色与页面一致；下面才是左右两栏，横向只有它底下
-// 一条分割线，两栏之间另有一条竖线。
+// 一条分割线，两栏之间另有一条竖线。搜索框居中靠左、右两段等宽伸缩实现，
+// 与窗口宽度无关，因此拖动改变窗口大小时它始终停在中线上。
 func (a *app) titleBar(c *ui.Context) {
 	t := c.Theme()
 	// bar 是系统窗口按钮占用的区域，HideWindowButtons 下为零。保留这段
@@ -1453,95 +1458,105 @@ func (a *app) titleBar(c *ui.Context) {
 	bar := c.TitleBar()
 	h := titleBarHeightFor(c)
 	winW, _ := c.Size()
-	centerSearch := winW >= titleSearchCenterMinWidth
 	searchW := titleSearchWidthFor(winW)
 	ui.Row(c).Height(h).FillWidth().AlignItems(ui.Stretch).
 		Padding(0, 0, 0, bar.Left).Background(t.Background).DragWindow().Children(func() {
-		// 左段：折叠开关、搜索框、通知铃铛，登录后再加上账号标识，整体可随
-		// 标题栏拖动。侧边栏头部已去掉，折叠开关收在标题栏最左侧，与下面
-		// 侧边栏的图标轨同在 32 DIP 竖中线上。金币、盲盒、「我的」与退出登录
-		// 都收在账号标识的气泡里；设置与未登录时的登录 / 注册留在侧边栏底部。
-		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 16).Gap(10).
+		// 左段：折叠开关。侧边栏头部已去掉，开关收在标题栏最左侧，与下面
+		// 侧边栏的图标轨同在 32 DIP 竖中线上。它和右段 Grow(1) 等宽，把中间
+		// 的搜索框顶到窗口正中。
+		ui.Row(c).Grow(1).MinWidth(0).Padding(0, 0, 0, 16).
 			AlignItems(ui.Center).Children(func() {
 			a.titleBarSidebarToggle(c)
-			// 宽窗口时搜索框前面再加一段可伸缩空白，与它后面的那段对半分，
-			// 于是搜索框落在「左端」与「通知铃铛」的中间；窄窗口省掉这段，
-			// 搜索框贴着左内边距排，不浪费本就有限的横向空间。
-			if centerSearch {
-				ui.Spacer(c).Grow(1)
+		})
+		// 中段：品牌名的位置换成输入框：点一下就展开命令面板（默认「命令」
+		// 模式），切到「搜索」才是搜索窗口入口。SearchField 自带一键清空按钮。
+		if a.search == nil {
+			a.search = newSearchState()
+		}
+		q := a.palette.text
+		ui.Column(c).Width(searchW).Height(h).Shrink(0).
+			AlignItems(ui.Stretch).Justify(ui.Center).Children(func() {
+			tk := lobetheme.TokensOf(c)
+			in := ui.SearchField(c, &a.palette.text).
+				Label("搜索关键词").
+				// 自带 Placeholder 跟着输入左对齐；这里改成下面那层居中的
+				// hint 覆盖，输入内容本身仍从左侧开始。
+				Placeholder("").
+				Width(searchW).Height(titleBarHeight-2*titleSearchInsetY).
+				// 边框宽度设 0：mygo 的 field 在聚焦时会把边框改成 Accent 蓝，
+				// 标题栏这条搜索框不要那圈高亮，0 宽让描边始终不画。
+				Background(tk.FillTertiary).Border(0, ui.Transparent).
+				Radius(tk.BorderRadiusSM)
+			in.Bind(&a.palette.input)
+			// 点输入框或聚焦时展开面板；焦点离开（切窗口、Tab 到别的控件）
+			// 或点到面板外时收起。FocusLeft / PressedOutside 都把挂在输入框
+			// 上的面板算作「还在里面」，点面板里的模式按钮/命令不会误关。
+			// 面板关闭时 mygo 会把焦点还给锚点，那不是用户重新点进来，靠
+			// suppressOpen 忽略这一次，避免「关了又立刻弹回来」。
+			focused := in.Focused()
+			if in.PressedInside() {
+				a.palette.open = true
+				a.palette.suppressOpen = false
 			}
-			// 品牌名的位置换成输入框：点一下就展开命令面板（默认「命令」模式），
-			// 切到「搜索」才是搜索窗口入口。SearchField 自带一键清空按钮。
-			if a.search == nil {
-				a.search = newSearchState()
+			if focused && !a.palette.wasFocused && !a.palette.suppressOpen {
+				a.palette.open = true
 			}
-			q := a.palette.text
-			ui.Column(c).Width(searchW).Shrink(0).AlignItems(ui.Stretch).Children(func() {
-				tk := lobetheme.TokensOf(c)
-				in := ui.SearchField(c, &a.palette.text).
-					Label("搜索关键词").
-					Placeholder("输入命令关键词，或切到搜索").
-					Width(searchW).Height(titleBarHeight-2*titleSearchInsetY).
-					// 边框宽度设 0：mygo 的 field 在聚焦时会把边框改成 Accent 蓝，
-					// 标题栏这条搜索框不要那圈高亮，0 宽让描边始终不画。
-					Background(tk.FillTertiary).Border(0, ui.Transparent).
-					Radius(tk.BorderRadiusSM)
-				in.Bind(&a.palette.input)
-				// 点输入框或聚焦时展开面板；焦点离开（切窗口、Tab 到别的控件）
-				// 或点到面板外时收起。FocusLeft / PressedOutside 都把挂在输入框
-				// 上的面板算作「还在里面」，点面板里的模式按钮/命令不会误关。
-				// 面板关闭时 mygo 会把焦点还给锚点，那不是用户重新点进来，靠
-				// suppressOpen 忽略这一次，避免「关了又立刻弹回来」。
-				focused := in.Focused()
-				if in.PressedInside() {
-					a.palette.open = true
-					a.palette.suppressOpen = false
-				}
-				if focused && !a.palette.wasFocused && !a.palette.suppressOpen {
-					a.palette.open = true
-				}
-				if in.FocusLeft() || in.PressedOutside() {
-					a.palette.open = false
-					a.palette.suppressOpen = true
-				}
-				a.palette.wasFocused = focused
-				// 输入一变回到第一项，清空则回到默认命令模式。
-				in.OnChange(func() {
-					a.palette.selected = 0
-					if a.palette.text == "" {
-						a.palette.mode = paletteModeCommands
-					}
-				})
-				in.OnShortcut(0, ui.KeyDown, func() { a.paletteMove(q, 1) })
-				in.OnShortcut(0, ui.KeyUp, func() { a.paletteMove(q, -1) })
-				// Esc 由 SearchField 自身处理：有内容时清空输入，OnChange 据此回到
-				// 默认命令模式；面板继续留着，点窗外才收起。
-				in.OnSubmit(func() { a.paletteRun(q) })
-				if a.palette.open {
-					a.commandPalette(c, in, q)
+			if in.FocusLeft() || in.PressedOutside() {
+				a.palette.open = false
+				a.palette.suppressOpen = true
+			}
+			a.palette.wasFocused = focused
+			// 输入一变回到第一项，清空则回到默认命令模式。
+			in.OnChange(func() {
+				a.palette.selected = 0
+				if a.palette.text == "" {
+					a.palette.mode = paletteModeCommands
 				}
 			})
-			ui.Spacer(c).Grow(1)
-			// 通知铃铛：未读数叠在铃铛右下角，点开独立窗口（不再是侧边栏页面）。
-			a.notificationBell(c)
-			if a.auth.loggedIn() {
-				// 头像 + 昵称是账号菜单的锚点：点一下弹出气泡，签到、金币、
-				// 潘多拉、「我的」与退出登录都在气泡里选。标题栏不写「已登录」，
-				// 也不放退出按钮：登录后才有的账号操作都由这颗锚点带出来。
-				a.profileTag(c, a.auth.username())
+			in.OnShortcut(0, ui.KeyDown, func() { a.paletteMove(q, 1) })
+			in.OnShortcut(0, ui.KeyUp, func() { a.paletteMove(q, -1) })
+			// Esc 由 SearchField 自身处理：有内容时清空输入，OnChange 据此回到
+			// 默认命令模式；面板继续留着，点窗外才收起。
+			in.OnSubmit(func() { a.paletteRun(q) })
+			// 空输入时画 hint。居中参照取放大镜右边的文字区（Left 留图标
+			// 宽），这样 hint 落在视觉中心而不是偏右。IgnoreInput 让点击
+			// 透到下面的输入框，不会挡住聚焦与命令面板。
+			if q == "" {
+				ui.Row(c).Absolute().Left(titleSearchIconInset).Right(0).Top(0).Bottom(0).
+					Center().IgnoreInput(true).Children(func() {
+					ui.Text(c, titleSearchHint).TextColor(t.TextMuted).SingleLine()
+				})
+			}
+			if a.palette.open {
+				a.commandPalette(c, in, q)
 			}
 		})
-		// 右段：自绘窗口控制按钮（最小化 / 最大化·还原 / 关闭），紧贴右上角。
-		titleBarButton(c, titleMinimize, "最小化", func() {
-			if a.win != nil {
-				a.win.Minimize()
-			}
-		})
-		titleMaximizeButton(c, a.win)
-		titleBarButton(c, titleClose, "关闭", func() {
-			if a.win != nil {
-				a.win.Close()
-			}
+		// 右段：通知铃铛、账号标识与自绘窗口按钮，贴窗口右缘；与左段等宽
+		// 伸缩。金币、盲盒、「我的」与退出登录都收在账号标识的气泡里；
+		// 设置与未登录时的登录 / 注册留在侧边栏底部。
+		ui.Row(c).Grow(1).MinWidth(280).Justify(ui.End).AlignItems(ui.Stretch).Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Gap(10).Padding(0, 10, 0, 0).Children(func() {
+				// 通知铃铛：未读数叠在铃铛右下角，点开独立窗口（不再是侧边栏页面）。
+				a.notificationBell(c)
+				if a.auth.loggedIn() {
+					// 头像 + 昵称是账号菜单的锚点：点一下弹出气泡，签到、金币、
+					// 潘多拉、「我的」与退出登录都在气泡里选。标题栏不写
+					// 「已登录」，也不放退出按钮：登录后才有的账号操作都由
+					// 这颗锚点带出来。
+					a.profileTag(c, a.auth.username())
+				}
+			})
+			titleBarButton(c, titleMinimize, "最小化", func() {
+				if a.win != nil {
+					a.win.Minimize()
+				}
+			})
+			titleMaximizeButton(c, a.win)
+			titleBarButton(c, titleClose, "关闭", func() {
+				if a.win != nil {
+					a.win.Close()
+				}
+			})
 		})
 	})
 }

@@ -34,20 +34,20 @@ func TestDisclaimerStoreShowsOnce(t *testing.T) {
 	}
 }
 
-// 首次启动声明弹窗写明 T2 全称，点「我已了解」后关窗并落盘；下一帧不再画。
+// 首次启动声明弹窗写明 T2 全称，点「继续使用」后关窗并落盘；下一帧不再画。
 func TestFirstLaunchDisclaimerDialog(t *testing.T) {
 	a := testApp(t)
 	a.disclaimer = newDisclaimerStore(t.TempDir())
 	a.disclaimerOpen = true
 	tt := ui.NewTester(a.disclaimerDialog, 600, 420)
 	tt.Frame()
-	for _, want := range []string{"关于 T2", "Third Party 2Libra", "非官方桌面客户端", "我已了解"} {
+	for _, want := range []string{"关于 T2", "Third Party 2Libra", "非官方桌面客户端", "基于开放 API 开发", "与开发者无关", "如果继续使用", "退出", "继续使用"} {
 		if !tt.HasText(want) {
 			t.Errorf("首次启动声明弹窗缺少 %q：%q", want, tt.Texts())
 		}
 	}
-	if err := tt.Click("我已了解"); err != nil {
-		t.Fatalf("点「我已了解」失败：%v（%q）", err, tt.Texts())
+	if err := tt.Click("继续使用"); err != nil {
+		t.Fatalf("点「继续使用」失败：%v（%q）", err, tt.Texts())
 	}
 	if a.disclaimerOpen {
 		t.Error("确认后应关掉声明弹窗")
@@ -83,13 +83,13 @@ func TestAboutReplayDisclaimer(t *testing.T) {
 	}
 
 	tt.Frame()
-	for _, want := range []string{"关于 T2", "Third Party 2Libra", "非官方桌面客户端", "我已了解"} {
+	for _, want := range []string{"关于 T2", "Third Party 2Libra", "非官方桌面客户端", "基于开放 API 开发", "与开发者无关", "如果继续使用", "退出", "继续使用"} {
 		if !tt.HasText(want) {
 			t.Errorf("重看声明弹窗缺少 %q：%q", want, tt.Texts())
 		}
 	}
-	if err := tt.Click("我已了解"); err != nil {
-		t.Fatalf("点「我已了解」失败：%v（%q）", err, tt.Texts())
+	if err := tt.Click("继续使用"); err != nil {
+		t.Fatalf("点「继续使用」失败：%v（%q）", err, tt.Texts())
 	}
 	if a.aboutDisclaimerOpen {
 		t.Error("确认后应关掉重看弹窗")
@@ -100,5 +100,49 @@ func TestAboutReplayDisclaimer(t *testing.T) {
 	tt.Frame()
 	if tt.HasText("关于 T2") {
 		t.Error("确认后下一帧不该再画重看弹窗")
+	}
+}
+
+// 声明弹窗的「退出」按钮走 a.quitApp，与托盘、系统菜单同一条退出流程；
+// 点它不算认可，不写 seen，下次启动仍会看到声明。
+func TestDisclaimerExitButton(t *testing.T) {
+	a := testApp(t)
+	a.disclaimer = newDisclaimerStore(t.TempDir())
+	a.disclaimerOpen = true
+	quits := 0
+	a.quitApp = func() { quits++ }
+	tt := ui.NewTester(a.disclaimerDialog, 600, 420)
+	tt.Frame()
+	if err := tt.Click("退出"); err != nil {
+		t.Fatalf("点「退出」失败：%v（%q）", err, tt.Texts())
+	}
+	if quits != 1 {
+		t.Errorf("点「退出」应调用 quitApp 一次，实际 %d", quits)
+	}
+	if a.disclaimer.seen {
+		t.Error("退出不该记成已看过")
+	}
+	if !a.disclaimerOpen {
+		t.Error("退出时弹窗应保持，交给退出流程关窗")
+	}
+}
+
+// 「关于」窗口重看声明时的「退出」同样退出整个应用，也不动 seen。
+func TestAboutDisclaimerExitButton(t *testing.T) {
+	a := testApp(t)
+	a.disclaimer = newDisclaimerStore(t.TempDir())
+	a.aboutDisclaimerOpen = true
+	quits := 0
+	a.quitApp = func() { quits++ }
+	tt := ui.NewTester(a.aboutWindowView, aboutWindowWidth, aboutWindowHeight)
+	tt.Frame()
+	if err := tt.Click("退出"); err != nil {
+		t.Fatalf("点「退出」失败：%v（%q）", err, tt.Texts())
+	}
+	if quits != 1 {
+		t.Errorf("点「退出」应调用 quitApp 一次，实际 %d", quits)
+	}
+	if a.disclaimer.seen {
+		t.Error("重看里的退出不该记成已看过")
 	}
 }

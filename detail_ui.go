@@ -737,20 +737,34 @@ func (a *app) loadRepliesFor(d *detailState, page int) {
 	}()
 }
 
-// refreshDetail 是详情页「刷新」：重新拉当前帖子的正文与第一页评论。
-// 旧内容在请求回来之前保持显示（loadTopic / loadReplies 只在成功时替换），
-// 所以在长帖里点刷新不会先把正文闪成空白。评论回到第 1 页，续拉从那里
-// 重新开始；失败仍走离线那条路（正文来自本地缓存时在顶部说明）。
-func (a *app) refreshDetail() {
+// refreshTopic 是正文区「刷新」：只重拉当前帖子的正文，评论区留在原处。
+// 旧正文在请求回来之前保持显示（loadTopic 只在成功时替换），长帖点刷新
+// 不会先闪成空白；失败仍走离线那条路（顶部说明这份是本地内容）。
+func (a *app) refreshTopic() {
 	d := a.detail
-	if d == nil || d.topicLoading || d.replyLoading {
+	if d == nil {
 		return
 	}
 	d.topicErr = ""
+	if d.topicLoading || !a.autoLoad {
+		return
+	}
+	a.loadTopic()
+}
+
+// refreshReplies 是评论区「刷新」：只重拉第一页评论，正文不动。续拉也从
+// 第 1 页重新开始；旧评论在请求回来之前保持显示，不会先清空。
+func (a *app) refreshReplies() {
+	d := a.detail
+	if d == nil {
+		return
+	}
 	d.replyErr = ""
 	d.replyMoreErr = ""
 	d.replyNoMore = false
-	a.loadTopic()
+	if d.replyLoading || !a.autoLoad {
+		return
+	}
 	a.loadReplies(1)
 }
 
@@ -820,7 +834,7 @@ const detailBottomBarHeight float32 = 57
 // 外层留白与分隔线，让整条底部条带正好是 detailBottomBarHeight。
 const replyComposerPadY float32 = 5
 
-// detailContent 是详情页真正的内容：左正文、右评论，底部来源与悬浮工具条。
+// detailContent 是详情页真正的内容：左正文、右评论，底部来源与正文右下角的操作组。
 // 显式收 d，让两扇详情窗口各画各的那篇，不靠游标在帧与帧之间保持一致。
 func (a *app) detailContent(c *ui.Context, d *detailState) {
 	// 主题已由窗口的 view 按外观模式设好，这里直接取用，避免重复解析。
@@ -874,6 +888,8 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 				if d.replyCollapsed {
 					a.replyComposer(c, d)
 				}
+				// 页面操作贴在正文面板右下角，悬浮在正文上方，不占高度。
+				a.detailToolBar(c, d, true)
 			})
 		}
 		// 评论区用一块底色和白色正文面板分出层次；收起正文时它吃掉整行。
@@ -886,8 +902,8 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 				// 让正文整块悬在中间（和双栏时的顶部对齐不一致）。撑满后正文
 				// 照旧从顶部往下排，收起前后位置不跳。
 				ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() { buildBody() })
-				// 正文铺满时没有接缝可依，箭头改贴在右上角工具条下方，不再
-				// 悬在半空垂直居中。
+				// 正文铺满时没有接缝可依，箭头改贴在右上角，不再悬在半空
+				// 垂直居中。
 				detailExpandToggle(c, tk, true, true, "展开评论", "展开评论区，恢复双栏", chevronLeftIcon,
 					func() { d.replyCollapsed = false })
 				return
@@ -932,10 +948,11 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 		// 数据来源声明 + 可点击的原文链接占满整个窗口底部，放在最底部。
 		// 进入详情就画出来：正文加载完成后高度不变，卡片区域不会跳。
 		a.topicSourceFooter(c, d)
-		// 操作按钮不再占一行页头，而是悬浮在内容右上角：不占正文高度，
-		// 也不会随正文滚走（见 detailToolBar）。
-		a.detailToolBar(c, d)
-		// 「关闭 / 开启评论」的确认框：作者点了工具条里的图标才展开，盖在整页上。
+		// 正文收起时它没有面板可贴，操作组退到内容区右下角，保持可达。
+		if d.bodyCollapsed {
+			a.detailToolBar(c, d, false)
+		}
+		// 「关闭 / 开启评论」的确认框：作者点了操作组里的图标才展开，盖在整页上。
 		a.commentsStatusDialog(c, d)
 		// 兑换码的领取确认框：点一条未领取的码才展开，领到后切到成功页看完整码。
 		a.redeemDialog(c, d)
@@ -955,8 +972,7 @@ var detailSeamFade = ui.Animation{Duration: 160 * time.Millisecond, Ease: motion
 // 接缝箭头只是提示，不该像主按钮那么抢眼：悬浮时也只淡入到半透明。
 const detailSeamArrowOpacity float32 = 0.55
 
-// 正文铺满时，「展开评论」贴在右上角悬浮工具条下方（工具条顶端 6.5、高约
-// 38），不再按接缝的逻辑垂直居中。
+// 正文铺满时，「展开评论」贴在右上角固定高度，不再按接缝的逻辑垂直居中。
 const detailExpandTop float32 = 56
 
 // detailSplitToggles 在两栏接缝上画对称的一对收起按钮：左半边收起正文、
@@ -996,7 +1012,7 @@ func detailSplitToggles(c *ui.Context, d *detailState, tk *lobetheme.Tokens, bod
 
 // detailExpandToggle 在一栏收起后，于内容区对应边缘留一条窄栏放展开按钮：
 // atRight 为真贴右边缘（展开评论），否则贴左边缘（展开正文）。atTop 为真时
-// 贴顶部工具条下方，否则垂直居中；正文铺满时没有接缝，箭头不宜悬在半空。
+// 贴顶部固定位置，否则垂直居中；正文铺满时没有接缝，箭头不宜悬在半空。
 // restore 由调用方决定清掉哪一份收起状态。
 func detailExpandToggle(c *ui.Context, tk *lobetheme.Tokens, atRight, atTop bool, label, tip string, icon *ui.SVG, restore func()) {
 	b := ui.ButtonBase(c).Label(label).Tooltip(tip).
@@ -1035,7 +1051,7 @@ func detailReplyStyle(t *ui.Theme, tk *lobetheme.Tokens) (float32, ui.Color) {
 	return 0, tk.BgContainer
 }
 
-// detailToolKind 决定一枚工具条动作交给哪支画法。
+// detailToolKind 决定一枚页面操作交给哪支画法。
 type detailToolKind int
 
 const (
@@ -1045,18 +1061,18 @@ const (
 	detailToolComments                       // 评论开关有自己的忙碌态
 )
 
-// detailToolAction 是右上角工具条里的一枚动作。悬浮条与详情窗口的自定义
+// detailToolAction 是正文区竖排操作组里的一枚动作。操作组与详情窗口的自定义
 // 标题栏共用这一份清单，条件只写一遍：只有一枚时收进标题栏（见
-// detailWindowTitleBar），两枚以上才画悬浮条。
+// detailWindowTitleBar），两枚以上才画正文区右下角的竖排操作组。
 type detailToolAction struct {
-	kind      detailToolKind
-	icon      *ui.SVG
-	label     string
-	tip       string
-	href      string
-	onClick   func()
-	busy      bool
-	gapBefore bool // 前面加一道短竖线，把分享类动作与页面操作分开
+	key     string // ActionIconGroup 用它在点击那一帧认出被点的动作
+	kind    detailToolKind
+	icon    *ui.SVG
+	label   string
+	tip     string
+	href    string
+	onClick func()
+	busy    bool
 }
 
 // detailToolActions 按界面顺序列出此刻该出现的动作。
@@ -1065,19 +1081,19 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 	// 复制链接排最左边，与页面操作之间隔一道短竖线：分享帖子不是一类事。
 	if href := d.originURL(); href != "" {
 		acts = append(acts, detailToolAction{
-			kind: detailToolCopy, icon: lucide.Copy(),
+			key: "copy", kind: detailToolCopy, icon: lucide.Copy(),
 			label: "复制帖子链接", tip: "把这篇帖子的链接复制到剪贴板", href: href,
 		})
 	}
-	// 只有正文或评论滚离顶部时才出现：工具条始终可达，不会像旧版页头那样
-	// 为了放它固定占掉一行。正文收起时不看它的偏移：那栏根本没画出来。
-	if first, _ := d.list.Visible(); (!d.bodyCollapsed && d.bodyScroll.Y > 0) || first > 0 {
+	// 只在正文滚离顶部时出现，且只管正文：评论区有自己的一键回顶。操作组
+	// 始终可达，不会像旧版页头那样为了放它固定占掉一行；正文收起时那栏
+	// 根本没画出来，也就不该出现正文的回顶。
+	if !d.bodyCollapsed && d.bodyScroll.Y > 0 {
 		acts = append(acts, detailToolAction{
-			icon: lucide.ArrowUp(), label: "返回顶部", tip: "正文与评论都回到顶部",
+			key: "top", icon: lucide.ArrowUp(), label: "返回顶部", tip: "正文回到顶部",
 			// 直接把偏移写回 ScrollState 就是立即回顶（ScrollTo 会走动画）。
 			onClick: func() {
 				d.bodyScroll.X, d.bodyScroll.Y = 0, 0
-				d.list.ScrollTo(0, ui.Start)
 			},
 		})
 	}
@@ -1086,11 +1102,11 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 	if a.canEditTopic(d) {
 		acts = append(acts,
 			detailToolAction{
-				icon: lucide.PenLine(), label: "编辑帖子", tip: "修改标题与正文",
+				key: "edit", icon: lucide.PenLine(), label: "编辑帖子", tip: "修改标题与正文",
 				onClick: func() { a.showTopicEdit(d) },
 			},
 			detailToolAction{
-				icon: lucide.FilePlus2(), label: "追加附言", tip: "在帖子末尾追加一段附言",
+				key: "postscript", icon: lucide.FilePlus2(), label: "追加附言", tip: "在帖子末尾追加一段附言",
 				onClick: func() { a.showPostscript(d) },
 			},
 		)
@@ -1105,57 +1121,96 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 			label, tip = "正在提交评论开关", "正在提交…"
 		}
 		acts = append(acts, detailToolAction{
-			kind: detailToolComments, icon: icon, label: label, tip: tip, busy: busy,
+			key: "comments", kind: detailToolComments, icon: icon, label: label, tip: tip, busy: busy,
 		})
 	}
-	loading := d.topicLoading || d.replyLoading
-	tip := "重新加载正文与评论"
+	loading := d.topicLoading
+	tip := "重新加载正文"
 	if loading {
 		tip = "正在刷新…"
 	}
 	acts = append(acts, detailToolAction{
-		kind: detailToolRefresh, icon: lucide.RefreshCw(), label: "刷新", tip: tip, busy: loading,
+		key: "refresh", kind: detailToolRefresh, icon: lucide.RefreshCw(), label: "刷新", tip: tip, busy: loading,
 	})
 	// 独立详情窗口的自定义标题栏已经有「关闭」，不再悬浮一枚重复的关闭按钮。
 	if d.host == nil {
 		acts = append(acts, detailToolAction{
-			icon: lucide.X(), label: "关闭详情", tip: "关闭详情（Esc）", onClick: a.closeDetail,
+			key: "close", icon: lucide.X(), label: "关闭详情", tip: "关闭详情（Esc）", onClick: a.closeDetail,
 		})
-	}
-	// 复制链接之后的第一个动作都隔一道短竖线，不只是「返回顶部」：没有滚动
-	// 时编辑 / 刷新也该和分享分开。
-	if len(acts) > 1 && acts[0].kind == detailToolCopy {
-		acts[1].gapBefore = true
 	}
 	return acts
 }
 
-// detailToolBar 是详情页右上角的悬浮工具条：绝对定位在内容区右上角，不参与
-// 布局，正文和评论能多吃到原来被页头占掉的高度。整条用浅表面加一根细描边
-// 勾边，不再垫一层大阴影——压在评论卡片上像贴纸的正是那圈阴影。
-func (a *app) detailToolBar(c *ui.Context, d *detailState) {
+// detailToolGroupInset 是竖排操作组离正文面板右下角的留白。
+const detailToolGroupInset float32 = 14
+
+// detailToolBar 把页面操作收成正文区右下角的一列 Lobe ActionIconGroup：竖排、
+// 绝对定位在正文面板内，不占正文高度，也不随正文滚走。正文收起时那块面板
+// 不再画，这一列退到内容区右下角，刷新与关闭仍然可达。
+func (a *app) detailToolBar(c *ui.Context, d *detailState, inBody bool) {
 	acts := a.detailToolActions(d)
-	// 单枚动作交给详情窗口标题栏；没有动作时连空条也不画。
+	// 单枚动作交给详情窗口标题栏；没有动作时连空组也不画。
 	if len(acts) == 0 || (len(acts) == 1 && d.host != nil) {
 		return
 	}
-	tk := lobetheme.TokensOf(c)
-	// 悬浮条与右栏「评论」标题垂直居中：标题中心距内容区顶部约 25，悬浮条
-	// 本身高约 38（30 的按钮 + 内边距 + 描边），所以顶部落在 6 附近。
-	ui.Row(c).Absolute().Top(6.5).Right(22).Gap(2).Padding(3).
-		Radius(tk.BorderRadiusLG).Background(tk.BgElevated).
-		Border(1, tk.BorderSecondary).Children(func() {
-		for _, act := range acts {
-			if act.gapBefore {
-				ui.Box(c).Width(1).Height(18).Background(tk.BorderSecondary).Shrink(0)
+	items := make([]action.ActionGroupItem, 0, len(acts))
+	for _, act := range acts {
+		items = append(items, action.ActionGroupItem{
+			Key: act.key, Icon: act.icon, Label: act.label, Disabled: act.busy,
+		})
+	}
+	host := ui.Box(c).Absolute().Right(detailToolGroupInset).ZIndex(2)
+	if inBody {
+		// 正文互动栏固定在面板底部，操作组贴在它上方；评论收起时正文底部
+		// 还会多一条输入框，同样让开。
+		bottom := detailToolGroupInset
+		if a.topicInteractionVisible(d) {
+			bottom += detailBottomBarHeight
+		}
+		if d.replyCollapsed {
+			bottom += detailBottomBarHeight
+		}
+		host.Bottom(bottom)
+	} else {
+		host.Bottom(detailToolGroupInset)
+	}
+	host.Children(func() {
+		if key := action.ActionIconGroup(c, action.ActionIconGroupProps{
+			Items: items, Size: lobetheme.Small, Vertical: true,
+			Variant: action.GroupOutlined, Shadow: true,
+		}); key != "" {
+			for _, act := range acts {
+				if act.key == key {
+					a.triggerDetailToolAction(c, d, act)
+					break
+				}
 			}
-			a.renderDetailToolAction(c, d, act)
 		}
 	})
 }
 
-// renderDetailToolAction 把清单里的一枚动作交给对应的画法，悬浮条与标题栏
-// 之外的按钮规范（尺寸、hover、tooltip、无障碍名）仍由各画法自己负责。
+// triggerDetailToolAction 执行竖排操作组里被点中的那一枚。忙碌的动作在组里
+// 已经禁用，这里再挡一道，免得确认框弹出后重复提交。
+func (a *app) triggerDetailToolAction(c *ui.Context, d *detailState, act detailToolAction) {
+	if act.busy {
+		return
+	}
+	switch act.kind {
+	case detailToolCopy:
+		a.copyToClipboard(c, act.href, a.detailToast(), "已复制链接")
+	case detailToolRefresh:
+		a.refreshTopic()
+	case detailToolComments:
+		a.askToggleComments(d)
+	default:
+		if act.onClick != nil {
+			act.onClick()
+		}
+	}
+}
+
+// renderDetailToolAction 把清单里的一枚动作交给对应的画法（详情窗口标题栏
+// 收下唯一一枚动作时用），按钮规范仍由各画法自己负责。
 func (a *app) renderDetailToolAction(c *ui.Context, d *detailState, act detailToolAction) {
 	switch act.kind {
 	case detailToolCopy:
@@ -1169,15 +1224,14 @@ func (a *app) renderDetailToolAction(c *ui.Context, d *detailState, act detailTo
 	}
 }
 
-// 悬浮工具条按钮的几何锁定值：30 的方形热区 + 17 的图标，决定工具条中心
-// 与右栏「评论」标题齐平（见 TestDetailToolbarCenteredWithReplyTitle）。
-// 从 mygo 裸画法换成 Lobe 组件也不能挪这两个数。
+// 标题栏里那枚动作的几何锁定值：30 的方形热区 + 17 的图标，与标题栏高度
+// 对齐。正文区里的操作组改用 Lobe 的 ActionIconGroup（Small），不再用这两个数。
 const (
 	detailToolBox   float32 = 30
 	detailToolGlyph float32 = 17
 )
 
-// detailActionIcon 是详情页悬浮工具条共用的 Lobe 图标按钮：ActionIcon 管方块
+// detailActionIcon 是详情页标题栏那枚动作用的 Lobe 图标按钮：ActionIcon 管方块
 // 尺寸、圆角、透明底、hover 浅底与键盘焦点，label 给读屏和点击测试，tip 说明
 // 点了会发生什么。忙碌时退成同尺寸的禁用方块 + Lobe 转圈，请求在途不会连点。
 func (a *app) detailActionIcon(c *ui.Context, icon *ui.SVG, label, tip string, busy bool, onClick func()) ui.Element {
@@ -1205,13 +1259,13 @@ func (a *app) detailActionIcon(c *ui.Context, icon *ui.SVG, label, tip string, b
 	return b
 }
 
-// detailToolButton 是悬浮工具条里的纯图标按钮：Lobe 的 ActionIcon 给浅底与
+// detailToolButton 是标题栏里那枚动作的纯图标按钮：Lobe 的 ActionIcon 给浅底与
 // 圆角，label 供读屏与测试识别，tip 是悬停说明。
 func (a *app) detailToolButton(c *ui.Context, icon *ui.SVG, label, tip string, onClick func()) {
 	a.detailActionIcon(c, icon, label, tip, false, onClick)
 }
 
-// detailCopyButton 是工具条里的「复制链接」：把 href 写进系统剪贴板，结果
+// detailCopyButton 是标题栏里那枚「复制链接」：把 href 写进系统剪贴板，结果
 // 由主窗口 toast 报告（成功或失败都提示，见 copyToClipboard）。悬停时图标
 // 换强调色，和旁边的页面操作区分开。
 func (a *app) detailCopyButton(c *ui.Context, href, label, tip string) {
@@ -1227,7 +1281,7 @@ func (a *app) detailCopyButton(c *ui.Context, href, label, tip string) {
 
 // copyToClipboard 把一条链接写进剪贴板，并在成功或失败时发一条 toast。
 // 拷贝结果在下一帧之前才回来（见 ui.WriteClipboardThen），所以提示不能在
-// 这里同步发出：先排队，等那个窗口重建时由 drainToasts 交给 c.Toast。写失败
+// 这里同步发出：先排队，等那个窗口重建时由 drainToasts 交给 Lobe 的 feedback.ShowToast。写失败
 // 多见于别的程序正占着剪贴板，此时 toast 里说明改用手动复制，而不是静默。
 // c 是发出这次复制的那一帧的 Context：剪贴板服务只在构建期取，不存进应用
 // 状态（元素与 Context 都不跨帧保存）。
@@ -1244,15 +1298,15 @@ func (a *app) copyToClipboard(c *ui.Context, text string, target toastTarget, ok
 	})
 }
 
-// detailRefreshButton 是悬浮工具条里的刷新按钮：请求在途时换成转圈并禁用，
-// 避免连点重复发请求。它刷新的是整页（正文 + 第一页评论）。
+// detailRefreshButton 是标题栏里那枚刷新按钮：请求在途时换成转圈并禁用，
+// 避免连点重复发请求。它只重拉正文，与正文区操作组里的刷新是同一个动作。
 func (a *app) detailRefreshButton(c *ui.Context, d *detailState) {
-	loading := d.topicLoading || d.replyLoading
-	tip := "重新加载正文与评论"
+	loading := d.topicLoading
+	tip := "重新加载正文"
 	if loading {
 		tip = "正在刷新…"
 	}
-	a.detailActionIcon(c, lucide.RefreshCw(), "刷新", tip, loading, a.refreshDetail)
+	a.detailActionIcon(c, lucide.RefreshCw(), "刷新", tip, loading, a.refreshTopic)
 }
 
 func (a *app) topicBody(c *ui.Context, d *detailState) {
@@ -1721,77 +1775,140 @@ func (a *app) topicSourceFooter(c *ui.Context, d *detailState) {
 	})
 }
 
+// replyToolBar 是评论区右下角的竖排 Lobe ActionIconGroup，和正文区那一列
+// 各管一栏：回顶只滚评论列表，视图切换只切楼层 / 扁平，刷新只重拉评论第一页。
+// 评论滚离顶部才露出回顶，视图切换与刷新则一直在；输入栏展开时它仍贴着列表
+// 底部，不压住输入框。视图切换收进这一组后跟评论区一起显隐：评论区收起时
+// 整组不画，切换入口也随之隐藏，不再单独挂在评论标题行里。
+func (a *app) replyToolBar(c *ui.Context, d *detailState, first int) {
+	items := make([]action.ActionGroupItem, 0, 3)
+	if first > 0 {
+		items = append(items, action.ActionGroupItem{
+			Key: "top", Icon: lucide.ArrowUp(), Label: "评论回到顶部",
+		})
+	}
+	// 图标表示将要切到的视图，点一下在楼层 / 扁平时间序间切换。
+	viewIcon, viewLabel := flatViewIcon, "切到扁平时间序"
+	if d.flat {
+		viewIcon, viewLabel = floorViewIcon, "切到楼层视图"
+	}
+	items = append(items, action.ActionGroupItem{
+		Key: "view", Icon: viewIcon, Label: viewLabel, Disabled: d.replyLoading,
+	})
+	items = append(items, action.ActionGroupItem{
+		Key: "refresh", Icon: lucide.RefreshCw(), Label: "刷新评论", Disabled: d.replyLoading,
+	})
+	ui.Box(c).Absolute().Right(detailToolGroupInset).Bottom(detailToolGroupInset).
+		ZIndex(2).Children(func() {
+		if key := action.ActionIconGroup(c, action.ActionIconGroupProps{
+			Items: items, Size: lobetheme.Small, Vertical: true,
+			Variant: action.GroupOutlined, Shadow: true,
+		}); key != "" {
+			switch key {
+			case "top":
+				d.list.ScrollTo(0, ui.Start)
+			case "view":
+				d.flat = !d.flat
+				d.replyList = nil
+				d.replyLoaded = false
+				d.replyNoMore = false
+				d.replyMoreErr = ""
+				// 换了视图重新找一次被定位的评论：楼层/扁平的分页位置不同。
+				d.focusPending = d.focusID != ""
+				d.focusTries = 0
+				d.focusMiss = false
+				a.loadReplies(1)
+				// 视图偏好按账号立即落盘：换一篇帖子打开也沿用（见 reply_view.go）。
+				a.saveReplyViewMode(d.flat)
+			case "refresh":
+				if !d.replyLoading {
+					a.refreshReplies()
+				}
+			}
+		}
+	})
+}
+
 func (a *app) replyPane(c *ui.Context, d *detailState) {
 	tk := lobetheme.TokensOf(c)
-	// 评论区自己有一行标题与计数 / 视图切换，输入框只负责编写与发送：
-	// 原来挤在输入框右侧的评论数、视图切换移到这里，输入栏因此干净得多。
+	// 评论区自己有一行标题与计数，输入框只负责编写与发送；视图切换收在
+	// 右下角的操作组里（见 replyToolBar），跟着评论区一起显隐。
 	a.replyHeader(c, d)
 	layout.Divider(c, layout.DividerProps{})
-	switch {
-	case d.replyLoading && len(d.replyList) == 0:
-		ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
-			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small, Tip: "正在加载评论…"})
-		})
-	case d.replyErr != "" && len(d.replyList) == 0:
-		ui.Column(c).Grow(1).Center().Gap(8).Padding(16).Children(func() {
-			ui.Text(c, "评论加载失败").FontSize(tk.FontSizeLG).Bold().TextColor(tk.TextHeading)
-			ui.Text(c, d.replyErr).TextColor(tk.Error).MaxLines(4)
-			if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+	// 列表区始终存在，四种状态的内容与右下角操作组都挂在它里面：没有评论时
+	// 视图切换与刷新仍可用，而评论区一旦收起整个 replyPane 不画，操作组也
+	// 随之隐藏（见 detailContent）。
+	ui.Column(c).Grow(1).FillWidth().MinHeight(0).Children(func() {
+		first := -1 // 没有评论列表时没有「评论回到顶部」
+		switch {
+		case d.replyLoading && len(d.replyList) == 0:
+			ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
+				lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small, Tip: "正在加载评论…"})
+			})
+		case d.replyErr != "" && len(d.replyList) == 0:
+			ui.Column(c).Grow(1).Center().Gap(8).Padding(16).Children(func() {
+				ui.Text(c, "评论加载失败").FontSize(tk.FontSizeLG).Bold().TextColor(tk.TextHeading)
+				ui.Text(c, d.replyErr).TextColor(tk.Error).MaxLines(4)
+				if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+					a.loadReplies(d.replyPage)
+				}
+			})
+		case len(d.replyList) == 0:
+			ui.Column(c).Grow(1).Center().Children(func() {
+				if d.topic.guardBlocks() && d.replyLoaded {
+					// 无权时评论接口返回 d:null，已经确认过不是「真的没人评论」。
+					ui.Text(c, "评论不可见").FontSize(tk.FontSize).TextColor(tk.TextDescription)
+					return
+				}
+				ui.Text(c, "暂无评论").FontSize(tk.FontSize).TextColor(tk.TextDescription)
+			})
+		default:
+			// display 是剔除折叠隐藏行后的显示列表；rebuildDisplay 在折叠为空时
+			// 直接复用 replyList，索引与现有行为一致。所有滚动定位、列表行数都
+			// 基于它。
+			d.rebuildDisplay()
+			rows := d.display
+			// 评论树连线：display 是前序摊平的树，下一行比第 l 层深就说明该层
+			// 竖线还要往下画。给每行算好各层的延续状态，replyRow 据此画导轨。
+			guides := replyTreeGuides(rows)
+			d.list.Key = func(i int) any {
+				if i >= 0 && i < len(rows) && rows[i].ID != "" {
+					return rows[i].ID
+				}
+				return i
+			}
+			// 实时记录停留位置：视口顶部的行号与评论 ID，供离开时落盘恢复。
+			var last int
+			first, last = d.list.Visible()
+			if first >= 0 && first < len(rows) {
+				d.stayIdx = first
+				if rows[first].ID != "" {
+					d.stayID = rows[first].ID
+				}
+				// 从通知点进来时，目标评论真的出现在屏幕上才把那条消息标为已读。
+				a.markNotificationSeen(d, first, last)
+			}
+			// MyGo 的 ui.List 是虚拟化滚动区：只构建可视行，长帖也不会一次
+			// 排完所有评论；Grow(1) + MinHeight(0) 让它吃满卡片中间，输入栏
+			// 始终固定在卡片底部。
+			//
+			// 平铺的评论区：行与行之间没有卡片间距（Gap 0），行距由每行自己的
+			// 上下 padding 给出，纵向导轨因此能首尾相接成一整条评论树。
+			ui.List(c, &d.list, len(rows), func(i int) {
+				a.replyRow(c, rows[i], guides[i], d.focusID, isNewReply(rows[i].CreatedAt, d.readBase))
+			}).Grow(1).MinHeight(0).Padding(6, 12).Gap(0)
+			a.loadMoreFooter(c, d.replyMoreErr, d.replyLoading, func() {
 				a.loadReplies(d.replyPage)
+			})
+			// 无限滚动：滚到底且还有下一页时自动加载更多，移除原来的页码与上下页按钮。
+			// 与首页 / 通知列表保持一致：AtEnd 触发、replyNoMore 兜底停止；
+			// 续拉失败后停在底部提示上，等用户点「重试」，不再自动重发。
+			if replyCanLoadMore(d) && d.replyMoreErr == "" && d.list.AtEnd() {
+				a.loadReplies(d.replyPage + 1)
 			}
-		})
-	case len(d.replyList) == 0:
-		ui.Column(c).Grow(1).Center().Children(func() {
-			if d.topic.guardBlocks() && d.replyLoaded {
-				// 无权时评论接口返回 d:null，已经确认过不是「真的没人评论」。
-				ui.Text(c, "评论不可见").FontSize(tk.FontSize).TextColor(tk.TextDescription)
-				return
-			}
-			ui.Text(c, "暂无评论").FontSize(tk.FontSize).TextColor(tk.TextDescription)
-		})
-	default:
-		// display 是剔除折叠隐藏行后的显示列表；rebuildDisplay 在折叠为空时
-		// 直接复用 replyList，索引与现有行为一致。所有滚动定位、列表行数都
-		// 基于它。
-		d.rebuildDisplay()
-		rows := d.display
-		// 评论树连线：display 是前序摊平的树，下一行比第 l 层深就说明该层
-		// 竖线还要往下画。给每行算好各层的延续状态，replyRow 据此画导轨。
-		guides := replyTreeGuides(rows)
-		d.list.Key = func(i int) any {
-			if i >= 0 && i < len(rows) && rows[i].ID != "" {
-				return rows[i].ID
-			}
-			return i
 		}
-		// 实时记录停留位置：视口顶部的行号与评论 ID，供离开时落盘恢复。
-		if first, last := d.list.Visible(); first >= 0 && first < len(rows) {
-			d.stayIdx = first
-			if rows[first].ID != "" {
-				d.stayID = rows[first].ID
-			}
-			// 从通知点进来时，目标评论真的出现在屏幕上才把那条消息标为已读。
-			a.markNotificationSeen(d, first, last)
-		}
-		// MyGo 的 ui.List 是虚拟化滚动区：只构建可视行，长帖也不会一次
-		// 排完所有评论；Grow(1) + MinHeight(0) 让它吃满卡片中间，输入栏
-		// 始终固定在卡片底部。
-		//
-		// 平铺的评论区：行与行之间没有卡片间距（Gap 0），行距由每行自己的
-		// 上下 padding 给出，纵向导轨因此能首尾相接成一整条评论树。
-		ui.List(c, &d.list, len(rows), func(i int) {
-			a.replyRow(c, rows[i], guides[i], d.focusID, isNewReply(rows[i].CreatedAt, d.readBase))
-		}).Grow(1).MinHeight(0).Padding(6, 12).Gap(0)
-		a.loadMoreFooter(c, d.replyMoreErr, d.replyLoading, func() {
-			a.loadReplies(d.replyPage)
-		})
-		// 无限滚动：滚到底且还有下一页时自动加载更多，移除原来的页码与上下页按钮。
-		// 与首页 / 通知列表保持一致：AtEnd 触发、replyNoMore 兜底停止；
-		// 续拉失败后停在底部提示上，等用户点「重试」，不再自动重发。
-		if replyCanLoadMore(d) && d.replyMoreErr == "" && d.list.AtEnd() {
-			a.loadReplies(d.replyPage + 1)
-		}
-	}
+		a.replyToolBar(c, d, first)
+	})
 	a.replyComposer(c, d)
 }
 
@@ -1826,8 +1943,9 @@ func (a *app) flushSeenNotifications() {
 	a.markNotificationsRead(a.detailToast(), ids)
 }
 
-// replyHeader 是评论卡片顶部固定的一行：「评论」标题、评论数（点一下回到
-// 列表顶部）与楼层 / 扁平视图切换。它不参与滚动，也不和输入框抢位置。
+// replyHeader 是评论卡片顶部固定的一行：「评论」标题与评论数（点一下回到
+// 列表顶部）。楼层 / 扁平视图切换已收进右下角的操作组（见 replyToolBar），
+// 跟着评论区一起显隐；这里不参与滚动，也不和输入框抢位置。
 func (a *app) replyHeader(c *ui.Context, d *detailState) {
 	tk := lobetheme.TokensOf(c)
 	ui.Row(c).FillWidth().Padding(14, 18, 10, 18).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -1849,42 +1967,6 @@ func (a *app) replyHeader(c *ui.Context, d *detailState) {
 		cnt.Tooltip("回到评论顶部")
 		if cnt.Clicked() {
 			d.list.ScrollTo(0, ui.Start)
-		}
-		// 视图切换紧跟在评论数后面，不再用 Spacer 推到最右：右上角留给
-		// 详情页的悬浮工具条（见 detailToolBar），两边不会叠在一起。
-		// 图标表示将要切到的视图，点一下在楼层 / 扁平时间序间切换。
-		target := flatViewIcon
-		viewLabel := "切到扁平时间序"
-		if d.flat {
-			target = floorViewIcon
-			viewLabel = "切到楼层视图"
-		}
-		tg := ui.Button(c, "").
-			Background(ui.Transparent).
-			Border(0, tk.BorderSecondary).
-			TextColor(tk.Primary).
-			FontSize(tk.FontSizeSM).
-			Padding(3, 6).
-			Radius(tk.BorderRadiusSM).
-			Disabled(d.replyLoading)
-		tg.Children(func() {
-			ui.Icon(c, target).Size(17, 17).TextColor(tk.Primary)
-		})
-		tg.Label(viewLabel)
-		tg.Tooltip(viewLabel)
-		if tg.Clicked() {
-			d.flat = !d.flat
-			d.replyList = nil
-			d.replyLoaded = false
-			d.replyNoMore = false
-			d.replyMoreErr = ""
-			// 换了视图重新找一次被定位的评论：楼层/扁平的分页位置不同。
-			d.focusPending = d.focusID != ""
-			d.focusTries = 0
-			d.focusMiss = false
-			a.loadReplies(1)
-			// 视图偏好按账号立即落盘：换一篇帖子打开也沿用（见 reply_view.go）。
-			a.saveReplyViewMode(d.flat)
 		}
 	})
 }
@@ -2520,8 +2602,8 @@ func (a *app) replyAction(c *ui.Context, label string, onClick func()) {
 func (a *app) replyComposer(c *ui.Context, d *detailState) {
 	tk := lobetheme.TokensOf(c)
 	layout.Divider(c, layout.DividerProps{})
-	// 输入栏固定在评论卡片底部，不再为右下角的悬浮按钮让出宽度：刷新与
-	// 返回顶部已经收进右上角的悬浮工具条，这里只需要普通的内边距。折叠态
+	// 输入栏固定在评论卡片底部，不再为悬浮按钮让出宽度：两栏各自的刷新
+	// 与回顶都收在右下角的操作组里，这里只需要普通的内边距。折叠态
 	// 的内层输入框会补足高度，让整条和左栏正文互动栏齐平。
 	ui.Column(c).FillWidth().Padding(replyComposerPadY, 14).Gap(4).
 		Label("评论输入栏").Children(func() {

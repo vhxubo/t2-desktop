@@ -48,52 +48,40 @@ func unreadCountText(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// notificationBell 是主窗口标题栏上的通知入口：铃铛图标 + 右下角的红色未读
-// 角标。图标本身是装饰，可访问名由 Label 提供（「通知（N 条未读）」），读屏
-// 与测试都按这个名字找它。
+// notificationBell 是主窗口标题栏上的通知入口：Lobe 的 ActionIcon 铃铛 +
+// 右下角的红色未读角标。图标、悬停态与打开态的底色都交给 ActionIcon，只有
+// 红点角标仍是自绘 Box：它要压在图标右下角且不能越出按钮，像素几何被测试
+// 断言，Lobe 的 Badge 固定落在内容右上角，替代不了这一定位。图标本身是装饰，
+// 可访问名由 Label 提供（「通知（N 条未读）」），读屏与测试都按这个名字找它。
 func (a *app) notificationBell(c *ui.Context) {
 	t := c.Theme()
-	idx := notificationTabIndex()
+	tk := lobetheme.TokensOf(c)
+	icon := lucide.Bell()
+	if idx := notificationTabIndex(); idx >= 0 {
+		icon = tabIcons[idx]
+	}
 	open := a.notificationWindowVisible()
-	b := ui.Box(c).Padding(4, 6).Radius(6).Center().Background(ui.Transparent)
-	if open || b.Hovered() {
-		b.Background(t.SurfaceHover)
-	}
-	ink := t.TextMuted
-	switch {
-	case open:
-		ink = t.Accent
-	case b.Hovered():
-		ink = t.Text
-	case a.unread > 0:
-		// 有未读时铃铛用正文色，和右下角的红点一起提示「有事」。
-		ink = t.Text
-	}
-	b.Children(func() {
-		// 铃铛与角标叠在一起：图标盒固定 16×16，角标绝对定位在它的右下角，
-		// 压出一点图标边缘。旧写法把数值排在铃铛右边，标题栏因此被撑宽，
-		// 数字离图标也远；现在数值贴在铃铛上，看起来就是一个角标。
-		ui.Box(c).Width(16).Height(16).Shrink(0).Children(func() {
-			if idx >= 0 {
-				display.Icon(c, tabIcons[idx], display.IconProps{Size: display.IconSmall}).
-					FontSize(16).TextColor(ink)
-			}
-			if count := unreadCountText(a.unread); count != "" {
-				// 角标外圈用铃铛底色描一圈，压住铃铛线条处也留得出一条缝，
-				// 红点不会和图标糊在一起。悬停、打开时底色换成 SurfaceHover。
-				ring := t.Surface
-				if open || b.Hovered() {
-					ring = t.SurfaceHover
-				}
-				ui.Box(c).Absolute().Right(-3).Bottom(-3).
-					MinWidth(14).Height(14).Padding(0, 3).Radius(999).Center().
-					Border(1, ring).Background(t.Danger).Children(func() {
-					display.Text(c, count, display.TextProps{Strong: true, FontSize: 9, Rows: 1}).
-						TextColor(ui.RGB(255, 255, 255))
-				})
-			}
-		})
+	b := action.ActionIcon(c, icon, action.ActionIconProps{
+		BlockSize: titleBarHeight, GlyphSize: 16, Active: open,
 	})
+	if count := unreadCountText(a.unread); count != "" {
+		// 角标压在铃铛右下角、且留在按钮范围内：ActionIcon 的方块是
+		// titleBarHeight×titleBarHeight，角标内缩 2 DIP 既不越出按钮，又贴着图标。
+		// 外圈描边用按钮此刻的底色（静止透明、悬停/打开 FillSecondary），压住
+		// 铃铛线条时留一条缝，红点不会和图标糊在一起。
+		ring := t.Surface
+		if open || b.Hovered() {
+			ring = tk.FillSecondary
+		}
+		b.Children(func() {
+			ui.Box(c).Absolute().Right(2).Bottom(2).
+				MinWidth(14).Height(14).Padding(0, 3).Radius(999).Center().
+				Border(1, ring).Background(t.Danger).Children(func() {
+				display.Text(c, count, display.TextProps{Strong: true, FontSize: 9, Rows: 1}).
+					TextColor(ui.RGB(255, 255, 255))
+			})
+		})
+	}
 	label := "通知"
 	if n := a.unread; n > 0 {
 		label = fmt.Sprintf("通知（%d 条未读）", n)
@@ -102,7 +90,8 @@ func (a *app) notificationBell(c *ui.Context) {
 	if a.unread > 0 {
 		hint = fmt.Sprintf("%d 条未读，点开查看", a.unread)
 	}
-	b.Label(label).Tooltip(hint).OnClick(a.showNotifications)
+	b.Label(label).Tooltip(hint)
+	b.OnClick(a.showNotifications)
 }
 
 /* ------------------------------------------------------------------
@@ -237,7 +226,7 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 	a.srv = c.Services()
 	c.Root().Background(tk.BgLayout)
 	// 标记已读等操作的结果以 toast 显示在这个窗口里。
-	a.drainToasts(c, a.claimsToasts(toastNotifications))
+	defer a.drainToasts(c, a.claimsToasts(toastNotifications))
 	// Esc 收起窗口而不是退出：消息中心随时可以再打开。
 	c.OnShortcut(0, ui.KeyEscape, a.hideNotificationWindow)
 

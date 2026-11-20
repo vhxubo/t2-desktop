@@ -409,7 +409,7 @@ func (a *app) detailWindowView(h *detailWindow, c *ui.Context) {
 	t := c.Theme()
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
-	a.drainToasts(c, h.claimsToasts)
+	defer a.drainToasts(c, h.claimsToasts)
 	c.OnShortcut(0, ui.KeyEscape, func() { a.closeDetailTab(h, h.active) })
 	if d := h.current(); d != nil {
 		a.detail = d
@@ -442,8 +442,8 @@ func (h *detailWindow) claimsToasts(target toastTarget) bool {
 func (a *app) detailWindowTitleBar(h *detailWindow, c *ui.Context) {
 	t := c.Theme()
 	d := h.current()
-	// 右上角工具条只剩一枚动作时不再画悬浮条，直接收进这根自定义标题栏；
-	// 清单与悬浮条共用，条件只写一遍（见 detailToolActions）。
+	// 页面操作只剩一枚动作时不再画操作组，直接收进这根自定义标题栏；
+	// 清单与操作组共用，条件只写一遍（见 detailToolActions）。
 	var lone *detailToolAction
 	if d != nil {
 		if acts := a.detailToolActions(d); len(acts) == 1 {
@@ -495,7 +495,7 @@ func (a *app) detailTitleToolButton(c *ui.Context, d *detailState, act detailToo
 	case detailToolCopy:
 		a.copyToClipboard(c, act.href, a.detailToastFor(d), "已复制链接")
 	case detailToolRefresh:
-		a.refreshDetail()
+		a.refreshTopic()
 	case detailToolComments:
 		a.askToggleComments(d)
 	default:

@@ -224,7 +224,8 @@ type composeState struct {
 	voteBatchOpen     bool
 	voteBatchText     string
 	voteResultVisible bool
-	voteDeadline      string
+	voteDeadlineOn    bool      // 截止时间选填：开关决定这一项是否进请求体
+	voteDeadlineAt    time.Time // 本地时间，提交时转 UTC ISO 8601
 	voteMaxChoices    float64
 
 	// 评分块
@@ -234,13 +235,14 @@ type composeState struct {
 	scoreComment string
 
 	// 竞猜块。批量编辑的状态与投票块同构。
-	betOpen      bool
-	betTitle     string
-	betOptions   []string
-	betChecked   []bool
-	betBatchOpen bool
-	betBatchText string
-	betDeadline  string
+	betOpen       bool
+	betTitle      string
+	betOptions    []string
+	betChecked    []bool
+	betBatchOpen  bool
+	betBatchText  string
+	betDeadlineOn bool
+	betDeadlineAt time.Time
 
 	// 兑换码 / 红包块
 	redeemOpen       bool
@@ -303,10 +305,14 @@ type composeState struct {
 // 各数量字段取文档允许的最小值，避免一打开就显示 0 这种必然被服务端拒绝的值。
 func newComposeState() *composeState {
 	return &composeState{
-		mdEditor:         newMDEditor(),
-		voteOptions:      []string{"", ""},
-		voteMaxChoices:   1,
+		mdEditor:       newMDEditor(),
+		voteOptions:    []string{"", ""},
+		voteMaxChoices: 1,
+		// 截止时间选填：开关默认关。先给一个「明天此时」的合理默认值，
+		// 打开开关时日历不会停在公元 1 年。
+		voteDeadlineAt:   time.Now().Add(24 * time.Hour),
 		betOptions:       []string{"", ""},
+		betDeadlineAt:    time.Now().Add(24 * time.Hour),
 		maxRedeemPerUser: composeRedeemPerUserLo,
 		poolCoins:        100,
 		guardChoice:      guardTypeLabels[0],
@@ -576,19 +582,13 @@ func (st *composeState) redeemCodeList() []string {
 	return out
 }
 
-// composeDeadline 把界面里写的本地时间换成文档要求的 ISO 8601（UTC，毫秒）。
-// 接受「2026-11-01 11:00」「2026-11-01T11:00」与带秒的写法。
-func composeDeadline(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", nil
+// composeDeadline 把界面上日期 / 时间控件给出的本地时间换成文档要求的
+// ISO 8601（UTC，毫秒）。零值表示没设，返回空串（不发这个字段）。
+func composeDeadline(at time.Time) string {
+	if at.IsZero() {
+		return ""
 	}
-	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02 15:04", "2006-01-02T15:04"} {
-		if t, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
-			return t.UTC().Format("2006-01-02T15:04:05.000Z"), nil
-		}
-	}
-	return "", fmt.Errorf("时间格式应为 2026-11-01 11:00（本地时间）")
+	return at.UTC().Format("2006-01-02T15:04:05.000Z")
 }
 
 // payload 组装 POST /v1/topics 的请求体，同时完成校验：返回的 error 就是
@@ -687,10 +687,6 @@ func (st *composeState) votePayload() (map[string]any, error) {
 			return nil, fmt.Errorf("投票选项最多 %d 字：%s", composeOptionTextMax, truncate(o, 12))
 		}
 	}
-	deadline, err := composeDeadline(st.voteDeadline)
-	if err != nil {
-		return nil, fmt.Errorf("投票截止时间：%w", err)
-	}
 	typ := voteTypeAt(st.voteTypeIndex)
 	v := map[string]any{
 		"type":           typ,
@@ -698,8 +694,10 @@ func (st *composeState) votePayload() (map[string]any, error) {
 		"options":        opts,
 		"result_visible": st.voteResultVisible,
 	}
-	if deadline != "" {
-		v["vote_deadline"] = deadline
+	if st.voteDeadlineOn {
+		if deadline := composeDeadline(st.voteDeadlineAt); deadline != "" {
+			v["vote_deadline"] = deadline
+		}
 	}
 	if typ == "multiple" {
 		choices := int(st.voteMaxChoices)
@@ -750,13 +748,11 @@ func (st *composeState) betPayload() (map[string]any, error) {
 			return nil, fmt.Errorf("竞猜选项最多 %d 字：%s", composeBetOptionMax, truncate(o, 12))
 		}
 	}
-	deadline, err := composeDeadline(st.betDeadline)
-	if err != nil {
-		return nil, fmt.Errorf("竞猜截止时间：%w", err)
-	}
 	b := map[string]any{"title": title, "options": opts}
-	if deadline != "" {
-		b["participate_deadline"] = deadline
+	if st.betDeadlineOn {
+		if deadline := composeDeadline(st.betDeadlineAt); deadline != "" {
+			b["participate_deadline"] = deadline
+		}
 	}
 	return b, nil
 }

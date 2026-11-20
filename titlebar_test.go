@@ -202,68 +202,72 @@ func TestTitleBarSearchHasNoFocusBorder(t *testing.T) {
 	}
 }
 
-// 搜索框的横向位置随窗口宽度切换：窄窗口贴着内容区左缘排，横向足够宽时
-// 落在内容区左缘与通知铃铛的中间——前面补一段伸缩空白，与它后面那段平分
-// 剩余空间（见 titleBar）。铃铛右边的账号气泡不影响这个居中参照。
-func TestTitleBarSearchFollowsWindowWidth(t *testing.T) {
+// 搜索框始终居中在整扇窗口的水平中线上：左段（折叠开关）与右段（铃铛、
+// 账号标识、窗口按钮）等宽伸缩，与窗口宽度无关，拖动改变窗口大小也不会
+// 让它偏向某一侧。宽度仍随窗口缩放，但被限制在上下限内。
+func TestTitleBarSearchAlwaysCentered(t *testing.T) {
 	a := testApp(t)
 
-	narrow := ui.NewTester(a.view, titleSearchCenterMinWidth-1, 720)
-	narrow.Frame()
-	ns, ok := narrow.Find("搜索关键词")
+	var narrowW float32
+	for i, w := range []int{900, 1080, 1440} {
+		tt := ui.NewTester(a.view, w, 720)
+		tt.Frame()
+		s, ok := tt.Find("搜索关键词")
+		if !ok {
+			t.Fatalf("窗口 %d 里没有搜索框：%q", w, tt.Texts())
+		}
+		if _, ok := tt.Find("通知"); !ok {
+			t.Fatalf("窗口 %d 里没有通知铃铛：%q", w, tt.Texts())
+		}
+		// 两端 Grow(1)、basis 0，中线就是窗口宽的一半。
+		if got, want := s.X+s.W/2, float32(w)/2; got < want-8 || got > want+8 {
+			t.Errorf("窗口 %d 搜索框没有居中：中心=%.0f 期望≈%.0f（%v）", w, got, want, s)
+		}
+		if want := titleSearchWidthFor(float32(w)); s.W < want-2 || s.W > want+2 {
+			t.Errorf("窗口 %d 搜索框宽度 = %.0f，按窗口比例应约为 %.0f", w, s.W, want)
+		}
+		if s.W > titleSearchWidthMax {
+			t.Errorf("窗口 %d 搜索框宽度 %.0f 超过上限 %d", w, s.W, titleSearchWidthMax)
+		}
+		if i == 0 {
+			narrowW = s.W
+		} else if s.W <= narrowW+10 {
+			t.Errorf("搜索框宽度没有随窗口变宽：窄 %.0f 宽 %.0f", narrowW, s.W)
+		}
+	}
+}
+
+// 输入框为空时显示的 hint 居中在搜索框内，且不拦截点击；一旦输入内容，
+// hint 让位给文字，已输入的内容仍从左侧开始。
+func TestTitleBarSearchHintCentered(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+
+	box, ok := tt.Find("搜索关键词")
 	if !ok {
-		t.Fatalf("窄窗口里没有搜索框：%q", narrow.Texts())
+		t.Fatalf("标题栏里没有搜索输入框：%q", tt.Texts())
 	}
-	nb, ok := narrow.Find("通知")
+	hint, ok := tt.Find(titleSearchHint)
 	if !ok {
-		t.Fatalf("窄窗口里没有通知铃铛：%q", narrow.Texts())
+		t.Fatalf("输入框里没有居中 hint：%q", tt.Texts())
 	}
-	// 贴左：搜索框紧跟在标题栏最左侧的折叠开关后面，离右端的铃铛还远。
-	// 位置从折叠开关量，改左内边距或开关宽度时不会误报。
-	nt, ok := narrow.Find("展开侧边栏")
-	if !ok {
-		t.Fatalf("窄窗口里没有折叠开关：%q", narrow.Texts())
-	}
-	if ns.X < nt.X+nt.W-1 || ns.X > nt.X+nt.W+24 {
-		t.Errorf("窄窗口搜索框没有紧跟折叠开关：search.x=%.0f toggle=%.0f+%.0f",
-			ns.X, nt.X, nt.W)
-	}
-	if ns.X+ns.W >= nb.X {
-		t.Errorf("窄窗口搜索框和通知铃铛挤在一起：search=%+v bell=%+v", ns, nb)
-	}
-	if want := titleSearchWidthFor(titleSearchCenterMinWidth - 1); ns.W < want-2 || ns.W > want+2 {
-		t.Errorf("窄窗口搜索框宽度 = %.0f，按窗口比例应约为 %.0f", ns.W, want)
+	// hint 居中在放大镜右边的文字区，比整条输入框中心偏右半个图标宽。
+	if got, want := hint.X+hint.W/2, box.X+box.W/2+titleSearchIconInset/2; got < want-8 || got > want+8 {
+		t.Errorf("hint 没有居中在输入框文字区：hint 中心=%.0f 期望≈%.0f", got, want)
 	}
 
-	wide := ui.NewTester(a.view, titleSearchCenterMinWidth+240, 720)
-	wide.Frame()
-	ws, ok := wide.Find("搜索关键词")
-	if !ok {
-		t.Fatalf("宽窗口里没有搜索框：%q", wide.Texts())
+	// 点进输入框打字：hint 消失，文字进到标题栏自己的状态里。
+	if err := tt.Click("搜索关键词"); err != nil {
+		t.Fatal(err)
 	}
-	wb, ok := wide.Find("通知")
-	if !ok {
-		t.Fatalf("宽窗口里没有通知铃铛：%q", wide.Texts())
+	tt.Type("职场")
+	tt.Frame()
+	if a.palette.text != "职场" {
+		t.Fatalf("标题栏搜索框没有收到关键词：%q", a.palette.text)
 	}
-	// 窄窗口里的搜索框左缘就是内容区左缘（贴左时的位置）。宽窗口时它
-	// 的中心应落在这条左缘与铃铛之间；留几个 DIP 的间隙误差。
-	mid := (ns.X + wb.X) / 2
-	if got := ws.X + ws.W/2; got < mid-12 || got > mid+12 {
-		t.Errorf("宽窗口搜索框没有居中在左缘与铃铛之间：中心=%.0f 期望≈%.0f（search=%+v bell=%+v）",
-			got, mid, ws, wb)
-	}
-	if ws.X <= ns.X+80 {
-		t.Errorf("宽窗口搜索框没有从贴左位置移开：窄窗口 x=%.0f 宽窗口 x=%.0f", ns.X, ws.X)
-	}
-	// 宽度也按比例跟着窗口走：宽窗口的框明显更长，但仍在上限内。
-	if want := titleSearchWidthFor(titleSearchCenterMinWidth + 240); ws.W < want-2 || ws.W > want+2 {
-		t.Errorf("宽窗口搜索框宽度 = %.0f，按窗口比例应约为 %.0f", ws.W, want)
-	}
-	if ws.W <= ns.W+40 {
-		t.Errorf("搜索框宽度没有随窗口变宽：窄 %.0f 宽 %.0f", ns.W, ws.W)
-	}
-	if ws.W > titleSearchWidthMax {
-		t.Errorf("搜索框宽度 %.0f 超过上限 %d", ws.W, titleSearchWidthMax)
+	if _, ok := tt.Find(titleSearchHint); ok {
+		t.Errorf("输入后 hint 仍显示在输入框里：%q", tt.Texts())
 	}
 }
 

@@ -225,7 +225,7 @@ func (a *app) imageViewerWindowView(c *ui.Context) {
 	c.SetTheme(homeTheme(true))
 	a.srv = c.Services()
 	c.Root().Background(ui.Hex("#101012"))
-	a.drainToasts(c, a.claimsToasts(toastViewer))
+	defer a.drainToasts(c, a.claimsToasts(toastViewer))
 	a.imageViewer(c)
 }
 

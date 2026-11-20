@@ -259,6 +259,19 @@ func composeToggle(c *ui.Context, on *bool, label string) {
 	})
 }
 
+// composeDeadlineField 画选填的截止时间。开关决定这一项是否进请求体；打开后
+// 用 Lobe（mygo ui）自带的日期与时间控件直接编辑同一个本地 time.Time，不再
+// 让用户手敲时间字符串。name 用来给两个控件各自的无障碍名加前缀。
+func composeDeadlineField(c *ui.Context, on *bool, at *time.Time, name string) {
+	composeToggle(c, on, "设置截止时间")
+	if *on {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.DateInput(c, at).Label(name + "截止日期")
+			ui.TimeInput(c, at).Label(name + "截止时间")
+		})
+	}
+}
+
 /* ------------------------------------------------------------------
    窗口界面
 ---------------------------------------------------------------- */
@@ -272,7 +285,7 @@ func (a *app) composeWindowView(c *ui.Context) {
 	a.srv = c.Services()
 	c.Root().Background(tk.BgLayout)
 	// 本窗口里发起的操作结果以 toast 显示在这里，不退回主窗口。
-	a.drainToasts(c, a.claimsToasts(toastCompose))
+	defer a.drainToasts(c, a.claimsToasts(toastCompose))
 	// Ctrl+Enter 发布：写长文的常用手势。动态模式下发的是短动态。
 	c.OnShortcut(ui.Ctrl, ui.KeyEnter, func() {
 		if a.compose != nil && a.compose.mode == composeModeMoment {
@@ -1030,12 +1043,7 @@ func (a *app) composeVote(c *ui.Context, st *composeState) {
 		})
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.End).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-				display.Text(c, "截止时间", display.TextProps{
-					Type: display.TextSecondary, FontSize: 12, Rows: 1,
-				})
-				composeInput(c, &st.voteDeadline, field.InputProps{
-					Placeholder: "可选，如 2026-11-20 12:00",
-				}).Label("投票截止时间")
+				composeDeadlineField(c, &st.voteDeadlineOn, &st.voteDeadlineAt, "投票")
 			})
 			if voteTypeAt(st.voteTypeIndex) == "multiple" {
 				ui.Column(c).Width(150).Gap(4).Children(func() {
@@ -1094,14 +1102,7 @@ func (a *app) composeBet(c *ui.Context, st *composeState) {
 		a.composeOptionList(c, &st.betOptions, &st.betChecked,
 			&st.betBatchOpen, &st.betBatchText,
 			"竞猜选项", composeBetOptionsMin, composeBetOptionsMax, composeBetOptionMax)
-		ui.Column(c).Gap(4).Children(func() {
-			display.Text(c, "参与截止时间", display.TextProps{
-				Type: display.TextSecondary, FontSize: 12, Rows: 1,
-			})
-			composeInput(c, &st.betDeadline, field.InputProps{
-				Placeholder: "可选，如 2026-11-20 12:00",
-			}).Label("竞猜参与截止时间")
-		})
+		composeDeadlineField(c, &st.betDeadlineOn, &st.betDeadlineAt, "竞猜")
 	})
 }
 

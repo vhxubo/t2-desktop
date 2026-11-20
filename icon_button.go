@@ -6,7 +6,7 @@ import "github.com/egoist/mygo/ui"
 // hover 时由 Tooltip 给出完整说明（见 iconActionButton）。
 const iconActionSize float32 = 16
 
-// iconActionBox 是图标按钮的方形热区：比详情页悬浮工具条的 30×30 略紧凑。
+// iconActionBox 是图标按钮的方形热区：比详情页标题栏那枚动作的 30×30 略紧凑。
 // 固定尺寸也让它放进 Column 时不会被拉成一整行宽——那样 hover 底色会横贯
 // 整行，看着像一条横幅。
 const iconActionBox float32 = 28
@@ -16,7 +16,7 @@ const iconActionBox float32 = 28
 // 的动作都该用它，别再写「关闭」「删除」这类纯文字按钮。
 //
 // 已经各有尺寸与 hover 规范的几处仍用各自的画法：窗口标题栏用
-// titleBarButton、详情页悬浮工具条用 detailToolButton、编辑器工具条用
+// titleBarButton、详情页标题栏那枚动作用 detailToolButton、编辑器工具条用
 // editorIconButton。这里服务的是对话框标题行、设置项与列表行这类普通位置。
 //
 // label 同时是读屏名字与点击测试的命中名；tip 要说清点了会发生什么，而不是把

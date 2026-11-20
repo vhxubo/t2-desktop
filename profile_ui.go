@@ -310,7 +310,7 @@ func (a *app) profileWindowView(c *ui.Context) {
 	a.srv = c.Services()
 	c.Root().Background(tk.BgLayout)
 	// 本窗口里发起的操作结果以 toast 显示在这里，不退回主窗口。
-	a.drainToasts(c, a.claimsToasts(toastProfile))
+	defer a.drainToasts(c, a.claimsToasts(toastProfile))
 	// Esc 收起窗口：随时可以再打开。
 	c.OnShortcut(0, ui.KeyEscape, a.closeProfileWindow)
 

@@ -180,7 +180,7 @@ func (a *app) commentsStatusUngranted(err error) bool {
 	return true
 }
 
-// commentsStatusButton 是悬浮工具条里的「关闭 / 开启评论」图标：只有作者看得到。
+// commentsStatusButton 是标题栏里那枚「关闭 / 开启评论」图标：只有作者看得到。
 // 请求在途时换成转圈并禁用，避免连点把同一件事反复提交。
 func (a *app) commentsStatusButton(c *ui.Context, d *detailState) {
 	if !a.canToggleComments(d) {

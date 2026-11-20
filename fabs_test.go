@@ -160,9 +160,9 @@ func TestListFabRefreshReloads(t *testing.T) {
 	}
 }
 
-// 详情页不再有页头：刷新与返回顶部收在右上角的悬浮工具条里，压在评论卡片
-// 头部右侧的留白上，不占正文高度。评论滚到底后出现返回顶部，点了评论回到
-// 开头；按钮不会和卡片底部的「发送」抢位置。
+// 正文与评论区各有自己的一键回顶与刷新：正文那组只滚正文，评论那组只滚
+// 评论列表。两组都竖排贴在各自面板右下角，不占正文高度，也不和评论卡片
+// 底部的「发送」抢位置。
 func TestDetailToolbarRefreshAndBackToTop(t *testing.T) {
 	a := detailAppWithReplies(t)
 	rows := make([]replyItem, 0, 60)
@@ -182,55 +182,70 @@ func TestDetailToolbarRefreshAndBackToTop(t *testing.T) {
 	if !tt.HasText("第60条评论") {
 		t.Fatalf("评论没有滚到底：%q", tt.Texts())
 	}
-	refresh, ok := tt.Find("刷新")
+	bodyRefresh, ok := tt.Find("刷新")
 	if !ok {
-		t.Fatalf("详情页没有刷新按钮：%q", tt.Texts())
+		t.Fatalf("正文区没有刷新按钮：%q", tt.Texts())
 	}
-	top, ok := tt.Find("返回顶部")
+	commentTop, ok := tt.Find("评论回到顶部")
 	if !ok {
-		t.Fatalf("评论滚离顶部后没有出现返回顶部：%q", tt.Texts())
+		t.Fatalf("评论滚离顶部后没有出现回顶按钮：%q", tt.Texts())
 	}
-	// 工具条悬浮在右上角：靠近窗口顶部与右边缘，并与评论卡片头部同一带，
-	// 说明它没有像旧版页头那样单独占一行。
-	if refresh.Y > 90 || top.Y > 90 {
-		t.Errorf("刷新 / 返回顶部应悬浮在内容右上角：刷新 %+v / 返回顶部 %+v", refresh, top)
-	}
-	if refresh.X < 900 {
-		t.Errorf("悬浮工具条应贴在窗口右侧：刷新 %+v", refresh)
-	}
-	if top.Y != refresh.Y {
-		t.Errorf("返回顶部与刷新应在同一行：返回顶部 %+v / 刷新 %+v", top, refresh)
-	}
-	comment, ok := tt.Find("评论")
+	commentRefresh, ok := tt.Find("刷新评论")
 	if !ok {
-		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
+		t.Fatalf("评论区没有刷新按钮：%q", tt.Texts())
 	}
-	if dy := refresh.Y + refresh.H/2 - (comment.Y + comment.H/2); dy > 20 || dy < -20 {
-		t.Errorf("悬浮工具条没有压在评论卡片头部一带：刷新 %+v / 评论 %+v", refresh, comment)
+	// 正文没滚，不该出现正文的回顶：那一枚只归正文滚动管。
+	if r, ok := tt.Find("返回顶部"); ok {
+		t.Errorf("正文没滚时不该出现正文回顶：%+v", r)
 	}
-	// 评论输入栏固定在卡片底部，远在工具条下方，不再需要为 FAB 让宽度。
+	// 评论组竖排贴在列表右下角：回顶在刷新上方，两枚同一列。
+	if commentTop.X != commentRefresh.X {
+		t.Errorf("评论回顶与刷新应排在同一列：%+v / %+v", commentTop, commentRefresh)
+	}
+	if commentTop.Y+commentTop.H > commentRefresh.Y {
+		t.Errorf("评论回顶应排在刷新上方：%+v / %+v", commentTop, commentRefresh)
+	}
+	// 两组各在自那一栏：正文组在左，评论组在右，都落在面板下部。
+	bar, ok := tt.Access("正文互动栏")
+	if !ok {
+		t.Fatalf("找不到正文互动栏：%q", tt.Texts())
+	}
+	if bodyRefresh.X >= commentRefresh.X {
+		t.Errorf("正文组应在评论组左侧：%v / %v", bodyRefresh, commentRefresh)
+	}
+	if bodyRefresh.Y < 380 || bodyRefresh.X+bodyRefresh.W > bar.Bounds.X+bar.Bounds.W {
+		t.Errorf("正文组应贴在正文区下部：刷新 %+v / 互动栏 %+v", bodyRefresh, bar.Bounds)
+	}
+	if commentRefresh.Y < 380 {
+		t.Errorf("评论组应贴在评论区下部：%+v", commentRefresh)
+	}
+	// 评论输入栏固定在卡片底部，不再需要为操作组让宽度。
 	send, ok := tt.Find("发送")
 	if !ok {
 		t.Fatalf("找不到发送按钮：%q", tt.Texts())
 	}
-	if send.Y <= refresh.Y+100 {
-		t.Errorf("发送按钮应固定在评论卡片底部：发送 %+v / 工具条刷新 %+v", send, refresh)
+	if send.Y < commentRefresh.Y {
+		t.Errorf("发送按钮应固定在评论卡片底部：发送 %+v / 评论刷新 %+v", send, commentRefresh)
 	}
 
-	if err := tt.Click("返回顶部"); err != nil {
+	// 评论回顶只滚评论列表，正文组不跟着收起。
+	if err := tt.Click("评论回到顶部"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if !tt.HasText("第1条评论") {
-		t.Errorf("点返回顶部没有回到评论开头：%q", tt.Texts())
+		t.Errorf("点评论回顶没有回到评论开头：%q", tt.Texts())
 	}
-	if r, ok := tt.Find("返回顶部"); ok {
-		t.Errorf("回到顶部后按钮应当收起：%+v", r)
+	if r, ok := tt.Find("评论回到顶部"); ok {
+		t.Errorf("回到顶部后评论回顶按钮应当收起：%+v", r)
+	}
+	if _, ok := tt.Find("刷新"); !ok {
+		t.Error("评论回顶不该把正文区的刷新一起收起")
 	}
 }
 
-// 详情页悬浮工具条里的「刷新」重新拉正文与评论：页面上还挂着的旧失败提示
-// 要被清掉。
+// 正文区操作组里的「刷新」只重拉正文：页面上还挂着的旧正文失败提示要被
+// 清掉，已有正文保持显示。
 func TestDetailToolbarRefreshClearsError(t *testing.T) {
 	a := detailAppWithReplies(t)
 	a.detail.topicErr = "上一次读取失败的原因"
@@ -256,8 +271,50 @@ func TestDetailToolbarRefreshClearsError(t *testing.T) {
 	}
 }
 
-// 正文那一栏自己滚动同样会露出悬浮工具条的「返回顶部」：它把正文与评论一起
-// 拉回开头。
+// 两枚刷新各发各的请求：正文那枚只打正文端点，评论那枚只打评论端点。
+func TestDetailRefreshIsSplitBetweenBodyAndComments(t *testing.T) {
+	var topicCalls, replyCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/replies"):
+			replyCalls.Add(1)
+			_, _ = io.WriteString(w, envelopeJSON(detailRepliesJSON))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/topics/"):
+			topicCalls.Add(1)
+			_, _ = io.WriteString(w, envelopeJSON(detailTopicJSON))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	a := detailAppWithReplies(t)
+	a.autoLoad = true
+	a.client = &Client{HTTP: srv.Client(), Base: srv.URL + "/api"}
+	// 首帧的无限滚动不能自己续拉，否则计数会混进这次点击的请求。
+	a.detail.replyNoMore = true
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	if err := tt.Click("刷新"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return topicCalls.Load() == 1 }, "正文刷新没有发出正文请求")
+	if replyCalls.Load() != 0 {
+		t.Errorf("正文刷新不该重拉评论：%d 次", replyCalls.Load())
+	}
+
+	if err := tt.Click("刷新评论"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return replyCalls.Load() == 1 }, "评论刷新没有发出评论请求")
+	if topicCalls.Load() != 1 {
+		t.Errorf("评论刷新不该重拉正文：%d 次", topicCalls.Load())
+	}
+}
+
+// 正文那一栏自己滚动同样会露出正文操作组的「返回顶部」：它只把正文拉回
+// 开头，不碰评论区。
 func TestDetailToolbarBackToTopScrollsBody(t *testing.T) {
 	a := detailAppWithReplies(t)
 	var body strings.Builder
@@ -284,9 +341,9 @@ func TestDetailToolbarBackToTopScrollsBody(t *testing.T) {
 	if _, ok := tt.Find("返回顶部"); !ok {
 		t.Fatalf("正文滚离顶部后没有出现返回顶部：%q", tt.Texts())
 	}
-	// 悬浮工具条不随正文滚动：刷新始终停在同一位置。
+	// 操作组不随正文滚动：刷新始终停在同一位置。
 	if after, ok := tt.Find("刷新"); !ok || after != before {
-		t.Errorf("滚动后悬浮工具条移动了：刷新 %+v → %+v", before, after)
+		t.Errorf("滚动后操作组移动了：刷新 %+v → %+v", before, after)
 	}
 
 	if err := tt.Click("返回顶部"); err != nil {

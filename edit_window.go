@@ -38,7 +38,7 @@ const (
    入口、显示与关闭
 ---------------------------------------------------------------- */
 
-// showTopicEdit 打开「编辑帖子」。入口是详情页右上角工具条，只在作者本人
+// showTopicEdit 打开「编辑帖子」。入口是详情页正文区右下角的操作组，只在作者本人
 // 时出现（见 canEditTopic）。
 func (a *app) showTopicEdit(d *detailState) {
 	if d == nil || d.topic == nil {
@@ -164,7 +164,7 @@ func (a *app) editWindowView(c *ui.Context) {
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
 	// 本窗口里的保存结果与上传失败都弹在这里；窗口不在了就退回主窗口。
-	a.drainToasts(c, a.claimsToasts(toastEdit))
+	defer a.drainToasts(c, a.claimsToasts(toastEdit))
 	c.OnShortcut(ui.Ctrl, ui.KeyEnter, a.submitEdit)
 	c.OnShortcut(0, ui.KeyEscape, a.closeEditWindow)
 

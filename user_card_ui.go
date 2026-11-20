@@ -159,7 +159,7 @@ func (a *app) userCardWindowView(c *ui.Context) {
 	a.srv = c.Services()
 	c.Root().Background(tk.BgLayout)
 	// 关注 / 取关的结果以 toast 显示在这个窗口里，不退回主窗口。
-	a.drainToasts(c, a.claimsToasts(toastUserCard))
+	defer a.drainToasts(c, a.claimsToasts(toastUserCard))
 	// Esc 收起窗口：随时可以再打开。
 	c.OnShortcut(0, ui.KeyEscape, a.closeUserCardWindow)
 

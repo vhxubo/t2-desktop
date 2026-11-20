@@ -12,9 +12,9 @@ import (
    详情页：复制帖子与评论的链接
 ------------------------------------------------------------------ */
 
-// 复制链接在详情页右上角的悬浮工具条里：一枚图标按钮，文案与说明都挂在
-// 无障碍信息上（图标按钮不写文字标签）。点一下，剪贴板里就是这一帖的地址，
-// 结果用主窗口 toast 报告。
+// 复制链接在详情页右下角的竖排操作组里：一枚图标按钮，Lobe 的 ActionIcon
+// 把无障碍名同时当作 tooltip。点一下，剪贴板里就是这一帖的地址，结果用主
+// 窗口 toast 报告。
 func TestDetailCopyPostLink(t *testing.T) {
 	a := detailAppWithReplies(t)
 	tt := ui.NewTester(a.view, 1200, 900)
@@ -24,12 +24,12 @@ func TestDetailCopyPostLink(t *testing.T) {
 	if !ok {
 		t.Fatalf("详情页工具条里没有复制链接：%q", tt.Texts())
 	}
-	if info.Description != "把这篇帖子的链接复制到剪贴板" {
+	if info.Description != "复制帖子链接" {
 		t.Errorf("复制链接的说明不对：%q", info.Description)
 	}
-	// 按钮落在内容右上角，和悬浮工具条上的其它图标按钮排在一起。
-	if top, ok := tt.Find("关闭详情"); ok && absInt(int(info.Bounds.Y-top.Y)) > 2 {
-		t.Errorf("复制链接应与工具条其它按钮同一行：%+v vs %+v", info.Bounds, top)
+	// 按钮落在正文区右下角，和操作组里的其它图标按钮排成一列。
+	if close, ok := tt.Find("关闭详情"); ok && absInt(int(info.Bounds.X-close.X)) > 2 {
+		t.Errorf("复制链接应与操作组其它按钮同一列：%+v vs %+v", info.Bounds, close)
 	}
 	if err := tt.Click("复制帖子链接"); err != nil {
 		t.Fatalf("点复制链接失败：%v", err)

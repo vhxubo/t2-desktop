@@ -124,7 +124,7 @@ func (a *app) followsWindowView(c *ui.Context) {
 	// 名单里的用户标识可能把链接交给系统浏览器，服务取本窗口自己的那份。
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
-	a.drainToasts(c, a.claimsToasts(toastFollows))
+	defer a.drainToasts(c, a.claimsToasts(toastFollows))
 	c.OnShortcut(0, ui.KeyEscape, a.closeFollowsWindow)
 
 	fs := a.follows

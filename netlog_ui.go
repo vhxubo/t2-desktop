@@ -131,7 +131,7 @@ func (a *app) netLogWindowView(c *ui.Context) {
 	c.Root().Background(t.Background)
 	// Esc 直接关掉窗口。复制结果这类提示归本窗口自己领走（见 toasts.go）。
 	c.OnShortcut(0, ui.KeyEscape, a.closeNetLogWindow)
-	a.drainToasts(c, a.claimsToasts(toastNetLog))
+	defer a.drainToasts(c, a.claimsToasts(toastNetLog))
 
 	entries := a.proxy.net.Snapshot()
 	shown := a.netLogFiltered(entries)

@@ -149,7 +149,7 @@ func (a *app) settingsWindowView(c *ui.Context) {
 	tk := lobetheme.TokensOf(c)
 	c.Root().Background(tk.BgLayout)
 	// 保存代理、清理缓存的结果以 toast 显示在这个窗口里。
-	a.drainToasts(c, a.claimsToasts(toastSettings))
+	defer a.drainToasts(c, a.claimsToasts(toastSettings))
 	// Esc 直接关掉设置窗口，和系统偏好设置的直觉一致。
 	c.OnShortcut(0, ui.KeyEscape, a.closeSettingsWindow)
 

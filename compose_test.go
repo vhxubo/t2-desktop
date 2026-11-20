@@ -221,7 +221,8 @@ func TestComposePublishSendsDocumentedPayload(t *testing.T) {
 	st.voteTitle = "你选哪个"
 	st.voteOptions = []string{"甲", "", "乙"}
 	st.voteResultVisible = true
-	st.voteDeadline = "2026-11-20 12:00"
+	st.voteDeadlineOn = true
+	st.voteDeadlineAt = time.Date(2026, 11, 20, 12, 0, 0, 0, time.Local)
 	st.voteMaxChoices = 2
 
 	st.scoreOpen = true
@@ -393,12 +394,6 @@ func TestComposePayloadValidation(t *testing.T) {
 			st.voteTitle = strings.Repeat("长", composeVoteTitleMax+1)
 			st.voteOptions = []string{"甲"}
 		}, "投票标题最多"},
-		{"投票时间格式", func(st *composeState) {
-			st.voteOpen = true
-			st.voteTitle = "选一个"
-			st.voteOptions = []string{"甲"}
-			st.voteDeadline = "明天中午"
-		}, "时间格式应为"},
 		{"竞猜选项不足", func(st *composeState) {
 			st.betOpen = true
 			st.betTitle = "谁会赢"
@@ -595,21 +590,43 @@ func TestComposeRuneSelClamps(t *testing.T) {
 	}
 }
 
-// 时间字段：本地时间进，ISO 8601 UTC 出；空值不发。
+// 时间字段：日期 / 时间控件给出的本地时间进，ISO 8601 UTC 出；零值不发。
 func TestComposeDeadline(t *testing.T) {
-	if got, err := composeDeadline("  "); err != nil || got != "" {
-		t.Errorf("空值 = %q %v", got, err)
+	if got := composeDeadline(time.Time{}); got != "" {
+		t.Errorf("零值 = %q，期望空串", got)
 	}
-	got, err := composeDeadline("2026-11-20 12:00")
-	if err != nil {
+	at := time.Date(2026, 11, 20, 12, 0, 0, 0, time.Local)
+	got := composeDeadline(at)
+	want := at.UTC().Format("2006-01-02T15:04:05.000Z")
+	if got != want {
+		t.Errorf("时间 = %q，期望 %q", got, want)
+	}
+}
+
+// 截止时间是选填的：默认只有开关，打开后才出现 Lobe 自带的日期 / 时间控件，
+// 两个块各自绑定自己的 time.Time。
+func TestComposeDeadlineDateInputs(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	st.voteDeadlineAt = time.Date(2026, 11, 20, 12, 37, 0, 0, time.Local)
+	it := ui.NewTester(a.composeWindowView, composeWindowWidth, 1100)
+	it.Frame()
+	if err := it.Click("投票"); err != nil {
 		t.Fatal(err)
 	}
-	want, _ := time.ParseInLocation("2006-01-02 15:04", "2026-11-20 12:00", time.Local)
-	if got != want.UTC().Format("2006-01-02T15:04:05.000Z") {
-		t.Errorf("时间 = %q，期望 %q", got, got)
+	it.Frame()
+	if it.HasText("2026") || it.HasText("37") {
+		t.Fatalf("开关没打开就画出了日期 / 时间控件：%q", it.Texts())
 	}
-	if _, err := composeDeadline("2026/11/20"); err == nil {
-		t.Errorf("不合法的写法应当报错")
+	if err := it.Click("设置截止时间"); err != nil {
+		t.Fatalf("打开截止时间失败：%v：%q", err, it.Texts())
+	}
+	it.Frame()
+	if !st.voteDeadlineOn {
+		t.Fatal("开关没写回状态")
+	}
+	if !it.HasText("2026") || !it.HasText("37") {
+		t.Fatalf("开关打开后没画出日期 / 时间控件：%q", it.Texts())
 	}
 }
 
@@ -796,13 +813,13 @@ func TestComposeWindowLayout(t *testing.T) {
 		}
 	}
 	openModule("投票", "投票类型", "单选", "多选", "公开投票结果", "添加选项",
-		"批量添加", "删除选中", "投票截止时间")
+		"批量添加", "删除选中", "设置截止时间")
 	openModule("可见性（谁可以看）", "可见范围", "所有人可见", "门槛由服务端判定")
 	openModule("金币池", "初始金币", "中奖概率（0 = 默认）")
 	openModule("兑换码 / 红包", "兑换码（一行一个）", "批量粘贴", "清空兑换码",
 		"每人可领", "红包上限", "同时开红包")
 	openModule("评分", "评分对象", "分值", "理由")
-	openModule("竞猜", "竞猜标题", "参与截止时间")
+	openModule("竞猜", "竞猜标题", "设置截止时间")
 }
 
 // 附加组件在右侧栏点开弹窗里编辑：添加后随帖发送、侧栏显示已添加、结果用

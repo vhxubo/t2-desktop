@@ -173,7 +173,7 @@ func (a *app) replyWindowView(c *ui.Context) {
 		a.detail = d
 	}
 	// 本窗口里发送失败 / 成功的提示弹在这里；窗口不在了就退回主窗口。
-	a.drainToasts(c, a.claimsToasts(toastReply))
+	defer a.drainToasts(c, a.claimsToasts(toastReply))
 	c.OnShortcut(0, ui.KeyEscape, a.closeReplyWindow)
 	c.OnShortcut(ui.Ctrl, ui.KeyEnter, a.submitReply)
 

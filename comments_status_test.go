@@ -152,8 +152,8 @@ func commentsStatusApp(t *testing.T, srv *httptest.Server) *app {
 	return a
 }
 
-// 工具条只多了一个 30 DIP 的图标：它必须落在窗口内，并且与相邻按钮不重叠，
-// 否则作者版的详情页右上角会互相盖住。
+// 竖排操作组多了一枚图标：它必须落在窗口内，与相邻按钮不重叠、排在同一列，
+// 否则作者版的详情页右下角会互相盖住。
 func TestCommentsStatusToolbarLayout(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()
@@ -171,8 +171,13 @@ func TestCommentsStatusToolbarLayout(t *testing.T) {
 		if r.X < 0 || r.Y < 0 || r.X+r.W > width || r.Y+r.H > height {
 			t.Errorf("%s 跑出了窗口：%+v", label, r)
 		}
-		if i > 0 && r.X < prev.X+prev.W {
-			t.Errorf("%s 与前一个按钮重叠：%+v / %+v", label, r, prev)
+		if i > 0 {
+			if r.Y < prev.Y+prev.H {
+				t.Errorf("%s 与前一个按钮重叠：%+v / %+v", label, r, prev)
+			}
+			if r.X != prev.X {
+				t.Errorf("%s 没有和前一个按钮排在同一列：%+v / %+v", label, r, prev)
+			}
 		}
 		prev = r
 	}

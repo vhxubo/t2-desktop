@@ -809,23 +809,38 @@ func TestNestedReplyQuoteLineHelperBackground(t *testing.T) {
 	}
 }
 
-// 悬浮工具条压在右栏顶部，要和「评论」标题上下居中：标题与工具条中心
-// 对齐，才不会看起来一边高一边低。
-func TestDetailToolbarCenteredWithReplyTitle(t *testing.T) {
+// 页面操作收进正文区右下角的一列 Lobe ActionIconGroup：竖排、贴在正文面板
+// 底部互动栏上方，不再压在评论区标题旁。
+func TestDetailToolbarAtBodyBottomRight(t *testing.T) {
 	a := detailAppWithReplies(t)
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	title, ok := tt.Find("评论")
+	copyLink, ok := tt.Find("复制帖子链接")
 	if !ok {
-		t.Fatalf("找不到评论标题：%q", tt.Texts())
+		t.Fatalf("找不到操作组里的复制链接：%q", tt.Texts())
 	}
-	tool, ok := tt.Find("复制帖子链接")
+	refresh, ok := tt.Find("刷新")
 	if !ok {
-		t.Fatalf("找不到悬浮工具条按钮：%q", tt.Texts())
+		t.Fatalf("找不到操作组里的刷新：%q", tt.Texts())
 	}
-	if d := (tool.Y + tool.H/2) - (title.Y + title.H/2); d > 1 || d < -1 {
-		t.Errorf("悬浮工具条没有和评论标题居中：工具条中心 %.1f / 标题中心 %.1f",
-			tool.Y+tool.H/2, title.Y+title.H/2)
+	// 竖排：两枚同一列，刷新在复制链接下方。
+	if d := absInt(int(copyLink.X - refresh.X)); d > 1 {
+		t.Errorf("操作组没有竖排：复制链接 %+v / 刷新 %+v", copyLink, refresh)
+	}
+	if refresh.Y < copyLink.Y+copyLink.H {
+		t.Errorf("刷新应在复制链接下方：%+v / %+v", copyLink, refresh)
+	}
+	// 贴着正文互动栏的右端、落在它的上方。
+	bar, ok := tt.Access("正文互动栏")
+	if !ok {
+		t.Fatalf("找不到正文互动栏：%q", tt.Texts())
+	}
+	if d := absInt(int((copyLink.X + copyLink.W) - (bar.Bounds.X + bar.Bounds.W - 14))); d > 12 {
+		t.Errorf("操作组没有贴着正文面板右边缘：组右 %.1f / 互动栏右 %.1f",
+			copyLink.X+copyLink.W, bar.Bounds.X+bar.Bounds.W)
+	}
+	if copyLink.Y+copyLink.H > bar.Bounds.Y+1 {
+		t.Errorf("操作组应落在正文互动栏上方：%+v / 互动栏 %+v", copyLink, bar.Bounds)
 	}
 }
 
@@ -2283,6 +2298,10 @@ func TestDetailReplyCollapsesRight(t *testing.T) {
 		t.Errorf("两个收起入口应同一高度：收起评论 %+v / 收起正文 %+v", collapseReply, collapseBody)
 	}
 
+	// 视图切换收在评论区操作组里：展开时可见，随着评论区一起显隐。
+	if _, ok := tt.Find("切到扁平时间序"); !ok {
+		t.Fatalf("评论区操作组里没有视图切换：%q", tt.Texts())
+	}
 	if err := tt.Click("收起评论"); err != nil {
 		t.Fatalf("点收起评论失败：%v", err)
 	}
@@ -2296,6 +2315,12 @@ func TestDetailReplyCollapsesRight(t *testing.T) {
 	if _, ok := tt.Find("评论"); ok {
 		t.Errorf("评论收起后右栏不该还在：%q", tt.Texts())
 	}
+	// 评论区收起时整组操作都不画，视图切换也随之隐藏。
+	for _, label := range []string{"切到扁平时间序", "切到楼层视图"} {
+		if _, ok := tt.Find(label); ok {
+			t.Errorf("评论收起后不该再画视图切换 %q：%q", label, tt.Texts())
+		}
+	}
 	full, ok := tt.Find("正文与评论的测试帖")
 	if !ok || full.W < 900 {
 		t.Fatalf("评论收起后正文没有占满整行：%+v / 原来 %+v", full, title)
@@ -2308,8 +2333,8 @@ func TestDetailReplyCollapsesRight(t *testing.T) {
 		t.Errorf("评论收起后正文不该上下居中：标题 %+v / 原来 %+v", full, title)
 	}
 
-	// 展开入口贴在右边缘、右上角工具条下方；正文铺满时没有接缝，不该再
-	// 按收起入口的高度垂直居中。
+	// 展开入口贴在右边缘的固定高度；正文铺满时没有接缝，不该再按收起入口
+	// 的高度垂直居中。
 	expand, ok := tt.Find("展开评论")
 	if !ok {
 		t.Fatalf("评论收起后找不到展开图标：%q", tt.Texts())
@@ -2318,7 +2343,7 @@ func TestDetailReplyCollapsesRight(t *testing.T) {
 		t.Errorf("展开评论应停在右边缘的窄栏上：%+v", expand)
 	}
 	if expand.Y < 60 || expand.Y > 140 || expand.Y >= collapseReply.Y-200 {
-		t.Errorf("展开评论应贴在右上角工具条下方，而不是垂直居中：%+v / 收起入口 %+v", expand, collapseReply)
+		t.Errorf("展开评论应贴在右上角固定高度，而不是垂直居中：%+v / 收起入口 %+v", expand, collapseReply)
 	}
 	if _, ok := tt.Find("收起正文"); ok {
 		t.Errorf("评论收起后不该再画收起正文，避免两边同时收起：%q", tt.Texts())
@@ -2341,6 +2366,9 @@ func TestDetailReplyCollapsesRight(t *testing.T) {
 	}
 	if d := restored.X - comment.X; d > 1 || d < -1 {
 		t.Errorf("展开后评论区没有回到原来的位置：%+v / 原来 %+v", restored, comment)
+	}
+	if _, ok := tt.Find("切到扁平时间序"); !ok {
+		t.Errorf("展开后视图切换没有回来：%q", tt.Texts())
 	}
 }
 

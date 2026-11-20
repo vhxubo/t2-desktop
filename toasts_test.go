@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
 // 操作结果用窗口内 toast 报告。目标窗口不在时退回主窗口，否则用户根本看不到
@@ -76,16 +77,18 @@ func TestToastDrawsAboveWindowOverlays(t *testing.T) {
 	red := ui.RGB(255, 0, 0)
 	shown := false
 	tt := ui.NewTester(func(c *ui.Context) {
+		// 和窗口的 view 一样，host 在最后建：toast 要盖在之后的遮罩之上。
+		defer feedback.ToastHost(c, feedback.ToastHostProps{Placement: feedback.ToastBottom})
 		if !shown {
 			shown = true
-			c.Toast("层级最高的提示")
+			feedback.ShowToast(c, feedback.ToastProps{Title: "层级最高的提示"})
 		}
 		ui.Overlay(c, func() {
 			ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).Background(red)
 		})
 	}, 420, 260)
 	tt.Frame()
-	tt.Advance(300 * time.Millisecond) // 等淡入结束，toast 完全显出来
+	tt.Advance(500 * time.Millisecond) // 等入场动画结束，toast 完全显出来
 	tt.Frame()
 	if !tt.HasText("层级最高的提示") {
 		t.Fatalf("窗口里没有 toast：%q", tt.Texts())
