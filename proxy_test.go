@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1591,5 +1592,85 @@ func TestMyProfileAndNodeDetailUseConfiguredProxy(t *testing.T) {
 		if paths[i] != want[i] {
 			t.Errorf("第 %d 个请求 = %s，期望 %s", i+1, paths[i], want[i])
 		}
+	}
+}
+
+// 合集名筛选帖子是 newApp 之后新增的读出口：必须通过共享的 Client.fetch
+// 出去，不能因为它是「筛选」就绕开代理直连。
+func TestProfileTopicCollUsesConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var hits atomic.Int32
+	var gotURL atomic.Value
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		gotURL.Store(r.URL.String())
+		_, _ = fmt.Fprint(w, proxyTestEnvelope)
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{Proxy: p, Base: "http://upstream.invalid/api"}
+	// 下拉选项：GET /v1/me/collections（复用已有的 fetchMyCollections）。
+	if _, err := c.fetchMyCollections(context.Background()); err != nil {
+		t.Fatalf("合集列表经代理失败：%v", err)
+	}
+	// 选中后按合集名筛选：GET /v1/users/:name/topics?collection=。
+	spec := profileTopicCollSpec("jimmy", "读过的书", 1)
+	if _, err := c.fetch(context.Background(), spec, 1); err != nil {
+		t.Fatalf("合集筛选经代理失败：%v", err)
+	}
+	if hits.Load() != 2 {
+		t.Errorf("代理收到 %d 个请求，期望 2", hits.Load())
+	}
+	want := "http://upstream.invalid/api/v1/users/jimmy/topics?page=1&limit=50&collection=" + url.QueryEscape("读过的书")
+	if got := gotURL.Load(); got != want {
+		t.Errorf("代理看到的 URL = %v，期望 %s", got, want)
+	}
+}
+
+// 编辑器的插入帖子选择器与资料卡的合集筛选都是这次新增的读出口：必须和
+// 其它请求一样经共享 transport 走代理，不能因为换了界面就绕过代理直连。
+func TestNewTopicPickersUseConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var urls []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		urls = append(urls, r.URL.String())
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, proxyTestEnvelope)
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{Proxy: p, Base: "http://upstream.invalid/api"}
+	// 编辑器选择器：GET /v1/me/topics?q=。
+	if _, err := c.fetchMyTopicsForPicker(context.Background(), "旧"); err != nil {
+		t.Fatalf("插入帖子选择器经代理失败：%v", err)
+	}
+	// 资料卡按合集名筛选：GET /v1/users/:name/topics?collection=。
+	if _, err := c.fetch(context.Background(), userCardTopicCollSpec("alice", "读过的书", 1), 1); err != nil {
+		t.Fatalf("资料卡合集筛选经代理失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(urls) != 2 {
+		t.Fatalf("代理收到 %d 个请求，期望 2：%v", len(urls), urls)
+	}
+	wantPicker := "http://upstream.invalid/api/v1/me/topics?q=" + url.QueryEscape("旧")
+	if urls[0] != wantPicker {
+		t.Errorf("选择器请求 = %s，期望 %s", urls[0], wantPicker)
+	}
+	wantColl := "http://upstream.invalid/api/v1/users/alice/topics?page=1&limit=50&collection=" +
+		url.QueryEscape("读过的书")
+	if urls[1] != wantColl {
+		t.Errorf("资料卡筛选请求 = %s，期望 %s", urls[1], wantColl)
 	}
 }
