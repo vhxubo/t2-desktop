@@ -12,6 +12,228 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// mentionSearchServer 在两份名单之外再接搜索端点，用来验证「本地没命中 →
+// 搜用户」这条链路。type=users 的响应是裸数组，与搜索窗口同一份形状。
+func mentionSearchServer(t *testing.T, participants, users string, calls *atomic.Int32) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/meta/guardians":
+			fmt.Fprint(w, envelopeJSON(`{"items":[],"total":0}`))
+		case "/api/v1/topics/JBYGf2A/participants":
+			fmt.Fprint(w, envelopeJSON(participants))
+		case "/api/v1/search":
+			calls.Add(1)
+			if got := r.URL.Query().Get("type"); got != "users" {
+				t.Errorf("搜索类型 = %q，期望 users", got)
+			}
+			fmt.Fprint(w, envelopeJSON(users))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func shortMentionSearchDelay(t *testing.T) {
+	t.Helper()
+	old := mentionSearchDelay
+	mentionSearchDelay = 10 * time.Millisecond
+	t.Cleanup(func() { mentionSearchDelay = old })
+}
+
+// 本地名单没命中时按输入搜索全站用户：结果进面板、点一下整块替换 @前缀，
+// 请求只发一次（同一个词），且严格走 type=users。
+func TestMentionSearchesUsersWhenNoLocalHit(t *testing.T) {
+	shortMentionSearchDelay(t)
+	var searches atomic.Int32
+	var queries atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/meta/guardians":
+			fmt.Fprint(w, envelopeJSON(`{"items":[],"total":0}`))
+		case "/api/v1/topics/JBYGf2A/participants":
+			fmt.Fprint(w, envelopeJSON(`{"items":[{"id":"u1","username":"alice"}],"total":1}`))
+		case "/api/v1/search":
+			searches.Add(1)
+			queries.Store(r.URL.RawQuery)
+			fmt.Fprint(w, envelopeJSON(`[{"id":"u2","username":"Jill"},`+
+				`{"id":"u3","username":"Jimmy2"},`+
+				`{"id":"u4","username":"jimmy"}]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	a, tt := mentionUIApp(t, srv)
+	typeAt(t, tt)
+	waitMentionLoaded(t, a)
+
+	tt.Type("Ji")
+	tt.Frame()
+	waitFor(t, func() bool { return len(a.detail.mentions.search.people) > 0 }, "用户搜索没有返回")
+	waitFor(t, func() bool { return !a.detail.mentions.search.busy }, "搜索没有结束")
+	tt.Frame()
+
+	q, _ := queries.Load().(string)
+	if !strings.Contains(q, "q=ji") || !strings.Contains(q, "type=users") {
+		t.Errorf("搜索参数不对：%q", q)
+	}
+	if _, ok := tt.Find("@Jill"); !ok {
+		t.Fatalf("搜索到的用户没进面板：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("@Jimmy2"); !ok {
+		t.Fatalf("第二个搜索结果没进面板：%q", tt.Texts())
+	}
+	// 自己（窗口账号 jimmy）即使被搜出来也不能列进候选。
+	if tt.HasText("@jimmy") {
+		t.Errorf("搜到的自己没被排掉：%q", tt.Texts())
+	}
+	// 「按输入」那行仍在：搜到的用户不一定就是用户想 @ 的那个。
+	if _, ok := tt.Find("按输入"); !ok {
+		t.Fatalf("没有留一行按输入：%q", tt.Texts())
+	}
+	if err := tt.Click("@Jill"); err != nil {
+		t.Fatalf("点不到搜到的用户：%v", err)
+	}
+	if a.detail.draft != "@Jill " {
+		t.Errorf("选中搜索结果的正文 = %q，期望 @Jill ", a.detail.draft)
+	}
+	if n := searches.Load(); n != 1 {
+		t.Errorf("搜索请求次数 = %d，期望 1", n)
+	}
+	// 面板收起后不再排队新的搜索。
+	for i := 0; i < 3; i++ {
+		tt.Frame()
+	}
+	if n := searches.Load(); n != 1 {
+		t.Errorf("面板收起后又发了搜索，次数 = %d", n)
+	}
+}
+
+// 搜到的用户也能纯键盘选：面板高亮的行就是回车会插进去的那一个。
+func TestMentionKeyboardPicksRemoteUser(t *testing.T) {
+	shortMentionSearchDelay(t)
+	var searches atomic.Int32
+	srv := mentionSearchServer(t,
+		`{"items":[{"id":"u1","username":"alice"}],"total":1}`,
+		`[{"id":"u2","username":"Jill"},{"id":"u3","username":"Jenny"}]`, &searches)
+	defer srv.Close()
+	a, tt := mentionUIApp(t, srv)
+	typeAt(t, tt)
+	waitMentionLoaded(t, a)
+
+	tt.Type("Ji")
+	tt.Frame()
+	waitFor(t, func() bool { return len(a.detail.mentions.search.people) == 2 }, "搜索没有返回")
+	tt.Frame()
+	tt.Key(0, ui.KeyDown) // Jill(0) -> Jenny(1)
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if a.detail.draft != "@Jenny " {
+		t.Errorf("键盘选中的搜索结果 = %q，期望 @Jenny ", a.detail.draft)
+	}
+}
+
+// 本地名单命中时不搜索：那条链路的配额很紧，不能拿它去做本地就能做的事。
+func TestMentionSkipsSearchWhenLocalHit(t *testing.T) {
+	shortMentionSearchDelay(t)
+	var searches atomic.Int32
+	srv := mentionSearchServer(t,
+		`{"items":[{"id":"u2","username":"alice"}],"total":1}`, `[]`, &searches)
+	defer srv.Close()
+	a, tt := mentionUIApp(t, srv)
+	typeAt(t, tt)
+	waitMentionLoaded(t, a)
+
+	tt.Type("ali")
+	tt.Frame()
+	if _, ok := tt.Find("@alice"); !ok {
+		t.Fatalf("本地命中没有列出来：%q", tt.Texts())
+	}
+	if tt.HasText("按输入") {
+		t.Errorf("本地命中时不该出现按输入那行：%q", tt.Texts())
+	}
+	time.Sleep(40 * time.Millisecond)
+	tt.Frame()
+	if n := searches.Load(); n != 0 {
+		t.Errorf("本地命中仍发了搜索，次数 = %d", n)
+	}
+}
+
+// 一个字不发搜索（服务端要求至少 2 个字符），但面板仍跟着输入走：
+// 搜不到人时也留一行把打的字原样拼成提及。
+func TestMentionEchoRowFollowsInput(t *testing.T) {
+	shortMentionSearchDelay(t)
+	var searches atomic.Int32
+	srv := mentionSearchServer(t,
+		`{"items":[{"id":"u1","username":"alice"}],"total":1}`, `[]`, &searches)
+	defer srv.Close()
+	a, tt := mentionUIApp(t, srv)
+	typeAt(t, tt)
+	waitMentionLoaded(t, a)
+
+	tt.Type("J")
+	tt.Frame()
+	if _, ok := tt.Find("@J"); !ok {
+		t.Fatalf("一个字时面板没跟输入：%q", tt.Texts())
+	}
+	tt.Type("i")
+	tt.Frame()
+	waitFor(t, func() bool {
+		return !a.detail.mentions.search.busy &&
+			a.detail.mentions.search.query == "ji"
+	}, "搜索没有结束")
+	tt.Frame()
+	if _, ok := tt.Find("@Ji"); !ok {
+		t.Fatalf("没命中时面板没跟着输入：%q", tt.Texts())
+	}
+	if err := tt.Click("@Ji"); err != nil {
+		t.Fatalf("点不到按输入那行：%v", err)
+	}
+	if a.detail.draft != "@Ji " {
+		t.Errorf("按输入插入的正文 = %q，期望 @Ji ", a.detail.draft)
+	}
+	if n := searches.Load(); n != 1 {
+		t.Errorf("搜索请求次数 = %d，期望 1（一个字不该搜）", n)
+	}
+}
+
+// 退格回到上一个前缀直接吃缓存，不再打一次搜索端点；换个前缀才重新查。
+func TestMentionSearchCachesPrefix(t *testing.T) {
+	shortMentionSearchDelay(t)
+	var searches atomic.Int32
+	srv := mentionSearchServer(t,
+		`{"items":[{"id":"u1","username":"alice"}],"total":1}`,
+		`[{"id":"u2","username":"Jill"}]`, &searches)
+	defer srv.Close()
+	a, tt := mentionUIApp(t, srv)
+	typeAt(t, tt)
+	waitMentionLoaded(t, a)
+
+	tt.Type("Ji")
+	tt.Frame()
+	waitFor(t, func() bool { return len(a.detail.mentions.search.people) > 0 }, "搜索没有返回")
+	for i := 0; i < 4; i++ {
+		tt.Key(0, ui.KeyBackspace) // 收起 @ 前缀
+		tt.Frame()
+	}
+	if a.detail.draft != "" {
+		t.Fatalf("草稿没清干净：%q", a.detail.draft)
+	}
+	tt.Type("@Ji")
+	tt.Frame()
+	waitFor(t, func() bool { return len(a.detail.mentions.search.people) > 0 }, "缓存没有命中")
+	tt.Frame()
+	if _, ok := tt.Find("@Jill"); !ok {
+		t.Fatalf("回到旧前缀时缓存的搜索结果没显示：%q", tt.Texts())
+	}
+	if n := searches.Load(); n != 1 {
+		t.Errorf("同一个前缀搜了 %d 次，期望 1", n)
+	}
+}
+
 // 两个名单端点的路径、列表字段与容错解码。文档里的列表字段都是 items，
 // 不能套用通用「取 items / posts / list」的猜法。
 func TestMentionEndpointContract(t *testing.T) {

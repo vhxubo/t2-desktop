@@ -5,25 +5,32 @@ import (
 	"encoding/json"
 	"errors"
 	"math/rand"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 )
 
-// 提及（@）能力的数据层：两个名单端点 + 正文拼串规则。
+// 提及（@）能力的数据层：两个名单端点 + 搜索用户 + 正文拼串规则。
 //
 // @ 在 2Libra API 里只是正文纯文本，没有单独的提交端点（api-write.md
-// 「提及（@）与抽奖」）。客户端要做的只有两件事：
+// 「提及（@）与抽奖」）。客户端要做的只有三件事：
 //
 //   - 取名单：GET /v1/meta/guardians（@随机守护者）与
 //     GET /v1/topics/:short_id/participants（@所有人 / 逐个挑人）。
+//   - 搜用户：本地名单没命中时按已输入的前缀查 GET /v1/search?type=users，
+//     把不在本帖参与人里的用户也补进面板；仍然没命中就留一行「按输入」，
+//     面板永远跟着输入走，不会空着。
 //   - 拼正文："@名字 "（后面必须补空格，否则服务端把整段当用户名，不发通知）。
 //
 // 拼串前必须排除自己（含临时换用的回复身份），单条内容最多 50 个 @ 会发
 // 通知。名单缓存与失败退避都放在 detailState 的 mentionState 里：参与人名单
-// 单独限流 20/30 次每分，打开编辑器取一次就够，不能每帧或每次按键重拉。
+// 单独限流 20/30 次每分，搜索端点单独限流（匿名 5 次/分、登录 20 次/分），
+// 所以都要防抖 + 同一个词只查一次，不能每帧或每次按键重拉。
 //
 // 所有请求都走 Client.getJSON（即 proxyManager 的共享 transport 与限流闸门），
 // 不在这里自建 http.Client。
@@ -38,7 +45,21 @@ const (
 	// 失败后的退避：30 秒起，逐次翻倍到 4 分钟，避免每帧重发注定失败的请求。
 	mentionRetry   = 30 * time.Second
 	mentionTimeout = 12 * time.Second
+
+	// 搜索端点要求 q 至少 2 个字符（短于它只会拿到 400 invalid_request），
+	// 而且单独限流：匿名 5 次/分、登录 20 次/分。所以输入停顿 400ms 才发，
+	// 同一个词只发一次，退格回到上一个前缀直接吃缓存。
+	mentionSearchMin      = 2
+	mentionSearchDebounce = 400 * time.Millisecond
+	mentionSearchTimeout  = 10 * time.Second
+	// 面板里最多列 8 个搜到的用户：再多也挑不过来，还会把面板撑高。
+	mentionSearchShown = 8
+	// 关键词缓存上限：退格回到上一个前缀时直接复用，不再花配额。
+	mentionSearchCacheMax = 24
 )
+
+// mentionSearchDelay 提成变量是为了测试能把它缩短。
+var mentionSearchDelay = mentionSearchDebounce
 
 // mentionPerson 是两份名单共用的最小字段。avatar_url 只用于参与人行的头像；
 // 守护者名单没有这个字段，留空即只画首字母。
@@ -109,6 +130,180 @@ func decodeMentionRoster(d json.RawMessage) mentionRoster {
 		out.Total = len(out.People)
 	}
 	return out
+}
+
+// ------------------------------------------------------------------
+// 搜索用户：本地名单没命中时补一批
+// ------------------------------------------------------------------
+
+// searchMentionUsers 按前缀搜索全站用户（GET /v1/search?type=users）。
+// 响应与搜索窗口的「用户」结果是同一份裸数组（见 search.go），所以解码直接
+// 复用 decodeSearch；这里只把它归一成 mentionPerson，列表行与参与人共用。
+//
+// 关键词由调用方保证不少于 2 个字符：短了服务端返回 400，白花一次配额。
+func (c *Client) searchMentionUsers(ctx context.Context, q string) ([]mentionPerson, error) {
+	v := url.Values{}
+	v.Set("q", q)
+	v.Set("type", searchUsers.value())
+	v.Set("page", "1")
+	v.Set("limit", strconv.Itoa(mentionSearchShown))
+	u := c.apiURL(searchPath()) + "?" + v.Encode()
+	d, err := withAuthRetry(c, ctx, func(token string) (json.RawMessage, error) {
+		return c.getJSON(ctx, u, token)
+	})
+	if err != nil {
+		return nil, err
+	}
+	res := decodeSearch(searchUsers, d, 1)
+	out := make([]mentionPerson, 0, len(res.hits))
+	for _, hit := range res.hits {
+		name := strings.TrimSpace(hit.username)
+		if name == "" {
+			continue
+		}
+		out = append(out, mentionPerson{Username: name, Avatar: hit.avatar})
+	}
+	return out, nil
+}
+
+// mentionSearchState 是「本地没命中 → 搜用户」那一层状态。people 只对 query
+// 这个词有效：换了前缀先不显示，等新结果回来，免得面板列出上一个词的答案。
+type mentionSearchState struct {
+	query   string
+	people  []mentionPerson
+	busy    bool
+	err     string
+	seq     uint64
+	timer   *time.Timer
+	pending string
+	// cache 按关键词存一次搜索结果：退格回到上一个前缀时不必再打一次请求。
+	cache map[string][]mentionPerson
+}
+
+// resetSearch 关掉这一轮搜索：停掉排队、作废在途请求、清掉当前结果。
+// 缓存保留，回到同一个前缀时仍然即时。
+func (st *mentionState) resetSearch() {
+	s := &st.search
+	if s.timer != nil {
+		s.timer.Stop()
+		s.timer = nil
+	}
+	s.pending = ""
+	s.query = ""
+	s.people = nil
+	s.err = ""
+	s.busy = false
+	s.seq++
+}
+
+// ensureMentionUserSearch 是守卫式任务：键入的 @前缀 在本地名单里没有命中时，
+// 停顿一下再去搜用户。可以在每次输入后调用——同一个词只会排一次队、发一次。
+func (a *app) ensureMentionUserSearch(d *detailState) {
+	st := &d.mentions
+	s := &st.search
+	if !st.typing || !st.open || !a.autoLoad || a.client == nil {
+		return
+	}
+	// 本地名单还没回来时先别搜：参与人里可能本来就有这个人，白花一次配额。
+	if !st.participantsLoaded && !st.participantsDenied {
+		return
+	}
+	q := mentionKey(st.query)
+	if utf8.RuneCountInString(q) < mentionSearchMin {
+		st.resetSearch()
+		return
+	}
+	if len(mentionPeople(st.participants, a.mentionExclude(d), q)) > 0 {
+		// 本地已经命中，不必再搜。
+		st.resetSearch()
+		return
+	}
+	if s.query == q || s.pending == q {
+		return
+	}
+	if people, ok := s.cache[q]; ok {
+		s.query, s.people, s.err, s.pending = q, people, "", ""
+		return
+	}
+	s.pending = q
+	if s.timer != nil {
+		s.timer.Stop()
+	}
+	s.timer = time.AfterFunc(mentionSearchDelay, func() {
+		a.publish(func() {
+			if !a.detailLive(d) {
+				return
+			}
+			d.mentions.search.pending = ""
+			a.runMentionUserSearch(d)
+		})
+	})
+}
+
+// runMentionUserSearch 真的发出一次搜索。query 取当前前缀，不用排队时记下的
+// 那个词：防抖窗口里用户可能又改了几个字母。
+func (a *app) runMentionUserSearch(d *detailState) {
+	st := &d.mentions
+	s := &st.search
+	if !st.typing || !st.open || !st.participantsLoaded && !st.participantsDenied ||
+		s.busy || !a.autoLoad || a.client == nil {
+		return // 面板收起了、名单还没回来或已经有请求在跑，都不该发
+	}
+	q := mentionKey(st.query)
+	if utf8.RuneCountInString(q) < mentionSearchMin || s.query == q {
+		return
+	}
+	if len(mentionPeople(st.participants, a.mentionExclude(d), q)) > 0 {
+		return // 名单姗姗来迟，本地已经命中
+	}
+	client, _ := a.mentionClient(d)
+	s.busy = true
+	s.query = q
+	s.err = ""
+	s.timer = nil
+	s.seq++
+	seq := s.seq
+	ctx, cancel := context.WithTimeout(context.Background(), mentionSearchTimeout)
+	go func() {
+		defer cancel()
+		people, err := client.searchMentionUsers(ctx, q)
+		a.publish(func() {
+			if !a.detailLive(d) || s.seq != seq {
+				return
+			}
+			s.busy = false
+			if err != nil {
+				if a.handleAuthErrorFor(a.replyAuthTarget(), err, func() { a.retryMentionSearch(d) }) {
+					return
+				}
+				s.err = friendlyError(err)
+				// 失败后 query 留在原地：同一前缀不会再自动重发（这个端点限流
+				// 很紧），要重试走气泡里的按钮。
+				a.ensureMentionUserSearch(d)
+				return
+			}
+			s.err = ""
+			s.people = people
+			if s.cache == nil || len(s.cache) >= mentionSearchCacheMax {
+				s.cache = make(map[string][]mentionPerson, mentionSearchCacheMax)
+			}
+			s.cache[q] = people
+			for _, p := range people {
+				a.prefetchAvatars(p.Avatar)
+			}
+			// 请求在路上时用户可能又改过前缀：那时排队被 busy 挡掉了，这里补排。
+			a.ensureMentionUserSearch(d)
+		})
+	}()
+}
+
+// retryMentionSearch 清掉失败标记重来一次（气泡里的「重试」与授权成功后的重放）。
+func (a *app) retryMentionSearch(d *detailState) {
+	s := &d.mentions.search
+	s.query = ""
+	s.err = ""
+	s.pending = ""
+	a.ensureMentionUserSearch(d)
 }
 
 // ------------------------------------------------------------------
@@ -203,6 +398,7 @@ func (a *app) onMentionInput(d *detailState, host replySurface, caret int) {
 			st.tokenStart, st.tokenEnd = -1, -1
 			st.query = ""
 			st.active = 0
+			st.resetSearch()
 		}
 		return
 	}
@@ -214,6 +410,7 @@ func (a *app) onMentionInput(d *detailState, host replySurface, caret int) {
 	st.active = 0
 	a.ensureMentionGuardians(d)
 	a.ensureMentionParticipants(d)
+	a.ensureMentionUserSearch(d)
 }
 
 // mentionPeople 是面板里的逐人列表与键盘上下键共用的口径：排掉自己（含临时
@@ -254,6 +451,7 @@ func (a *app) syncMentionToken(d *detailState) {
 		st.tokenStart, st.tokenEnd = -1, -1
 		st.query = ""
 		st.active = 0
+		st.resetSearch()
 		return
 	}
 	if start == st.tokenStart && end == st.tokenEnd {
@@ -262,13 +460,28 @@ func (a *app) syncMentionToken(d *detailState) {
 	st.tokenStart, st.tokenEnd = start, end
 	st.query = string([]rune(d.draft)[start+1 : end])
 	st.active = 0
+	a.ensureMentionUserSearch(d)
+}
+
+// mentionPicks 是面板里「逐人行」的顺序：本地参与人 → 搜索到的用户。键盘上下
+// 键、回车与行高亮都按它来，三处必须是同一份——各筛各的会错位。
+func (a *app) mentionPicks(d *detailState) []mentionPerson {
+	data := a.mentionData(d, d.draft)
+	exclude := a.mentionExclude(d)
+	people := mentionPeople(data.Participants, exclude, d.mentions.query)
+	if len(people) > mentionPanelShown {
+		people = people[:mentionPanelShown]
+	}
+	if len(people) > 0 {
+		return people
+	}
+	return mentionRemotePeople(data.Search, exclude, people)
 }
 
 // mentionCandidates 是键盘上下键 / 回车要用的候选用户名。与面板逐人列表同一
-// 份口径（见 mentionPeople），因此下标就是列表里的顺序。
+// 份口径（见 mentionPicks），因此下标就是列表里的顺序。
 func (a *app) mentionCandidates(d *detailState) []string {
-	data := a.mentionData(d, d.draft)
-	people := mentionPeople(data.Participants, a.mentionExclude(d), d.mentions.query)
+	people := a.mentionPicks(d)
 	out := make([]string, 0, len(people))
 	for _, p := range people {
 		out = append(out, p.Username)
@@ -371,6 +584,61 @@ func pickRandomMention(people []mentionPerson, exclude map[string]bool) string {
 	return candidates[rand.Intn(len(candidates))]
 }
 
+// mentionRemotePeople 把搜到的用户并进逐人列表：排掉自己、排掉本地名单里
+// 已经有的人（同一个人不列两遍），最多 mentionSearchShown 个。
+func mentionRemotePeople(found []mentionPerson, exclude map[string]bool, local []mentionPerson) []mentionPerson {
+	if len(found) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(found)+len(local))
+	for _, p := range local {
+		seen[mentionKey(p.Username)] = true
+	}
+	out := make([]mentionPerson, 0, min(len(found), mentionSearchShown))
+	for _, p := range found {
+		key := mentionKey(p.Username)
+		if key == "" || exclude[key] || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, p)
+		if len(out) >= mentionSearchShown {
+			break
+		}
+	}
+	return out
+}
+
+// mentionQuickHit 回答「这条快捷行还该不该出现」：输入为空时全部出现，
+// 打了字就按标签过滤（打 "@所" 仍能挑到 @所有人），让面板跟着输入走。
+func mentionQuickHit(label, query string) bool {
+	if query == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(label), query)
+}
+
+// mentionEchoRow 是面板最后那行「按输入」：本地名单与搜索都没命中时，把用户
+// 打的几个字原样拼成 "@前缀 "。面板因此永远跟着输入走，也能直接 @ 一个不在
+// 本帖参与人里、但确实存在的用户名。
+func mentionEchoRow(query string, exclude map[string]bool) (mentionRow, bool) {
+	name := strings.TrimSpace(query)
+	if name == "" || exclude[mentionKey(name)] {
+		return mentionRow{}, false
+	}
+	text := mentionAt(name)
+	if text == "" {
+		return mentionRow{}, false
+	}
+	return mentionRow{
+		Key:   "echo:" + mentionKey(name),
+		Label: "@" + name,
+		Extra: "按输入",
+		Text:  text,
+		Icon:  mentionIcon,
+	}, true
+}
+
 // ------------------------------------------------------------------
 // 列表状态：缓存、退避、加载
 // ------------------------------------------------------------------
@@ -399,6 +667,9 @@ type mentionState struct {
 	triedParticipants  time.Time
 	failGuardians      int
 	failParticipants   int
+
+	// search 是「本地名单没命中 → 搜全站用户」那一层，见 ensureMentionUserSearch。
+	search mentionSearchState
 
 	open  bool
 	host  replySurface
@@ -592,7 +863,8 @@ func (a *app) reloadMentionParticipants(d *detailState) {
 	a.ensureMentionParticipants(d)
 }
 
-// mentionResult 汇总面板要用的两份名单与拼串名额，避免界面里到处判空。
+// mentionResult 汇总面板要用的两份名单、搜索到的用户与拼串名额，避免界面里
+// 到处判空。
 type mentionResult struct {
 	Guardians     []mentionPerson
 	Participants  []mentionPerson
@@ -603,13 +875,17 @@ type mentionResult struct {
 	GuardiansErr  string
 	PeopleErr     string
 	PeopleDenied  bool
+	// Search 是「本地没命中」时搜到的用户，SearchBusy / SearchErr 是它的状态。
+	Search     []mentionPerson
+	SearchBusy bool
+	SearchErr  string
 }
 
 // mentionData 读当前状态。缓存与请求状态都由 ensure* 在 UI 线程维护，
 // 这里只读不算，视图每帧调用也不会改状态。
 func (a *app) mentionData(d *detailState, draft string) mentionResult {
 	st := &d.mentions
-	return mentionResult{
+	res := mentionResult{
 		Guardians:     st.guardians,
 		Participants:  st.participants,
 		Total:         st.participantsTotal,
@@ -620,4 +896,12 @@ func (a *app) mentionData(d *detailState, draft string) mentionResult {
 		PeopleErr:     st.participantsErr,
 		PeopleDenied:  st.participantsDenied,
 	}
+	// 搜索结果只对某个关键词有效：输入已经换了前缀就先不显示，等新结果回来，
+	// 否则面板会列出上一个词的答案。
+	if q := mentionKey(st.query); q != "" && st.search.query == q {
+		res.Search = st.search.people
+		res.SearchBusy = st.search.busy
+		res.SearchErr = st.search.err
+	}
+	return res
 }

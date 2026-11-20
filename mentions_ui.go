@@ -130,7 +130,11 @@ func (a *app) mentionPopover(c *ui.Context, d *detailState, host replySurface, p
 
 	ui.Overlay(c, func() {
 		dismiss := ui.Box(c).Absolute().Left(0).Top(0).Fill()
-		dismiss.Label("收起提及候选").OnClick(func() { st.open = false })
+		dismiss.Label("收起提及候选").OnClick(func() {
+			st.open = false
+			// 顺手停掉排队中的用户搜索：面板都收起了，不该再花一次配额。
+			st.resetSearch()
+		})
 
 		// KeepFocus：在面板里点行、点重试都不把焦点从输入框抢走，选完人
 		// 光标还在原处，接着就能打字。
@@ -158,6 +162,13 @@ func mentionPanelStatus(data mentionResult, st *mentionState) bool {
 	if data.PeopleErr != "" {
 		return true
 	}
+	// 本地没命中、正在搜用户：给一行转圈，别让人以为面板只肯给「按输入」。
+	if data.SearchBusy && len(data.Search) == 0 {
+		return true
+	}
+	if data.SearchErr != "" {
+		return true
+	}
 	return st.guardiansErr != "" && !st.guardiansLoaded && !data.GuardiansBusy
 }
 
@@ -182,6 +193,21 @@ func (a *app) mentionPanel(c *ui.Context, d *detailState, host replySurface,
 	if st.guardiansErr != "" && !st.guardiansLoaded && !data.GuardiansBusy {
 		if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
 			a.reloadMentionGuardians(d)
+		}
+	}
+	// 搜用户失败：只影响「本地没命中」这条补位链路，说清原因并给重试；
+	// 下面的「按输入」仍然可用，所以不是死路。
+	if data.SearchBusy && len(data.Search) == 0 {
+		lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
+	}
+	if data.SearchErr != "" {
+		display.Text(c, "搜索用户失败："+data.SearchErr, display.TextProps{
+			Type: display.TextWarning, FontSize: 11, Rows: 2,
+		})
+		if !data.SearchBusy {
+			if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+				a.retryMentionSearch(d)
+			}
 		}
 	}
 	if len(rows) == 0 {
@@ -221,24 +247,37 @@ type mentionRow struct {
 // mentionPersonKey 是参与人行的键：按归一后的用户名取，名单里重名的只留一行。
 func mentionPersonKey(p mentionPerson) string { return "person:" + mentionKey(p.Username) }
 
-// mentionRows 生成面板里的行：三条快捷拼串在前，参与人按当前 @前缀 过滤在后。
-// 名单还没回来或名额已满时对应项不出现，不摆一个点了没反应的入口。抽奖助手
-// 只在自己的帖子里出现：服务端只认帖主发的一级评论，换账号回复或别人的帖子
-// 写了也不开奖，所以入口与工具条用同一套作者判断（见 canLottery）。
+// mentionRows 生成面板里的行：快捷拼串在前，参与人按当前 @前缀 过滤在后；
+// 本地一个都没命中时，再补上搜到的用户与一行「按输入」——面板因此永远跟着
+// 输入走，不会因为名单里没这个人就空掉。名单还没回来或名额已满时对应项不
+// 出现，不摆一个点了没反应的入口。抽奖助手只在自己的帖子里出现：服务端只认
+// 帖主发的一级评论，换账号回复或别人的帖子写了也不开奖，所以入口与工具条用
+// 同一套作者判断（见 canLottery）。
 func (a *app) mentionRows(d *detailState, data mentionResult) []mentionRow {
 	exclude := a.mentionExclude(d)
+	query := mentionKey(d.mentions.query)
 	out := make([]mentionRow, 0, 8)
+	// 分隔线只在两段之间出现一次，避免空段留下一条孤零零的线。
+	divider := func() {
+		if len(out) > 0 {
+			out = append(out, mentionRow{Divider: true})
+		}
+	}
 	if data.Slots > 0 {
+		// 快捷行也按输入过滤：打了 "@所" 仍能挑到 @所有人，打了别的字就让位给
+		// 逐人候选，不再占着最上面三行。
 		if all := buildMentions(data.Participants, exclude, data.Slots); all != "" &&
-			data.Total <= mentionNotifyLimit {
+			data.Total <= mentionNotifyLimit && mentionQuickHit("@所有人", query) {
 			out = append(out, mentionRow{Key: "quick:all", Label: "@所有人",
 				Icon: accountsIcon, Text: all})
 		}
-		if random := pickRandomMention(data.Guardians, exclude); random != "" {
+		if random := pickRandomMention(data.Guardians, exclude); random != "" &&
+			mentionQuickHit("@随机守护者", query) {
 			out = append(out, mentionRow{Key: "quick:random", Label: "@随机守护者",
 				Icon: profileIcon, Text: mentionAt(random)})
 		}
-		if a.canLottery(d) && !a.replyIdentityFor(d).Switched {
+		if a.canLottery(d) && !a.replyIdentityFor(d).Switched &&
+			mentionQuickHit("@"+lotteryName, query) {
 			out = append(out, mentionRow{Key: "quick:lottery", Label: "@" + lotteryName,
 				Icon: lotteryIcon, Text: lotteryCommand(lotteryDefaultWinners) + " "})
 		}
@@ -247,18 +286,38 @@ func (a *app) mentionRows(d *detailState, data mentionResult) []mentionRow {
 	if len(people) > mentionPanelShown {
 		people = people[:mentionPanelShown]
 	}
-	if len(people) > 0 && len(out) > 0 {
-		out = append(out, mentionRow{Divider: true})
+	if len(people) > 0 {
+		divider()
+		for _, p := range people {
+			row := mentionRow{
+				Key: mentionPersonKey(p), Label: "@" + p.Username, Person: p,
+				Text: mentionAt(p.Username),
+			}
+			if p.IsAlias {
+				row.Extra = "分身"
+			}
+			out = append(out, row)
+		}
 	}
-	for _, p := range people {
-		row := mentionRow{
-			Key: mentionPersonKey(p), Label: "@" + p.Username, Person: p,
-			Text: mentionAt(p.Username),
+	// 本地名单里没有这个人：先列搜到的用户，最后留一行「按输入」。
+	var remote []mentionPerson
+	if len(people) == 0 {
+		remote = mentionRemotePeople(data.Search, exclude, people)
+	}
+	if len(remote) > 0 {
+		divider()
+		for _, p := range remote {
+			out = append(out, mentionRow{
+				Key: mentionPersonKey(p), Label: "@" + p.Username, Person: p,
+				Extra: "搜索", Text: mentionAt(p.Username),
+			})
 		}
-		if p.IsAlias {
-			row.Extra = "分身"
+	}
+	if len(people) == 0 {
+		if row, ok := mentionEchoRow(d.mentions.query, exclude); ok {
+			divider()
+			out = append(out, row)
 		}
-		out = append(out, row)
 	}
 	return out
 }
@@ -292,14 +351,14 @@ func (a *app) mentionListItems(c *ui.Context, rows []mentionRow) []display.ListI
 }
 
 // mentionActiveKey 是键盘上下键当前指着的那一行：面板里高亮它，回车选的就是
-// 它。快捷行不参与键盘循环——打了 "@ali" 还让回车先撞上 @所有人 会很意外。
+// 它。快捷行与「按输入」不参与键盘循环——打了 "@ali" 还让回车先撞上 @所有人
+// 会很意外；候选顺序与 mentionCandidates 完全一致，两处各筛各的会错位。
 func (a *app) mentionActiveKey(d *detailState) string {
 	st := &d.mentions
 	if !st.typing || !st.open {
 		return ""
 	}
-	people := mentionPeople(a.mentionData(d, d.draft).Participants,
-		a.mentionExclude(d), st.query)
+	people := a.mentionPicks(d)
 	if st.active < 0 || st.active >= len(people) {
 		return ""
 	}
@@ -388,6 +447,7 @@ func (a *app) insertMention(d *detailState, text string) {
 	st.query = ""
 	st.tokenStart, st.tokenEnd = -1, -1
 	st.active = 0
+	st.resetSearch()
 }
 
 // mentionDeleteBlock 让写完的 @名字 像一个整体：光标落在名字里任何一个位置
@@ -470,6 +530,7 @@ func (a *app) mentionTextKey(d *detailState, k ui.TextKey) bool {
 		st.open = false
 		st.query = ""
 		st.tokenStart, st.tokenEnd = -1, -1
+		st.resetSearch()
 		return true
 	}
 	return false

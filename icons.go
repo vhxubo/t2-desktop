@@ -81,6 +81,9 @@ var (
 	// 换账号：一左一右两枚反向箭头（swap），放在详情页评论框下方的身份标签
 	// 里，提示「这枚标签可以点开换个账号回复」（见 reply_identity.go）。
 	swapAccountIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h13"/><path d="M13 3l4 4-4 4"/><path d="M20 17H7"/><path d="M11 13l-4 4 4 4"/></svg>`))
+	// 提及：@ 符号。@ 候选面板里「按输入」那一行用它，表示这一行是把打的字
+	// 原样拼成提及，不是名单里的某个人（见 mentions_ui.go）。
+	mentionIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>`))
 )
 
 // editorIcons 供评论输入框（与发帖编辑器共用）的 Markdown 工具条、插入按钮
