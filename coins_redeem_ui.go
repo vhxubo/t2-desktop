@@ -131,7 +131,7 @@ func (a *app) coinRedeemView(c *ui.Context, cs *coinState) {
 				Type: display.TextSecondary, FontSize: 11, Rows: 1,
 			})
 		}
-		a.smallAction(c, "刷新", cs.redeemLoading, func() { a.reloadCoinRedeem() })
+		a.smallRefreshButton(c, cs.redeemLoading, func() { a.reloadCoinRedeem() })
 	})
 
 	switch {

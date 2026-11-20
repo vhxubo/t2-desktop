@@ -193,7 +193,6 @@ func (a *app) uploadAvatarFile(ps *profileState, path string) {
 			a.applyAvatar(ps, url)
 			ps.avatarOpen = false
 			a.toast(toastProfile, "头像已更新")
-			a.coinsChanged(coinEventAvatar)
 		})
 	}()
 }
@@ -236,7 +235,6 @@ func (a *app) resetAvatar(ps *profileState) {
 			a.applyAvatar(ps, url)
 			ps.avatarOpen = false
 			a.toast(toastProfile, "已恢复默认头像")
-			a.coinsChanged(coinEventAvatar)
 		})
 	}()
 }

@@ -81,8 +81,6 @@ func (a *app) afterMainWindowOpen() {
 	a.refreshUnread()
 	a.refreshFollowsUnread()
 	a.startNotificationWatch()
-	// 登录过的会话启动时就先把金币数读出来，之后定时刷新。
-	a.startCoinTagWatch()
 	// 首页标题栏的潘多拉事件名也来自这一份静默读取。
 	a.loadPandoraEntry()
 	// 令牌里已经缓存了用户名与头像地址；这里再校准一次，老会话也能补上
@@ -201,8 +199,9 @@ func (a *app) finalizeAccountWindow() {
 		return
 	}
 	a.finalized = true
-	// 后台刷新跟着账号的生命周期：只要还有一扇窗口开着，通知长连接与金币
-	// 数就继续更新；最后一扇关掉才停。
+	// 后台刷新跟着账号的生命周期：只要还有一扇窗口开着，通知长连接就继续
+	// 更新；最后一扇关掉才停。金币数只在展开账号菜单时请求，这里只丢弃在途
+	// 的余额请求。
 	a.stopCoinTagWatch()
 	a.stopNotificationWatch()
 	a.win = nil

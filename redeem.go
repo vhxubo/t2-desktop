@@ -421,7 +421,6 @@ func (a *app) submitRedeemCode(d *detailState, id string) {
 			d.redeem.claimedFull = full
 			d.redeem.redPacket = res.RedPacket
 			a.toast(a.detailToastFor(d), redeemSuccessText(res))
-			a.coinsChanged(coinEventRedeem)
 		})
 	}()
 }

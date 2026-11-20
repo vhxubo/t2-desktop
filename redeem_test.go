@@ -246,7 +246,7 @@ func redeemTestDetail(t *testing.T, a *app) *detailState {
 }
 
 // 同一条码失败后重试复用幂等键（按 id，不是脱敏码）；成功后清空键、把完整码
-// 记在码条上，同时发出金币变动事件。
+// 记在码条上。
 func TestSubmitRedeemCodeReusesKeyAndRecordsClaim(t *testing.T) {
 	got := make(chan redeemCall, 4)
 	var fail atomic.Bool
@@ -265,8 +265,6 @@ func TestSubmitRedeemCodeReusesKeyAndRecordsClaim(t *testing.T) {
 	}))
 	defer srv.Close()
 	a := loginApp(t, srv)
-	events := make(chan coinEvent, 2)
-	a.onCoinsChanged = func(e coinEvent) { events <- e }
 	d := redeemTestDetail(t, a)
 
 	a.submitRedeemCode(d, "id-1")
@@ -298,14 +296,6 @@ func TestSubmitRedeemCodeReusesKeyAndRecordsClaim(t *testing.T) {
 	e := d.topic.Redeem.Codes[0]
 	if !e.Redeemed || e.RedeemedByName != "reader" || e.Code != "ABCD-1234-XPFJ" {
 		t.Errorf("码条没标成我领的：%+v", e)
-	}
-	select {
-	case ev := <-events:
-		if ev != coinEventRedeem {
-			t.Errorf("金币事件 = %q，期望 %q", ev, coinEventRedeem)
-		}
-	case <-time.After(time.Second):
-		t.Error("没有发出金币事件")
 	}
 
 	// 换一条码是另一笔：必然是新键。

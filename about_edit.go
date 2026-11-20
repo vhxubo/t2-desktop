@@ -124,8 +124,6 @@ func (a *app) submitUserCardAbout() {
 			cs.aboutSig = ""
 			cs.aboutErrEdit = ""
 			a.toast(toastUserCard, "个人介绍已保存；审核通过后会扣除 500 金币")
-			// 扣费是异步的，不在请求返回时刷新余额；标题栏定时刷新与回到
-			// 前台时的校准会补上实际扣款。
 		})
 	}()
 }

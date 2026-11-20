@@ -578,8 +578,6 @@ func (a *app) pandoraAction(kind string) {
 			st.entryKnown = true
 			st.loaded, st.wait, st.err = true, false, ""
 			// 结果已经在卡片里展示一次，这里不再发结果 toast。
-			// 开盒 / 重抽都可能改变金币与流水：交给全局金币事件统一刷新。
-			a.coinsChanged(coinEventPandora)
 			// 动作响应不一定带完整今日状态，再读一次 today 校准。直接调
 			// loadPandoraStatus 而不是 reloadPandora：保留刚抽到的结果，
 			// 刷新期间不把卡片退回「正在读取」。

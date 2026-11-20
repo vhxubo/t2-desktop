@@ -34,8 +34,8 @@ import (
 // 签到是这里唯一的写操作：它没有请求体、没有幂等键，今日重复签到由服务端以
 // 409 conflict 拒绝。入口收在账号菜单里（见 profile_ui.go），金币窗口只展示
 // 状态。开盲盒、竞猜、兑换、解锁等其它会改变金币的操作仍然不做，界面上也不
-// 提供入口；发帖、回复、表态与打赏在各自的页面里，成功后统一发出金币变动
-// 事件（见 coin_events.go），本页已经加载过的数据会跟着刷新。
+// 提供入口；发帖、回复、表态与打赏在各自的页面里。金币余额只在展开账号菜单
+// 时请求，本页各块在打开金币窗口时各自加载。
 const (
 	coinBalancePath        = "/v1/me/coins/balance"
 	coinBalanceRankingPath = "/v1/me/coins/balance-with-ranking"

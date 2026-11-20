@@ -396,8 +396,6 @@ func (a *app) toggleProfileBadge(badgeID, name string, equip bool, key string) {
 			// 评论框的状态栏读的是同一份佩戴状态：这里切换完要立刻跟上，
 			// 否则评论框上方还显示着上一枚徽章的费用。
 			a.noteBadgeEquipped(badgeID, equip)
-			// 佩戴可能扣金币，交给全局金币事件刷新标题栏与金币窗口。
-			a.coinsChanged(coinEventBadge)
 			if message == "" {
 				if name == "" {
 					message = "徽章佩戴状态已更新"

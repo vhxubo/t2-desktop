@@ -351,8 +351,8 @@ func badgeToggleApp(t *testing.T, handler func(w http.ResponseWriter, r *http.Re
 	return a, tt
 }
 
-// 点「佩戴」发 POST、成功后更新本地状态与资料头、发金币事件并用服务器文案
-// 报 toast；再点「取消佩戴」发 DELETE。两次操作都在同一个窗口里出结果。
+// 点「佩戴」发 POST、成功后更新本地状态与资料头并用服务器文案报 toast；
+// 再点「取消佩戴」发 DELETE。两次操作都在同一个窗口里出结果。
 func TestProfileBadgeToggle(t *testing.T) {
 	var mu sync.Mutex
 	var methods, keys []string
@@ -367,13 +367,6 @@ func TestProfileBadgeToggle(t *testing.T) {
 		}
 		fmt.Fprint(w, envelopeJSON(`{"message":"佩戴成功，扣除 5 金币"}`))
 	})
-	var eventsMu sync.Mutex
-	var events []coinEvent
-	a.onCoinsChanged = func(e coinEvent) {
-		eventsMu.Lock()
-		events = append(events, e)
-		eventsMu.Unlock()
-	}
 
 	if err := tt.Click("佩戴「全勤」"); err != nil {
 		t.Fatal(err)
@@ -384,12 +377,6 @@ func TestProfileBadgeToggle(t *testing.T) {
 	})
 	if len(a.profile.user.Badges) != 1 || a.profile.user.Badges[0].Name != "全勤" {
 		t.Errorf("资料头的佩戴徽章没有跟着切换：%+v", a.profile.user.Badges)
-	}
-	eventsMu.Lock()
-	gotEvents := append([]coinEvent(nil), events...)
-	eventsMu.Unlock()
-	if len(gotEvents) != 1 || gotEvents[0] != coinEventBadge {
-		t.Errorf("佩戴没有发出金币刷新事件：%+v", gotEvents)
 	}
 	// 提示可能在请求完成的那一帧里已经被窗口领走，所以看界面而不是队列：
 	// 「我的」窗口只认领发给自己的 toast，能在它里面看到就说明目标窗口对。

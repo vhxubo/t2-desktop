@@ -101,7 +101,7 @@ func TestDeleteAvatarRequest(t *testing.T) {
 	}
 }
 
-// 选择本地图片后：资料头、会话与账号索引都要换到新地址，并发一次金币事件。
+// 选择本地图片后：资料头、会话与账号索引都要换到新地址。
 func TestUploadAvatarFromFile(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/me/avatar" {
@@ -118,8 +118,6 @@ func TestUploadAvatarFromFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.pickImagePaths = func() ([]string, error) { return []string{path}, nil }
-	events := make(chan coinEvent, 1)
-	a.onCoinsChanged = func(e coinEvent) { events <- e }
 
 	a.pickAvatar(a.profile)
 	waitProfile(t, "换头像", func() bool {
@@ -128,14 +126,6 @@ func TestUploadAvatarFromFile(t *testing.T) {
 	})
 	if got := a.auth.avatarURL(); got != "https://r2.2libra.com/avatars/new.png" {
 		t.Errorf("会话里的头像 = %q", got)
-	}
-	select {
-	case e := <-events:
-		if e != coinEventAvatar {
-			t.Errorf("金币事件 = %q，期望 %q", e, coinEventAvatar)
-		}
-	default:
-		t.Error("换头像后没有发出金币事件")
 	}
 }
 

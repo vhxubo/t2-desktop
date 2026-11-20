@@ -848,8 +848,6 @@ func (a *app) setCommentCostBadge(badge badgeWallEntry, equip bool, key string) 
 				}
 			}
 			a.replyToast(message)
-			// 佩戴可能扣金币，交给全局金币事件刷新标题栏与金币窗口。
-			a.coinsChanged(coinEventBadge)
 		})
 	}()
 }

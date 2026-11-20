@@ -53,7 +53,7 @@ func TestCreateMomentRequest(t *testing.T) {
 	}
 }
 
-// 提交成功后：草稿清空、幂等键清掉、走一次金币刷新，并留下创建结果。
+// 提交成功后：草稿清空、幂等键清掉，并留下创建结果。
 func TestSubmitMoment(t *testing.T) {
 	reqCh := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -74,9 +74,6 @@ func TestSubmitMoment(t *testing.T) {
 		}
 		done <- created
 	}
-	var event coinEvent
-	a.onCoinsChanged = func(e coinEvent) { event = e }
-
 	a.submitMoment()
 	select {
 	case created := <-done:
@@ -88,9 +85,6 @@ func TestSubmitMoment(t *testing.T) {
 	}
 	if a.compose.momentDraft != "" || a.compose.momentKey != "" || a.compose.momentBusy {
 		t.Errorf("成功后状态没收拾：%+v", a.compose)
-	}
-	if event != coinEventPost {
-		t.Errorf("金币事件 = %q，期望 %q", event, coinEventPost)
 	}
 
 	req := <-reqCh

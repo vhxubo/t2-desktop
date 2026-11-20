@@ -1585,7 +1585,7 @@ func (b *accountBook) openNoticeFallback(accountID string) {
 	b.showPanel()
 }
 
-// onBecameActive 是应用回到前台时：每个开着的窗口都校准一次未读数与金币数。
+// onBecameActive 是应用回到前台时：每个开着的窗口都校准一次未读数。
 // 站内读掉消息不会产生通知事件，只能靠这一次校准跟上。
 func (b *accountBook) onBecameActive() {
 	b.onMain(func() {

@@ -1079,21 +1079,25 @@ func TestCoinTagShownOnlyForLoggedInUser(t *testing.T) {
 	}
 }
 
-// 登录后立即读一次余额，之后按间隔刷新；退出登录时停掉，不再发请求。
-func TestCoinTagPeriodicRefresh(t *testing.T) {
+// 每次展开账号菜单都会重新读一次余额；不展开就不发请求。打开菜单时还会
+// 顺带同步签到状态（按自然日缓存），这里用一份假服务端接住两个端点。
+func TestCoinBalanceFetchedOnAccountMenuOpen(t *testing.T) {
 	var hits atomic.Int32
 	var balance atomic.Int64
 	balance.Store(42)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/me/coins/balance" {
+		switch r.URL.Path {
+		case "/api/v1/me/coins/balance":
+			if got := r.Header.Get("Authorization"); got != "Bearer tok" {
+				t.Errorf("余额请求缺少令牌：%q", got)
+			}
+			hits.Add(1)
+			_, _ = io.WriteString(w, envelopeJSON(fmt.Sprintf(`{"coins":%d}`, balance.Load())))
+		case "/api/v1/me/sign":
+			_, _ = io.WriteString(w, envelopeJSON(`{"signed":false}`))
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		if got := r.Header.Get("Authorization"); got != "Bearer tok" {
-			t.Errorf("余额请求缺少令牌：%q", got)
-		}
-		hits.Add(1)
-		_, _ = io.WriteString(w, envelopeJSON(fmt.Sprintf(`{"coins":%d}`, balance.Load())))
 	}))
 	defer srv.Close()
 
@@ -1105,34 +1109,29 @@ func TestCoinTagPeriodicRefresh(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	old := coinTagRefreshEvery
-	coinTagRefreshEvery = 20 * time.Millisecond
-	defer func() {
-		coinTagRefreshEvery = old
-		a.stopCoinTagWatch()
-	}()
+	defer a.stopCoinTagWatch()
 
-	a.startCoinTagWatch()
-	waitCoin(t, "登录后读取金币数", func() bool {
-		return a.coins.balanceOK && a.coins.balance == 42
+	// 不展开菜单：启动后不发任何余额请求。
+	time.Sleep(60 * time.Millisecond)
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("没展开菜单就请求了 %d 次余额", got)
+	}
+
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	openAccountMenu(t, tt)
+	waitCoin(t, "展开账号菜单读取余额", func() bool {
+		return a.coins.balanceOK && a.coins.balance == 42 && hits.Load() == 1
 	})
 
-	// 服务端余额变了：不用手动刷新，定时器到点后标题栏与金币窗口共用
-	// 的数字自己跟上。
+	// 服务端余额变了：再展开一次，标题栏与金币窗口共用的数字跟着更新。
 	balance.Store(1234)
-	waitCoin(t, "定时刷新金币数", func() bool { return a.coins.balance == 1234 })
-	if hits.Load() < 2 {
-		t.Errorf("应至少请求 2 次余额，实际 %d", hits.Load())
-	}
-
-	a.stopCoinTagWatch()
-	// 让停掉前已经在路上的那一次请求落完，再确认之后不再发请求。
-	time.Sleep(60 * time.Millisecond)
-	before := hits.Load()
-	time.Sleep(80 * time.Millisecond)
-	if got := hits.Load(); got != before {
-		t.Errorf("停掉定时器后仍在刷新：%d → %d", before, got)
-	}
+	openAccountMenu(t, tt) // 收起
+	tt.Frame()
+	openAccountMenu(t, tt) // 再次展开
+	waitCoin(t, "再次展开刷新余额", func() bool {
+		return a.coins.balance == 1234 && hits.Load() == 2
+	})
 }
 
 // 金币窗口缩到最小尺寸时，视图切换、签到状态与刷新都还在窗口里。

@@ -22,7 +22,7 @@ import (
 // 统计、排行、兑换」切换。窗口本身在 coins_window.go；这里只画窗口里的内容。
 // 窗口里没有写操作：签到与潘多拉的入口都收在标题栏「我的」的账号菜单里（见
 // profile_ui.go），这里只展示签到状态。发帖、回复、表态与打赏在各自的页面里，
-// 成功后发出金币变动事件（见 coin_events.go），本页已经加载过的块会一起刷新。
+// 金币余额只在展开账号菜单时请求；本页各块在打开窗口时各自加载。
 //
 // 整套界面走 Lobe UI：分段、按钮、卡片、标签、提示与空状态都用 lobe-mygo 的
 // 组件，颜色取 TokensOf(c)，与通知 / 设置 / 我的等窗口同一套设计语言。转圈沿用
@@ -59,7 +59,7 @@ func (a *app) coinsBody(c *ui.Context) {
 			busy := cs.baseLoading || cs.todayLoading || cs.historyLoading ||
 				cs.dailyLoading || cs.breakdownLoading || cs.rankingLoading ||
 				cs.redeemLoading || cs.signBusy
-			a.smallAction(c, "刷新", busy, func() { a.reloadCoins() })
+			a.smallRefreshButton(c, busy, func() { a.reloadCoins() })
 		})
 		layout.Divider(c, layout.DividerProps{})
 		a.coinBalanceCard(c, cs)
@@ -255,10 +255,7 @@ func (a *app) signInNow() {
 				text += fmt.Sprintf(" · 连续 %d 天", next.Streak)
 			}
 			a.toast(toastCoins, text)
-			// 余额、排名与今日明细都跟着签到变了：先发全局金币刷新事件，
-			// 把已经打开过的流水、统计与排行一起重拉，再补拉 base 与今日
-			// 明细——它们不必先加载过，签到本身已经证明这两块变了。
-			a.coinsChanged(coinEventSign)
+			// 余额、排名与今日明细都跟着签到变了：补拉 base 与今日明细。
 			a.reloadCoinBase()
 			a.reloadCoinToday()
 		})
@@ -452,7 +449,7 @@ func (a *app) coinDailyCard(c *ui.Context, cs *coinState) {
 				Type: display.TextSecondary, FontSize: 11, Rows: 1,
 			})
 			ui.Spacer(c).Grow(1)
-			a.smallAction(c, "刷新", cs.dailyLoading, func() { a.reloadCoinDaily() })
+			a.smallRefreshButton(c, cs.dailyLoading, func() { a.reloadCoinDaily() })
 		})
 		switch {
 		case cs.dailyErr != "":
@@ -599,7 +596,7 @@ func (a *app) coinRankingView(c *ui.Context, cs *coinState) {
 			Type: display.TextSecondary, FontSize: 11, Rows: 1,
 		})
 		ui.Spacer(c).Grow(1)
-		a.smallAction(c, "刷新", cs.rankingLoading, func() { a.reloadCoinRanking() })
+		a.smallRefreshButton(c, cs.rankingLoading, func() { a.reloadCoinRanking() })
 	})
 	switch {
 	case cs.rankingErr != "":

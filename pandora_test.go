@@ -146,8 +146,8 @@ func TestPandoraActionMergePartialBox(t *testing.T) {
 }
 
 // 两次抽奖的请求契约：POST /v1/pandora/open（无请求体）与
-// POST /v1/pandora/reroll（box_instance_id），都带令牌与 Idempotency-Key，
-// 成功后发出金币变动事件。点第二次重抽时不再发请求。
+// POST /v1/pandora/reroll（box_instance_id），都带令牌与 Idempotency-Key；
+// 点第二次重抽时不再发请求。
 func TestPandoraOpenAndRerollContract(t *testing.T) {
 	freezePandoraNow(t)
 	var mu sync.Mutex
@@ -235,9 +235,6 @@ func TestPandoraOpenAndRerollContract(t *testing.T) {
 	a := pandoraTestApp(t, true)
 	a.client.Base = srv.URL + "/api"
 	a.client.HTTP = srv.Client()
-	defer a.stopCoinRefresh() // 动作会触发合并的金币刷新，测试结束前取消
-	events := make(chan coinEvent, 8)
-	a.onCoinsChanged = func(e coinEvent) { events <- e }
 
 	a.showPandora()
 	waitPandora(t, "今日盲盒状态", func() bool {
@@ -263,14 +260,6 @@ func TestPandoraOpenAndRerollContract(t *testing.T) {
 	// 结果只在卡片里展示一次，不再发结果 toast。
 	if pandoraHasToast(a, "盲盒已开启") || pandoraHasToast(a, "已再抽一次") {
 		t.Errorf("抽卡结果不该重复成 toast：%+v", a.toasts)
-	}
-	select {
-	case e := <-events:
-		if e != coinEventPandora {
-			t.Errorf("金币事件 = %q，期望 %q", e, coinEventPandora)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("开盒成功后没有发出金币变动事件")
 	}
 	if !a.pandora.entryKnown || a.pandora.entryStatus.Box.EventName != "金币雨" {
 		t.Errorf("开盒后首页入口没有拿到事件名：%+v", a.pandora.entryStatus)
@@ -302,14 +291,6 @@ func TestPandoraOpenAndRerollContract(t *testing.T) {
 	// 第二次结果同样只在卡片里出一次，没有 toast。
 	if pandoraHasToast(a, "已再抽一次") || pandoraHasToast(a, "盲盒已开启") {
 		t.Errorf("抽卡结果不该重复成 toast：%+v", a.toasts)
-	}
-	select {
-	case e := <-events:
-		if e != coinEventPandora {
-			t.Errorf("第二次金币事件 = %q，期望 %q", e, coinEventPandora)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("重抽成功后没有发出金币变动事件")
 	}
 
 	// 第三次：本应用只给两次抽奖，入口应当直接关掉，不再发请求。

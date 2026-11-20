@@ -18,7 +18,7 @@ import (
 // 气泡里；点一下打开，窗口已经开着时就把它带到前台。
 //
 // 数据与请求在 coins.go，窗口里的内容仍然由 coins_ui.go 的 coinsBody 画出；
-// 这里只负责窗口的开关、窗口标题栏，以及账号菜单金币数的定时刷新。
+// 这里只负责窗口的开关、窗口标题栏，以及账号菜单金币数的按需刷新。
 
 // 金币窗口的默认尺寸。和其他附属窗口一样用 StateKey 记住用户摆放的位置与
 // 大小，所以这里只是首次打开时的默认值。
@@ -28,10 +28,6 @@ const (
 	coinWinMinWidth  = 460
 	coinWinMinHeight = 480
 )
-
-// coinTagRefreshEvery 是账号菜单金币数的刷新间隔：登录后先读一次，之后每隔
-// 这么久再读一次余额。提成变量是为了测试能把它缩短。
-var coinTagRefreshEvery = time.Minute
 
 /* ------------------------------------------------------------------
    金币窗口：全局入口、显示与关闭
@@ -130,66 +126,24 @@ func (a *app) redrawCoinWindow() {
 }
 
 /* ------------------------------------------------------------------
-   账号菜单金币数的定时刷新
+   账号菜单金币数的按需刷新
 ---------------------------------------------------------------- */
 
-// startCoinTagWatch 在登录后启动金币数刷新：先立即读一次余额，再按
-// coinTagRefreshEvery 定时重读。幂等：登录、回到前台、应用就绪都可调用；
-// 已经在跑时只补一次立即校准，不会叠加定时器。
-func (a *app) startCoinTagWatch() {
-	if !a.autoLoad || !a.auth.loggedIn() {
-		return
-	}
-	a.refreshCoinTagBalance()
-	a.scheduleCoinTagRefresh()
-}
-
-// scheduleCoinTagRefresh 排下一次刷新。gen 让 stop 之后已经排好的定时器不再
-// 生效；到点后重新排下一次，形成固定间隔。
-func (a *app) scheduleCoinTagRefresh() {
-	if a.coinTagTimer != nil || !a.auth.loggedIn() {
-		return
-	}
-	a.coinTagGen++
-	gen := a.coinTagGen
-	a.coinTagTimer = time.AfterFunc(coinTagRefreshEvery, func() {
-		a.publish(func() {
-			if a.coinTagGen != gen {
-				return
-			}
-			a.coinTagTimer = nil
-			if !a.auth.loggedIn() {
-				return
-			}
-			a.refreshCoinTagBalance()
-			a.scheduleCoinTagRefresh()
-		})
-	})
-}
-
-// stopCoinTagWatch 停掉定时刷新：退出登录、主窗口关闭时调用。seq 自增让还在
-// 路上的请求结果直接被丢弃；金币变动事件排着的合并刷新也一并丢掉。
+// stopCoinTagWatch 让还在路上的余额请求结果直接被丢弃：退出登录、主窗口关闭
+// 时调用。金币数是展开账号菜单时才请求的，这里只负责收尾，不再有定时器。
 func (a *app) stopCoinTagWatch() {
-	a.coinTagGen++
-	if a.coinTagTimer != nil {
-		a.coinTagTimer.Stop()
-		a.coinTagTimer = nil
-	}
 	a.coinTagSeq++
 	a.coinTagLoading = false
 	a.coinTagPending = false
-	a.stopCoinRefresh()
 }
 
-// refreshCoinTagBalance 只拉余额接口：标题栏不需要排名与盲盒，盲盒在点开
-// 账号菜单时按需补；签到状态由 ensureCoinSignSynced 在打开菜单时同步，每天
-// 最多一次。结果写回金币页共用的 a.coins，
-// 这样标题栏与金币窗口的数字始终一致；失败时保留上次的值，标题栏不自作主张
-// 显示错误。
+// refreshCoinTagBalance 只拉余额接口：账号菜单不需要排名与盲盒，盲盒在点开
+// 菜单时按需补；签到状态由 ensureCoinSignSynced 在打开菜单时同步，每天最多
+// 一次。每次展开账号菜单时调用一次。结果写回金币页共用的 a.coins，这样菜单
+// 与金币窗口的数字始终一致；失败时保留上次的值，菜单不自作主张显示错误。
 //
-// 请求在途时收到的刷新（定时器、金币变动事件）先记在 coinTagPending 里，等
-// 这次结果回来再补一次：正在路上的请求可能是在这次变动之前发出的，不能直接
-// 把后来的那次刷新丢掉。
+// 请求在途时又展开了一次菜单，先记在 coinTagPending 里，等这次结果回来再补
+// 一次，保证每次展开都能读到当时的余额。
 func (a *app) refreshCoinTagBalance() {
 	if !a.autoLoad || !a.auth.loggedIn() {
 		return
@@ -229,7 +183,7 @@ func (a *app) refreshCoinTagBalance() {
 			}
 			cs.balance, cs.balanceOK = balance, true
 			if pending {
-				// 刷新期间又收到了金币变动：用刚刚拿到的结果之外再校准一次。
+				// 刷新期间又展开了一次菜单：再读一次，拿到这次展开时的余额。
 				a.refreshCoinTagBalance()
 			}
 		})
