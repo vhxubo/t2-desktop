@@ -641,34 +641,53 @@ func (a *app) syncComposeSelection(area ui.Element, st *composeState) {
 
 // composeModuleSpec 是右侧栏里的一项。flag 指向「这一块随帖发送」的开关，
 // body 画弹窗里的字段；侧栏与弹窗共用同一张表，加组件时不用改两处。
+// tag 是这一块在标题里对应的【】关键词（网页端加扩展时自动加、移除时自动删）；
+// review 表示它用《X》点评：N 分｜ 而不是【】标签写标题（网页端的「点评」）。
 type composeModuleSpec struct {
-	name string
-	hint string
-	flag func(*composeState) *bool
-	body func(*app, *ui.Context, *composeState)
+	name   string
+	hint   string
+	tag    string
+	review bool
+	flag   func(*composeState) *bool
+	body   func(*app, *ui.Context, *composeState)
 }
 
 // composeModuleSpecs 是发帖接口支持的全部可选块，顺序就是侧栏里的顺序。
 // 默认一个都不启用：没点「添加此组件」的块，一个字段都不会进请求体。
 var composeModuleSpecs = []composeModuleSpec{
-	{"投票", "给帖子加一个单选或多选投票。",
-		func(st *composeState) *bool { return &st.voteOpen },
-		func(a *app, c *ui.Context, st *composeState) { a.composeVote(c, st) }},
-	{"评分", "给某个对象打分并附上理由。",
-		func(st *composeState) *bool { return &st.scoreOpen },
-		func(a *app, c *ui.Context, st *composeState) { a.composeScore(c, st) }},
-	{"竞猜", "发起一场竞猜，让读者选边。",
-		func(st *composeState) *bool { return &st.betOpen },
-		func(a *app, c *ui.Context, st *composeState) { a.composeBet(c, st) }},
-	{"兑换码 / 红包", "发兑换码，或开一个随帖红包。",
-		func(st *composeState) *bool { return &st.redeemOpen },
-		func(a *app, c *ui.Context, st *composeState) { a.composeRedeem(c, st) }},
-	{"金币池", "放一笔金币，读者浏览时按概率领取。",
-		func(st *composeState) *bool { return &st.poolOpen },
-		func(a *app, c *ui.Context, st *composeState) { a.composePool(c, st) }},
-	{"可见性（谁可以看）", "限制谁能读这篇帖子。",
-		func(st *composeState) *bool { return &st.guardOpen },
-		func(a *app, c *ui.Context, st *composeState) { a.composeGuard(c, st) }},
+	{name: "投票", hint: "给帖子加一个单选或多选投票。", tag: "投票",
+		flag: func(st *composeState) *bool { return &st.voteOpen },
+		body: func(a *app, c *ui.Context, st *composeState) { a.composeVote(c, st) }},
+	{name: "评分", hint: "给某个对象打分并附上理由。", review: true,
+		flag: func(st *composeState) *bool { return &st.scoreOpen },
+		body: func(a *app, c *ui.Context, st *composeState) { a.composeScore(c, st) }},
+	{name: "竞猜", hint: "发起一场竞猜，让读者选边。", tag: "竞猜",
+		flag: func(st *composeState) *bool { return &st.betOpen },
+		body: func(a *app, c *ui.Context, st *composeState) { a.composeBet(c, st) }},
+	{name: "兑换码 / 红包", hint: "发兑换码，或开一个随帖红包。", tag: "兑换码",
+		flag: func(st *composeState) *bool { return &st.redeemOpen },
+		body: func(a *app, c *ui.Context, st *composeState) { a.composeRedeem(c, st) }},
+	{name: "金币池", hint: "放一笔金币，读者浏览时按概率领取。", tag: "💰",
+		flag: func(st *composeState) *bool { return &st.poolOpen },
+		body: func(a *app, c *ui.Context, st *composeState) { a.composePool(c, st) }},
+	{name: "可见性（谁可以看）", hint: "限制谁能读这篇帖子。",
+		flag: func(st *composeState) *bool { return &st.guardOpen },
+		body: func(a *app, c *ui.Context, st *composeState) { a.composeGuard(c, st) }},
+}
+
+// composeApplyModuleTitle 按网页端规则同步标题：加组件就插【关键词】/点评前缀，
+// 移除就删掉。评分可能反复打开改分值，所以 on 为真时也重算点评前缀（先剥旧的）。
+func composeApplyModuleTitle(st *composeState, m composeModuleSpec, on bool) {
+	if m.tag != "" {
+		st.title = composeSetTitleTag(st.title, m.tag, on)
+	}
+	if m.review {
+		if !on {
+			st.title = composeStripReviewPrefix(st.title)
+		} else if target := strings.TrimSpace(st.scoreTarget); target != "" {
+			st.title = composeWithReviewPrefix(st.title, target, int(st.scoreValue))
+		}
+	}
 }
 
 // enabledModuleCount 是侧栏底部那行汇总用的数量。
@@ -682,6 +701,33 @@ func (st *composeState) enabledModuleCount() int {
 	return n
 }
 
+// composeAnonymousToggle 是匿名开关。网页端规定匿名帖不能用金币池、竞猜与
+// 隐藏内容：勾上匿名时，这几块连同标题里对应的【💰】【竞猜】【🔒】一起撤掉，
+// 免得发出去被服务端拒绝。关闭匿名不自动恢复——草稿与开关状态都还在。
+func (a *app) composeAnonymousToggle(c *ui.Context, st *composeState) {
+	before := st.anonymous
+	ui.Row(c).FillWidth().Children(func() {
+		composeToggle(c, &st.anonymous, "匿名发帖")
+	})
+	if before || !st.anonymous {
+		return
+	}
+	dropped := 0
+	for _, m := range composeModuleSpecs {
+		if !*m.flag(st) || (m.tag != "💰" && m.tag != "竞猜") {
+			continue
+		}
+		composeApplyModuleTitle(st, m, false)
+		*m.flag(st) = false
+		dropped++
+	}
+	// 桌面端没有「隐藏内容」组件，但标题里可能手工写了【🔒】，一并清掉。
+	st.title = composeSetTitleTag(st.title, "🔒", false)
+	if dropped > 0 {
+		a.toast(toastCompose, "匿名发帖已移除金币池、竞猜，及相关标题标签")
+	}
+}
+
 // composeSidebar 是窗口右侧常驻的控制栏：上半是匿名等发布设置，下半是六块
 // 附加组件。点一行在弹窗里编辑；已添加的行尾直接放「移除」，不必为了移除再
 // 进一次弹窗，底部还有「全部移除」一次清掉所有组件。
@@ -690,9 +736,7 @@ func (a *app) composeSidebar(c *ui.Context, st *composeState) {
 	ui.Column(c).Width(composeSidebarWidth).FillHeight().MinHeight(0).
 		Background(tk.BgContainer).Padding(14, 12).Gap(8).Children(func() {
 		display.Text(c, "发布设置", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
-		ui.Row(c).FillWidth().Children(func() {
-			composeToggle(c, &st.anonymous, "匿名发帖")
-		})
+		a.composeAnonymousToggle(c, st)
 		display.Text(c, "匿名只随这篇帖子生效。",
 			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 		layout.Divider(c, layout.DividerProps{})
@@ -736,6 +780,7 @@ func (a *app) composeSidebar(c *ui.Context, st *composeState) {
 							if iconActionButton(c, trashIcon, "移除"+m.name,
 								"移除"+m.name+"，填过的内容仍留在草稿里").Clicked() {
 								*m.flag(st) = false
+								composeApplyModuleTitle(st, m, false)
 								a.toast(toastCompose, "已移除"+m.name)
 							}
 						}
@@ -754,6 +799,9 @@ func (a *app) composeSidebar(c *ui.Context, st *composeState) {
 					Size: lobetheme.Small,
 				}).Label("全部移除附加组件").Clicked() {
 					for _, m := range composeModuleSpecs {
+						if *m.flag(st) {
+							composeApplyModuleTitle(st, m, false)
+						}
 						*m.flag(st) = false
 					}
 					a.toast(toastCompose, "已移除全部附加组件")
@@ -809,6 +857,9 @@ func (a *app) composeModuleDialog(c *ui.Context, st *composeState) {
 			*m.flag(st) = true
 			a.toast(toastCompose, "已添加"+m.name)
 		}
+		// 加组件时按网页端规则给标题插【关键词】/点评前缀；已添加的块再次
+		// 点「完成」也重算一次（评分可能改了对象或分值）。
+		composeApplyModuleTitle(st, m, true)
 		st.moduleOpen = false
 	}
 }

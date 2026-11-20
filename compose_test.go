@@ -278,7 +278,8 @@ func TestComposePublishSendsDocumentedPayload(t *testing.T) {
 	assertField(t, gotBody, "title", "我的第一篇帖子")
 	assertField(t, gotBody, "node_id", "uuid-community")
 	assertField(t, gotBody, "is_anonymous", true)
-	// 界面已经移除的补充字段，请求体里也不该再出现。
+	// 只有标题开头带【】/[] 块时才发 title_prefix；本用例标题是纯文本，
+	// 仍不该出现。tip / contact / status 是界面早已移除的字段。
 	for _, key := range []string{"title_prefix", "tip", "contact", "status"} {
 		if _, ok := gotBody[key]; ok {
 			t.Errorf("已移除的字段不该发送：%s", key)

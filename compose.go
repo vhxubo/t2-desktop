@@ -607,6 +607,11 @@ func (st *composeState) payload() (map[string]any, error) {
 	}
 
 	p := map[string]any{"title": title}
+	// 网页端把标题开头的【】/[] 块单独作为 title_prefix 一起发（≤100 字）。
+	// 桌面端这些标签已经写进 title，这里照抄同一份提取结果，保持一致。
+	if prefix := composeTitlePrefix(title); prefix != "" {
+		p["title_prefix"] = prefix
+	}
 	// 节点是选填的：没选就不发 node_id，发帖后由站点的 AI 判定分类。手动
 	// 选中了才带上 uuid（文档要求的是 uuid，不是 slug）。
 	if node := st.selectedNode(); node != nil {
