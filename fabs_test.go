@@ -76,6 +76,109 @@ func TestListFabsRenderRefreshAndBackTop(t *testing.T) {
 	}
 }
 
+// 评论区右下角的横排操作组是绝对定位的，列表滚到底时不能压住最后一条评论
+// 最右侧的「回复」图标：列表底部要留出它那一排的高度，让回复停在上方。
+func TestDetailCommentToolbarDoesNotCoverLastReply(t *testing.T) {
+	a := detailAppWithReplies(t)
+	rows := make([]replyItem, 0, 60)
+	for i := 0; i < 60; i++ {
+		rows = append(rows, replyItem{
+			ID: fmt.Sprintf("c%d", i), Author: "u", Floor: i + 1,
+			Content: fmt.Sprintf("第%d条评论", i+1),
+		})
+	}
+	a.detail.replyList = rows
+	a.detail.replyTotal = len(rows)
+	a.detail.replyLoaded = true
+	a.detail.list.ScrollTo(59, ui.End)
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if !tt.HasText("第60条评论") {
+		t.Fatalf("评论没有滚到底：%q", tt.Texts())
+	}
+
+	// 取最后一条可见评论的回复按钮，和整列工具栏里最靠上的一枚比高度。
+	var lastReply, toolbarTop ui.Rect
+	var hasReply, hasToolbar bool
+	for _, n := range tt.AccessAll() {
+		switch n.Name {
+		case "回复":
+			if !hasReply || n.Bounds.Y > lastReply.Y {
+				lastReply, hasReply = n.Bounds, true
+			}
+		case "评论回到顶部", "切到扁平时间序", "切到楼层视图", "刷新评论":
+			if !hasToolbar || n.Bounds.Y < toolbarTop.Y {
+				toolbarTop, hasToolbar = n.Bounds, true
+			}
+		}
+	}
+	if !hasReply {
+		t.Fatalf("滚到底后看不到回复按钮：%q", tt.Texts())
+	}
+	if !hasToolbar {
+		t.Fatalf("看不到评论区操作组：%q", tt.Texts())
+	}
+	if lastReply.Y+lastReply.H > toolbarTop.Y {
+		t.Errorf("评论操作组压住了最后一条评论的回复图标：回复 %+v / 操作组顶端 %+v", lastReply, toolbarTop)
+	}
+}
+
+// 主页右下角的一列 FAB 全是圆按钮：主操作「发帖」是整圆（对角的像素透出页面
+// 底色，最宽处才是强调色），次级按钮也按直径对半取圆角。这里用有实色填充的
+// 发帖按钮验证圆角几何，其余几枚核对尺寸没有被改掉。
+func TestHomeFabsAreCircular(t *testing.T) {
+	a := testApp(t)
+	a.tabs[0].items = fabListItems(30)
+	a.tabs[0].loaded = true
+	a.tabs[0].total = 30
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	img := tt.Image()
+	fab, ok := tt.Find("发帖")
+	if !ok {
+		t.Fatalf("找不到发帖 FAB：%q", tt.Texts())
+	}
+	if fab.W != fabPrimary || fab.H != fabPrimary {
+		t.Fatalf("发帖 FAB 尺寸不对：%+v", fab)
+	}
+	// 整圆：四角应是页面底色（浅色主题纯白），横向最宽处才是强调色。
+	left, top := int(fab.X), int(fab.Y)
+	right, bottom := int(fab.X+fab.W)-1, int(fab.Y+fab.H)-1
+	cy := int(fab.Y + fab.H/2)
+	for _, p := range [][2]int{{left + 1, top + 1}, {right - 1, top + 1}, {left + 1, bottom - 1}, {right - 1, bottom - 1}} {
+		if cl := img.RGBAAt(p[0], p[1]); cl.R != 255 || cl.G != 255 || cl.B != 255 {
+			t.Errorf("发帖 FAB 角落 (%d,%d) 应是页面底色，实际 %v", p[0], p[1], cl)
+		}
+	}
+	if cl := img.RGBAAt(left+1, cy); cl.R != 0x1D || cl.G != 0x4E || cl.B != 0xD8 {
+		t.Errorf("发帖 FAB 最宽处应是强调色 #1D4ED8，实际 %v", cl)
+	}
+
+	// 次级按钮维持原尺寸，仍是圆按钮。
+	for _, name := range []string{"刷新", "发动态"} {
+		r, ok := tt.Find(name)
+		if !ok {
+			t.Fatalf("找不到 %s FAB：%q", name, tt.Texts())
+		}
+		if r.W != fabCircle || r.H != fabCircle {
+			t.Errorf("%s FAB 尺寸不对：%+v", name, r)
+		}
+	}
+
+	// 滚离顶部后出现的「返回顶部」也是同一套圆按钮。
+	tt.Scroll(500, 400, 0, 900)
+	tt.Frame()
+	topFab, ok := tt.Find("返回顶部")
+	if !ok {
+		t.Fatalf("滚离顶部后没有出现返回顶部：%q", tt.Texts())
+	}
+	if topFab.W != fabCircle || topFab.H != fabCircle {
+		t.Errorf("返回顶部 FAB 尺寸不对：%+v", topFab)
+	}
+}
+
 // 点「返回顶部」把列表滚动到开头，按钮随即收起；它只动滚动位置，不重发请求。
 func TestListFabBackToTopScrollsToStart(t *testing.T) {
 	a := testApp(t)
@@ -198,12 +301,12 @@ func TestDetailToolbarRefreshAndBackToTop(t *testing.T) {
 	if r, ok := tt.Find("返回顶部"); ok {
 		t.Errorf("正文没滚时不该出现正文回顶：%+v", r)
 	}
-	// 评论组竖排贴在列表右下角：回顶在刷新上方，两枚同一列。
-	if commentTop.X != commentRefresh.X {
-		t.Errorf("评论回顶与刷新应排在同一列：%+v / %+v", commentTop, commentRefresh)
+	// 评论组横排贴在列表右下角：回顶在刷新左边，两枚同一行。
+	if commentTop.Y != commentRefresh.Y {
+		t.Errorf("评论回顶与刷新应排在同一行：%+v / %+v", commentTop, commentRefresh)
 	}
-	if commentTop.Y+commentTop.H > commentRefresh.Y {
-		t.Errorf("评论回顶应排在刷新上方：%+v / %+v", commentTop, commentRefresh)
+	if commentTop.X+commentTop.W > commentRefresh.X {
+		t.Errorf("评论回顶应排在刷新左边：%+v / %+v", commentTop, commentRefresh)
 	}
 	// 两组各在自那一栏：正文组在左，评论组在右，都落在面板下部。
 	bar, ok := tt.Access("正文互动栏")
@@ -310,6 +413,51 @@ func TestDetailRefreshIsSplitBetweenBodyAndComments(t *testing.T) {
 	waitFor(t, func() bool { return replyCalls.Load() == 1 }, "评论刷新没有发出评论请求")
 	if topicCalls.Load() != 1 {
 		t.Errorf("评论刷新不该重拉正文：%d 次", topicCalls.Load())
+	}
+}
+
+// 收起正文后，正文右下角那一列悬浮操作组要跟着正文面板一起隐藏：正文已经
+// 不在画面上，再把它画到内容区右下角，正好压住评论区最下方评论的「回复」入口。
+// 评论区自己的操作组（刷新 / 视图切换 / 回顶）仍留在原处，展开正文后正文那组
+// 再回来。
+func TestDetailBodyCollapseHidesBodyToolbar(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if _, ok := tt.Find("刷新"); !ok {
+		t.Fatalf("展开态找不到正文操作组的刷新：%q", tt.Texts())
+	}
+
+	if err := tt.Click("收起正文"); err != nil {
+		t.Fatalf("点收起正文失败：%v", err)
+	}
+	tt.Advance(500 * time.Millisecond)
+	if !a.detail.bodyCollapsed {
+		t.Fatalf("点了一下正文没有收起")
+	}
+	// 正文的工具按钮随面板一起收起，不再悬在评论区右下角。
+	for _, label := range []string{"刷新", "复制帖子链接"} {
+		if _, ok := tt.Find(label); ok {
+			t.Errorf("正文收起后不该再画正文操作组的 %q：%q", label, tt.Texts())
+		}
+	}
+	// 评论区自己的操作组与展开入口仍可用。
+	if _, ok := tt.Find("刷新评论"); !ok {
+		t.Errorf("正文收起后评论区刷新不该消失：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("展开正文"); !ok {
+		t.Errorf("正文收起后找不到展开入口：%q", tt.Texts())
+	}
+
+	if err := tt.Click("展开正文"); err != nil {
+		t.Fatalf("点展开正文失败：%v", err)
+	}
+	tt.Advance(500 * time.Millisecond)
+	if a.detail.bodyCollapsed {
+		t.Fatalf("点了一下正文没有展开")
+	}
+	if _, ok := tt.Find("刷新"); !ok {
+		t.Errorf("展开正文后正文操作组没有回来：%q", tt.Texts())
 	}
 }
 

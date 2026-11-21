@@ -108,8 +108,8 @@ func TestUserCardAboutStates(t *testing.T) {
 	}
 }
 
-// 很长的介绍不会把统计、标签页和列表挤出窗口：介绍在块内滚动（窗口被缩小
-// 时也随之收缩），其余区块仍留在窗口里。
+// 很长的介绍独占一个标签页，正文在块内滚动（窗口被缩小时也随之收缩），
+// 标题栏、资料头、统计与标签页不会被挤出窗口。
 func TestUserCardAboutLongContentKeepsLayout(t *testing.T) {
 	for _, height := range []int{userCardWindowHeight, userCardMinHeight} {
 		a := userCardTestApp(t)
@@ -120,12 +120,10 @@ func TestUserCardAboutLongContentKeepsLayout(t *testing.T) {
 			PublicKnown: true,
 			IsPublic:    true,
 		}
-		cs.topics.items = []Item{{Key: "T1", ShortID: "T1", Title: "第一篇主题"}}
 		tt := ui.NewTester(a.userCardWindowView, userCardWindowWidth, height)
 		tt.Frame()
 
-		// 列表行渲染成「· 标题」，按行上的完整文本定位。
-		for _, label := range append(append([]string{}, userCardTabLabels...), "· 第一篇主题") {
+		for _, label := range userCardTabLabels {
 			r, ok := tt.Find(label)
 			if !ok {
 				t.Fatalf("窗口高 %d 时，很长的介绍把 %q 挤没了：%q", height, label, tt.Texts())

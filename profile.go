@@ -16,9 +16,10 @@ import (
 // 「我的」窗口的数据层与界面状态。窗口本身在 profile_ui.go：它是独立窗口
 // （和通知、设置一样），入口是标题栏上登录账号的头像。
 //
-// 五个标签页对应这几组端点：
+// 六个标签页对应这几组端点：
 //
 //	概览        GET /v1/users/:userName（最近统计与六维属性）
+//	个人简介    GET /v1/users/:userName/about（正文；本人可编辑，见 about_edit.go）
 //	我的内容    GET /v1/users/:userName/topics、/v1/me/favorites、/v1/me/bookmarks、/v1/me/collections
 //	我的回复    GET /v1/users/:userName/replies
 //	徽章        GET /v1/me/badges、/v1/me/badges/equipped；佩戴 / 取消佩戴（见 badges.go）
@@ -34,7 +35,8 @@ import (
 // 「我的内容」一页里有四个分段：帖子、收藏、书签、合集。这四类原先占着主
 // 窗口的侧边栏，现在只在这里出现。
 //
-// 这里唯一的写操作是「徽章」里的佩戴切换（scope interact 或 write:economy，不扣金币）；
+// 这里的写操作是「徽章」里的佩戴切换（scope interact 或 write:economy，不扣金币）
+// 与「个人简介」的编辑（POST /v1/me/about，每次 500 金币，见 about_edit.go）；
 // 发帖、互动等其它操作仍在各自的窗口或站点完成。
 
 // 弹窗的默认尺寸。它和通知窗口一样用 StateKey 记住位置与大小，这里只是
@@ -58,13 +60,14 @@ const (
 // 弹窗里的标签页。金币页不在这个窗口里，去独立的金币窗口看。
 const (
 	profileTabOverview = iota
+	profileTabAbout
 	profileTabContent
 	profileTabReplies
 	profileTabBadges
 	profileTabAccount
 )
 
-var profileTabLabels = []string{"概览", "我的内容", "我的回复", "徽章", "权限与账号"}
+var profileTabLabels = []string{"概览", "个人简介", "我的内容", "我的回复", "徽章", "权限与账号"}
 
 // 「我的内容」里的四个分段。
 const (
@@ -190,6 +193,25 @@ type profileState struct {
 	avatarOpen bool
 	avatarBusy bool
 	avatarErr  string
+
+	// 个人简介：正文在单独的 about 端点（见 user_card.go），切到那个标签页
+	// 才拉一次。本人可以编辑，保存一次消耗 500 金币（见 about_edit.go）。
+	aboutSeq     uint64
+	aboutLoading bool
+	aboutLoaded  bool
+	aboutErr     string
+	about        userAbout
+
+	aboutEditOpen bool
+	aboutDraft    string
+	aboutPublic   bool
+	aboutBusy     bool
+	aboutErrEdit  string
+	aboutKey      string
+	aboutSig      string
+	aboutGen      uint64
+	// aboutTpl 是编辑框顶部「个人常量 / 展示组件」快捷模板的开合与选区状态。
+	aboutTpl aboutTemplateState
 
 	// 我的内容：帖子 / 收藏 / 书签 / 合集各有一份列表状态，切换分段时保留
 	// 已经拉到的内容，不重新请求。加载走主窗口同一套通用加载（loadSpec）。
@@ -634,6 +656,10 @@ func (a *app) ensureProfileLoaded() {
 		a.loadProfileInfo(name)
 	}
 	switch ps.tab {
+	case profileTabAbout:
+		if !ps.aboutLoaded && !ps.aboutLoading {
+			a.loadProfileAbout()
+		}
 	case profileTabContent:
 		st := &ps.content[ps.contentKind]
 		// 「我的帖子」要拼当前账号的用户名；令牌里没有、资料也还没拉到时
@@ -655,6 +681,42 @@ func (a *app) ensureProfileLoaded() {
 			a.loadProfileBadges()
 		}
 	}
+}
+
+// loadProfileAbout 读本人的个人介绍正文。读端点匿名可用，这里照常带令牌：
+// 自己的不公开介绍也能读到。失败后保留原因，页面上给重试入口。
+func (a *app) loadProfileAbout() {
+	ps := a.profile
+	if ps == nil || !a.auth.loggedIn() || ps.aboutLoading {
+		return
+	}
+	name := a.auth.username()
+	if name == "" {
+		return
+	}
+	ps.aboutSeq++
+	seq := ps.aboutSeq
+	ps.aboutLoading = true
+	ps.aboutErr = ""
+	a.ensureEmojis()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	go func() {
+		defer cancel()
+		about, err := a.client.fetchUserAbout(ctx, name)
+		a.publish(func() {
+			if a.profile != ps || ps.aboutSeq != seq {
+				return
+			}
+			ps.aboutLoading = false
+			ps.aboutLoaded = true
+			if err != nil {
+				ps.aboutErr = friendlyError(err)
+				return
+			}
+			ps.about = about
+			ps.aboutErr = ""
+		})
+	}()
 }
 
 func (a *app) loadProfileInfo(name string) {

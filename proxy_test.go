@@ -1497,6 +1497,68 @@ func TestCreateMomentUsesConfiguredProxy(t *testing.T) {
 	}
 }
 
+// 发帖的隐藏内容字段同样走 postJSON：必须经配置的代理，带幂等键与 restricted_*。
+func TestCreateHiddenContentUsesConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var paths, bodies, keys []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		bodies = append(bodies, string(body))
+		keys = append(keys, r.Header.Get("Idempotency-Key"))
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"short_id":"H1"}`))
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		Proxy:  p,
+		Base:   "http://upstream.invalid/api",
+		bearer: func() string { return "tok" },
+	}
+	st := newComposeState()
+	st.title = "带隐藏内容的帖子"
+	st.restrictedOpen = true
+	st.restrictedContent = "解锁后正文"
+	st.restrictedAccessChoice = restrictedAccessLabels[3]
+	st.restrictedAuctionTopN = 5
+	st.restrictedAuctionDeadline = time.Date(2026, 11, 23, 12, 30, 0, 0, time.UTC)
+	st.restrictedDurationMonths = 6
+	payload, err := st.payload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.createTopic(context.Background(), payload, "key-h"); err != nil {
+		t.Fatalf("经代理发隐藏内容帖失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != 1 || paths[0] != "POST /api/v1/topics" {
+		t.Fatalf("代理收到的请求 = %v", paths)
+	}
+	if keys[0] != "key-h" {
+		t.Errorf("幂等键 = %q", keys[0])
+	}
+	for _, want := range []string{
+		`"restricted_access_type":"auction"`,
+		`"restricted_content":"解锁后正文"`,
+		`"restricted_auction_top_n":5`,
+		`"restricted_auction_deadline":"2026-11-23T12:30:00.000Z"`,
+		`"restricted_duration_months":6`,
+	} {
+		if !strings.Contains(bodies[0], want) {
+			t.Errorf("请求体缺少 %s：%q", want, bodies[0])
+		}
+	}
+}
+
 // 评分榜的分类字典与列表也是新读出口：必须经配置的代理。
 func TestScoresEndpointsUseConfiguredProxy(t *testing.T) {
 	clearProxyEnv(t)

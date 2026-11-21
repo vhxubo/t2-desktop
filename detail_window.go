@@ -442,12 +442,12 @@ func (h *detailWindow) claimsToasts(target toastTarget) bool {
 func (a *app) detailWindowTitleBar(h *detailWindow, c *ui.Context) {
 	t := c.Theme()
 	d := h.current()
-	// 页面操作只剩一枚动作时不再画操作组，直接收进这根自定义标题栏；
-	// 清单与操作组共用，条件只写一遍（见 detailToolActions）。
+	// 常驻操作只剩一枚且没有「更多」动作时不再画操作组，直接收进这根自定义
+	// 标题栏；清单与操作组共用，条件只写一遍（见 detailToolActions）。
 	var lone *detailToolAction
 	if d != nil {
-		if acts := a.detailToolActions(d); len(acts) == 1 {
-			act := acts[0]
+		if icons, more := detailToolSplit(a.detailToolActions(d)); len(icons) == 1 && len(more) == 0 {
+			act := icons[0]
 			lone = &act
 		}
 	}
@@ -457,9 +457,6 @@ func (a *app) detailWindowTitleBar(h *detailWindow, c *ui.Context) {
 			AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, lucide.FileText()).Size(16, 16).TextColor(t.Accent)
 			ui.Text(c, "详情").FontSize(13).Bold().SingleLine().TextColor(t.Text)
-			if d != nil {
-				ui.Text(c, detailTabTitle(d)).FontSize(11).TextColor(t.TextMuted).SingleLine()
-			}
 			a.accountWindowTag(c)
 		})
 		ui.Row(c).AlignItems(ui.Center).Padding(0, 4).Gap(2).Children(func() {

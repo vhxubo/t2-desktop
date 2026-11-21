@@ -186,13 +186,19 @@ func TestDetailWindowTitleAndTabsRender(t *testing.T) {
 
 	tt := ui.NewTester(func(c *ui.Context) { a.detailWindowView(h, c) }, detailWindowWidth, detailWindowHeight)
 	tt.Frame()
-	for _, want := range []string{"详情", "窗口里的帖子", "关闭"} {
+	for _, want := range []string{"详情", "关闭"} {
 		if !tt.HasText(want) {
 			t.Errorf("详情窗口标题栏缺少 %q：%q", want, tt.Texts())
 		}
 	}
 	if _, ok := tt.Access("合并详情窗口"); !ok {
 		t.Error("标题栏应有「合并详情窗口」按钮")
+	}
+	// 标题栏只写「详情」，不再把帖子标题当副标题展示；正文区仍会画标题。
+	ttBar := ui.NewTester(func(c *ui.Context) { a.detailWindowTitleBar(h, c) }, detailWindowWidth, titleBarHeight)
+	ttBar.Frame()
+	if !ttBar.HasText("详情") || ttBar.HasText("窗口里的帖子") {
+		t.Errorf("标题栏不该展示帖子标题副标题：%q", ttBar.Texts())
 	}
 
 	// 合并后标签栏出现，两个标题都能看到，当前标签能单独关闭。

@@ -508,7 +508,7 @@ func TestReactionPopover(t *testing.T) {
 			t.Errorf("表情工具栏缺少 %q：%q", want, tt.Texts())
 		}
 	}
-	// 表情工具栏是盖在整页上的 Modal，关掉它再点底下的打赏入口。
+	// 表态气泡贴着笑脸入口，关掉它再点底下的打赏入口。
 	a.detail.react.reactOpen = false
 	tt.Frame()
 	tt.Advance(500 * time.Millisecond)
@@ -530,6 +530,52 @@ func TestReactionPopover(t *testing.T) {
 	}
 	if n := calls.Load(); n != 0 {
 		t.Errorf("打开气泡不该发请求，实际 %d 次", n)
+	}
+}
+
+// 打赏与表态都收成贴着入口的 Lobe Popover：面板横向靠近图标、宽度不超过
+// 一个小面板，不再像整页 Modal 那样把视线拉到窗口中央。
+func TestInteractPopoversCompactAndAnchored(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, envelopeJSON(`{}`))
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct{ name, entry, content string }{
+		{"表态", "表情", "选择一个表情"},
+		{"打赏", "打赏", "打赏金币"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := loginApp(t, srv)
+			a.pageName = "detail"
+			topic, err := decodeTopic([]byte(interactJSON), "AB12")
+			if err != nil {
+				t.Fatal(err)
+			}
+			topic.URL = "https://2libra.com/post/work/AB12"
+			a.detail = &detailState{shortID: "AB12", topic: &topic}
+
+			tt := ui.NewTester(a.view, 1100, 760)
+			tt.Frame()
+			entry, ok := tt.Find(tc.entry)
+			if !ok {
+				t.Fatalf("找不到 %s 入口：%q", tc.name, tt.Texts())
+			}
+			if err := tt.Click(tc.entry); err != nil {
+				t.Fatalf("点开%s气泡失败：%v", tc.name, err)
+			}
+			tt.Frame()
+			panel, ok := tt.Find(tc.content)
+			if !ok {
+				t.Fatalf("没有弹出%s面板：%q", tc.name, tt.Texts())
+			}
+			if panel.W > 260 {
+				t.Errorf("%s面板应小巧（<=260），实际宽 %.0f", tc.name, panel.W)
+			}
+			if dx := panel.X - entry.X; dx < -180 || dx > 180 {
+				t.Errorf("%s面板应贴着入口：入口 X %.0f，面板 X %.0f", tc.name, entry.X, panel.X)
+			}
+		})
 	}
 }
 

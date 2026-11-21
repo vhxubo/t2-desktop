@@ -20,18 +20,15 @@ import (
 //	POST /v1/topics/moments 🔑  发一条 1～500 字的短动态
 //
 // 发帖的可选块按文档的字段名原样组装：vote（投票）、score（评分）、
-// bet（竞猜）、redeem_codes（兑换码 / 红包）、reward_pool（金币池）与
-// access_guard_*（可见性门槛）。文档明确「随时可以新增字段」，所以解码
-// 一律忽略不认识的字段，不做严格结构体绑定。
+// bet（竞猜）、redeem_codes（兑换码 / 红包）、reward_pool（金币池）、
+// access_guard_*（可见性门槛）与 restricted_*（隐藏内容 / 付费墙）。文档明确
+// 「随时可以新增字段」，所以解码一律忽略不认识的字段，不做严格结构体绑定。
+// restricted_* 的字段名与枚举取自官网发帖页的 JS chunk（文档只给了中文说法）。
 //
 // node_id 在文档里标成必填，但线上接口允许不带：缺这个字段时由站点的 AI
 // 按标题与正文判定分类（实测），所以发帖窗口默认不选节点，请求体里也就没有
 // node_id（见 payload）。想指定时在写作区最下面的两列级联选择里选，选中才
 // 带 uuid——文档里的「必填」指的是要指定节点时必须给 uuid，不是 slug。
-//
-// 付费墙的隐藏内容（restricted_*）没有做：文档只写了「付费 / D20 检定 /
-// 竞拍」这些中文说法，没给 restricted_access_type 的机器可读取值，猜一个
-// 值发出去只会换来 400，所以宁可缺这一块也不写死。
 const (
 	composeTitleMax   = 500
 	composeContentMax = 20000
@@ -63,6 +60,15 @@ const (
 	composeGuardLevelLo = 1
 	composeGuardLevelHi = 100
 	composeGuardAttrHi  = 10
+
+	// 隐藏内容：枚举与校验范围照官网发帖页（站点 JS chunk）。正文上限沿用
+	// 普通正文的 20000 字，避免客户端发出服务端必然拒绝的超长内容。
+	composeRestrictedContentMax   = 20000
+	composeRestrictedD20Lo        = 1
+	composeRestrictedD20Hi        = 25
+	composeRestrictedDurationLo   = 1
+	composeRestrictedDurationHi   = 12
+	composeRestrictedAuctionTopLo = 1
 )
 
 // 「发帖」窗口的两种模式：发正式帖子，或发一条短动态。动态没有标题、节点与
@@ -139,6 +145,41 @@ func guardFromLabel(label string) string {
 	return guardNone
 }
 
+// 隐藏内容的访问类型。取值逐字照官网发帖页的 PostRestrictedAccessType，
+// 标签是同一份 chunk 里展示给用户的文案；下拉框存标签，请求里发机器取值。
+const (
+	restrictedAccessPro     = "pro"
+	restrictedAccessReward  = "reward"
+	restrictedAccessD20     = "d20"
+	restrictedAccessAuction = "auction"
+)
+
+var restrictedAccessLabels = []string{"Pro 可见", "打赏可见", "属性检定可见", "竞拍可见"}
+
+var restrictedAccessValues = []string{
+	restrictedAccessPro, restrictedAccessReward, restrictedAccessD20, restrictedAccessAuction,
+}
+
+func restrictedAccessFromLabel(label string) string {
+	for i, l := range restrictedAccessLabels {
+		if l == label {
+			return restrictedAccessValues[i]
+		}
+	}
+	return restrictedAccessD20 // 与官网发帖页的默认值一致
+}
+
+// 属性检定的 D20 属性：机器取值照官网 PostRestrictedD20Attr，中文标签照
+// POST_RESTRICTED_D20_ATTR_LABEL_MAP。界面直接绑定机器取值。
+var restrictedD20Attrs = []struct{ Value, Label string }{
+	{"karma", "财富"},
+	{"experience", "阅历"},
+	{"charm", "魅力"},
+	{"luck", "幸运"},
+	{"diligence", "勤勉"},
+	{"craft", "技艺"},
+}
+
 // voteTypeValues 是投票类型：文档的取值只有 pk（单选）与 multiple（多选）。
 // 两项用分段控件切换，所以状态里存的是下标。
 var voteTypeValues = []string{"pk", "multiple"}
@@ -181,6 +222,8 @@ type composeState struct {
 	// 用。默认空串：不发送 node_id，发帖后由站点 AI 判定分类（见 payload）。
 	nodePick cascaderState
 	nodeID   string
+	// nodeSearch 是级联浮层顶部搜索框的草稿；空串显示两列级联。
+	nodeSearch string
 	// 选中节点的简介：GET /v1/nodes/:slug 单独读一次，列表响应里没有可靠的
 	// 简介字段。nodeDetailSlug 记录这份简介属于哪个节点。
 	nodeDetailSlug    string
@@ -266,6 +309,17 @@ type composeState struct {
 	guardAttr      string
 	guardAttrValue float64
 
+	// 隐藏内容（付费墙）：字段名与取值照官网发帖页。access 存下拉框标签，
+	// attr 直接存机器取值；duration 为 0 表示不发送有效期。
+	restrictedOpen            bool
+	restrictedAccessChoice    string
+	restrictedContent         string
+	restrictedD20Attr         string
+	restrictedD20Threshold    float64
+	restrictedDurationMonths  float64
+	restrictedAuctionTopN     float64
+	restrictedAuctionDeadline time.Time
+
 	// 模式：帖子 / 动态。两边的草稿分开存，切换模式不会互相覆盖。
 	mode        int
 	lastMode    int
@@ -317,6 +371,13 @@ func newComposeState() *composeState {
 		poolCoins:        100,
 		guardChoice:      guardTypeLabels[0],
 		guardLevel:       composeGuardLevelLo,
+		// 隐藏内容沿用官网发帖页的默认值：属性检定、财富、目标 10、竞拍前 3 名、
+		// 截止时间 48 小时后；有效期留空表示不发送。
+		restrictedAccessChoice:    restrictedAccessLabels[2],
+		restrictedD20Attr:         restrictedD20Attrs[0].Value,
+		restrictedD20Threshold:    10,
+		restrictedAuctionTopN:     3,
+		restrictedAuctionDeadline: time.Now().Add(48 * time.Hour),
 	}
 }
 
@@ -324,66 +385,48 @@ func newComposeState() *composeState {
 // 节点列表（请求与本地缓存在 nodes.go）
 // ------------------------------------------------------------------
 
-// ensureComposeNodes 是受保护的任务：先把本地缓存里的节点摆进级联选择（内存
-// 或磁盘，哪怕过期），再按新鲜度决定要不要刷新；正在加载时不重复发请求，
-// 失败时保留上一次的结果。
+// ensureComposeNodes 委托共享节点目录加载：发帖窗口不再单独发请求，只把
+// 目录的结果镜像到自己的渲染状态里。缓存优先、失败冷却与单飞都在目录里。
 func (a *app) ensureComposeNodes() {
 	st := a.compose
-	if st == nil || st.nodeLoading {
+	if st == nil {
 		return
 	}
-	// 1) 缓存优先：首帧就有可选项，不用先看一屏「正在读取节点…」。
-	if len(st.nodes) == 0 {
-		if nodes, at, ok := a.nodeSnapshot(); ok {
-			// 只把列表摆进级联选择，不预选：默认留空，由站点的 AI 判定分类。
-			st.nodes, st.nodesAt, st.nodeLoaded = nodes, at, true
-		}
-	}
-	// 2) 新鲜期内直接用，不再请求。
-	if len(st.nodes) > 0 && nodeCacheFresh(st.nodesAt) {
+	cat := &a.nodeCat
+	// 测试与调用方有时直接把加载态 / 错误摆进 composeState（例如展示一个
+	// 失败的节点区）。目录没有对应状态时就不要反过来把它抹掉。
+	if (st.nodeLoading && !cat.loading) || (st.nodeErr != "" && cat.err == "") ||
+		(st.nodeLoaded && !cat.loaded) {
 		return
 	}
-	// 3) 刚失败过就先等一下，别对着一个失败的服务端每帧重试。
-	if !st.nodeFailedAt.IsZero() && time.Since(st.nodeFailedAt) < nodeRetryCooldown {
+	// 发帖窗口的「重试」会清掉自己的冷却字段；把这个意图传给共享目录，
+	// 否则目录还在冷却里，点重试看起来没有反应。
+	if st.nodeFailedAt.IsZero() && !cat.failedAt.IsZero() {
+		a.nodeCat.failedAt = time.Time{}
+		a.nodeCat.at = time.Time{}
+	}
+	a.ensureNodeCatalog()
+	a.syncComposeNodeState()
+}
+
+// syncComposeNodeState 把共享节点目录的状态抄回发帖窗口。保留 st.nodeSeq
+// 作为发帖窗口自己的简介请求序号，与目录的加载序号互不干扰。
+func (a *app) syncComposeNodeState() {
+	st := a.compose
+	if st == nil {
 		return
 	}
-	if !a.autoLoad && len(st.nodes) == 0 {
-		return
+	cat := &a.nodeCat
+	if len(cat.nodes) > 0 {
+		st.nodes = cat.nodes
 	}
-	st.nodeLoading = true
-	st.nodeErr = ""
-	st.nodeSeq++
-	gen := st.nodeSeq
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		defer cancel()
-		nodes, err := a.client.loadNodeTree(ctx)
-		a.publish(func() {
-			if err == nil {
-				// 窗口已经关掉也把结果留下来，下次打开直接命中缓存。
-				a.storeNodeCache(nodes, time.Now())
-			}
-			if st != a.compose || st.nodeSeq != gen {
-				return
-			}
-			st.nodeLoading = false
-			if err != nil {
-				// 已经有上一次的列表就继续用，只把原因记下来；冷却从这里开始。
-				st.nodeFailedAt = time.Now()
-				if len(st.nodes) == 0 {
-					st.nodeErr = friendlyError(err)
-				}
-				a.notifyNodesLoaded(err)
-				return
-			}
-			st.nodeErr = ""
-			st.nodeFailedAt = time.Time{}
-			st.nodes = nodes
-			st.nodeLoaded = true
-			st.nodesAt = a.nodes.at
-			a.notifyNodesLoaded(nil)
-		})
-	}()
+	if !cat.at.IsZero() {
+		st.nodesAt = cat.at
+	}
+	st.nodeLoaded = cat.loaded
+	st.nodeLoading = cat.loading
+	st.nodeErr = cat.err
+	st.nodeFailedAt = cat.failedAt
 }
 
 // notifyNodesLoaded 触发节点加载完成的测试钩子。
@@ -664,6 +707,9 @@ func (st *composeState) payload() (map[string]any, error) {
 	if err := st.guardPayload(p); err != nil {
 		return nil, err
 	}
+	if err := st.restrictedPayload(p); err != nil {
+		return nil, err
+	}
 	return p, nil
 }
 
@@ -840,6 +886,59 @@ func (st *composeState) guardPayload(p map[string]any) error {
 		p["access_guard_attr"] = attr
 		p["access_guard_attr_value"] = val
 		return nil
+	}
+	return nil
+}
+
+// restrictedPayload 写入隐藏内容（付费墙）。字段名与取值逐字照官网发帖页：
+// restricted_access_type 是 pro / reward / d20 / auction，D20 属性用
+// karma/experience/charm/luck/diligence/craft，只有对应类型才带各自的字段。
+// 有效期留空（0）时不发送；未开启这一块时一个 restricted_* 字段都不发。
+func (st *composeState) restrictedPayload(p map[string]any) error {
+	if !st.restrictedOpen {
+		return nil
+	}
+	if strings.TrimSpace(st.restrictedContent) == "" {
+		return fmt.Errorf("隐藏内容不能为空")
+	}
+	if n := utf8.RuneCountInString(st.restrictedContent); n > composeRestrictedContentMax {
+		return fmt.Errorf("隐藏内容最多 %d 字，当前 %d 字", composeRestrictedContentMax, n)
+	}
+	access := restrictedAccessFromLabel(st.restrictedAccessChoice)
+	// 保留作者输入的原样内容（Markdown 的前导空格可能有意义），只用 trim 后的
+	// 结果做非空判断。
+	p["restricted_content"] = st.restrictedContent
+	p["restricted_access_type"] = access
+
+	switch access {
+	case restrictedAccessD20:
+		if st.restrictedD20Attr == "" {
+			return fmt.Errorf("属性检定需要选择 D20 属性")
+		}
+		n := int(st.restrictedD20Threshold)
+		if n < composeRestrictedD20Lo || n > composeRestrictedD20Hi {
+			return fmt.Errorf("属性检定目标值应在 %d～%d 之间",
+				composeRestrictedD20Lo, composeRestrictedD20Hi)
+		}
+		p["restricted_d20_attr"] = st.restrictedD20Attr
+		p["restricted_d20_threshold"] = n
+	case restrictedAccessAuction:
+		top := int(st.restrictedAuctionTopN)
+		if top < composeRestrictedAuctionTopLo {
+			return fmt.Errorf("竞拍可见至少需要 %d 名解锁者", composeRestrictedAuctionTopLo)
+		}
+		p["restricted_auction_top_n"] = top
+		if deadline := composeDeadline(st.restrictedAuctionDeadline); deadline != "" {
+			p["restricted_auction_deadline"] = deadline
+		}
+	}
+
+	if months := int(st.restrictedDurationMonths); months != 0 {
+		if months < composeRestrictedDurationLo || months > composeRestrictedDurationHi {
+			return fmt.Errorf("有效期应在 %d～%d 个月之间",
+				composeRestrictedDurationLo, composeRestrictedDurationHi)
+		}
+		p["restricted_duration_months"] = months
 	}
 	return nil
 }

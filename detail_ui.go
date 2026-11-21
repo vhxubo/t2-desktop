@@ -20,6 +20,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	"github.com/lobehub/lobe-mygo/pkg/motion"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
@@ -258,7 +259,7 @@ var (
 
 // newMarkdownOptions 造一套 Markdown 渲染选项。颜色、字体等未写的字段由
 // Markdown 默认主题按窗口外观补齐（见 markdown.Theme 的合并规则）。
-func newMarkdownOptions(a *app, st mdTextStyle) *markdown.Options {
+func newMarkdownOptions(a *app, st mdTextStyle, mentions bool) *markdown.Options {
 	return &markdown.Options{
 		// Links to another 2Libra post are intercepted and shown in place;
 		// only other http(s) links leave the app. javascript: is dropped.
@@ -270,7 +271,7 @@ func newMarkdownOptions(a *app, st mdTextStyle) *markdown.Options {
 		// [说明]；这类段落改由 article_render.go 接管。组图按解析好的文档
 		// 现认（见 articlePictures），点开的预览弹窗正好翻这一份源文里的图：
 		// 正文一份、每条评论各一份，互不掺和。
-		Block:    a.articleBlockAt(st.size, a.picturesForDoc),
+		Block:    a.articleBlockAt(st.size, a.picturesForDoc, mentions),
 		WrapCode: true,
 		Theme: &markdown.Theme{
 			FontSize:     st.size,
@@ -287,7 +288,7 @@ func newMarkdownOptions(a *app, st mdTextStyle) *markdown.Options {
 // 深色主题照旧由 Markdown 默认主题按外观给色。两份都在启动时建好，渲染时
 // 按窗口外观二选一，避免复制带 sync.Map 的 Options。
 func (a *app) newCommentMarkdownOptions(light bool) *markdown.Options {
-	o := newMarkdownOptions(a, commentTextStyle)
+	o := newMarkdownOptions(a, commentTextStyle, true)
 	if light {
 		o.Theme.CodeBackground = commentHelperBG
 		o.Theme.CodeBlockBackground = commentHelperBG
@@ -828,11 +829,12 @@ const detailBodyMinWidth float32 = 200
 // detailBottomBarHeight 是左右两栏底部条带的总高度（DIP，含各自 1px 分隔线）：
 // 左栏是正文底部的表态 / 打赏互动栏，右栏是折叠态的评论输入框。两栏共用同一
 // 个高度，默认视图里底边齐平；评论框展开后自然往下长，不再受这个值约束。
-const detailBottomBarHeight float32 = 57
+// 条带只放一枚图标与一行摘要，收紧到 48 让正文和评论多出一点阅读空间。
+const detailBottomBarHeight float32 = 48
 
 // replyComposerPadY 是评论区输入栏外层的上下内边距。折叠态的输入框据此扣掉
 // 外层留白与分隔线，让整条底部条带正好是 detailBottomBarHeight。
-const replyComposerPadY float32 = 5
+const replyComposerPadY float32 = 4
 
 // detailContent 是详情页真正的内容：左正文、右评论，底部来源与正文右下角的操作组。
 // 显式收 d，让两扇详情窗口各画各的那篇，不靠游标在帧与帧之间保持一致。
@@ -889,7 +891,7 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 					a.replyComposer(c, d)
 				}
 				// 页面操作贴在正文面板右下角，悬浮在正文上方，不占高度。
-				a.detailToolBar(c, d, true)
+				a.detailToolBar(c, d)
 			})
 		}
 		// 评论区用一块底色和白色正文面板分出层次；收起正文时它吃掉整行。
@@ -948,18 +950,17 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 		// 数据来源声明 + 可点击的原文链接占满整个窗口底部，放在最底部。
 		// 进入详情就画出来：正文加载完成后高度不变，卡片区域不会跳。
 		a.topicSourceFooter(c, d)
-		// 正文收起时它没有面板可贴，操作组退到内容区右下角，保持可达。
-		if d.bodyCollapsed {
-			a.detailToolBar(c, d, false)
-		}
+		// 正文收起时整列操作组跟着正文面板一起隐藏：正文已经不在画面上，这
+		// 一列本就属于它；再画到内容区右下角只会压住评论区最下方那条评论的
+		// 回复入口（评论区自己的操作组仍在，见 replyToolBar）。
+
 		// 「关闭 / 开启评论」的确认框：作者点了操作组里的图标才展开，盖在整页上。
 		a.commentsStatusDialog(c, d)
 		// 兑换码的领取确认框：点一条未领取的码才展开，领到后切到成功页看完整码。
 		a.redeemDialog(c, d)
-		// 打赏、合集、注资、竞猜与解锁确认是盖在整页上的 Lobe Modal；表情与
-		// 明细是贴着入口的 Lobe Popover（见 interact.go / collections.go /
+		// 打赏、表态与明细都是贴着入口的 Lobe Popover（见 interact.go）；
+		// 合集、注资、竞猜与解锁确认是盖在整页上的 Lobe Modal（见 collections.go /
 		// reward_pool.go / bets.go / restricted_ui.go / reply_identity.go）。
-		a.rewardDialog(c, d)
 		a.collectionDialog(c, d)
 		a.rewardPoolDialog(c, d)
 		a.betDialog(c, d)
@@ -1062,8 +1063,8 @@ const (
 )
 
 // detailToolAction 是正文区竖排操作组里的一枚动作。操作组与详情窗口的自定义
-// 标题栏共用这一份清单，条件只写一遍：只有一枚时收进标题栏（见
-// detailWindowTitleBar），两枚以上才画正文区右下角的竖排操作组。
+// 标题栏共用这一份清单，条件只写一遍：常驻只剩一枚且没有「更多」动作时收进
+// 标题栏（见 detailWindowTitleBar），其余画成正文区右下角的竖排操作组。
 type detailToolAction struct {
 	key     string // ActionIconGroup 用它在点击那一帧认出被点的动作
 	kind    detailToolKind
@@ -1073,21 +1074,35 @@ type detailToolAction struct {
 	href    string
 	onClick func()
 	busy    bool
+	more    bool // 不常用动作：收进操作组末尾的「更多」菜单，不占常驻图标位
+}
+
+// detailToolSplit 把清单拆成常驻图标与「更多」菜单两组。返回值都保持原来的
+// 顺序，常驻那组按界面顺序竖排，更多那组按同样顺序进菜单。
+func detailToolSplit(acts []detailToolAction) (items, more []detailToolAction) {
+	for _, act := range acts {
+		if act.more {
+			more = append(more, act)
+		} else {
+			items = append(items, act)
+		}
+	}
+	return
 }
 
 // detailToolActions 按界面顺序列出此刻该出现的动作。
 func (a *app) detailToolActions(d *detailState) []detailToolAction {
 	acts := make([]detailToolAction, 0, 8)
-	// 复制链接排最左边，与页面操作之间隔一道短竖线：分享帖子不是一类事。
+	// 复制链接常驻：分享帖子是高频动作，不进「更多」。
 	if href := d.originURL(); href != "" {
 		acts = append(acts, detailToolAction{
 			key: "copy", kind: detailToolCopy, icon: lucide.Copy(),
 			label: "复制帖子链接", tip: "把这篇帖子的链接复制到剪贴板", href: href,
 		})
 	}
-	// 只在正文滚离顶部时出现，且只管正文：评论区有自己的一键回顶。操作组
-	// 始终可达，不会像旧版页头那样为了放它固定占掉一行；正文收起时那栏
-	// 根本没画出来，也就不该出现正文的回顶。
+	// 只在正文滚离顶部时出现，且只管正文：评论区有自己的一键回顶。正文
+	// 展开时操作组常驻右下角可达，不会像旧版页头那样为了放它固定占掉一行；
+	// 正文收起时整组都不画，自然也没有正文的回顶。
 	if !d.bodyCollapsed && d.bodyScroll.Y > 0 {
 		acts = append(acts, detailToolAction{
 			key: "top", icon: lucide.ArrowUp(), label: "返回顶部", tip: "正文回到顶部",
@@ -1103,11 +1118,11 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 		acts = append(acts,
 			detailToolAction{
 				key: "edit", icon: lucide.PenLine(), label: "编辑帖子", tip: "修改标题与正文",
-				onClick: func() { a.showTopicEdit(d) },
+				onClick: func() { a.showTopicEdit(d) }, more: true,
 			},
 			detailToolAction{
 				key: "postscript", icon: lucide.FilePlus2(), label: "追加附言", tip: "在帖子末尾追加一段附言",
-				onClick: func() { a.showPostscript(d) },
+				onClick: func() { a.showPostscript(d) }, more: true,
 			},
 		)
 	}
@@ -1121,7 +1136,7 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 			label, tip = "正在提交评论开关", "正在提交…"
 		}
 		acts = append(acts, detailToolAction{
-			key: "comments", kind: detailToolComments, icon: icon, label: label, tip: tip, busy: busy,
+			key: "comments", kind: detailToolComments, icon: icon, label: label, tip: tip, busy: busy, more: true,
 		})
 	}
 	loading := d.topicLoading
@@ -1135,7 +1150,7 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 	// 独立详情窗口的自定义标题栏已经有「关闭」，不再悬浮一枚重复的关闭按钮。
 	if d.host == nil {
 		acts = append(acts, detailToolAction{
-			key: "close", icon: lucide.X(), label: "关闭详情", tip: "关闭详情（Esc）", onClick: a.closeDetail,
+			key: "close", icon: lucide.X(), label: "关闭详情", tip: "关闭详情（Esc）", onClick: a.closeDetail, more: true,
 		})
 	}
 	return acts
@@ -1144,39 +1159,54 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 // detailToolGroupInset 是竖排操作组离正文面板右下角的留白。
 const detailToolGroupInset float32 = 14
 
+// replyToolBarReserve 是评论区列表底部给右下角横排操作组预留的高度（DIP）。
+// 那一排绝对定位、不占布局；不预留的话列表滚到底时最后一条评论最右侧的
+// 「回复」图标正好落在它下面被遮住。横排只有一枚 Small 按钮高，加上底部
+// 留白与阴影留一点余量，底部因此只空出很窄一条。
+const replyToolBarReserve float32 = 52
+
 // detailToolBar 把页面操作收成正文区右下角的一列 Lobe ActionIconGroup：竖排、
-// 绝对定位在正文面板内，不占正文高度，也不随正文滚走。正文收起时那块面板
-// 不再画，这一列退到内容区右下角，刷新与关闭仍然可达。
-func (a *app) detailToolBar(c *ui.Context, d *detailState, inBody bool) {
+// 绝对定位在正文面板内，不占正文高度，也不随正文滚走。作者专属的改帖 / 附言 /
+// 评论开关和「关闭详情」不常用，走组件自带的 More 菜单（见 ActionIconGroup 的
+// Menu 字段），常驻列只留返回顶部、复制链接与刷新，避免右下角图标堆成一串。
+// 只在正文面板画出来时调用：正文收起后整列一起隐藏，不会退到评论区右下角压住
+// 最下方评论的回复入口（见 detailContent）。
+func (a *app) detailToolBar(c *ui.Context, d *detailState) {
 	acts := a.detailToolActions(d)
-	// 单枚动作交给详情窗口标题栏；没有动作时连空组也不画。
-	if len(acts) == 0 || (len(acts) == 1 && d.host != nil) {
+	icons, more := detailToolSplit(acts)
+	// 没有动作时连空组也不画。常驻只剩一枚且没有「更多」动作时交给详情窗口
+	// 标题栏；还有「更多」动作就得保留这一列，否则那些入口没地方放。
+	if len(icons) == 0 && len(more) == 0 {
 		return
 	}
-	items := make([]action.ActionGroupItem, 0, len(acts))
-	for _, act := range acts {
+	if d.host != nil && len(icons) == 1 && len(more) == 0 {
+		return
+	}
+	items := make([]action.ActionGroupItem, 0, len(icons))
+	for _, act := range icons {
 		items = append(items, action.ActionGroupItem{
 			Key: act.key, Icon: act.icon, Label: act.label, Disabled: act.busy,
 		})
 	}
-	host := ui.Box(c).Absolute().Right(detailToolGroupInset).ZIndex(2)
-	if inBody {
-		// 正文互动栏固定在面板底部，操作组贴在它上方；评论收起时正文底部
-		// 还会多一条输入框，同样让开。
-		bottom := detailToolGroupInset
-		if a.topicInteractionVisible(d) {
-			bottom += detailBottomBarHeight
-		}
-		if d.replyCollapsed {
-			bottom += detailBottomBarHeight
-		}
-		host.Bottom(bottom)
-	} else {
-		host.Bottom(detailToolGroupInset)
+	menu := make([]lobeoverlay.MenuItem, 0, len(more))
+	for _, act := range more {
+		menu = append(menu, lobeoverlay.MenuItem{
+			Key: act.key, Icon: act.icon, Label: act.label, Disabled: act.busy,
+		})
 	}
+	// 正文互动栏固定在面板底部，操作组贴在它上方；评论收起时正文底部
+	// 还会多一条输入框，同样让开。
+	bottom := detailToolGroupInset
+	if a.topicInteractionVisible(d) {
+		bottom += detailBottomBarHeight
+	}
+	if d.replyCollapsed {
+		bottom += detailBottomBarHeight
+	}
+	host := ui.Box(c).Absolute().Right(detailToolGroupInset).Bottom(bottom).ZIndex(2)
 	host.Children(func() {
 		if key := action.ActionIconGroup(c, action.ActionIconGroupProps{
-			Items: items, Size: lobetheme.Small, Vertical: true,
+			Items: items, Menu: menu, Size: lobetheme.Small, Vertical: true,
 			Variant: action.GroupOutlined, Shadow: true,
 		}); key != "" {
 			for _, act := range acts {
@@ -1726,7 +1756,9 @@ func (a *app) topicSubtitle(c *ui.Context, p *topicDetail) {
 					})
 				}
 				if path != "" {
-					nodeTag(c, path)
+					nodeTagAction(c, nodeTagProps{
+						Label: path, Ref: nodeRefFromTopic(p), OnPick: a.showNodeFeed,
+					})
 				}
 				if p.CommentsClosed {
 					ui.Text(c, "评论已关闭").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
@@ -1772,11 +1804,13 @@ func (a *app) topicSourceFooter(c *ui.Context, d *detailState) {
 	})
 }
 
-// replyToolBar 是评论区右下角的竖排 Lobe ActionIconGroup，和正文区那一列
+// replyToolBar 是评论区右下角的横排 Lobe ActionIconGroup，和正文区那一列
 // 各管一栏：回顶只滚评论列表，视图切换只切楼层 / 扁平，刷新只重拉评论第一页。
 // 评论滚离顶部才露出回顶，视图切换与刷新则一直在；输入栏展开时它仍贴着列表
-// 底部，不压住输入框。视图切换收进这一组后跟评论区一起显隐：评论区收起时
-// 整组不画，切换入口也随之隐藏，不再单独挂在评论标题行里。
+// 底部，不压住输入框。横排只占一枚按钮的高度，列表底部预留一条窄带即可
+// （见 replyToolBarReserve），不再像竖排那样空出一大片。视图切换收进这一组
+// 后跟评论区一起显隐：评论区收起时整组不画，切换入口也随之隐藏，不再单独
+// 挂在评论标题行里。
 func (a *app) replyToolBar(c *ui.Context, d *detailState, first int) {
 	items := make([]action.ActionGroupItem, 0, 3)
 	if first > 0 {
@@ -1798,7 +1832,7 @@ func (a *app) replyToolBar(c *ui.Context, d *detailState, first int) {
 	ui.Box(c).Absolute().Right(detailToolGroupInset).Bottom(detailToolGroupInset).
 		ZIndex(2).Children(func() {
 		if key := action.ActionIconGroup(c, action.ActionIconGroupProps{
-			Items: items, Size: lobetheme.Small, Vertical: true,
+			Items: items, Size: lobetheme.Small, Vertical: false,
 			Variant: action.GroupOutlined, Shadow: true,
 		}); key != "" {
 			switch key {
@@ -1903,6 +1937,11 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 				a.loadReplies(d.replyPage + 1)
 			}
 		}
+		// 右下角横排操作组绝对定位、不占列表高度，滚到底会压住最后一条评论
+		// 最右侧的「回复」图标。这里垫一块固定高度的空白把列表顶上去。
+		// 不能用 ui.Spacer：它默认 Grow(1)，会跟列表均分整列高度，让评论
+		// 区只剩一半（列表实测只有容器高度的 51%）。
+		ui.Box(c).Height(replyToolBarReserve)
 		a.replyToolBar(c, d, first)
 	})
 	a.replyComposer(c, d)
@@ -2633,7 +2672,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	// 折叠态的输入框是评论区底部的「入口」，不是一块空白的白板：上下留白
 	// 比展开态略收一点，整条撑满卡片宽度，鼠标移上去底色提亮一档，暗示点
 	// 一下就能写。
-	vpad := float32(6)
+	vpad := float32(3)
 	if expanded {
 		vpad = 8
 	}

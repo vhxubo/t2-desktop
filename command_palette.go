@@ -12,8 +12,8 @@ import (
 )
 
 // 命令面板：标题栏输入框点击即展开，默认在「命令」模式，列出全部命令；切到
-// 「搜索」模式才是原来的搜索窗口入口。输入框用 mygo 的 SearchField，自带一键
-// 清空按钮（非空时出现）。命令本身不重复实现动作，只是调用已有的入口。
+// 「搜索」模式才是原来的搜索窗口入口。输入框用闪电作前导图标，有内容时右侧
+// 出现一键清空按钮。命令本身不重复实现动作，只是调用已有的入口。
 //
 // 输入框的文字存在 palette.text：命令模式下它是过滤词，搜索模式下它是关键词。
 // 回车成功后文字交给搜索窗口（a.search.q）并就地清空；切回空输入时也自动回到
@@ -22,7 +22,53 @@ import (
 const (
 	paletteWidth     float32 = 360 // 下拉面板宽度，略宽于标题栏搜索框
 	paletteMaxHeight float32 = 360 // 列表最高，超出就滚动，不顶到内容区
+	// titleSearchPlaceholder 是输入框聚焦且为空时显示的左对齐占位文案。未
+	// 聚焦时改用居中的 titleSearchHint（见 main.go），两者不会同时出现。
+	titleSearchPlaceholder = "搜索命令、帖子和用户..."
 )
+
+// titleSearchField 构建标题栏命令面板的输入框。mygo 自带 SearchField 把放大镜
+// 图标写死，这里自己拼同样的结构，把前导图标换成闪电，呼应「命令面板」；有
+// 内容时右侧出现一键清空按钮。
+//
+// 可访问名和几何都放在输入元素上，与原 SearchField 一致：测试和读屏拿到的都是
+// 整条输入框的边界，点击也直接落在输入上。返回的 box 是包在外面的定位容器，
+// 作面板锚点与内外点击判定，让面板里的按钮、清空按钮都算「在里面」。
+func (a *app) titleSearchField(c *ui.Context, width, height float32) (ui.Element, ui.Element) {
+	tk := lobetheme.TokensOf(c)
+	t := c.Theme()
+	box := ui.Row(c).Width(width).Height(height)
+	var in ui.Element
+	box.Children(func() {
+		// 输入本身就是字段盒子：0 宽边框禁掉聚焦时的 Accent 描边。
+		in = ui.TextInput(c, &a.palette.text).
+			Width(width).Height(height).
+			Padding(0, 26, 0, titleSearchIconInset).
+			Background(tk.FillTertiary).Border(0, ui.Transparent).Radius(tk.BorderRadiusSM).
+			FocusRing(false).Label("搜索关键词")
+		// 前导闪电图标：绝对定位在左侧，IgnoreInput 让点击透到下面的输入。
+		ui.Row(c).Absolute().Left(7).Top(0).Bottom(0).Width(15).
+			Center().IgnoreInput(true).Children(func() {
+			ui.Icon(c, lucide.Zap()).Label("闪电").Size(15, 15).TextColor(tk.TextTertiary)
+		})
+		// 有内容时右侧出现一键清空按钮。KeepFocus 让点击后焦点还在输入里，
+		// 不会把命令面板误关掉。
+		if a.palette.text != "" {
+			clear := ui.ButtonBase(c).Absolute().Right(6).Top(0).Bottom(0).Width(16).
+				Radius(8).Background(t.TextMuted.Alpha(0.5)).Label("Clear").KeepFocus()
+			clear.Children(func() {
+				ui.Icon(c, lucide.X()).Size(10, 10).TextColor(t.Background).Shrink(0)
+			})
+			clear.OnClick(func() {
+				a.palette.text = ""
+				a.palette.selected = 0
+				a.palette.mode = paletteModeCommands
+				a.palette.input.Focus(c)
+			})
+		}
+	})
+	return in, box
+}
 
 const (
 	paletteModeCommands = iota
@@ -53,6 +99,13 @@ type paletteState struct {
 	wasFocused   bool      // 上一帧输入框是否聚焦：聚焦时展开，失焦时收起
 	suppressOpen bool      // 面板刚因失焦/外部点击关掉，忽略随后焦点回到锚点造成的重开
 	input        ui.Handle // 输入框身份，切模式后把焦点还给它，好接着输入
+	// focusTarget 是 FocusBind 绑定的期望焦点：1 是输入框，0 表示输入框没有
+	// 焦点。面板收起后用它确认光标已随面板一起隐藏。
+	focusTarget int
+	// blurPending 标记下一次构建要把焦点从输入框挪到字段盒子。mygo 关闭弹出
+	// 层时会把焦点还给它打开的锚点（输入框），仅清焦点会被 restoreFocus 还原；
+	// 把焦点交给仍在场上的盒子就不会被还原，光标也随之消失。
+	blurPending bool
 }
 
 // paletteCommands 列全部命令。顺序就是没有过滤词时的展示顺序：先页面导航，
@@ -192,6 +245,7 @@ func (a *app) closePalette() {
 	// 锚点），要再点一次输入框才重新打开。
 	a.palette.wasFocused = false
 	a.palette.suppressOpen = true
+	a.palette.blurPending = true
 }
 
 // commitTitleSearch 把标题栏输入交给搜索窗口并清空输入框、收起面板。搜索词留

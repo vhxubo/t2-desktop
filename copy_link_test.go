@@ -28,8 +28,8 @@ func TestDetailCopyPostLink(t *testing.T) {
 		t.Errorf("复制链接的说明不对：%q", info.Description)
 	}
 	// 按钮落在正文区右下角，和操作组里的其它图标按钮排成一列。
-	if close, ok := tt.Find("关闭详情"); ok && absInt(int(info.Bounds.X-close.X)) > 2 {
-		t.Errorf("复制链接应与操作组其它按钮同一列：%+v vs %+v", info.Bounds, close)
+	if more, ok := tt.Find("更多"); ok && absInt(int(info.Bounds.X-more.X)) > 2 {
+		t.Errorf("复制链接应与操作组其它按钮同一列：%+v vs %+v", info.Bounds, more)
 	}
 	if err := tt.Click("复制帖子链接"); err != nil {
 		t.Fatalf("点复制链接失败：%v", err)

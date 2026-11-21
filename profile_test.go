@@ -213,6 +213,22 @@ func TestProfileWindowView(t *testing.T) {
 	}
 }
 
+// 加入「个人简介」后仍有六个标签页，最窄窗口下也不能溢出。
+func TestProfileTabsFitMinWidth(t *testing.T) {
+	a := profileWindowApp(t)
+	tt := ui.NewTester(a.profileWindowView, profileWinMinWidth, profileWinMinHeight)
+	tt.Frame()
+	for _, label := range profileTabLabels {
+		r, ok := tt.Find(label)
+		if !ok {
+			t.Fatalf("缺少标签页 %q：%q", label, tt.Texts())
+		}
+		if r.X+r.W > float32(profileWinMinWidth) {
+			t.Errorf("标签页 %q 超出最窄窗口：x=%.0f 宽 %.0f", label, r.X, r.W)
+		}
+	}
+}
+
 // 「我的」窗口的标题栏与页面底色都取 Lobe token（浅色纯白），不再用原生
 // 主题的灰色 Surface；账号面板与设置窗口用的是同一支颜色。
 func TestProfileWindowUsesLobeTokens(t *testing.T) {

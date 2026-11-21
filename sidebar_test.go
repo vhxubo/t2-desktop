@@ -528,6 +528,31 @@ func TestSidebarFooterInset(t *testing.T) {
 	}
 }
 
+// 折叠态的节点入口是 DropdownMenu 的触发按钮，默认会靠在列左缘，和其余
+// ActionIcon 不在一条中线上。它必须和其他图标一样居中在图标轨里。
+func TestSidebarNodeRailIconCentered(t *testing.T) {
+	a := testApp(t)
+	if a.navExpanded {
+		t.Fatal("前置条件：默认应是折叠态")
+	}
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	node, ok := tt.Access("节点快捷入口")
+	if !ok {
+		t.Fatalf("折叠态缺少节点入口：%q", tt.Texts())
+	}
+	home, ok := tt.Access("首页")
+	if !ok {
+		t.Fatalf("折叠态缺少「首页」：%q", tt.Texts())
+	}
+	nodeCenter := node.Bounds.X + node.Bounds.W/2
+	homeCenter := home.Bounds.X + home.Bounds.W/2
+	if d := nodeCenter - homeCenter; d > 1.5 || d < -1.5 {
+		t.Errorf("节点入口中心 %.1f，未与「首页」中心 %.1f 对齐", nodeCenter, homeCenter)
+	}
+}
+
 // 顶部开关、导航项与底部项在展开和收起两态必须落在同一条竖线上，否则点开
 // 侧边栏时整列图标会横向跳一下。中心对准的是折叠图标轨的中线 32 DIP。
 func TestSidebarIconsAlignAcrossExpandStates(t *testing.T) {

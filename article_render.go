@@ -35,15 +35,16 @@ type articlePicture struct {
 // pictures 按解析好的文档给出这份源文的整组配图（见 newMarkdownOptions 的
 // groupPictures）：Markdown 视图在重新解析之后才逐块调用 Block，这时按文档
 // 收图才对得上号，所以这里拿的是函数而不是一张事先算好的表。
-func (a *app) articleBlockAt(size float32, pictures func(d *parser.Document) []articlePicture) func(c *ui.Context, d *parser.Document, i int) bool {
+func (a *app) articleBlockAt(size float32, pictures func(d *parser.Document) []articlePicture, mentions bool) func(c *ui.Context, d *parser.Document, i int) bool {
 	return func(c *ui.Context, d *parser.Document, i int) bool {
-		return a.articleBlock(c, d, i, size, pictures(d))
+		return a.articleBlock(c, d, i, size, pictures(d), mentions)
 	}
 }
 
-// articleBlock 接管含表情或配图的段落 / 标题 / 表格，size 见 articleBlockAt，
-// pictures 是 d 所在那份 Markdown 的整组配图。
-func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float32, pictures []articlePicture) bool {
+// articleBlock 接管含表情、配图或提及的段落 / 标题 / 表格，size 见
+// articleBlockAt，pictures 是 d 所在那份 Markdown 的整组配图。mentions 为真
+// 时，正文里的 @名字 画成可点击的提及组件（只有评论区打开，见 detail_ui.go）。
+func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float32, pictures []articlePicture, mentions bool) bool {
 	b := d.Block(i)
 	if b.Kind == parser.Table {
 		// 表格单元格不会经过 Options.Block：Markdown 画表格时直接排每一格。
@@ -51,7 +52,7 @@ func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float3
 		if !a.tableHasImage(d, i) {
 			return false
 		}
-		a.articleTable(c, d, i, size, pictures)
+		a.articleTable(c, d, i, size, pictures, mentions)
 		return true
 	}
 	if b.Kind != parser.Paragraph && b.Kind != parser.Heading {
@@ -60,17 +61,41 @@ func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float3
 	in := d.Inlines(i)
 	emoji := a.hasEmojiImage(in)
 	picture := a.hasTopLevelPicture(in)
-	if !emoji && !picture {
+	mention := mentions && hasMention(in)
+	if !emoji && !picture && !mention {
 		return false
 	}
 	if b.Kind == parser.Heading || !picture {
 		// 标题或没有配图的段落：表情按行内图片画，链接、强调原样保留。
-		a.articleParagraph(c, d, i, b, size)
+		a.articleParagraph(c, d, i, b, size, mentions)
 		return true
 	}
 	// 有配图的段落：把段落按图片切成几段文字，图片在段落内部独占一行。
-	a.articleMixedParagraph(c, d, i, size, pictures)
+	a.articleMixedParagraph(c, d, i, size, pictures, mentions)
 	return true
+}
+
+// hasMention 递归查找一段内联里的提及，口径与 displayMentions 一致（见
+// mentions.go）。@ 在链接、行内代码里不算：那些位置的文字不该变成组件。
+func hasMention(in []parser.Inline) bool {
+	return hasMentionIn(in, 0, len(in))
+}
+
+func hasMentionIn(in []parser.Inline, from, to int) bool {
+	for k := from; k < to; k = in[k].Next {
+		n := &in[k]
+		switch n.Kind {
+		case parser.Text, parser.Mention:
+			if len(displayMentions(n.Text)) > 0 {
+				return true
+			}
+		case parser.Emphasis, parser.Strong, parser.Strikethrough:
+			if hasMentionIn(in, k+1, n.Next) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // hasEmojiImage 递归查找表情图片，包括强调、链接里的表情。Next 是整段
@@ -159,6 +184,8 @@ type articleRenderer struct {
 	runes   int
 	objects map[int]ui.ImageSource
 	measure bool
+	// mentions 为真时把正文里的 @名字 画成可点击的组件；只有评论区打开。
+	mentions bool
 	// measured 是测量模式下收到的全部 span，按出现顺序，供调用方整体度量。
 	measured []ui.Span
 }
@@ -186,7 +213,7 @@ func articleBaseStyle(c *ui.Context, d *parser.Document, i int, b *parser.Block,
 }
 
 // articleParagraph 把整段（含表情）收成一个可换行的 RichText。
-func (a *app) articleParagraph(c *ui.Context, d *parser.Document, i int, b *parser.Block, size float32) {
+func (a *app) articleParagraph(c *ui.Context, d *parser.Document, i int, b *parser.Block, size float32, mentions bool) {
 	base := articleBaseStyle(c, d, i, b, size)
 	th := markdown.DefaultTheme(c.Theme())
 	root := ui.RichText(c).FontSize(base.size).TextColor(base.color).FillWidth()
@@ -196,7 +223,7 @@ func (a *app) articleParagraph(c *ui.Context, d *parser.Document, i int, b *pars
 	if b.Kind == parser.Heading {
 		root.Role(ui.RoleHeading).Level(b.Level)
 	}
-	r := &articleRenderer{a: a, th: th, objects: map[int]ui.ImageSource{}}
+	r := &articleRenderer{a: a, th: th, objects: map[int]ui.ImageSource{}, mentions: mentions}
 	in := d.Inlines(i)
 	root.Children(func() {
 		r.inlines(c, in, 0, len(in), base)
@@ -213,9 +240,9 @@ func (a *app) articleParagraph(c *ui.Context, d *parser.Document, i int, b *pars
 
 // articleMixedParagraph 渲染「文字 + 配图 + 文字」的段落：每个文字
 // 片段仍是可换行的 RichText，配图作为片段之间的独立图片。
-func (a *app) articleMixedParagraph(c *ui.Context, d *parser.Document, i int, size float32, pictures []articlePicture) {
+func (a *app) articleMixedParagraph(c *ui.Context, d *parser.Document, i int, size float32, pictures []articlePicture, mentions bool) {
 	base := articleBaseStyle(c, d, i, d.Block(i), size)
-	a.articleMixedInlines(c, d.Inlines(i), base, ui.Start, pictures)
+	a.articleMixedInlines(c, d.Inlines(i), base, ui.Start, pictures, mentions)
 }
 
 // articleMixedInlines 是 articleMixedParagraph 的实现，也用于表格单元格：
@@ -224,7 +251,7 @@ func (a *app) articleMixedParagraph(c *ui.Context, d *parser.Document, i int, si
 // pictures 是这张表所在那份 Markdown 的全部配图（见 articlePictures）：每张
 // 图点开时打开它所在的那一组并停在自己身上。收图不在这里做——一段内联只
 // 知道自己的图，不知道同一份正文里还有几张，组要按整份源文认。
-func (a *app) articleMixedInlines(c *ui.Context, in []parser.Inline, base articleStyle, align ui.Align, pictures []articlePicture) {
+func (a *app) articleMixedInlines(c *ui.Context, in []parser.Inline, base articleStyle, align ui.Align, pictures []articlePicture, mentions bool) {
 	col := ui.Column(c).Gap(4)
 	col.Children(func() {
 		from := 0
@@ -233,16 +260,16 @@ func (a *app) articleMixedInlines(c *ui.Context, in []parser.Inline, base articl
 			if n.Kind != parser.Image || a.isEmojiImage(n.Dest) {
 				continue
 			}
-			a.articleTextSegment(c, in, from, k, base, align)
+			a.articleTextSegment(c, in, from, k, base, align, mentions)
 			a.articlePicture(c, n.Dest, parser.PlainText(in[k+1:n.Next]), pictures)
 			from = n.Next
 		}
-		a.articleTextSegment(c, in, from, len(in), base, align)
+		a.articleTextSegment(c, in, from, len(in), base, align, mentions)
 	})
 }
 
 // articleTextSegment 渲染段落里的一段连续文字；片段里可能还有表情。
-func (a *app) articleTextSegment(c *ui.Context, in []parser.Inline, from, to int, base articleStyle, align ui.Align) {
+func (a *app) articleTextSegment(c *ui.Context, in []parser.Inline, from, to int, base articleStyle, align ui.Align, mentions bool) {
 	if from >= to || articleSegmentEmpty(in, from, to) {
 		return
 	}
@@ -254,7 +281,7 @@ func (a *app) articleTextSegment(c *ui.Context, in []parser.Inline, from, to int
 	if align != ui.Start {
 		root.TextAlign(align)
 	}
-	r := &articleRenderer{a: a, th: th, objects: map[int]ui.ImageSource{}}
+	r := &articleRenderer{a: a, th: th, objects: map[int]ui.ImageSource{}, mentions: mentions}
 	root.Children(func() {
 		r.inlines(c, in, from, to, base)
 		r.flush(c)
@@ -422,7 +449,7 @@ func (a *app) articleHasImage(in []parser.Inline, from, to int) bool {
 //
 // 与默认实现的唯一区别是单元格内容由 article_render.go 自己画，因此配图和
 // :code: 表情在表格里也能显示成图片。
-func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size float32, pictures []articlePicture) {
+func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size float32, pictures []articlePicture, mentions bool) {
 	th := markdown.DefaultTheme(c.Theme())
 	b := d.Block(i)
 	cols := len(b.Align)
@@ -488,7 +515,7 @@ func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size float3
 						if k > 0 {
 							box.BorderWidth(0, 0, 0, 1).BorderColor(th.TableBorder)
 						}
-						box.Children(func() { a.articleCell(c, d, cell, s, align, pictures) })
+						box.Children(func() { a.articleCell(c, d, cell, s, align, pictures, mentions) })
 						k++
 					}
 				})
@@ -500,13 +527,13 @@ func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size float3
 
 // articleCell 画一格内容：有顶层配图时按「文字 + 图片 + 文字」排，否则就是
 // 一段可换行的文字（其中的表情仍是行内图片）。pictures 见 articlePicture。
-func (a *app) articleCell(c *ui.Context, d *parser.Document, cell int, base articleStyle, align ui.Align, pictures []articlePicture) {
+func (a *app) articleCell(c *ui.Context, d *parser.Document, cell int, base articleStyle, align ui.Align, pictures []articlePicture, mentions bool) {
 	in := d.Inlines(cell)
 	if a.hasTopLevelPicture(in) {
-		a.articleMixedInlines(c, in, base, align, pictures)
+		a.articleMixedInlines(c, in, base, align, pictures, mentions)
 		return
 	}
-	a.articleTextSegment(c, in, 0, len(in), base, align)
+	a.articleTextSegment(c, in, 0, len(in), base, align, mentions)
 }
 
 // articleCellWidth 估算一格内容需要的宽度：文字按硬换行拆行后取最宽的一行，
@@ -637,7 +664,10 @@ func (r *articleRenderer) inlines(c *ui.Context, in []parser.Inline, from, to in
 		n := &in[k]
 		switch n.Kind {
 		case parser.Text:
-			r.addText(n.Text, st)
+			r.addTextWithMentions(c, n.Text, st)
+		case parser.Mention:
+			// Markdown 默认把 @名字 当纯文字；显示层把它画成一块可点开的组件。
+			r.addTextWithMentions(c, n.Text, st)
 		case parser.SoftBreak:
 			// 源文在交给 Markdown 前已经按「一个回车换行」改写成硬换行
 			// （见 markdown_breaks.go）；这里兜底同样显示为换行。
@@ -759,6 +789,55 @@ func (r *articleRenderer) addText(text string, st articleStyle) {
 		return
 	}
 	r.pending = append(r.pending, r.span(text, st))
+	r.runes += utf8.RuneCountInString(text)
+}
+
+// addTextWithMentions 把一段文字收进 RichText：@名字 单独成一块可点击组件，
+// 前后文字仍是普通 span。测量宽度时不建元素，链接里的 @ 也不该抢走链接的
+// 点击，这两种情况都退回普通文字。
+func (r *articleRenderer) addTextWithMentions(c *ui.Context, text string, st articleStyle) {
+	if !r.mentions || r.measure || st.inLink || text == "" {
+		r.addText(text, st)
+		return
+	}
+	ms := displayMentions(text)
+	if len(ms) == 0 {
+		r.addText(text, st)
+		return
+	}
+	rs := []rune(text)
+	at := 0
+	for _, m := range ms {
+		if m.Start > at {
+			r.addText(string(rs[at:m.Start]), st)
+		}
+		r.flush(c) // 先收掉前面的文字，保证组件落在正确的阅读顺序上
+		r.mentionChip(c, string(rs[m.Start:m.End]), m.Name, st)
+		at = m.End
+	}
+	if at < len(rs) {
+		r.addText(string(rs[at:]), st)
+	}
+}
+
+// mentionChip 画一块 @名字：字号字形跟着正文，额外给浅底、圆角和左右内边距，
+// 像编辑器里写完的提及那样成为独立的一块；点一下打开这个用户的资料卡。
+func (r *articleRenderer) mentionChip(c *ui.Context, text, name string, st articleStyle) {
+	if name == "" {
+		r.addText(text, st)
+		return
+	}
+	t := c.Theme()
+	sp := r.span(text, st)
+	sp.Color = t.Accent
+	sp.Background = t.Accent.Mix(t.Background, 0.88)
+	sp.Radius = 4
+	sp.PaddingX = 3
+	sp.PaddingY = 1
+	label := "查看 @" + name + " 的资料"
+	chip := ui.RichText(c, sp).Cursor(ui.CursorPointer).Label(label).Tooltip(label)
+	chip.OnClick(func() { r.a.showUserCard(name) })
+	// 行内表情的对象坐标按整段的 rune 数定位，组件里的文字也要算进去。
 	r.runes += utf8.RuneCountInString(text)
 }
 

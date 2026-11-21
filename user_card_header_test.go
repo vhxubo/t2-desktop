@@ -18,6 +18,8 @@ func TestUserCardHeaderIsCompact(t *testing.T) {
 	cs.aboutLoaded = true
 	cs.about = userAbout{Content: "一段介绍", PublicKnown: true, IsPublic: true}
 	cs.topics.items = []Item{{Key: "T1", ShortID: "T1", Title: "第一篇主题"}}
+	// 个人简介已移到单独标签页，首屏看的是主题列表。
+	cs.tab = userCardTabTopics
 
 	tt := ui.NewTester(a.userCardWindowView, userCardWindowWidth, userCardWindowHeight)
 	tt.Frame()
@@ -98,19 +100,18 @@ func TestUserCardHeaderWithoutFollowKeepsDensity(t *testing.T) {
 	if tt.HasText("关注他") || tt.HasText("已关注") {
 		t.Fatalf("自己的资料卡不该出现关注按钮：%q", tt.Texts())
 	}
-	name, ok := tt.Find("爱丽丝")
-	if !ok {
+	if !tt.HasText("爱丽丝") {
 		t.Fatalf("没有昵称：%q", tt.Texts())
 	}
-	bio, ok := tt.Find("个人简介")
+	// 个人简介已单独成页：资料头下面紧跟统计与标签页，不再留一整行只有
+	// 关注按钮（或没有按钮时的空白）的动作行。
+	tabs, ok := tt.Find(userCardTabLabels[1])
 	if !ok {
-		t.Fatalf("没有个人简介一块：%q", tt.Texts())
+		t.Fatalf("没有标签页：%q", tt.Texts())
 	}
-	// 昵称高约 21、身份行 16、资料头下边距 12、分隔线 1、简介上边距 10：
-	// 两者间距应在一行身份行加边距的范围内。旧版这里还夹着一整行只有关注
-	// 按钮的动作行（37 DIP），没有按钮时也照样留白。
-	if gap := bio.Y - (name.Y + name.H); gap > 60 {
-		t.Errorf("资料头与简介之间空出了 %.0f DIP", gap)
+	// 个人简介移出头部后，标签页已经落在窗口上半部（中间只剩统计条）。
+	if tabs.Y > float32(userCardWindowHeight)/2 {
+		t.Errorf("资料头与标签页之间空出了 %.0f DIP", tabs.Y)
 	}
 }
 

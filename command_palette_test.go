@@ -153,7 +153,12 @@ func TestCommandPaletteKeyboardNavigation(t *testing.T) {
 		t.Error("回车没有执行高亮的「设置」")
 	}
 
-	// 再验证首尾循环：从最后一项按 ↓ 回到第一项。
+	// 再验证首尾循环：从最后一项按 ↓ 回到第一项。执行命令后光标已随面板一起
+	// 隐藏，要先重新点输入框拿回焦点，↓ 才会送进输入框。
+	if err := tt.Click("搜索关键词"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
 	a.palette.text = "金币"
 	a.palette.selected = len(cmds) - 1
 	tt.Frame()
@@ -233,9 +238,9 @@ func TestCommandPaletteClosesOnOutsidePress(t *testing.T) {
 		t.Fatal("点输入框后面板没有展开")
 	}
 
-	// 面板挂在搜索框下方（x 约 81–441），点右边列表区域肯定在面板外。
-	tt.Press(600, 300)
-	tt.Release(600, 300)
+	// 面板挂在搜索框下方（x 约 418–778），点右侧内容区才算面板外。
+	tt.Press(950, 500)
+	tt.Release(950, 500)
 	tt.Frame()
 	if a.palette.open {
 		t.Error("点面板外没有收起面板")
@@ -251,8 +256,8 @@ func TestCommandPaletteReopensAfterOutsideClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	tt.Press(600, 300)
-	tt.Release(600, 300)
+	tt.Press(950, 500)
+	tt.Release(950, 500)
 	tt.Frame()
 	if a.palette.open {
 		t.Fatal("点面板外没有收起")
@@ -337,7 +342,7 @@ func TestCommandPaletteNoMatchFallsBackToSearch(t *testing.T) {
 	}
 }
 
-// Esc 清空输入（SearchField 自带），模式回到默认的命令模式；面板继续留着。
+// Esc 清空输入，模式回到默认的命令模式；面板继续留着。
 func TestCommandPaletteEscapeClearsInput(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1080, 720)
@@ -353,5 +358,64 @@ func TestCommandPaletteEscapeClearsInput(t *testing.T) {
 	if a.palette.text != "" || a.palette.mode != paletteModeCommands {
 		t.Errorf("Esc 没清空输入/回到命令模式：text=%q mode=%d",
 			a.palette.text, a.palette.mode)
+	}
+}
+
+// 输入框前导图标是闪电；空输入时提示随聚焦状态切换：未聚焦是居中的
+// 「命令面板」，聚焦后换成左对齐的「搜索命令、帖子和用户...」。失焦时占位
+// 文案立刻让位给居中 hint，不残留。
+func TestCommandPaletteFocusHint(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+
+	if _, ok := tt.Find("闪电"); !ok {
+		t.Errorf("输入框前导图标不是闪电：%q", tt.Texts())
+	}
+	if !tt.HasText(titleSearchHint) {
+		t.Fatal("未聚焦时该显示居中的「命令面板」")
+	}
+	if tt.HasText(titleSearchPlaceholder) {
+		t.Error("未聚焦时不该显示左对齐占位文案")
+	}
+
+	if err := tt.Click("搜索关键词"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if tt.HasText(titleSearchHint) {
+		t.Error("聚焦后该隐藏「命令面板」文案")
+	}
+	if !tt.HasText(titleSearchPlaceholder) {
+		t.Errorf("聚焦后该显示左对齐占位文案：%q", tt.Texts())
+	}
+
+	// 点窗外关面板时，占位文案和输入光标都要一起消失。mygo 关闭弹出层会把
+	// 焦点还给锚点（输入框），所以这里还要断言输入框确实丢了焦点。
+	tt.Press(950, 500)
+	tt.Release(950, 500)
+	tt.Frame()
+	if tt.HasText(titleSearchPlaceholder) {
+		t.Error("点窗外关面板后占位文案没有立即隐藏")
+	}
+	if !tt.HasText(titleSearchHint) {
+		t.Error("点窗外关面板后没有恢复居中的「命令面板」")
+	}
+	if a.palette.focusTarget != 0 {
+		t.Error("面板收起后输入框仍有焦点，光标没有跟着隐藏")
+	}
+
+	// 再点输入框展开，Tab 让输入框失焦，下一帧同样该恢复居中 hint。
+	if err := tt.Click("搜索关键词"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Key(0, ui.KeyTab)
+	tt.Frame()
+	if tt.HasText(titleSearchPlaceholder) {
+		t.Error("失焦后占位文案没有立即隐藏")
+	}
+	if !tt.HasText(titleSearchHint) {
+		t.Error("失焦后没有恢复居中的「命令面板」")
 	}
 }

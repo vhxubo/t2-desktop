@@ -57,6 +57,15 @@ type tabState struct {
 	reading      map[string]bool
 	selected     map[string]bool
 	markingAll   bool
+
+	// 首页节点筛选：只在 UI 线程读写。filterOpen 是筛选 chip 的浮层，
+	// filterSearch 是浮层顶部的搜索词，filterRoot 是左列展开的父 slug。
+	// homeFilterNode 是首页的节点筛选；通知页的 filter 是另一种筛选，
+	// 两者都是 int/struct 不同语义，不能共用一个字段。
+	homeFilterNode nodeFilter
+	filterOpen     bool
+	filterSearch   string
+	filterRoot     string
 }
 
 // tabFold 存一页的分组结果与展开状态。
@@ -338,6 +347,17 @@ type app struct {
 	// nodes 是节点表的共享缓存（内存 + cache/offline.json，见 nodes.go）：
 	// 发帖级联选择用它，节点页以后也读这一份。只在主线程读写。
 	nodes nodeCache
+	// nodeCat 是首页筛选、配置弹窗与发帖窗口共用的节点目录（见
+	// node_catalog.go）：单飞加载、共享缓存，避免多处并发拉同一份节点表。
+	nodeCat nodeCatalog
+	// nodePrefs / nodeShortcuts / nodeEditor 是节点筛选的本机偏好与侧边栏
+	// 快捷入口（见 node_shortcuts.go）。prefs 与快捷入口进程内共享，上次筛选
+	// 按账号键落盘；editor 是配置弹窗的草稿，只在主线程读写。
+	nodePrefs      *nodeFeedPrefs
+	nodeShortcuts  []nodeRef
+	nodeEditor     nodeEditor
+	nodeRailOpen   bool
+	nodeLastFilter nodeFilter
 	// userCardWin 是「用户资料」窗口：点任何一处统一用户标识（头像 + 昵称）
 	// 打开，见 user_ui.go 的 userTag；userCard 是它读的状态，userCardShown
 	// 表示窗口此刻是否在屏幕上。界面与请求在 user_card.go / user_card_ui.go。
@@ -594,11 +614,12 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 	for i := range a.tabs {
 		a.tabs[i] = &tabState{}
 	}
+	a.loadNodePrefs()
 	a.bindAuth()
-	a.md = newMarkdownOptions(a, postTextStyle)
+	a.md = newMarkdownOptions(a, postTextStyle, false)
 	a.commentMd = a.newCommentMarkdownOptions(false)
 	a.commentMdLight = a.newCommentMarkdownOptions(true)
-	a.bioMd = newMarkdownOptions(a, bioTextStyle)
+	a.bioMd = newMarkdownOptions(a, bioTextStyle, false)
 	a.viewer = &imageViewer{}
 	return a
 }
@@ -691,11 +712,7 @@ func (a *app) loadFor(owner toastTarget, idx, page int) {
 		return
 	}
 	st := a.tabs[idx]
-	spec := tabSpecs[idx]
-	if spec.Kind == kindNotification {
-		// 分段筛选与关键词搜索直接改接口参数，不额外请求参数名。
-		spec.Query = notificationsQuery(st.filter, st.keyword)
-	}
+	spec := a.specFor(idx)
 	a.loadSpec(owner, st, spec, page, func() { a.loadFor(owner, idx, page) })
 }
 
@@ -886,7 +903,7 @@ func (a *app) ensureLoaded() {
 	if !a.autoLoad {
 		return
 	}
-	spec := tabSpecs[a.tab]
+	spec := a.specFor(a.tab)
 	st := a.tabs[a.tab]
 	if st.loading || st.loaded || st.authWait {
 		return
@@ -929,7 +946,7 @@ func (a *app) refreshTab(idx int) {
 	if st == nil || st.loading || st.authWait {
 		return
 	}
-	if spec := tabSpecs[idx]; spec.NeedsAuth && !a.auth.loggedIn() {
+	if spec := a.specFor(idx); spec.NeedsAuth && !a.auth.loggedIn() {
 		// 需要登录的页交给选中处理去弹授权，这里不发注定失败的请求。
 		return
 	}
@@ -1142,6 +1159,7 @@ func (a *app) dialogs(c *ui.Context) {
 	a.viewerTick()
 	// 抽卡弹窗先画：抽卡缺权限时授权框后画、叠在它上面，关掉授权还能回来。
 	a.pandoraDialog(c)
+	a.nodeEditorDialog(c)
 	a.authDialogFor(c, toastMain)
 	a.closePromptDialog(c)
 	// 首次启动声明放最后，盖在其它弹窗之上；确认后本进程不再画。
@@ -1239,6 +1257,7 @@ func (a *app) sidebarNavList(c *ui.Context, nav layout.SideNavState) {
 		// 折叠态图标轨居中靠左右零内边距，这里只补顶部留白，别把图标推离轨中线。
 		ui.Column(c).Padding(sidebarNavInsetTop, 0, 0, 0).Children(func() {
 			sidebarRail(c, items, a.navSel, a.handleSidebarNavItem)
+			a.sidebarNodeRail(c)
 		})
 		return
 	}
@@ -1253,6 +1272,7 @@ func (a *app) sidebarNavList(c *ui.Context, nav layout.SideNavState) {
 		if clicked != "" {
 			a.handleSidebarNavItem(clicked)
 		}
+		a.sidebarNodeSection(c, nav)
 	})
 }
 
@@ -1296,8 +1316,23 @@ func sidebarRail(c *ui.Context, items []display.ListItem, active string, onSelec
 
 // selectTab 是导航项一次点击的完整处理：点当前页再刷新一次，点别的页先切
 // 选中、再按登录要求决定弹授权还是直接拉首屏。
+//
+// 主页图标是个例外：还挂着节点筛选时点它，不只是刷新当前列表，而是清掉
+// 筛选回到默认列表重新拉首屏。侧边栏自定义节点的高亮读的是同一个筛选，
+// 随之熄灭，选中的仍是刚点过的主页图标。
 func (a *app) selectTab(idx int) {
 	if idx < 0 || idx >= len(a.tabs) {
+		return
+	}
+	if idx == 0 && !a.homeFilter().isAll() {
+		a.tab = 0
+		a.navSel = tabID(0)
+		a.pageName = "list"
+		a.setHomeFilter(allNodes())
+		if a.tab != a.lastTab {
+			a.lastTab = a.tab
+			a.status = ""
+		}
 		return
 	}
 	if idx == a.tab {
@@ -1428,9 +1463,10 @@ const (
 	// titleSearchInsetY 是标题栏搜索框上下留出的边距（DIP）：矮一圈后居中
 	// 悬浮，四周更透气。
 	titleSearchInsetY = 5
-	// titleSearchIconInset 是放大镜图标连同它右侧间距占的宽度。hint 要
-	// 居中在图标右边的文字区，而不是整条输入框，否则视觉上会偏右。
-	titleSearchIconInset = 21
+	// titleSearchIconInset 是闪电图标连同左右内边距、间距占的宽度（7 +
+	// 15 + 4）。提示文字要落在图标右边的文字区：居中的 hint 以它为左界，
+	// 聚焦时的左对齐占位文案从它开始，都与输入内容对齐。
+	titleSearchIconInset = 26
 	// titleSearchWidthRatio 是标题栏搜索框宽度占窗口宽度的比例：窗口越宽，
 	// 输入框越长，既不在窄窗口里挤到通知铃铛，也不在大窗口里显得局促。
 	titleSearchWidthRatio = 0.24
@@ -1492,43 +1528,43 @@ func (a *app) titleBar(c *ui.Context) {
 			a.titleBarSidebarToggle(c)
 		})
 		// 中段：品牌名的位置换成输入框：点一下就展开命令面板（默认「命令」
-		// 模式），切到「搜索」才是搜索窗口入口。SearchField 自带一键清空按钮。
+		// 模式），切到「搜索」才是搜索窗口入口。前导图标用闪电，有内容时
+		// 右侧出现一键清空按钮（见 titleSearchField）。
 		if a.search == nil {
 			a.search = newSearchState()
 		}
 		q := a.palette.text
 		ui.Column(c).Width(searchW).Height(h).Shrink(0).
 			AlignItems(ui.Stretch).Justify(ui.Center).Children(func() {
-			tk := lobetheme.TokensOf(c)
-			in := ui.SearchField(c, &a.palette.text).
-				Label("搜索关键词").
-				// 自带 Placeholder 跟着输入左对齐；这里改成下面那层居中的
-				// hint 覆盖，输入内容本身仍从左侧开始。
-				Placeholder("").
-				Width(searchW).Height(titleBarHeight-2*titleSearchInsetY).
-				// 边框宽度设 0：mygo 的 field 在聚焦时会把边框改成 Accent 蓝，
-				// 标题栏这条搜索框不要那圈高亮，0 宽让描边始终不画。
-				Background(tk.FillTertiary).Border(0, ui.Transparent).
-				Radius(tk.BorderRadiusSM)
-			in.Bind(&a.palette.input)
+			inputFocused := a.palette.input.Focused(c)
+			in, box := a.titleSearchField(c, searchW, titleBarHeight-2*titleSearchInsetY)
+			in.Bind(&a.palette.input).FocusBind(&a.palette.focusTarget, 1)
+			if a.palette.blurPending {
+				box.Focus()
+				a.palette.blurPending = false
+			}
 			// 点输入框或聚焦时展开面板；焦点离开（切窗口、Tab 到别的控件）
 			// 或点到面板外时收起。FocusLeft / PressedOutside 都把挂在输入框
 			// 上的面板算作「还在里面」，点面板里的模式按钮/命令不会误关。
 			// 面板关闭时 mygo 会把焦点还给锚点，那不是用户重新点进来，靠
 			// suppressOpen 忽略这一次，避免「关了又立刻弹回来」。
-			focused := in.Focused()
-			if in.PressedInside() {
+			if box.PressedInside() {
 				a.palette.open = true
 				a.palette.suppressOpen = false
 			}
-			if focused && !a.palette.wasFocused && !a.palette.suppressOpen {
+			if inputFocused && !a.palette.wasFocused && !a.palette.suppressOpen {
 				a.palette.open = true
 			}
-			if in.FocusLeft() || in.PressedOutside() {
+			if box.FocusLeft() || box.PressedOutside() {
+				// 只有面板本来开着、这次是把它关掉时才移走焦点；面板本来就关着
+				// 的时候，点详情评论框等控件不能把它们的焦点抢过来。
+				if a.palette.open {
+					a.palette.blurPending = true
+				}
 				a.palette.open = false
 				a.palette.suppressOpen = true
 			}
-			a.palette.wasFocused = focused
+			a.palette.wasFocused = inputFocused
 			// 输入一变回到第一项，清空则回到默认命令模式。
 			in.OnChange(func() {
 				a.palette.selected = 0
@@ -1538,20 +1574,33 @@ func (a *app) titleBar(c *ui.Context) {
 			})
 			in.OnShortcut(0, ui.KeyDown, func() { a.paletteMove(q, 1) })
 			in.OnShortcut(0, ui.KeyUp, func() { a.paletteMove(q, -1) })
-			// Esc 由 SearchField 自身处理：有内容时清空输入，OnChange 据此回到
-			// 默认命令模式；面板继续留着，点窗外才收起。
+			// Esc 有内容时清空输入，OnChange 据此回到默认命令模式；面板留着。
+			in.OnShortcut(0, ui.KeyEscape, func() {
+				if a.palette.text != "" {
+					a.palette.text = ""
+				}
+			})
 			in.OnSubmit(func() { a.paletteRun(q) })
-			// 空输入时画 hint。居中参照取放大镜右边的文字区（Left 留图标
-			// 宽），这样 hint 落在视觉中心而不是偏右。IgnoreInput 让点击
-			// 透到下面的输入框，不会挡住聚焦与命令面板。
+			// 空输入时的提示。面板展开时用左对齐的占位文案，落在图标右边的
+			// 文字区，与真正输入的内容同一位置；收起后改成居中的 hint。以面板
+			// 开合为准而不是输入框聚焦：点窗外会先关面板，但 mygo 未必把输入
+			// 框的焦点一起挪走，用聚焦判断会让占位文案赖着不走。IgnoreInput
+			// 让点击透到下面的输入框，不会挡住聚焦与命令面板。
 			if q == "" {
-				ui.Row(c).Absolute().Left(titleSearchIconInset).Right(0).Top(0).Bottom(0).
-					Center().IgnoreInput(true).Children(func() {
-					ui.Text(c, titleSearchHint).TextColor(t.TextMuted).SingleLine()
-				})
+				if a.palette.open {
+					ui.Row(c).Absolute().Left(titleSearchIconInset).Right(0).Top(0).Bottom(0).
+						IgnoreInput(true).Children(func() {
+						ui.Text(c, titleSearchPlaceholder).TextColor(t.TextMuted).SingleLine()
+					})
+				} else {
+					ui.Row(c).Absolute().Left(titleSearchIconInset).Right(0).Top(0).Bottom(0).
+						Center().IgnoreInput(true).Children(func() {
+						ui.Text(c, titleSearchHint).TextColor(t.TextMuted).SingleLine()
+					})
+				}
 			}
 			if a.palette.open {
-				a.commandPalette(c, in, q)
+				a.commandPalette(c, box, q)
 			}
 		})
 		// 右段：通知铃铛、账号标识与自绘窗口按钮，贴窗口右缘；与左段等宽
@@ -1720,6 +1769,9 @@ func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
 					TextColor(tk.TextDescription).SingleLine().Shrink(0)
 			}
 		})
+		if spec.FilterByNode {
+			a.feedNodeFilter(c, st)
+		}
 	})
 }
 
@@ -1738,7 +1790,8 @@ func feedCountLabel(st *tabState) string {
 
 func (a *app) body(c *ui.Context) {
 	st := a.tabs[a.tab]
-	spec := tabSpecs[a.tab]
+	a.validateRestoredHomeFilter()
+	spec := a.specFor(a.tab)
 
 	if spec.NeedsAuth && !a.auth.loggedIn() {
 		ui.Column(c).Grow(1).Center().Padding(24).Children(func() {
@@ -1886,7 +1939,9 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 				ui.Row(c).MinWidth(0).AlignItems(ui.Center).Wrap().Font(sidebarFont).
 					Children(func() {
 						if node := strings.TrimSuffix(it.SubtitlePrefix, " · "); node != "" {
-							nodeTag(c, node)
+							nodeTagAction(c, nodeTagProps{
+								Label: node, Ref: it.Node, OnPick: a.showNodeFeed,
+							})
 						}
 						a.userTag(c, userTagSpec{
 							Name:   it.Author,
@@ -1908,7 +1963,9 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 				if node := strings.TrimSuffix(it.SubtitlePrefix, " · "); node != "" {
 					ui.Row(c).MinWidth(0).AlignItems(ui.Center).Wrap().Font(sidebarFont).
 						Children(func() {
-							nodeTag(c, node)
+							nodeTagAction(c, nodeTagProps{
+								Label: node, Ref: it.Node, OnPick: a.showNodeFeed,
+							})
 							if rest := strings.TrimPrefix(it.Subtitle, node); rest != "" {
 								ui.Text(c, rest).FontSize(tk.FontSizeSM).
 									TextColor(tk.TextDescription).SingleLine()

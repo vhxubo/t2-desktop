@@ -352,6 +352,45 @@ func mentionBlocks(body string) []mentionBlock {
 	return out
 }
 
+// displayMention 是正文里要画成可点击提及组件的 @名字。Start/End 是 rune
+// 下标 [Start, End)，End 不含尾随分隔符；Name 是去掉 @ 的用户名。
+type displayMention struct {
+	Start, End int
+	Name       string
+}
+
+// mentionBoundary 是提及名字的结束符：空白，或中文评论里紧跟名字的标点。
+// 服务端只把 @名字+空白 当作提及，但显示时若把「@小明，你好」整串当成用户名，
+// 点开会跳到错误的资料卡，所以这些常见标点也要把名字截断（标点本身保留原样）。
+func mentionBoundary(r rune) bool {
+	return unicode.IsSpace(r) || strings.ContainsRune("，。！？、；：,.!?;:）)]】》\"'", r)
+}
+
+// displayMentions 扫出一段正文里所有写完的提及，口径与 mentionBlocks 一致：
+// @ 前是开头或空白、@ 后是一段非空用户名、后面跟分隔符或到段尾，邮箱里的 @
+// 不算。显示层用它把 @名字 画成一块组件并接上用户资料卡（见 article_render.go）；
+// 区别于编辑器里的 mentionBlocks，显示不要求尾随空格——评论末尾的 @名字 也
+// 该是一块组件。
+func displayMentions(body string) []displayMention {
+	rs := []rune(body)
+	var out []displayMention
+	for i := 0; i < len(rs); i++ {
+		if rs[i] != '@' || (i > 0 && !unicode.IsSpace(rs[i-1])) {
+			continue
+		}
+		j := i + 1
+		for j < len(rs) && !mentionBoundary(rs[j]) {
+			j++
+		}
+		if j == i+1 {
+			continue
+		}
+		out = append(out, displayMention{Start: i, End: j, Name: string(rs[i+1 : j])})
+		i = j - 1
+	}
+	return out
+}
+
 // mentionWordRange 把 start 处的 @ 起、到这段用户名末尾（下一个空白为止）
 // 扩成一整块，并连带吃掉后面那一个空格。
 //

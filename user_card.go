@@ -51,31 +51,22 @@ const (
 	// userCardBioFontSize 是「个人简介」正文的字号：比昵称小一号，与统计
 	// 块的字号对齐。
 	userCardBioFontSize float32 = 12
-	// userCardBioMaxHeight 是「个人简介」内容区的高度上限（DIP）。介绍可以
-	// 写很长，超过就在块内滚动，后面的统计、标签页与列表不会被挤出窗口。
-	userCardBioMaxHeight float32 = 132
-	// userCardBioMinHeight 是窗口很矮时介绍内容区仍保留的高度：至少还能看到
-	// 两三行，而不是整块消失。
-	userCardBioMinHeight float32 = 48
-	// userCardBioReserved 是窗口里除介绍内容区以外大致要占的高度（标题栏、
-	// 资料头、统计、标签页、列表首行与分隔线）。介绍区取剩余高度，并夹在
-	// 上面两个上下限之间；这只是估计，块上的 MinHeight(0) 兜住估偏的情况。
-	userCardBioReserved float32 = 380
 )
 
-// 资料卡里的五个标签页。前两个是列表（各自对应一个端点），第三个是站点
-// 六项属性的雷达图（数据来自 about 响应里的 achievement_count），第四个是
-// 这个人的徽章墙，第五个是他的公开合集（点开一个就换成合集里的帖子，见
-// collection_browse.go）。
+// 资料卡里的标签页。第一个是个人介绍（GET /v1/users/:name/about 的正文），
+// 接着两个是列表（各自对应一个端点），然后是站点六项属性的雷达图（数据
+// 来自 about 响应里的 achievement_count）、这个人的徽章墙，最后是他的公开
+// 合集（点开一个就换成合集里的帖子，见 collection_browse.go）。
 const (
-	userCardTabTopics = iota
+	userCardTabAbout = iota
+	userCardTabTopics
 	userCardTabReplies
 	userCardTabAttrs
 	userCardTabBadges
 	userCardTabCollections
 )
 
-var userCardTabLabels = []string{"他发布的主题", "他的最新回复", "属性雷达", "他的徽章", "他的合集"}
+var userCardTabLabels = []string{"个人简介", "他发布的主题", "他的最新回复", "属性雷达", "他的徽章", "他的合集"}
 
 // userCardListKind 区分资料卡里的三个列表：它们只有端点和行渲染不同。
 type userCardListKind int
@@ -170,8 +161,8 @@ func userBadgesEquippedPath(username string) string {
 //	achievement_count  统计数据，键是小写（coins、tip_out_coins…），值是字符串
 //
 // 没填写介绍时端点返回 404 not_found「介绍不存在」，拿到的是空正文而不是
-// 错误；constantsLabel 只是这些统计项在编辑器里的显示名，渲染用不到，按
-// 「未知字段忽略」的约定不解析。
+// 错误。constantsLabel 是这些统计项在编辑器里的显示名，编辑个人介绍时的
+// 「个人常量」快捷模板要用它（见 about_templates.go）。
 //
 // 正文里的 {{KEY}} 是统计占位符：站点渲染前用 achievement_count 的值替换，
 // 这里同样替换，否则会原样显示成「金币：{{COINS}}」。
@@ -185,6 +176,9 @@ type userAbout struct {
 	Emojis map[string]string
 	// Stats 是 {{KEY}} 的取值表，键统一小写，正文里的大写占位符也能命中。
 	Stats map[string]string
+	// ConstantsLabel 是统计项的中文显示名（key 为小写），用于编辑器下拉；
+	// 服务端可能不带这个字段，缺失时回退成把 key 转成可读名字。
+	ConstantsLabel map[string]string
 }
 
 // fetchUserAbout 读个人介绍。读端点匿名可用，但登录后仍照常带令牌：
@@ -214,13 +208,34 @@ func decodeUserAbout(d json.RawMessage) userAbout {
 		return userAbout{}
 	}
 	return userAbout{
-		Content:     o.str("content"),
-		IsPublic:    o.flag("is_public"),
-		PublicKnown: o.has("is_public"),
-		UpdatedAt:   o.str("updated_at"),
-		Emojis:      decodeEmojiURLs(o["emojiMap"]),
-		Stats:       decodeAboutStats(o["achievement_count"]),
+		Content:        o.str("content"),
+		IsPublic:       o.flag("is_public"),
+		PublicKnown:    o.has("is_public"),
+		UpdatedAt:      o.str("updated_at"),
+		Emojis:         decodeEmojiURLs(o["emojiMap"]),
+		Stats:          decodeAboutStats(o["achievement_count"]),
+		ConstantsLabel: decodeAboutLabels(o["constantsLabel"]),
 	}
+}
+
+// decodeAboutLabels 把 constantsLabel 收成「小写 key → 显示名」。按键原样
+// 读取，未知字段忽略；服务端给的是字符串数字以外的普通文本，空串当作没给。
+func decodeAboutLabels(raw json.RawMessage) map[string]string {
+	o := asObject(raw)
+	if o == nil {
+		return nil
+	}
+	out := make(map[string]string, len(o))
+	for k, v := range o {
+		var s string
+		if json.Unmarshal(v, &s) == nil && s != "" {
+			out[strings.ToLower(k)] = s
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // decodeAboutStats 把 achievement_count 收成 {{KEY}} 的取值表。键统一转小写，
@@ -351,6 +366,8 @@ type userCardState struct {
 	aboutKey      string
 	aboutSig      string
 	aboutGen      uint64
+	// aboutTpl 是编辑框顶部「个人常量 / 展示组件」快捷模板的开合与选区状态。
+	aboutTpl aboutTemplateState
 
 	tab     int
 	topics  userCardList

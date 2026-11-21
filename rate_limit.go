@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,30 +9,27 @@ import (
 	"time"
 )
 
-// API 限流退避。文档（openapi/v1/index.md 4.6）：超限返回 429 +
-// code "rate_limited"，错误体根上的 retry_after 以秒为单位，按它退避。
+// API 限流。文档（openapi/v1/index.md 4.6）说每个响应都带
+// X-RateLimit-Limit / X-RateLimit-Remaining / X-RateLimit-Reset，并明确建议
+// 「按 Remaining 主动降频，比撞 429 再退避体验好得多」。
 //
-// 这里守的是「被限流之后不要再发请求」：UI 的 ensure* 每帧都会被调用，
-// 列表加载失败后页面仍是未加载态，下一帧就会把同一个请求再发一遍。闸门
-// 记下退避截止时间，期内所有走 API 信封的请求直接返回错误，不碰网络。
+// 因此这里不再等 429 才反应：每个 API 响应都把配额窗口记进共享闸门，
+// Remaining 归零就拦到 X-RateLimit-Reset 的窗口结束，期内不发网络请求。
+// 真收到 429 时按服务端给的 Retry-After / Reset 退避；两者都没有才退回
+// 错误体里的 retry_after（文档字段）或一个很短的固定值，避免无信号时猛冲。
+//
 // 一个闸门挂在共享的 proxyManager 上，多个账号窗口与后台轮询共用；没有
-// proxyManager 的测试客户端各自用一份私有的。
+// proxyManager 的测试客户端各自用一份私有的。第三方图床与 multipart 上传
+// 各有自己的配额规则，不走这个闸门。
 const (
 	rateLimitMaxServerDelay = 10 * time.Minute // 服务端给的秒数异常大时不无限期卡死
+	rateLimitNoHeaderDelay  = 5 * time.Second  // 429 且完全没有时间信号时的保守退避
 )
 
-var rateLimitFallbackDelays = []time.Duration{
-	5 * time.Second,
-	10 * time.Second,
-	20 * time.Second,
-	40 * time.Second,
-	60 * time.Second,
-}
-
 type rateLimitGate struct {
-	mu       sync.Mutex
-	until    time.Time
-	failures int
+	mu    sync.Mutex
+	until time.Time // 配额耗尽或 429 后的退避截止；期内不发请求
+
 	// now 只给测试替换时钟用；生产为 nil，走 time.Now。
 	now func() time.Time
 }
@@ -61,43 +59,79 @@ func (g *rateLimitGate) remaining() time.Duration {
 	return 0
 }
 
-// hold 记下一次限流，返回本次要退避多久。服务端给了 retry_after 就按它来；
-// 没给才按 5/10/20/40/60 秒逐级退避。退避期内又收到限流（并发请求常见）
-// 不累加失败次数，避免把退避抬到几小时；只有服务端明确要求更久才延长。
-func (g *rateLimitGate) hold(retryAfter int) time.Duration {
+// blockUntil 把退避截止推到 at（只延长、不缩短）；返回实际剩余退避。
+func (g *rateLimitGate) blockUntil(at time.Time) time.Duration {
 	if g == nil {
 		return 0
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.clock()
-	server := serverRateLimitDelay(retryAfter)
-	if now.Before(g.until) {
-		if server > g.until.Sub(now) {
-			g.until = now.Add(server)
-		}
-		return g.until.Sub(now)
+	if at.After(g.until) {
+		g.until = at
 	}
-	g.failures++
-	delay := server
-	if delay <= 0 {
-		delay = fallbackRateLimitDelay(g.failures - 1)
+	if d := g.until.Sub(now); d > 0 {
+		return d
 	}
-	g.until = now.Add(delay)
-	return delay
+	return 0
 }
 
-// success 在退避已经结束后清掉连续失败次数：隔了很久再来一次限流，应该
-// 从最短退避开始，而不是接着上次的次数往上翻。退避期内的成功不清零。
-func (g *rateLimitGate) success() {
-	if g == nil {
+// observe 在每次 API 响应后调用（成功或失败都要调），用响应头维护配额状态：
+//
+//   - X-RateLimit-Remaining <= 0：拦到 X-RateLimit-Reset，窗口结束再放行。
+//   - 429：Retry-After（秒数或 HTTP 日期）优先，其次 Reset，再退回错误体的
+//     retry_after，最后用一个固定短延迟；封顶 rateLimitMaxServerDelay。
+//
+// bodyRetryAfter 是错误体根上的 retry_after，只在响应头没给时间信号时兜底。
+func (g *rateLimitGate) observe(resp *http.Response, bodyRetryAfter int) {
+	if g == nil || resp == nil {
 		return
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if !g.clock().Before(g.until) {
-		g.failures = 0
+	remaining, hasRemaining := headerInt(resp.Header.Get("X-RateLimit-Remaining"))
+	resetUnix, _ := strconv.ParseInt(strings.TrimSpace(resp.Header.Get("X-RateLimit-Reset")), 10, 64)
+	var resetAt time.Time
+	if resetUnix > 0 {
+		resetAt = time.Unix(resetUnix, 0)
 	}
+
+	if hasRemaining && remaining <= 0 {
+		until := resetAt
+		if !until.After(g.clock()) {
+			until = g.clock().Add(time.Second)
+		}
+		g.blockUntil(until)
+	}
+
+	if resp.StatusCode != http.StatusTooManyRequests {
+		return
+	}
+	now := g.clock()
+	delay := serverRateLimitDelay(retryAfterHeaderSeconds(resp.Header.Get("Retry-After"), now))
+	if delay <= 0 && resetAt.After(now) {
+		delay = resetAt.Sub(now)
+	}
+	if delay <= 0 && bodyRetryAfter > 0 {
+		delay = time.Duration(bodyRetryAfter) * time.Second
+	}
+	if delay <= 0 {
+		delay = rateLimitNoHeaderDelay
+	}
+	g.blockUntil(now.Add(delay))
+}
+
+// wait 在发请求前由 sendJSON 调用：退避期内直接返回 rate_limited 错误，
+// 不发网络请求。context 已取消时不制造多余的等待。
+func (g *rateLimitGate) wait(ctx context.Context) error {
+	if g == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if left := g.remaining(); left > 0 {
+		return rateLimitWaitError(left)
+	}
+	return nil
 }
 
 func serverRateLimitDelay(retryAfter int) time.Duration {
@@ -111,22 +145,21 @@ func serverRateLimitDelay(retryAfter int) time.Duration {
 	return d
 }
 
-func fallbackRateLimitDelay(n int) time.Duration {
-	if n < 0 {
-		n = 0
+// headerInt 读一个整数响应头；空串或非法值当作「没有这个头」。
+func headerInt(v string) (int, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0, false
 	}
-	if n >= len(rateLimitFallbackDelays) {
-		n = len(rateLimitFallbackDelays) - 1
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, false
 	}
-	return rateLimitFallbackDelays[n]
+	return n, true
 }
 
-// retryAfterSeconds 优先读错误体根上的 retry_after（文档字段）；响应头只
-// 作为服务端偶尔补上时的兼容兜底，不作为判断限流的依据。
-func retryAfterSeconds(header string, body int) int {
-	if body > 0 {
-		return body
-	}
+// retryAfterHeaderSeconds 只认 Retry-After 响应头：整数秒，或 HTTP 日期。
+func retryAfterHeaderSeconds(header string, now time.Time) int {
 	h := strings.TrimSpace(header)
 	if h == "" {
 		return 0
@@ -135,7 +168,7 @@ func retryAfterSeconds(header string, body int) int {
 		return n
 	}
 	if t, err := http.ParseTime(h); err == nil {
-		if d := time.Until(t); d > 0 {
+		if d := t.Sub(now); d > 0 {
 			return ceilSeconds(d)
 		}
 	}

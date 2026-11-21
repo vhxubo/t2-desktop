@@ -180,7 +180,7 @@ func TestComposeAnonymousToggleDropsIncompatibleModules(t *testing.T) {
 	a := testApp(t)
 	st := composeReady(a)
 	st.title = "【竞猜·💰·🔒】【吐槽】匿名测试"
-	st.poolOpen, st.betOpen = true, true
+	st.poolOpen, st.betOpen, st.restrictedOpen = true, true, true
 	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	tt.Frame()
 	if err := tt.Click("匿名发帖"); err != nil {
@@ -189,14 +189,15 @@ func TestComposeAnonymousToggleDropsIncompatibleModules(t *testing.T) {
 	if !st.anonymous {
 		t.Fatal("点匿名开关没有改状态")
 	}
-	if st.poolOpen || st.betOpen {
-		t.Errorf("匿名发帖应撤掉金币池与竞猜：pool=%v bet=%v", st.poolOpen, st.betOpen)
+	if st.poolOpen || st.betOpen || st.restrictedOpen {
+		t.Errorf("匿名发帖应撤掉金币池、竞猜与隐藏内容：pool=%v bet=%v restricted=%v",
+			st.poolOpen, st.betOpen, st.restrictedOpen)
 	}
 	if want := "【吐槽】匿名测试"; st.title != want {
 		t.Errorf("匿名发帖后标题 = %q，期望 %q", st.title, want)
 	}
 	tt.Frame()
-	if !tt.HasText("匿名发帖已移除金币池、竞猜，及相关标题标签") {
+	if !tt.HasText("匿名发帖已移除金币池、竞猜、隐藏内容，及相关标题标签") {
 		t.Errorf("自动移除没有用 toast 报告：%q", tt.Texts())
 	}
 }

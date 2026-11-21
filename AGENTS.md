@@ -107,13 +107,18 @@ a pure white page.
 - 新增网络出口要补一条 `httptest` 假代理用例，断言请求确实经过代理
   （写法见 `proxy_test.go`）。
 
-### 限流退避：被 429 之后不要再发请求
+### 限流：按 X-RateLimit-* 响应头主动降频
 
-- 2Libra API 的限流是 HTTP 429 + `code: "rate_limited"`，错误体根上的
-  `retry_after` 是秒数（见开放 API 文档 4.6）。`Client.getJSON` / `writeJSON`
-  统一走 `sendJSON`：它先查 `rateLimitGate`，退避期内直接返回 `rate_limited`
-  错误而不发网络请求；收到限流后按 `retry_after` 退避，没给时按 5/10/20/
-  40/60 秒逐级退避，封顶 60 秒。
+- 文档 4.6 说每个响应都带 `X-RateLimit-Limit` / `X-RateLimit-Remaining` /
+  `X-RateLimit-Reset`（窗口结束的 Unix 秒），并明确建议「按 Remaining 主动
+  降频，比撞 429 再退避体验好得多」。`Client.getJSON` / `writeJSON` 统一走
+  `sendJSON`：发请求前先查 `rateLimitGate`，退避期内直接返回 `rate_limited`
+  错误而不发网络请求；**每个响应（成功或失败）都调 `gate.observe` 用响应头
+  更新闸门**，Remaining 归零就拦到 Reset，窗口结束再放行。
+- 真收到 429（HTTP 状态码或 `code: "rate_limited"`）时按服务端 `Retry-After`
+  响应头（整数秒或 HTTP 日期）退避，其次 Reset，再退回错误体根上的
+  `retry_after`，都没有时用 5 秒固定值；封顶 10 分钟。不再有 5/10/20/40/60
+  逐级退避，也不靠错误体 `retry_after` 做首要判断。
 - 闸门挂在共享的 `proxyManager` 上，多个账号窗口与后台轮询共用；一个窗口
   被限流，其它窗口在退避期内也跳过。无头测试里没有共享闸门时客户端各自
   用私有的一份。
@@ -150,6 +155,10 @@ a pure white page.
   统一交给 `auth_gate.go` 的授权链路，它会重跑被中断的调用。
 - 标 🔑 的写端点必须带 `Idempotency-Key`（`postJSON` 的第 3 个参数）：超时重试用
   同一个键，内容变了换新键，见 `compose.go`。
+- 发帖的隐藏内容（`restricted_*`）文档只给了中文说法，没有机器可读枚举；取值
+  `pro` / `reward` / `d20` / `auction` 与 D20 属性 `karma` / `experience` /
+  `charm` / `luck` / `diligence` / `craft` 来自**官网发帖页的 JS chunk**，
+  校验范围也在那里（目标值 1～25、有效期 1～12 个月）；不要凭中文猜。
 - **列表字段名不统一**：`posts` / `items` / `list` / 裸数组按端点各不相同。用
   `tabSpec.ListKey` 声明，不要写通用的「取 items」函数。
 - 未知字段必须忽略：解码走 `object.str/num/sub` 这类容错读取，不要用严格结构体
@@ -165,7 +174,7 @@ a pure white page.
 | --- | --- |
 | oauth.md | `auth.go`、`auth_ui.go`、`auth_gate.go` |
 | api-read.md | `api.go`（列表与解码）、`detail.go`、`profile.go`（`/v1/me` 与公开资料）、`attributes.go`（六维属性）、`badges.go`（我的徽章墙与佩戴状态）、`user_card.go`（资料卡、个人介绍、他人徽章墙）、`notifications.go`（含 `keyword` 搜索）、`follows.go`（关注 / 粉丝名单、关注流未读数）、`collections.go`（公开合集、合集内帖子，浏览界面见 `collection_browse.go`）、`redeem_history.go`（我兑换过的兑换码，界面在金币窗口「兑换」页） |
-| api-write.md | `compose.go`（发帖与短动态）、`topic_node.go`（不选节点时的 AI 自动分区轮询与「节点寻找中」）、`vote.go`（投票与结果分布）、`detail.go`（发评论）、`edit.go`（编辑帖子 / 编辑评论 / 追加附言，界面在 `edit_window.go`）、`comments_status.go`（关闭 / 开启评论）、`follow.go`、`interact.go`、`bookmarks.go`（评论书签）、`collections.go`（新建合集 / 改名 / 删除 / 归入与移出） |
+| api-write.md | `compose.go`（发帖与短动态，含隐藏内容 `restricted_*`）、`topic_node.go`（不选节点时的 AI 自动分区轮询与「节点寻找中」）、`vote.go`（投票与结果分布）、`detail.go`（发评论）、`edit.go`（编辑帖子 / 编辑评论 / 追加附言，界面在 `edit_window.go`）、`comments_status.go`（关闭 / 开启评论）、`follow.go`、`interact.go`、`bookmarks.go`（评论书签）、`collections.go`（新建合集 / 改名 / 删除 / 归入与移出） |
 | api-economy.md | `coins.go`、`coins_window.go`、`pandora.go`（盲盒）、`badges.go`（佩戴切换，scope `write:economy`）、`restricted.go`（受限内容读取、竞拍与解锁）、`bets.go`（竞猜）、`redeem.go`（兑换码领取，界面在详情页正文末尾）、`reward_pool.go`（金币池状态与注资，含评论领到的金币）、`avatar.go`（换头像 / 重置，界面在「我的」资料头）、`about_edit.go`（个人介绍编辑，界面在本人资料卡）、`scores.go` / `scores_window.go`（评分榜）、`image_hosts.go`（上传；官方图床只对 Pro 会员与守护者开放）、`image_hosts_adapters.go`（第三方图床协议：Imgur / Tikolu / MJJ.Today / ImgBB / Skyimg / 111666.best / StarDots，来自「通用图片上传助手」脚本） |
 | 搜索（`/v1/search`） | `search.go`、`search_ui.go` |
 | 标签（`/v1/tags/hot`） | `tags.go`、`search_ui.go`（搜索空状态的热门标签） |

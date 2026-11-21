@@ -152,8 +152,9 @@ func commentsStatusApp(t *testing.T, srv *httptest.Server) *app {
 	return a
 }
 
-// 竖排操作组多了一枚图标：它必须落在窗口内，与相邻按钮不重叠、排在同一列，
-// 否则作者版的详情页右下角会互相盖住。
+// 常驻图标只有复制链接、刷新与「更多」：作者专属的改帖 / 附言 / 评论开关和
+// 「关闭详情」都收进菜单，不再把正文右下角堆成一串图标。常驻列仍要落在窗口
+// 内、彼此不重叠且排在同一列。
 func TestCommentsStatusToolbarLayout(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()
@@ -163,7 +164,7 @@ func TestCommentsStatusToolbarLayout(t *testing.T) {
 	tt.Frame()
 
 	var prev ui.Rect
-	for i, label := range []string{"编辑帖子", "追加附言", "关闭评论", "刷新", "关闭详情"} {
+	for i, label := range []string{"复制帖子链接", "刷新", "更多"} {
 		r, ok := tt.Find(label)
 		if !ok {
 			t.Fatalf("工具条里找不到 %q：%q", label, tt.Texts())
@@ -175,11 +176,27 @@ func TestCommentsStatusToolbarLayout(t *testing.T) {
 			if r.Y < prev.Y+prev.H {
 				t.Errorf("%s 与前一个按钮重叠：%+v / %+v", label, r, prev)
 			}
-			if r.X != prev.X {
+			if absInt(int(r.X-prev.X)) > 2 {
 				t.Errorf("%s 没有和前一个按钮排在同一列：%+v / %+v", label, r, prev)
 			}
 		}
 		prev = r
+	}
+	// 不常用动作打开菜单后才出现，且整份菜单都在窗口内。
+	for _, label := range []string{"编辑帖子", "追加附言", "关闭评论", "关闭详情"} {
+		if _, ok := tt.Find(label); ok {
+			t.Errorf("%q 不该占常驻图标位：%q", label, tt.Texts())
+		}
+	}
+	openDetailMoreMenu(t, tt)
+	for _, label := range []string{"编辑帖子", "追加附言", "关闭评论", "关闭详情"} {
+		r, ok := tt.Find(label)
+		if !ok {
+			t.Fatalf("「更多」菜单里找不到 %q：%q", label, tt.Texts())
+		}
+		if r.X < 0 || r.Y < 0 || r.X+r.W > width || r.Y+r.H > height {
+			t.Errorf("菜单项 %s 跑出了窗口：%+v", label, r)
+		}
 	}
 }
 
@@ -192,18 +209,21 @@ func TestCommentsStatusEntryOnlyForAuthor(t *testing.T) {
 	a := commentsStatusApp(t, srv)
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
+	openDetailMoreMenu(t, tt)
 	if _, ok := tt.Find("关闭评论"); !ok {
 		t.Fatalf("自己的帖子没有「关闭评论」入口：%q", tt.Texts())
 	}
 
 	a.detail.topic.Author = "alice"
 	tt.Frame()
+	ensureDetailMoreMenu(t, tt)
 	if _, ok := tt.Find("关闭评论"); ok {
 		t.Error("别人的帖子不该给「关闭评论」入口")
 	}
 
 	a.detail.topic.Author = "匿名"
 	tt.Frame()
+	ensureDetailMoreMenu(t, tt)
 	if _, ok := tt.Find("关闭评论"); ok {
 		t.Error("匿名帖确认不了作者，不该给入口")
 	}
@@ -230,6 +250,7 @@ func TestCommentsStatusTogglesThroughConfirm(t *testing.T) {
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
+	openDetailMoreMenu(t, tt)
 	if err := tt.Click("关闭评论"); err != nil {
 		t.Fatalf("点不到「关闭评论」：%v（%q）", err, tt.Texts())
 	}
@@ -272,6 +293,7 @@ func TestCommentsStatusTogglesThroughConfirm(t *testing.T) {
 	if !tt.HasText("评论已关闭") {
 		t.Errorf("关闭后页面没有「评论已关闭」：%q", tt.Texts())
 	}
+	openDetailMoreMenu(t, tt)
 	if _, ok := tt.Find("开启评论"); !ok {
 		t.Fatalf("关闭后入口应变成「开启评论」：%q", tt.Texts())
 	}
@@ -293,6 +315,7 @@ func TestCommentsStatusTogglesThroughConfirm(t *testing.T) {
 		t.Errorf("开启评论没有 toast：%q", tt.Texts())
 	}
 	tt.Frame()
+	openDetailMoreMenu(t, tt)
 	if _, ok := tt.Find("关闭评论"); !ok {
 		t.Errorf("开启后入口应回到「关闭评论」：%q", tt.Texts())
 	}

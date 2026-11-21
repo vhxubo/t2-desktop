@@ -363,6 +363,117 @@ func TestComposeGuardPayload(t *testing.T) {
 	}
 }
 
+// 隐藏内容：字段名与枚举逐字照官网发帖页，未开启时一个 restricted_* 都不发。
+func TestComposeRestrictedPayload(t *testing.T) {
+	st := newComposeState()
+	st.title = "标题"
+	st.restrictedContent = "解锁后的正文"
+
+	p, err := st.payload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k := range p {
+		if strings.HasPrefix(k, "restricted_") {
+			t.Fatalf("未开启隐藏内容不该发送 %s", k)
+		}
+	}
+
+	// 默认：属性检定 + 财富 + 目标 10（官网发帖页的默认值）。
+	st.restrictedOpen = true
+	p, err = st.payload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertField(t, p, "restricted_access_type", restrictedAccessD20)
+	assertField(t, p, "restricted_content", "解锁后的正文")
+	assertField(t, p, "restricted_d20_attr", "karma")
+	assertField(t, p, "restricted_d20_threshold", 10)
+	for _, k := range []string{"restricted_auction_top_n", "restricted_auction_deadline", "restricted_duration_months"} {
+		if _, ok := p[k]; ok {
+			t.Errorf("属性检定不该发送 %s", k)
+		}
+	}
+
+	// Pro / 打赏只带类型与正文；有效期填了才发。
+	st.restrictedDurationMonths = 3
+	for _, label := range []string{restrictedAccessLabels[0], restrictedAccessLabels[1]} {
+		st.restrictedAccessChoice = label
+		p, err = st.payload()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := p["restricted_d20_attr"]; ok {
+			t.Errorf("%s 不该发送 D20 字段", label)
+		}
+		assertField(t, p, "restricted_duration_months", 3)
+	}
+	wantAccess := map[string]string{
+		restrictedAccessLabels[0]: restrictedAccessPro,
+		restrictedAccessLabels[1]: restrictedAccessReward,
+	}
+	for label, want := range wantAccess {
+		st.restrictedAccessChoice = label
+		p, _ = st.payload()
+		assertField(t, p, "restricted_access_type", want)
+	}
+
+	// 竞拍：前 N 名与 ISO 8601 截止时间，不带 D20 字段。
+	st.restrictedAccessChoice = restrictedAccessLabels[3]
+	st.restrictedDurationMonths = 0
+	st.restrictedAuctionTopN = 5
+	st.restrictedAuctionDeadline = time.Date(2026, 11, 23, 12, 30, 0, 0, time.UTC)
+	p, err = st.payload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertField(t, p, "restricted_access_type", restrictedAccessAuction)
+	assertField(t, p, "restricted_auction_top_n", 5)
+	assertField(t, p, "restricted_auction_deadline", "2026-11-23T12:30:00.000Z")
+	for _, k := range []string{"restricted_d20_attr", "restricted_d20_threshold", "restricted_duration_months"} {
+		if _, ok := p[k]; ok {
+			t.Errorf("竞拍不该发送 %s", k)
+		}
+	}
+}
+
+// 隐藏内容的本地校验：必填项与官网给出的范围都要拦住，不能等服务端 400。
+func TestComposeRestrictedValidation(t *testing.T) {
+	base := func() *composeState {
+		st := newComposeState()
+		st.title = "标题"
+		st.restrictedOpen = true
+		st.restrictedContent = "正文"
+		return st
+	}
+	check := func(st *composeState, want string) {
+		t.Helper()
+		if _, err := st.payload(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("期望错误包含 %q，得到 %v", want, err)
+		}
+	}
+	st := base()
+	st.restrictedContent = "  "
+	check(st, "隐藏内容不能为空")
+
+	st = base()
+	st.restrictedD20Threshold = 26
+	check(st, "属性检定目标值应在 1～25 之间")
+
+	st = base()
+	st.restrictedD20Attr = ""
+	check(st, "属性检定需要选择 D20 属性")
+
+	st = base()
+	st.restrictedDurationMonths = 13
+	check(st, "有效期应在 1～12 个月之间")
+
+	st = base()
+	st.restrictedAccessChoice = restrictedAccessLabels[3]
+	st.restrictedAuctionTopN = 0
+	check(st, "竞拍可见至少需要 1 名解锁者")
+}
+
 // 校验：必填项与文档给出的上限都要在本地拦住，不能等 400。
 func TestComposePayloadValidation(t *testing.T) {
 	base := func() *composeState {
@@ -670,9 +781,9 @@ func TestComposeFabPaintsAboveList(t *testing.T) {
 		t.Fatal("找不到发帖按钮")
 	}
 	img := tt.Image()
-	// 发帖是 Lobe ActionIcon：44 DIP 方形热区、强调色底、居中的 SquarePen。
+	// 发帖是 Lobe ActionIcon：44 DIP 圆形热区、强调色底、居中的 SquarePen。
 	if r.W != fabPrimary || r.H != fabPrimary {
-		t.Errorf("发帖 FAB 应当是 %g DIP 方块，实际 %+v", fabPrimary, r)
+		t.Errorf("发帖 FAB 应当是 %g DIP 圆形，实际 %+v", fabPrimary, r)
 	}
 	if bg := img.RGBAAt(int(r.X)+8, int(r.Y)+8); bg.R != 0x1D || bg.G != 0x4E || bg.B != 0xD8 {
 		t.Errorf("发帖 FAB 底色 = %v，期望强调色 #1D4ED8", bg)
@@ -766,7 +877,7 @@ func TestComposeWindowLayout(t *testing.T) {
 		"节点", "选填",
 		"标题", "正文", "发布设置", "匿名发帖",
 		"加粗", "斜体", "删除线", "代码", "引用", "代码块", "列表", "编号", "链接", "图片", "分割线",
-		"编辑", "预览", "附加组件", "已添加 0 / 6 项",
+		"编辑", "预览", "附加组件", "已添加 0 / 7 项",
 		"投票", "评分", "竞猜", "兑换码 / 红包", "金币池", "可见性（谁可以看）",
 		"发布", "Ctrl+Enter 发布",
 	} {
@@ -851,7 +962,7 @@ func TestComposeModuleDialogAddRemove(t *testing.T) {
 		t.Errorf("添加后状态不对：voteOpen=%v moduleOpen=%v", st.voteOpen, st.moduleOpen)
 	}
 	tt.Frame()
-	if !tt.HasText("已添加 1 / 6 项") {
+	if !tt.HasText("已添加 1 / 7 项") {
 		t.Errorf("侧栏没有显示已添加的组件：%q", tt.Texts())
 	}
 	if !tt.HasText("已添加投票") {
@@ -879,6 +990,37 @@ func TestComposeModuleDialogAddRemove(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("已移除投票") {
 		t.Errorf("移除结果没有用 toast 报告：%q", tt.Texts())
+	}
+}
+
+// 隐藏内容在右侧栏的弹窗里编辑：默认带出官网的解锁方式与 D20 字段，
+// 添加后计入组件总数，请求体由 TestComposeRestrictedPayload 验证。
+func TestComposeRestrictedDialog(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	tt.Frame()
+	if err := tt.Click("隐藏内容"); err != nil {
+		t.Fatalf("侧栏里没有隐藏内容：%v：%q", err, tt.Texts())
+	}
+	tt.Frame()
+	for _, want := range []string{
+		"解锁方式", "隐藏正文（Markdown）", "D20 属性", "目标值（1～25）",
+		"有效期（月，0 = 不填）", "隐藏内容涉及金币规则，发布后不可撤销。",
+	} {
+		if !tt.HasText(want) {
+			t.Errorf("弹窗缺少 %q：%q", want, tt.Texts())
+		}
+	}
+	if err := tt.Click("添加此组件"); err != nil {
+		t.Fatalf("添加隐藏内容失败：%v：%q", err, tt.Texts())
+	}
+	if !st.restrictedOpen || st.moduleOpen {
+		t.Errorf("添加后状态不对：restrictedOpen=%v moduleOpen=%v", st.restrictedOpen, st.moduleOpen)
+	}
+	tt.Frame()
+	if !tt.HasText("已添加 1 / 7 项") {
+		t.Errorf("侧栏没有计入隐藏内容：%q", tt.Texts())
 	}
 }
 

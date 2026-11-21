@@ -37,8 +37,8 @@ import (
 // profileTabIcons 与 profileTabLabels 一一对应：图标只是标签前的装饰，文案仍
 // 是读屏与点击测试命中的无障碍名。
 var profileTabIcons = []*ui.SVG{
-	lucide.ChartNoAxesColumn(), lucide.FolderClosed(), lucide.MessageCircle(),
-	lucide.Award(), lucide.ShieldCheck(),
+	lucide.ChartNoAxesColumn(), lucide.FileText(), lucide.FolderClosed(),
+	lucide.MessageCircle(), lucide.Award(), lucide.ShieldCheck(),
 }
 
 // showProfile 是「我的」窗口的全局入口：任何窗口、任何 goroutine 都能调用。
@@ -370,6 +370,8 @@ func (a *app) profileWindowView(c *ui.Context) {
 		c.Key(fmt.Sprintf("profile-page-%d", ps.tab))
 		ui.Column(c).Grow(1).MinHeight(0).Padding(12, 16).Children(func() {
 			switch ps.tab {
+			case profileTabAbout:
+				a.profileAboutBody(c, ps)
 			case profileTabContent:
 				a.profileContentBody(c, ps)
 			case profileTabReplies:
@@ -387,8 +389,9 @@ func (a *app) profileWindowView(c *ui.Context) {
 	// 缺权限时也摆出同一个全局授权弹窗：从本窗口发起的请求失败后，用户就
 	// 在这个窗口里看到原因与「前往授权」。
 	a.authDialogFor(c, toastProfile)
-	// 合集改名 / 删除的对话框：它们盖在整扇窗口上，所以画在最后。
+	// 合集改名 / 删除、个人简介编辑的对话框：盖在整扇窗口上，画在最后。
 	a.profileCollectionDialogs(c)
+	a.profileAboutEditor(c)
 }
 
 // profileTitleName 是窗口标题栏上的账号名：优先昵称，其次用户名。
@@ -546,7 +549,21 @@ func (a *app) profileAuthEntry(c *ui.Context, ps *profileState) {
 }
 
 /* ------------------------------------------------------------------
-   Tab 2：我的内容（帖子 / 收藏 / 书签 / 合集）
+   Tab 2：个人简介
+---------------------------------------------------------------- */
+
+// profileAboutBody 是「我的 - 个人简介」页：正文、公开状态与编辑入口和
+// 用户资料卡共用 aboutBody，本人且正文已读到时右上角出现「编辑介绍」。
+func (a *app) profileAboutBody(c *ui.Context, ps *profileState) {
+	a.aboutBody(c, aboutViewState{
+		about: ps.about, loaded: ps.aboutLoaded, loading: ps.aboutLoading,
+		err: ps.aboutErr, busy: ps.aboutBusy,
+	}, ps.aboutLoaded && ps.aboutErr == "",
+		a.openProfileAboutEditor, a.loadProfileAbout)
+}
+
+/* ------------------------------------------------------------------
+   Tab 3：我的内容（帖子 / 收藏 / 书签 / 合集）
 ---------------------------------------------------------------- */
 
 // profileContentUnits 是「共 N <单位>」里的单位，与四个分段一一对应。
@@ -824,7 +841,7 @@ func (a *app) profileMoreContentWith(c *ui.Context, kind int, st *tabState, load
 }
 
 /* ------------------------------------------------------------------
-   Tab 3：我的回复
+   Tab 4：我的回复
 ---------------------------------------------------------------- */
 
 func (a *app) profileRepliesBody(c *ui.Context, ps *profileState) {
@@ -974,7 +991,7 @@ func (a *app) profileReplyRow(c *ui.Context, it Item) {
 }
 
 /* ------------------------------------------------------------------
-   Tab 4：权限与账号
+   Tab 5：权限与账号
 ---------------------------------------------------------------- */
 
 func (a *app) profileAccountBody(c *ui.Context, ps *profileState) {

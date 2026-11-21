@@ -35,6 +35,7 @@ type rowExtra struct {
 	Excerpt       string
 	Quote         string
 	NodeLabel     string
+	Node          nodeRef
 	PostTitle     string
 	When          string
 	Floor         int
@@ -70,7 +71,9 @@ type commentItem struct {
 	PostTitle      string
 	PostReplyCount int
 	NodeSlug       string
+	NodeID         string
 	NodeName       string
+	ParentNodeSlug string
 	ParentNodeName string
 
 	Reactions string
@@ -206,9 +209,20 @@ func decodeCommentItem(o object) commentItem {
 		if n := post.sub("node"); n != nil {
 			c.NodeName = n.str("name", "title")
 			c.NodeSlug = n.str("slug")
+			c.NodeID = n.str("id", "uuid")
+			c.ParentNodeSlug = n.str("parent_slug")
+			if pn := n.sub("parent", "parent_node"); pn != nil {
+				c.ParentNodeName = pn.str("name", "title")
+				if c.ParentNodeSlug == "" {
+					c.ParentNodeSlug = pn.str("slug")
+				}
+			}
 		}
 		if pn := post.sub("parent_node", "parentNode"); pn != nil {
 			c.ParentNodeName = pn.str("name", "title")
+			if c.ParentNodeSlug == "" {
+				c.ParentNodeSlug = pn.str("slug")
+			}
 		}
 	}
 	if c.PostShortID == "" {
@@ -344,6 +358,7 @@ func commentItemFrom(o object) Item {
 		CommentID: c.ID,
 		Title:     title,
 		URL:       commentURL(c),
+		Node:      nodeRefFromComment(c),
 	}
 	// 接口没给作者时，副标题里不能留一个空段：直接写「帖子 · 时间」。
 	parts := []string{}
@@ -383,6 +398,7 @@ func commentItemFrom(o object) Item {
 		Excerpt:       title,
 		Quote:         c.quote(),
 		NodeLabel:     c.nodeLabel(),
+		Node:          nodeRefFromComment(c),
 		PostTitle:     c.PostTitle,
 		When:          relativeTime(c.CreatedAt),
 		Floor:         c.effectiveFloor(),

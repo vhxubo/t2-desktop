@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,8 +18,9 @@ func TestRateLimitBackoffStopsRepeatedRequests(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if atomic.AddInt32(&calls, 1) == 1 {
+			w.Header().Set("Retry-After", "60")
 			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = io.WriteString(w, `{"c":429,"code":"rate_limited","m":"请求过于频繁","dimension":"user","retry_after":60,"d":null,"t":1}`)
+			_, _ = io.WriteString(w, `{"c":429,"code":"rate_limited","m":"请求过于频繁","dimension":"user","d":null,"t":1}`)
 			return
 		}
 		_, _ = io.WriteString(w, envelopeJSON(`{"posts":[],"total":0,"page":1,"limit":50,"total_pages":1}`))
@@ -57,39 +59,46 @@ func TestRateLimitBackoffStopsRepeatedRequests(t *testing.T) {
 	}
 }
 
-// 服务端没给 retry_after 时按固定序列指数退避；给了就按服务端来。
-func TestRateLimitBackoffSequence(t *testing.T) {
-	g := newRateLimitGate()
+// 文档 4.6 要求按 X-RateLimit-* 主动降频：成功响应里 Remaining 归零，
+// 下一个请求就该在本地拦到窗口重置，而不是等服务端回 429。
+func TestRateLimitProactiveHeaderThrottle(t *testing.T) {
+	var calls int32
 	now := time.Now()
-	g.now = func() time.Time { return now }
-	for i, want := range []time.Duration{
-		5 * time.Second, 10 * time.Second, 20 * time.Second,
-		40 * time.Second, 60 * time.Second, 60 * time.Second,
-	} {
-		if got := g.hold(0); got != want {
-			t.Fatalf("第 %d 次无 retry_after 的退避 = %v，期望 %v", i+1, got, want)
-		}
-		now = now.Add(want + time.Millisecond)
+	resetAt := now.Add(60 * time.Second).Unix()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("X-RateLimit-Limit", "1800")
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt, 10))
+		_, _ = io.WriteString(w, envelopeJSON(`{"posts":[],"total":0,"page":1,"limit":50,"total_pages":1}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{HTTP: srv.Client(), Base: srv.URL + "/api"}
+	gate := c.rateGate()
+	gate.now = func() time.Time { return now }
+
+	if _, err := c.fetch(context.Background(), tabSpecs[0], 1); err != nil {
+		t.Fatalf("配额未耗尽前应正常请求，得到 %v", err)
+	}
+	_, err := c.fetch(context.Background(), tabSpecs[0], 1)
+	var ae *apiError
+	if !errors.As(err, &ae) || ae.Code != "rate_limited" {
+		t.Fatalf("Remaining=0 后应本地拦掉，得到 %v", err)
+	}
+	if ae.RetryAfter < 55 || ae.RetryAfter > 60 {
+		t.Errorf("拦截秒数 = %d，期望约 60（Reset 窗口）", ae.RetryAfter)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("主动降频期内发出去 %d 个请求，期望 1", got)
 	}
 
-	withHeader := newRateLimitGate()
-	if got := withHeader.hold(7); got != 7*time.Second {
-		t.Errorf("按服务端 retry_after 退避 = %v，期望 7s", got)
+	now = time.Unix(resetAt, 0).Add(time.Second)
+	if _, err = c.fetch(context.Background(), tabSpecs[0], 1); err != nil {
+		t.Fatalf("窗口重置后应恢复请求，得到 %v", err)
 	}
-
-	// 并发请求会同时吃到 429：退避期内再来一次不叠加次数，只认更长的服务端要求。
-	concurrent := newRateLimitGate()
-	if got := concurrent.hold(0); got != 5*time.Second {
-		t.Fatalf("首次退避 = %v，期望 5s", got)
-	}
-	if got := concurrent.hold(0); got > 5*time.Second {
-		t.Errorf("退避期内重复限流被抬高到 %v", got)
-	}
-	if concurrent.failures != 1 {
-		t.Errorf("退避期内重复限流把失败次数加到 %d，期望 1", concurrent.failures)
-	}
-	if got := concurrent.hold(30); got != 30*time.Second {
-		t.Errorf("服务端要求更长时应延长到 30s，实际 %v", got)
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Errorf("恢复后请求数 = %d，期望 2", got)
 	}
 }
 
@@ -99,8 +108,9 @@ func TestRateLimitGateSharedAcrossClients(t *testing.T) {
 	var firstCalls, secondCalls int32
 	limited := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&firstCalls, 1)
+		w.Header().Set("Retry-After", "30")
 		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = io.WriteString(w, `{"c":429,"code":"rate_limited","m":"请求过于频繁","retry_after":30,"d":null,"t":1}`)
+		_, _ = io.WriteString(w, `{"c":429,"code":"rate_limited","m":"请求过于频繁","d":null,"t":1}`)
 	}))
 	defer limited.Close()
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -130,8 +140,9 @@ func TestEnsureLoadedStopsAfterRateLimit(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if atomic.AddInt32(&calls, 1) == 1 {
+			w.Header().Set("Retry-After", "60")
 			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = io.WriteString(w, `{"c":429,"code":"rate_limited","m":"请求过于频繁","retry_after":60,"d":null,"t":1}`)
+			_, _ = io.WriteString(w, `{"c":429,"code":"rate_limited","m":"请求过于频繁","d":null,"t":1}`)
 			return
 		}
 		_, _ = io.WriteString(w, envelopeJSON(`{"posts":[],"total":0,"page":1,"limit":50,"total_pages":1}`))
@@ -166,14 +177,42 @@ func TestEnsureLoadedStopsAfterRateLimit(t *testing.T) {
 	}
 }
 
-func TestRetryAfterSeconds(t *testing.T) {
-	if got := retryAfterSeconds("", 12); got != 12 {
-		t.Errorf("错误体 retry_after 应优先，得到 %d", got)
+func TestRetryAfterHeaderSeconds(t *testing.T) {
+	now := time.Now()
+	if got := retryAfterHeaderSeconds("12", now); got != 12 {
+		t.Errorf("整数秒头应读到 12，得到 %d", got)
 	}
-	if got := retryAfterSeconds("9", 0); got != 9 {
-		t.Errorf("响应头兜底应读到 9 秒，得到 %d", got)
-	}
-	if got := retryAfterSeconds("bad", 0); got != 0 {
+	if got := retryAfterHeaderSeconds("bad", now); got != 0 {
 		t.Errorf("无法解析时不应退避，得到 %d", got)
+	}
+	if got := retryAfterHeaderSeconds(now.Add(30*time.Second).UTC().Format(http.TimeFormat), now); got < 28 || got > 30 {
+		t.Errorf("HTTP 日期头应读到约 30 秒，得到 %d", got)
+	}
+	if n, ok := headerInt("0"); !ok || n != 0 {
+		t.Errorf("X-RateLimit-Remaining: 0 应被识别为有该头，得到 (%d,%v)", n, ok)
+	}
+	if _, ok := headerInt(""); ok {
+		t.Error("空响应头不应被识别")
+	}
+}
+
+// 429 没有任何响应头时，才退回错误体 retry_after；再没有就用固定短延迟。
+func TestRateLimitHeaderFallbacks(t *testing.T) {
+	resp := &http.Response{StatusCode: http.StatusTooManyRequests, Header: make(http.Header)}
+	g := newRateLimitGate()
+	now := time.Now()
+	g.now = func() time.Time { return now }
+
+	g.observe(resp, 9)
+	if d := g.remaining(); d < 8*time.Second || d > 9*time.Second {
+		t.Errorf("错误体 retry_after 兜底 = %v，期望约 9s", d)
+	}
+
+	plain := &http.Response{StatusCode: http.StatusTooManyRequests, Header: make(http.Header)}
+	g2 := newRateLimitGate()
+	g2.now = func() time.Time { return now }
+	g2.observe(plain, 0)
+	if d := g2.remaining(); d != rateLimitNoHeaderDelay {
+		t.Errorf("无信号时退避 = %v，期望 %v", d, rateLimitNoHeaderDelay)
 	}
 }

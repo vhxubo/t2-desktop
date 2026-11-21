@@ -56,10 +56,13 @@ type tabSpec struct {
 	// groupComments）。只给「最新评论」打开：「动态」是按时间混排的关注流，
 	// 聚合等于把关注的人藏起来，不能跟着打开。
 	FoldByAuthor bool
+	// FilterByNode 只给首页：列表 query 由首页的节点筛选与排序偏好生成。
+	// 「社区讨论」同样打 /v1/topics，但它固定筛到社区节点，不吃首页筛选。
+	FilterByNode bool
 }
 
 var tabSpecs = []tabSpec{
-	{Label: "首页", Path: "/v1/topics", Query: "page=1&limit=50&parent_slug=All&sort=value", ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
+	{Label: "首页", Path: "/v1/topics", Query: "page=1&limit=50&parent_slug=All&sort=value", ListKey: "posts", Paging: pagingPages, Kind: kindTopic, FilterByNode: true},
 	{Label: "今日热议", Path: "/v1/topics/hot", ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
 	{Label: "近期热议", Path: "/v1/topics/hot", Query: "period=7d", ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
 	{Label: "新发表", Path: "/v1/topics/latest", ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
@@ -125,6 +128,9 @@ type Item struct {
 	SubtitleSuffix string
 	// Extra 是最新评论 / 动态行的富展示字段；普通榜单行为 nil。
 	Extra *rowExtra
+	// Node 是这一行所属节点的引用，供行内节点 Tag 点击后筛到首页。
+	// 接口没给节点信息时留空，Tag 退回只读。
+	Node nodeRef
 	// Notif 是通知行归一后的消息；只有通知数据的行非 nil。
 	Notif *notification
 	// Stats 是帖子列表行的时效信息；合集、阅读记录等非帖子行为 nil。
@@ -452,15 +458,16 @@ func (c *Client) writeJSON(ctx context.Context, method, u, token, idempotencyKey
 	return c.sendJSON(req)
 }
 
-// sendJSON 是 getJSON / writeJSON 共用的出口：退避期内直接返回错误，不把
-// 请求发出去；收到 429 rate_limited 时按错误体里的 retry_after 记下退避。
+// sendJSON 是 getJSON / writeJSON 共用的出口：先看共享闸门的配额状态，
+// Remaining 归零后退避期内直接返回错误，不把请求发出去；每个响应（成功或
+// 失败）都按 X-RateLimit-* 响应头更新闸门，做到撞 429 之前就主动降频。
 // 这里只管 API 信封请求——第三方图床与 multipart 上传各有自己的限流规则，
 // 不要被 2Libra 的一次限流连带挡住。
 func (c *Client) sendJSON(req *http.Request) (json.RawMessage, error) {
 	var empty json.RawMessage
 	gate := c.rateGate()
-	if left := gate.remaining(); left > 0 {
-		return empty, rateLimitWaitError(left)
+	if err := gate.wait(req.Context()); err != nil {
+		return empty, err
 	}
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
@@ -473,8 +480,10 @@ func (c *Client) sendJSON(req *http.Request) (json.RawMessage, error) {
 	}
 	var env envelope
 	if err := json.Unmarshal(body, &env); err != nil {
+		gate.observe(resp, 0)
 		return empty, fmt.Errorf("响应不是 {c,m,d,t} 信封（HTTP %d）：%w", resp.StatusCode, err)
 	}
+	gate.observe(resp, env.RetryAfter)
 	if resp.StatusCode >= 400 || env.C != 0 {
 		ae := &apiError{
 			Status:        resp.StatusCode,
@@ -484,7 +493,6 @@ func (c *Client) sendJSON(req *http.Request) (json.RawMessage, error) {
 			RetryAfter:    env.RetryAfter,
 		}
 		if resp.StatusCode == http.StatusTooManyRequests || env.Code == "rate_limited" {
-			gate.hold(retryAfterSeconds(resp.Header.Get("Retry-After"), env.RetryAfter))
 			// 按闸门实际退避时间回写，界面上显示的秒数才和真正拦截的时长一致。
 			if secs := ceilSeconds(gate.remaining()); secs > ae.RetryAfter {
 				ae.RetryAfter = secs
@@ -492,7 +500,6 @@ func (c *Client) sendJSON(req *http.Request) (json.RawMessage, error) {
 		}
 		return empty, ae
 	}
-	gate.success()
 	return env.D, nil
 }
 
@@ -769,15 +776,43 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 	}
 	nodeName := ""
 	nodeSlug := ""
+	nodeID := ""
+	nodeParentSlug := ""
+	parentNodeName := ""
 	if node != nil {
 		nodeName = node.str("name", "title")
 		nodeSlug = node.str("slug")
+		nodeID = node.str("id", "uuid")
+		nodeParentSlug = node.str("parent_slug")
+		if p := node.sub("parent", "parent_node"); p != nil {
+			parentNodeName = p.str("name", "title")
+			if nodeParentSlug == "" {
+				nodeParentSlug = p.str("slug")
+			}
+		}
+		if pn := node.sub("parent_node"); pn != nil && parentNodeName == "" {
+			parentNodeName = pn.str("name", "title")
+		}
 	}
 	if nodeName == "" && postNode != nil {
 		nodeName = postNode.str("name", "title")
 	}
 	if nodeSlug == "" && postNode != nil {
 		nodeSlug = postNode.str("slug")
+	}
+	if nodeID == "" && postNode != nil {
+		nodeID = postNode.str("id", "uuid")
+	}
+	if nodeParentSlug == "" && postNode != nil {
+		nodeParentSlug = postNode.str("parent_slug")
+	}
+	if parentNodeName == "" && postNode != nil {
+		if p := postNode.sub("parent", "parent_node"); p != nil {
+			parentNodeName = p.str("name", "title")
+			if nodeParentSlug == "" {
+				nodeParentSlug = p.str("slug")
+			}
+		}
 	}
 	created := o.str("created_at", "createdAt", "updated_at", "published_at")
 	if created == "" && post != nil {
@@ -811,7 +846,10 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 		title = cleanText(post.str("title", "name"))
 	}
 
-	it := Item{Key: id, ShortID: shortID}
+	it := Item{Key: id, ShortID: shortID, Node: nodeRef{
+		ID: nodeID, Slug: nodeSlug, ParentSlug: nodeParentSlug,
+		Name: nodeName, ParentName: parentNodeName,
+	}}
 	switch kind {
 	case kindCollection:
 		it.Title = title

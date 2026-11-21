@@ -5,7 +5,6 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
-	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 右下角的悬浮按钮（FAB）组：只用在主页列表上，画法与几何见这里。详情页
@@ -19,8 +18,8 @@ const (
 	fabRight   float32 = 24 // 距内容区右边
 	fabBottom  float32 = 24 // 距内容区下边
 	fabGap     float32 = 12 // 竖排按钮之间的间距
-	fabCircle  float32 = 38 // 次级按钮（刷新 / 返回顶部 / 发动态）的方块尺寸
-	fabPrimary float32 = 44 // 主操作（发帖）的方块尺寸，比次级的大一圈
+	fabCircle  float32 = 38 // 次级按钮（刷新 / 返回顶部 / 发动态）的圆形直径
+	fabPrimary float32 = 44 // 主操作（发帖）的圆形直径，比次级的大一圈
 )
 
 // fabStack 画右下角竖排的一列悬浮按钮。buttons 按从上到下的顺序给出，
@@ -28,7 +27,7 @@ const (
 //
 // Lobe 没有「绝对定位的悬浮按钮列」这种组件，这里仍用 mygo 的 Column 做
 // 定位容器；列里的每枚按钮本身都是 Lobe 组件（见 fabButton / composeFab），
-// 配色与圆角也全部取自 Lobe token。
+// 配色取自 Lobe token，圆角由各按钮按自身尺寸对半取整圆。
 func (a *app) fabStack(c *ui.Context, buttons ...func(*ui.Context)) {
 	if len(buttons) == 0 {
 		return
@@ -41,17 +40,16 @@ func (a *app) fabStack(c *ui.Context, buttons ...func(*ui.Context)) {
 	})
 }
 
-// fabButton 画一个 Lobe 次级 FAB：ActionIcon 的 BlockSize 给方块尺寸，悬停由
-// 它自己处理；图标由调用处传 Lobe 的 lucide 图标（见 listFabs）。label 是可
-// 访问名，tip 是悬停说明；loading 时禁用按钮并在图标位转圈，请求还在路上，
-// 连点不该重复发。
+// fabButton 画一个 Lobe 次级 FAB：ActionIcon 的 BlockSize 给圆形直径，再按
+// 半径对半设圆角做成整圆；悬停由它自己处理，图标由调用处传 Lobe 的 lucide
+// 图标（见 listFabs）。label 是可访问名，tip 是悬停说明；loading 时禁用按钮
+// 并在图标位转圈，请求还在路上，连点不该重复发。
 func (a *app) fabButton(c *ui.Context, icon *ui.SVG, label, tip string, loading bool, onClick func()) {
 	if loading {
-		// 请求在路上：按钮退成 Lobe ActionIcon 的禁用态——方块尺寸与圆角都取
-		// Lobe token，只把图标位换成转圈，连点不会重复发。
-		tk := lobetheme.TokensOf(c)
+		// 请求在路上：按钮退成 Lobe ActionIcon 的禁用态——尺寸不变、同样圆，
+		// 只把图标位换成转圈，连点不会重复发。
 		b := ui.ButtonBase(c).Size(fabCircle, fabCircle).Center().Disabled(true).
-			Radius(tk.BorderRadiusSM).Background(ui.Transparent).Border(1, ui.Transparent)
+			Radius(fabCircle/2).Background(ui.Transparent).Border(1, ui.Transparent)
 		b.Label(label).Tooltip(tip)
 		b.Children(func() {
 			lobeSpin(c, feedback.SpinProps{CustomSize: 16})
@@ -59,7 +57,7 @@ func (a *app) fabButton(c *ui.Context, icon *ui.SVG, label, tip string, loading 
 		return
 	}
 	b := action.ActionIcon(c, icon, action.ActionIconProps{BlockSize: fabCircle})
-	b.Label(label).Tooltip(tip).OnClick(onClick)
+	b.Label(label).Tooltip(tip).OnClick(onClick).Radius(fabCircle / 2)
 }
 
 // listFabs 是主页内容区右下角的一列悬浮按钮：发帖（主操作，强调色的

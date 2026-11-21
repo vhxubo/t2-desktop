@@ -26,7 +26,7 @@ import (
 //
 // 左边专心写：标题、正文，最下面才是「节点」。节点是选填的：留空就发出去，
 // 由站点的 AI 判定分类；想指定时用两列级联选择挑一个，也随时能清掉。右边是
-// 常驻的控制栏：上面是匿名等发布设置，下面是六块组件，每块点开在弹窗里填写；
+// 常驻的控制栏：上面是匿名等发布设置，下面是各块组件，每块点开在弹窗里填写；
 // 已添加的行尾直接有「移除」，不必再进弹窗，底部还有「全部移除」。凡是可以有
 // 多个选项的地方（投票、竞猜、兑换码）都有「批量添加」与批量删除入口。
 //
@@ -203,7 +203,7 @@ func composePublishButton(c *ui.Context, label string) ui.Element {
 // 位置由 listFabs 的竖列给（见 fabs.go），这里只管长什么样；公开 tab 与
 // 私人 tab 都能用（未登录时点它先走授权）。
 //
-// 和列里其余按钮一样用 Lobe 的 ActionIcon：方形热区、悬停 / 按下反馈与图标
+// 和列里其余按钮一样用 Lobe 的 ActionIcon：圆形热区、悬停 / 按下反馈与图标
 // 都由它负责，图标是 lucide.SquarePen，文案交给 tooltip。可访问名仍是「发帖」
 // （Label），读屏与测试按这个名字找它。ActionIcon 默认的中性配色留给次级按钮；
 // 这里是主操作，底 / 前景色改取 Lobe 的 Primary token，静止、悬停、按下分别
@@ -219,7 +219,7 @@ func (a *app) composeFab(c *ui.Context) {
 	case b.Hovered():
 		bg = tk.PrimaryHover
 	}
-	b.Background(bg).Border(1, bg).TextColor(tk.PrimaryForeground)
+	b.Background(bg).Border(1, bg).TextColor(tk.PrimaryForeground).Radius(fabPrimary / 2)
 }
 
 /* ------------------------------------------------------------------
@@ -528,8 +528,26 @@ func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 			options := nodeCascaderOptions(st.nodes)
 			if len(options) > 0 {
 				// 节点选填：面板顶部给出清除入口，清掉就回到「由 AI 判定」。
-				cascader(c, "节点", options, &st.nodeID, &st.nodePick,
-					"清除节点选择", "由 AI 判定分类")
+				// 空值用 nodeFilterNode + 空引用表示：触发框显示「由 AI 判定分类」，
+				// 提交时 st.nodeID 仍是空串。
+				value := nodeFilterOf(nodeRef{})
+				if node := st.selectedNode(); node != nil {
+					value = nodeFilterOf(nodeRefFromNode(*node))
+				}
+				nodeCascader(c, st.nodes, nodeCascadeProps{
+					Label:      "节点",
+					Value:      &value,
+					Open:       &st.nodePick.open,
+					ActiveRoot: &st.nodePick.active,
+					Search:     &st.nodeSearch,
+					AllowClear: true,
+					ClearLabel: "清除节点选择",
+					EmptyLabel: "由 AI 判定分类",
+					OnPick: func(f nodeFilter) {
+						st.nodeID = f.Ref.ID
+					},
+					OnClear: func() { st.nodeID = "" },
+				})
 				return
 			}
 		}
@@ -720,6 +738,9 @@ var composeModuleSpecs = []composeModuleSpec{
 	{name: "可见性（谁可以看）", hint: "限制谁能读这篇帖子。",
 		flag: func(st *composeState) *bool { return &st.guardOpen },
 		body: func(a *app, c *ui.Context, st *composeState) { a.composeGuard(c, st) }},
+	{name: "隐藏内容", hint: "付费 / 属性检定 / 竞拍才能解锁的正文。", tag: "🔒",
+		flag: func(st *composeState) *bool { return &st.restrictedOpen },
+		body: func(a *app, c *ui.Context, st *composeState) { a.composeRestricted(c, st) }},
 }
 
 // composeApplyModuleTitle 按网页端规则同步标题：加组件就插【关键词】/点评前缀，
@@ -761,21 +782,22 @@ func (a *app) composeAnonymousToggle(c *ui.Context, st *composeState) {
 	}
 	dropped := 0
 	for _, m := range composeModuleSpecs {
-		if !*m.flag(st) || (m.tag != "💰" && m.tag != "竞猜") {
+		if !*m.flag(st) || (m.tag != "💰" && m.tag != "竞猜" && m.tag != "🔒") {
 			continue
 		}
 		composeApplyModuleTitle(st, m, false)
 		*m.flag(st) = false
 		dropped++
 	}
-	// 桌面端没有「隐藏内容」组件，但标题里可能手工写了【🔒】，一并清掉。
+	// 手工写进标题的【🔒】也要清掉：隐藏内容没作为组件启用时，上面的循环
+	// 不会经过它。已启用时 composeApplyModuleTitle 已经清过，再调一次无害。
 	st.title = composeSetTitleTag(st.title, "🔒", false)
 	if dropped > 0 {
-		a.toast(toastCompose, "匿名发帖已移除金币池、竞猜，及相关标题标签")
+		a.toast(toastCompose, "匿名发帖已移除金币池、竞猜、隐藏内容，及相关标题标签")
 	}
 }
 
-// composeSidebar 是窗口右侧常驻的控制栏：上半是匿名等发布设置，下半是六块
+// composeSidebar 是窗口右侧常驻的控制栏：上半是匿名等发布设置，下半是各块
 // 附加组件。点一行在弹窗里编辑；已添加的行尾直接放「移除」，不必为了移除再
 // 进一次弹窗，底部还有「全部移除」一次清掉所有组件。
 func (a *app) composeSidebar(c *ui.Context, st *composeState) {
@@ -1308,6 +1330,81 @@ func (a *app) composeGuard(c *ui.Context, st *composeState) {
 			})
 		}
 		display.Text(c, "门槛由服务端判定；写错属性名时发表会返回 400 并说明原因。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
+	})
+}
+
+// composeRestricted 是隐藏内容块：解锁方式、隐藏正文、有效期，以及对应解锁
+// 方式的字段。机器取值与校验范围都在 compose.go 的 restrictedPayload。
+func (a *app) composeRestricted(c *ui.Context, st *composeState) {
+	ui.Column(c).FillWidth().Gap(8).Children(func() {
+		ui.Column(c).Gap(4).Children(func() {
+			display.Text(c, "解锁方式", display.TextProps{
+				Type: display.TextSecondary, FontSize: 12, Rows: 1,
+			})
+			options := make([]field.SelectOption, 0, len(restrictedAccessLabels))
+			for _, l := range restrictedAccessLabels {
+				options = append(options, field.SelectOption{Value: l, Label: l})
+			}
+			composeInputRow(c, func() ui.Element {
+				return field.Select(c, &st.restrictedAccessChoice, field.SelectProps{Options: options})
+			}).Label("解锁方式")
+		})
+		ui.Column(c).FillWidth().Gap(4).Children(func() {
+			display.Text(c, "隐藏正文（Markdown）", display.TextProps{FontSize: 12, Rows: 1})
+			composeTextArea(c, &st.restrictedContent, field.TextAreaProps{
+				Placeholder: "满足解锁条件后才可见",
+				MinRows:     4,
+				MaxRows:     10,
+			}).Label("隐藏正文").MaxLength(composeRestrictedContentMax)
+		})
+		switch restrictedAccessFromLabel(st.restrictedAccessChoice) {
+		case restrictedAccessD20:
+			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.End).Children(func() {
+				ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+					display.Text(c, "D20 属性", display.TextProps{
+						Type: display.TextSecondary, FontSize: 12, Rows: 1,
+					})
+					attrs := make([]field.SelectOption, 0, len(restrictedD20Attrs))
+					for _, at := range restrictedD20Attrs {
+						attrs = append(attrs, field.SelectOption{Value: at.Value, Label: at.Label})
+					}
+					composeInputRow(c, func() ui.Element {
+						return field.Select(c, &st.restrictedD20Attr, field.SelectProps{Options: attrs})
+					}).Label("D20 属性")
+				})
+				ui.Column(c).Width(150).Gap(4).Children(func() {
+					display.Text(c, "目标值（1～25）", display.TextProps{
+						Type: display.TextSecondary, FontSize: 12, Rows: 1,
+					})
+					composeNumber(c, &st.restrictedD20Threshold, field.InputNumberProps{
+						Min: composeRestrictedD20Lo, Max: composeRestrictedD20Hi, Step: 1,
+					}).Label("属性检定目标值")
+				})
+			})
+		case restrictedAccessAuction:
+			ui.Column(c).Width(180).Gap(4).Children(func() {
+				display.Text(c, "前 N 名可解锁", display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 1,
+				})
+				composeNumber(c, &st.restrictedAuctionTopN, field.InputNumberProps{
+					Min: composeRestrictedAuctionTopLo, Max: 1000, Step: 1,
+				}).Label("竞拍解锁人数")
+			})
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.DateInput(c, &st.restrictedAuctionDeadline).Label("竞拍截止日期")
+				ui.TimeInput(c, &st.restrictedAuctionDeadline).Label("竞拍截止时间")
+			})
+		}
+		ui.Column(c).Width(200).Gap(4).Children(func() {
+			display.Text(c, "有效期（月，0 = 不填）", display.TextProps{
+				Type: display.TextSecondary, FontSize: 12, Rows: 1,
+			})
+			composeNumber(c, &st.restrictedDurationMonths, field.InputNumberProps{
+				Min: 0, Max: composeRestrictedDurationHi, Step: 1,
+			}).Label("隐藏内容有效期")
+		})
+		display.Text(c, "隐藏内容涉及金币规则，发布后不可撤销。",
 			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 	})
 }

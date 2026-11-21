@@ -515,6 +515,7 @@ func TestClickOpensDetailView(t *testing.T) {
 	if flat, ok := a.loadReplyViewMode(); !ok || !flat {
 		t.Errorf("切换后没有按账号存下视图偏好：flat=%v ok=%v", flat, ok)
 	}
+	openDetailMoreMenu(t, view)
 	if err := view.Click("关闭详情"); err != nil {
 		t.Errorf("返回列表失败：%v", err)
 	}
@@ -843,6 +844,26 @@ func TestDetailToolbarAtBodyBottomRight(t *testing.T) {
 	if copyLink.Y+copyLink.H > bar.Bounds.Y+1 {
 		t.Errorf("操作组应落在正文互动栏上方：%+v / 互动栏 %+v", copyLink, bar.Bounds)
 	}
+}
+
+// openDetailMoreMenu 点开正文右下角操作组的「更多」菜单。不常用的动作现在都
+// 收在菜单里，测试要先打开它才能找到 / 点击那些入口。
+func openDetailMoreMenu(t *testing.T, tt *ui.Tester) {
+	t.Helper()
+	if err := tt.Click("更多"); err != nil {
+		t.Fatalf("点不到操作组的「更多」：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+}
+
+// ensureDetailMoreMenu 在菜单没开时打开它。内联详情的「关闭详情」只在菜单里
+// 出现，拿它当探针；作者改帖之类会随帖子变化的入口不能当探针。
+func ensureDetailMoreMenu(t *testing.T, tt *ui.Tester) {
+	t.Helper()
+	if _, ok := tt.Find("关闭详情"); ok {
+		return
+	}
+	openDetailMoreMenu(t, tt)
 }
 
 // 作者信息收进正文、放在标题下面：小头像、昵称与等级在标题与副标题之间，

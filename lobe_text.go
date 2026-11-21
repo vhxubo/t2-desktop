@@ -17,6 +17,7 @@ func init() {
   "lobe.close": "关闭",
   "lobe.ok": "确定",
   "lobe.cancel": "取消",
+  "lobe.more": "更多",
   "lobe.panelCollapse": "收起正文",
   "lobe.panelExpand": "展开正文",
   "lobe.panelResize": "调整宽度"

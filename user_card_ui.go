@@ -29,11 +29,10 @@ import (
 //	│  (头像)  昵称 [Lv.13] [PRO] [徽章]  [关注他] │
 //	│          @username · 注册 2024-05-01 · 512 天│
 //	│  ────────────────────────────────────────  │
-//	│  个人简介：…                                │
-//	│  ────────────────────────────────────────  │
 //	│  主题数 | 回复数 | 粉丝 | 关注               │
 //	│  ────────────────────────────────────────  │
-//	│  [他发布的主题] [他的最新回复]                │
+//	│  [个人简介] [他发布的主题] [他的最新回复] …     │
+//	│  （个人简介单独占一个标签页，正文在块内滚动）   │
 //	│  · 标题 ……………                      2 天前  │
 //	└────────────────────────────────────────────┘
 //
@@ -176,8 +175,6 @@ func (a *app) userCardWindowView(c *ui.Context) {
 		layout.Divider(c, layout.DividerProps{})
 		a.userCardHeader(c, cs)
 		layout.Divider(c, layout.DividerProps{})
-		a.userCardBio(c, cs)
-		layout.Divider(c, layout.DividerProps{})
 		a.userCardStats(c, cs)
 		layout.Divider(c, layout.DividerProps{})
 		// 标签页用 Lobe 的 nav.Tabs：选中态与滑动指示块由组件负责。切换时
@@ -203,6 +200,8 @@ func (a *app) userCardWindowView(c *ui.Context) {
 		c.Key(fmt.Sprintf("user-card-page-%d", cs.tab))
 		ui.Column(c).Grow(1).MinHeight(0).Padding(12, 16).Children(func() {
 			switch cs.tab {
+			case userCardTabAbout:
+				a.userCardBio(c, cs)
 			case userCardTabReplies:
 				a.userCardListBody(c, cs, userCardReplies)
 			case userCardTabAttrs:
@@ -338,79 +337,78 @@ func (a *app) userCardFollowButton(c *ui.Context, cs *userCardState) {
 	}
 }
 
-// userCardBio 是「个人简介」一块：正文来自 GET /v1/users/:userName/about，
-// 按 Markdown 渲染（链接、列表与表情都走正文同一套渲染），{{KEY}} 统计
-// 占位符换成该用户的实际数字。介绍可能很长，超过一块的高度就在块内滚动，
-// 下面的统计、标签页与列表不会被挤出窗口。
+// aboutViewState 是「个人简介」展示所需的最小状态。用户资料卡与「我的」
+// 两处共用同一套 aboutBody 渲染，避免两处各写一份加载 / 空 / 失败分支。
+type aboutViewState struct {
+	about   userAbout
+	loaded  bool
+	loading bool
+	err     string
+	busy    bool
+}
+
+// userCardBio 把资料卡的介绍状态喂给共用的 aboutBody。正文来自
+// GET /v1/users/:userName/about，{{KEY}} 占位符与表情按帖子正文同一套规则
+// 渲染；只有本人且正文已读到时才给编辑入口。
 func (a *app) userCardBio(c *ui.Context, cs *userCardState) {
-	// MinHeight(0)：窗口缩到最小时先压这一块（里面的介绍框会跟着缩短），
-	// 否则内容会把统计、标签页与列表顶出窗口。
-	ui.Column(c).FillWidth().MinHeight(0).Padding(10, 16).Gap(4).Children(func() {
+	a.aboutBody(c, aboutViewState{
+		about: cs.about, loaded: cs.aboutLoaded, loading: cs.aboutLoading,
+		err: cs.aboutErr, busy: cs.aboutBusy,
+	}, a.userCardSelf() && cs.aboutLoaded && cs.aboutErr == "",
+		a.openUserCardAboutEditor, a.loadUserCardAbout)
+}
+
+// aboutBody 画个人简介：标题右侧是可选的编辑入口，正文按 Markdown 渲染，
+// 内容很长时在块内滚动。加载中 / 失败 / 空与正文四种状态都在这里收口，
+// 「我的」窗口的个人简介页复用同一套画法。
+func (a *app) aboutBody(c *ui.Context, st aboutViewState, canEdit bool, onEdit, onRetry func()) {
+	ui.Column(c).Fill().Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(6).Children(func() {
 			display.Text(c, "个人简介", display.TextProps{
 				Type: display.TextSecondary, FontSize: 11, Rows: 1,
 			})
 			ui.Spacer(c).Grow(1)
-			// 只有本人、且介绍已经读到，才给编辑入口：没读到正文就编辑，
-			// 容易用空草稿覆盖掉原来的内容。
-			if a.userCardSelf() && cs.aboutLoaded && cs.aboutErr == "" {
-				a.smallAction(c, "编辑介绍", cs.aboutBusy, a.openUserCardAboutEditor)
+			if canEdit {
+				a.smallAction(c, "编辑介绍", st.busy, onEdit)
 			}
 		})
 		switch {
-		case cs.aboutErr != "":
+		case st.err != "":
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				display.Text(c, "介绍暂时不可用："+cs.aboutErr, display.TextProps{
+				display.Text(c, "介绍暂时不可用："+st.err, display.TextProps{
 					Type: display.TextDanger, FontSize: userCardBioFontSize, Rows: 2,
 				}).Grow(1).MinWidth(0)
-				a.smallAction(c, "重试", cs.aboutLoading, a.loadUserCardAbout)
+				a.smallAction(c, "重试", st.loading, onRetry)
 			})
-		case !cs.aboutLoaded || cs.aboutLoading:
+		case !st.loaded || st.loading:
 			display.Text(c, "正在读取个人介绍…", display.TextProps{
 				FontSize: userCardBioFontSize, Rows: 1,
 			})
-		case strings.TrimSpace(cs.about.Content) == "":
+		case strings.TrimSpace(st.about.Content) == "":
 			// 没填写和「仅社区成员可见」都是空正文，但原因不同，不能混为一谈。
-			text := "这位用户还没有填写个人介绍。"
-			if cs.about.PublicKnown && !cs.about.IsPublic {
-				text = "这位用户的个人介绍仅在社区内可见。"
+			text := "还没有填写个人介绍。"
+			if st.about.PublicKnown && !st.about.IsPublic {
+				text = "个人介绍仅在社区内可见。"
 			}
 			display.Text(c, text, display.TextProps{FontSize: userCardBioFontSize, Rows: 2})
 		default:
-			// Lobe 的细滚动条与边缘渐隐，替换 mygo 原生 Scroll；高度仍按窗口
-			// 剩余空间计算，窗口被缩小时介绍先让位。
+			// Lobe 的细滚动条与边缘渐隐，替换 mygo 原生 Scroll。介绍占满这一页，
+			// Grow(1) + MinHeight(0) 让它在窗口被缩小时先让位。
 			scroll := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
 				// 介绍自己的 emojiMap 可能带社区图标；并到全局表情表后一起
 				// 渲染，规则与帖子正文相同。
-				emojis := mergeEmojiMaps(a.emojis, cs.about.Emojis)
-				src := replaceEmoji(expandAboutStats(cs.about.Content, cs.about.Stats), emojis, true)
+				emojis := mergeEmojiMaps(a.emojis, st.about.Emojis)
+				src := replaceEmoji(expandAboutStats(st.about.Content, st.about.Stats), emojis, true)
 				a.markdownView(c, src, a.bioMd)
 			})
-			scroll.FillWidth().MaxHeight(userCardBioContentHeight(c))
-			if meta := userCardAboutMeta(cs.about); meta != "" {
+			scroll.FillWidth().Grow(1).MinHeight(0)
+			if meta := userCardAboutMeta(st.about); meta != "" {
 				display.Text(c, meta, display.TextProps{
 					Type: display.TextSecondary, FontSize: 11, Rows: 1,
 				})
 			}
 		}
 	})
-}
-
-// userCardBioContentHeight 是介绍内容区当前能给的高度：窗口总高减去其余
-// 区块（标题栏、资料头、统计、标签页、列表首行与分隔线）大约要占的高度，
-// 再限制在 [userCardBioMinHeight, userCardBioMaxHeight] 之间。窗口被缩小
-// 时介绍先让位；常量只是估计，bio 块的 MinHeight(0) 保证估错时也不会把
-// 列表顶出窗口。
-func userCardBioContentHeight(c *ui.Context) float32 {
-	_, h := c.Size()
-	height := h - userCardBioReserved
-	if height > userCardBioMaxHeight {
-		return userCardBioMaxHeight
-	}
-	if height < userCardBioMinHeight {
-		return userCardBioMinHeight
-	}
-	return height
 }
 
 // userCardAboutMeta 是介绍底下的状态行：是否公开，以及最后更新时间（站点
@@ -634,7 +632,9 @@ func (a *app) userCardRow(c *ui.Context, it Item, kind userCardListKind) {
 				if node, meta := userCardRowMeta(it, kind); node != "" || meta != "" {
 					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 						if node != "" {
-							nodeTag(c, node)
+							nodeTagAction(c, nodeTagProps{
+								Label: node, Ref: it.Node, OnPick: a.showNodeFeed,
+							})
 						}
 						if meta != "" {
 							display.Text(c, meta, display.TextProps{
