@@ -110,6 +110,15 @@ func (c *Client) streamHTTPClient() *http.Client {
 	return &http.Client{}
 }
 
+// netStatus 返回这个客户端共用的网络状态机；裸测试客户端没有代理管理器，
+// 返回 nil，重试行为保持原样。
+func (c *Client) netStatus() *networkStatus {
+	if c == nil {
+		return nil
+	}
+	return c.Proxy.netStatus()
+}
+
 func (c *Client) streamIdleDuration() time.Duration {
 	if c.streamIdleTimeout > 0 {
 		return c.streamIdleTimeout
@@ -147,6 +156,14 @@ func (c *Client) streamBackoff(failures int) time.Duration {
 func (c *Client) watchNotifications(ctx context.Context, h notificationStreamHandlers) {
 	failures := 0
 	for ctx.Err() == nil {
+		if st := c.netStatus(); st != nil && st.isOffline() {
+			// 网络未连接：暂停重连，等恢复后再继续，不再按退避反复重试。
+			if !waitNetworkOnline(ctx, st) {
+				return
+			}
+			failures = 0
+			continue
+		}
 		result, err := c.connectNotificationStream(ctx, h)
 		if ctx.Err() != nil {
 			return
@@ -383,6 +400,26 @@ func handleNotificationFrame(raw string, h notificationStreamHandlers) (streamRe
 		return streamReconnect, true
 	}
 	return streamEnded, false
+}
+
+// waitNetworkOnline 在网络离线期间等它恢复：每秒检查一次，既不空转也不按退避
+// 反复建连。ctx 取消（窗口关闭 / 账号退出）就退出。
+func waitNetworkOnline(ctx context.Context, st *networkStatus) bool {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return false
+		}
+		if !st.isOffline() {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 func sleepContext(ctx context.Context, d time.Duration) bool {

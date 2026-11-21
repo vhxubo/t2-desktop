@@ -117,6 +117,9 @@ type proxyManager struct {
 	// rateLimit 是全应用共享的限流退避闸门（见 rate_limit.go）：所有走这份
 	// 代理配置的窗口和后台轮询共用，一处被限流，其余请求在退避期内跳过。
 	rateLimit *rateLimitGate
+	// connectivity 是进程级的网络在线状态机（见 netstatus.go）。请求失败时由
+	// netLogTransport 报告，确认离线后拦下后续请求、暂停重试并弹窗。
+	connectivity *networkStatus
 }
 
 // rateLimitGate 返回这份代理配置下的共享闸门；零值代理管理器没有闸门，
@@ -128,12 +131,21 @@ func (p *proxyManager) rateLimitGate() *rateLimitGate {
 	return p.rateLimit
 }
 
+// netStatus 返回这份配置下的共享网络状态机；零值代理管理器没有状态机。
+func (p *proxyManager) netStatus() *networkStatus {
+	if p == nil {
+		return nil
+	}
+	return p.connectivity
+}
+
 func newProxyManager(dir string) *proxyManager {
 	if dir == "" {
 		dir = configDir()
 	}
 	p := &proxyManager{dir: dir, cfg: proxyConfig{Mode: proxyFollowSystem},
 		net: newNetRecorder(), rateLimit: newRateLimitGate()}
+	p.connectivity = newNetworkStatus(p.probeConnectivity)
 	var cfg proxyConfig
 	if err := readJSONFile(filepath.Join(dir, "proxy.json"), &cfg); err == nil {
 		p.cfg = cfg.normalized()
@@ -185,7 +197,7 @@ func (p *proxyManager) Transport() *http.Transport {
 // installGlobalProxy 都从这拿，普通 API、SSE、图床上传、图片下载与兜底的
 // 默认客户端因此都会被网络调试窗口记录。
 func (p *proxyManager) netTransport() http.RoundTripper {
-	return &netLogTransport{inner: p.Transport(), rec: p.net}
+	return &netLogTransport{inner: p.Transport(), rec: p.net, status: p.connectivity}
 }
 
 // closeIdleConnections 断开所有共享 transport 上的空闲连接。换代理地址后

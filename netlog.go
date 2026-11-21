@@ -362,21 +362,37 @@ func netHumanSize(n int) string {
 // 的请求，不给它记第二条。
 type netLogMarkerKey struct{}
 
-// netLogTransport 把共享 transport 包一层：发出前记请求，回来后记响应。
+// netLogTransport 把共享 transport 包一层：发出前记请求，回来后记响应。它同时
+// 是网络状态机的探针——连接类失败上报一次（触发断网确认），确认离线后拦下后续
+// 请求，让全应用各种退避重试都停下来（见 netstatus.go）。
 type netLogTransport struct {
-	inner http.RoundTripper
-	rec   *netRecorder
+	inner  http.RoundTripper
+	rec    *netRecorder
+	status *networkStatus
 }
 
 func (t *netLogTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// 离线期间不再把请求发到网络：没有请求就没有重试，弹窗被关掉后用户再
+	// 触发请求时借 nudge 把它顶回来。
+	if t.status != nil && t.status.isOffline() {
+		t.status.nudge()
+		return nil, errOffline
+	}
 	if !t.rec.active() {
-		return t.inner.RoundTrip(req)
+		resp, err := t.inner.RoundTrip(req)
+		if err != nil && t.status != nil {
+			t.status.reportFailure(err)
+		}
+		return resp, err
 	}
 	// 先打标记再往下传：共享 transport 内部解析代理时会调 proxyFor，靠标记
 	// 区分「这个请求已经记过」，不给它补第二条。
 	marked := req.WithContext(context.WithValue(req.Context(), netLogMarkerKey{}, true))
 	e := t.rec.begin(marked)
 	resp, err := t.inner.RoundTrip(marked)
+	if err != nil && t.status != nil {
+		t.status.reportFailure(err)
+	}
 	t.rec.header(e, resp, err)
 	if err != nil || resp == nil {
 		return resp, err

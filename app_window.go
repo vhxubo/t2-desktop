@@ -208,6 +208,10 @@ func (a *app) finalizeAccountWindow() {
 	// 的余额请求。
 	a.stopCoinTagWatch()
 	a.stopNotificationWatch()
+	if a.netStatusUnwatch != nil {
+		a.netStatusUnwatch()
+		a.netStatusUnwatch = nil
+	}
 	a.win = nil
 	if a.book == nil {
 		return
@@ -240,6 +244,10 @@ func (a *app) closeAllWindows() {
 	a.closeUserCardWindow()
 	a.closeViewerWindow()
 	a.closeAllDetailWindows()
+	if a.netStatusUnwatch != nil {
+		a.netStatusUnwatch()
+		a.netStatusUnwatch = nil
+	}
 	win := a.win
 	a.win = nil
 	if win != nil {

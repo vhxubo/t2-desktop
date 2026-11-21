@@ -145,6 +145,13 @@ type app struct {
 	netLogUnwatch    func()
 	netLogRedrawMu   sync.Mutex
 	netLogLastRedraw time.Time
+	// 网络状态弹窗（见 netstatus.go / netstatus_ui.go）：请求失败确认离线后，
+	// 状态机通知本窗口把 offlineDialogOpen 置位，由 dialogs 画出来；点「重新
+	// 连接」走 retryNetwork 后台探测。netStatusUnwatch 是反注册函数。只在
+	// UI 线程读写（回调经 publish 回到 UI 线程）。
+	offlineDialogOpen bool
+	offlineRechecking bool
+	netStatusUnwatch  func()
 	// cacheStatus 是设置窗口「图片缓存」一块的显示状态；统计在后台跑，
 	// 结果回到主线程。
 	cacheStatus cacheStatus
@@ -616,6 +623,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 	}
 	a.loadNodePrefs()
 	a.bindAuth()
+	a.bindNetworkStatus()
 	a.md = newMarkdownOptions(a, postTextStyle, false)
 	a.commentMd = a.newCommentMarkdownOptions(false)
 	a.commentMdLight = a.newCommentMarkdownOptions(true)
@@ -640,6 +648,26 @@ func (a *app) bindAuth() {
 				return
 			}
 			a.onAuthChanged(err)
+		})
+	})
+}
+
+// bindNetworkStatus 把进程级的网络状态机接回本窗口：离线/上线翻转时置位弹窗
+// 状态并解冻界面。回调来自网络协程，统一经 publish 挪回 UI 线程。
+func (a *app) bindNetworkStatus() {
+	st := a.proxy.netStatus()
+	if st == nil {
+		return
+	}
+	a.netStatusUnwatch = st.addListener(func(offline bool) {
+		a.publish(func() {
+			if offline {
+				a.offlineDialogOpen = true
+			} else {
+				a.offlineDialogOpen = false
+				a.toast(toastMain, "网络已恢复")
+			}
+			a.redrawNetLogWindow()
 		})
 	})
 }
@@ -913,6 +941,11 @@ func (a *app) ensureLoaded() {
 	if a.client != nil && a.client.rateGate().remaining() > 0 {
 		return
 	}
+	// 网络未连接时状态机会弹窗并暂停全应用重试，这里也别每帧发注定失败的
+	// 请求（transport 仍会兜底拦下，但连失败的本地回调都不必排）。
+	if st := a.proxy.netStatus(); st != nil && st.isOffline() {
+		return
+	}
 	if spec.NeedsAuth && !a.auth.loggedIn() {
 		return
 	}
@@ -1164,6 +1197,8 @@ func (a *app) dialogs(c *ui.Context) {
 	a.closePromptDialog(c)
 	// 首次启动声明放最后，盖在其它弹窗之上；确认后本进程不再画。
 	a.disclaimerDialog(c)
+	// 断网提示放在最上层：离线时压住其它弹窗，先让用户处理网络。
+	a.offlineDialog(c)
 }
 
 // feedMaxWidth 是正文栏的最大宽度：窗口再宽，一行文字也不超过 760 DIP，

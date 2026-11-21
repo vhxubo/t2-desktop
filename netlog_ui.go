@@ -198,6 +198,17 @@ func (a *app) netLogWindowView(c *ui.Context) {
 			})
 			display.Text(c, fmt.Sprintf("%d 条", len(shown)), display.TextProps{FontSize: 11, Rows: 1}).
 				TextColor(t.TextMuted)
+			// 网络状态指示：本工具直接读进程级状态机，离线时变红并可就地重测。
+			if st := a.proxy.netStatus(); st != nil {
+				if st.isOffline() {
+					display.Text(c, "● 离线", display.TextProps{FontSize: 11, Rows: 1}).TextColor(t.Danger)
+				} else {
+					display.Text(c, "● 在线", display.TextProps{FontSize: 11, Rows: 1}).TextColor(t.Success)
+				}
+				if action.Button(c, "重新检测", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+					a.retryNetwork()
+				}
+			}
 		})
 		layout.Divider(c, layout.DividerProps{})
 
