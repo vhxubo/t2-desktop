@@ -19,6 +19,9 @@ func TestAboutWindowShowsVersionAndUpdateCheck(t *testing.T) {
 	if !tt.HasText("检查更新") {
 		t.Fatalf("关于窗口没有检查更新入口：%q", tt.Texts())
 	}
+	if usesHarmonySans() && !tt.HasText("鸿蒙字体") {
+		t.Errorf("关于窗口没有鸿蒙字体的授权声明：%q", tt.Texts())
+	}
 
 	clicked := false
 	a.onUpdateCheck = func() { clicked = true }

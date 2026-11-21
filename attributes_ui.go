@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/display"
 )
 
 // 「我的 - 概览」里的六维属性：左侧是雷达图，右侧是六项数值。雷达图本身封装
@@ -36,14 +38,18 @@ func (a *app) profileAttributesSection(c *ui.Context, ps *profileState) {
 					}
 				})
 			})
-			ui.Textf(c, "六维属性由服务端计算，单项上限 %d；雷达图按当前值绘制。",
-				profileAttributeMax).FontSize(10).TextColor(t.TextMuted).MaxLines(2)
+			display.Text(c, fmt.Sprintf("六维属性由服务端计算，单项上限 %d；雷达图按当前值绘制。",
+				profileAttributeMax), display.TextProps{FontSize: 10, Rows: 2}).
+				TextColor(t.TextMuted)
 		case ps.infoLoading:
-			ui.Text(c, "正在读取属性…").FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, "正在读取属性…", display.TextProps{FontSize: 11, Rows: 1}).
+				TextColor(t.TextMuted)
 		case ps.infoErr != "":
-			ui.Text(c, "属性数据暂时不可用。").FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, "属性数据暂时不可用。", display.TextProps{FontSize: 11, Rows: 1}).
+				TextColor(t.TextMuted)
 		default:
-			ui.Text(c, "当前账号没有返回属性数据。").FontSize(11).TextColor(t.TextMuted)
+			display.Text(c, "当前账号没有返回属性数据。", display.TextProps{FontSize: 11, Rows: 1}).
+				TextColor(t.TextMuted)
 		}
 	})
 }
@@ -52,9 +58,11 @@ func (a *app) profileAttributesSection(c *ui.Context, ps *profileState) {
 func profileAttributeRow(c *ui.Context, attr profileAttribute) {
 	t := c.Theme()
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, attr.Label).FontSize(11).TextColor(t.TextMuted).Width(32).SingleLine()
-		ui.Text(c, strconv.Itoa(attr.Value)).FontSize(12).Bold().SingleLine()
+		display.Text(c, attr.Label, display.TextProps{FontSize: 11, Rows: 1}).
+			TextColor(t.TextMuted).Width(32)
+		display.Text(c, strconv.Itoa(attr.Value), display.TextProps{FontSize: 12, Strong: true, Rows: 1})
 		ui.Spacer(c).Grow(1)
-		ui.Textf(c, "/%d", profileAttributeMax).FontSize(9).TextColor(t.TextMuted).SingleLine()
+		display.Text(c, fmt.Sprintf("/%d", profileAttributeMax), display.TextProps{FontSize: 9, Rows: 1}).
+			TextColor(t.TextMuted)
 	})
 }

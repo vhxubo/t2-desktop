@@ -2,6 +2,7 @@ package main
 
 import (
 	"image"
+	"math"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -61,8 +62,11 @@ func TestUserCardRadarTab(t *testing.T) {
 	if !ok {
 		t.Fatalf("没有画出雷达图：%q", tt.Texts())
 	}
-	if chart.W != profileAttributeRadarSize || chart.H != profileAttributeRadarSize {
-		t.Errorf("雷达图尺寸 = %.0f×%.0f，期望 %.0f×%.0f",
+	// 字体行高可能带小数，布局算出的 committed bounds 会有万分之一 DIP 的
+	// 舍入误差（如 196.00003），按浮点容差比较，不用精确相等。
+	if math.Abs(float64(chart.W-profileAttributeRadarSize)) > 0.01 ||
+		math.Abs(float64(chart.H-profileAttributeRadarSize)) > 0.01 {
+		t.Errorf("雷达图尺寸 = %.5f×%.5f，期望 %.0f×%.0f",
 			chart.W, chart.H, profileAttributeRadarSize, profileAttributeRadarSize)
 	}
 	if chart.X < 0 || chart.X+chart.W > userCardWindowWidth {

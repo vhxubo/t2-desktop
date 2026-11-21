@@ -50,8 +50,8 @@ const (
 	composeEditorLines       = 10
 	composeEditorMaxLine     = 30
 	composePreviewHeight     = 320
-	// composeFabInset 是 FAB 占用的右侧宽度（按钮 + 边距）。列表底部的
-	// 「加载更多 / 重试」那一行据此让出这一段，免得被浮在上面的按钮盖住；
+	// composeFabInset 是为右下角 FAB 列预留的右侧宽度（按钮 + 边距）。列表
+	// 底部的「加载更多 / 重试」那一行据此让出这一段，免得被浮在上面的按钮盖住；
 	// FAB 本身不占布局高度，只是浮在内容区右下角。
 	composeFabInset = 110
 )
@@ -179,9 +179,9 @@ func (a *app) redrawComposeWindow() {
    主页的悬浮入口
 ---------------------------------------------------------------- */
 
-// composePostIcon 画发帖主操作里的图标。主页悬浮的「发帖」按钮和窗口底部的
-// 「发布」按钮都用它：同一枚 SquarePen、同样的 15×15 与强调色前景，保证两处
-// 的发帖图标看着是同一个（见 composeFab、composePublishButton）。
+// composePostIcon 画发帖主操作里的图标。窗口底部的「发布」按钮用它；主页
+// 悬浮的「发帖」按钮是 Lobe ActionIcon，直接吃 lucide.SquarePen，同一枚图标
+// 由 ActionIcon 按自己的字号绘制（见 composeFab、composePublishButton）。
 func composePostIcon(c *ui.Context) {
 	tk := lobetheme.TokensOf(c)
 	ui.Icon(c, lucide.SquarePen()).Size(15, 15).TextColor(tk.PrimaryForeground)
@@ -201,18 +201,25 @@ func composePublishButton(c *ui.Context, label string) ui.Element {
 
 // composeFab 是主页右下角那一列悬浮按钮里的「发帖」：主操作，放在最下面。
 // 位置由 listFabs 的竖列给（见 fabs.go），这里只管长什么样；公开 tab 与
-// 私人 tab 都能用（未登录时点它先走授权）。图标 + 文案一起显示，任何窗口
-// 宽度下都能看出这是「发帖」。整颗按钮是 Lobe 的 Primary Button，图标用
-// Lobe 的 lucide 图标，文案用 Lobe 的字阶。
+// 私人 tab 都能用（未登录时点它先走授权）。
+//
+// 和列里其余按钮一样用 Lobe 的 ActionIcon：方形热区、悬停 / 按下反馈与图标
+// 都由它负责，图标是 lucide.SquarePen，文案交给 tooltip。可访问名仍是「发帖」
+// （Label），读屏与测试按这个名字找它。ActionIcon 默认的中性配色留给次级按钮；
+// 这里是主操作，底 / 前景色改取 Lobe 的 Primary token，静止、悬停、按下分别
+// 对应 Primary、PrimaryHover、PrimaryActive，保持原来强调色按钮的层次。
 func (a *app) composeFab(c *ui.Context) {
 	tk := lobetheme.TokensOf(c)
-	b := action.StyleButton(c, ui.ButtonBase(c), "", action.ButtonProps{Variant: action.Primary})
+	b := action.ActionIcon(c, lucide.SquarePen(), action.ActionIconProps{BlockSize: fabPrimary})
 	b.Label("发帖").Tooltip("写一篇新帖子").OnClick(a.showCompose)
-	b.Children(func() {
-		composePostIcon(c)
-		display.Text(c, "发帖", display.TextProps{FontSize: 12, Strong: true}).
-			Font(sidebarFont).SingleLine().TextColor(tk.PrimaryForeground)
-	})
+	bg := tk.Primary
+	switch {
+	case b.Pressed():
+		bg = tk.PrimaryActive
+	case b.Hovered():
+		bg = tk.PrimaryHover
+	}
+	b.Background(bg).Border(1, bg).TextColor(tk.PrimaryForeground)
 }
 
 /* ------------------------------------------------------------------
@@ -1415,8 +1422,8 @@ func (a *app) composeFooter(c *ui.Context, st *composeState) {
 			}
 		}
 		// 「当前账号」与「发布」贴在一起：多账号时点下去之前就能看清是哪个
-		// 账号发出去（见 account_badge.go）。发布按钮带图标，样式与主页悬浮
-		// 的「发帖」按钮共用同一套（见 composePostIcon）。
+		// 账号发出去（见 account_badge.go）。发布按钮带图标，用的是和主页悬浮
+		// 「发帖」按钮同一枚 SquarePen（见 composePostIcon）。
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Children(func() {
 			a.accountBadge(c)
 			label := "发布"

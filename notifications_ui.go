@@ -64,7 +64,7 @@ func (a *app) notificationBell(c *ui.Context) {
 	b := action.ActionIcon(c, icon, action.ActionIconProps{
 		BlockSize: titleBarHeight, GlyphSize: 16, Active: open,
 	})
-	if count := unreadCountText(a.unread); count != "" {
+	if count := unreadCountText(a.unread); count != "" && a.notifPrefs().badgeEnabled() {
 		// 角标压在铃铛右下角、且留在按钮范围内：ActionIcon 的方块是
 		// titleBarHeight×titleBarHeight，角标内缩 2 DIP 既不越出按钮，又贴着图标。
 		// 外圈描边用按钮此刻的底色（静止透明、悬停/打开 FillSecondary），压住
@@ -253,11 +253,17 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 				display.Text(c, unreadText, display.TextProps{
 					Type: display.TextSecondary, FontSize: 11, Rows: 1,
 				})
-				if a.streamLive {
+				switch {
+				case !a.notifPrefs().streamEnabled():
+					// 关掉长连接是用户的选择，不该显示成「未连接」那样像坏了。
+					display.Text(c, "· 轮询中", display.TextProps{
+						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+					})
+				case a.streamLive:
 					display.Text(c, "· 已连接", display.TextProps{
 						Type: display.TextSuccess, FontSize: 11, Rows: 1,
 					})
-				} else {
+				default:
 					display.Text(c, "· 未连接", display.TextProps{
 						Type: display.TextSecondary, FontSize: 11, Rows: 1,
 					})
@@ -378,10 +384,14 @@ func (a *app) notificationActions(c *ui.Context, st *tabState) {
 			display.Text(c, "原生通知不可用", display.TextProps{
 				Type: display.TextSecondary, FontSize: 11, Rows: 1,
 			})
-		case a.nativeNotify:
-			a.smallAction(c, "原生通知：开", false, func() { a.nativeNotify = false })
+		case a.notifPrefs().notificationEnabled():
+			a.smallAction(c, "原生通知：开", false, func() {
+				a.saveNotifyPref(toastNotifications, func() error { return a.notifPrefs().setEnabled(false) })
+			})
 		default:
-			a.smallAction(c, "原生通知：关", false, func() { a.nativeNotify = true })
+			a.smallAction(c, "原生通知：关", false, func() {
+				a.saveNotifyPref(toastNotifications, func() error { return a.notifPrefs().setEnabled(true) })
+			})
 		}
 	})
 }

@@ -494,7 +494,8 @@ func TestClickOpensDetailView(t *testing.T) {
 			t.Errorf("详情页没有显示 %q：%q", want, view.Texts())
 		}
 	}
-	// 评论数（图标 + 数值）与视图切换（图标按钮）现在贴在写评论旁边。
+	// 评论数（图标 + 数值）与视图切换（图标按钮）都在评论区里，评论数收回
+	// 底部折叠输入框、紧挨发送按钮左侧（见 TestDetailComposerStats）。
 	if _, ok := view.Find("评论数"); !ok {
 		t.Errorf("详情页没有评论数按钮：%q", view.Texts())
 	}
@@ -621,9 +622,9 @@ func TestDetailSplitViewLayout(t *testing.T) {
 	if !ok {
 		t.Fatalf("找不到帖子标题：%q", tt.Texts())
 	}
-	comment, ok := tt.Find("评论")
+	comment, ok := tt.Find("评论区")
 	if !ok {
-		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
+		t.Fatalf("找不到评论区面板：%q", tt.Texts())
 	}
 	if title.X >= comment.X {
 		t.Errorf("标题应在左栏、评论在右栏：标题 %+v / 评论 %+v", title, comment)
@@ -846,8 +847,8 @@ func TestDetailToolbarAtBodyBottomRight(t *testing.T) {
 
 // 作者信息收进正文、放在标题下面：小头像、昵称与等级在标题与副标题之间，
 // 帖子编号让位；分类和标签收在作者下方的副标题里（分类显示两级，第二行是
-// 标签，并在分类行给出浏览数）。详情页不再显示关注按钮：关注入口只在用户
-// 资料卡里。
+// 标签）。浏览数已经挪到评论区折叠输入框的发送按钮左侧。详情页不再显示关注
+// 按钮：关注入口只在用户资料卡里。
 func TestDetailAuthorSitsBelowTitle(t *testing.T) {
 	a := detailAppWithReplies(t)
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -872,8 +873,8 @@ func TestDetailAuthorSitsBelowTitle(t *testing.T) {
 	if r, ok := tt.Find("Lv.4"); !ok || r.Y <= title.Y {
 		t.Errorf("作者等级应在标题下方：%+v ok=%v / 标题 %+v", r, ok, title)
 	}
-	// 分类（两级）与标签在作者行下面。
-	for _, want := range []string{"生活 · 职场", "340 次浏览", "#职场  #讨论"} {
+	// 分类（两级）与标签在作者行下面；浏览数已移到评论区折叠输入框里。
+	for _, want := range []string{"生活 · 职场", "#职场  #讨论"} {
 		r, ok := tt.Find(want)
 		if !ok {
 			t.Errorf("作者下方缺少 %q：%q", want, tt.Texts())
@@ -1328,6 +1329,64 @@ func TestReplyComposerAnonymous(t *testing.T) {
 	}
 }
 
+// 评论区顶部的「评论」标题与计数、正文副标题里的浏览数都收进底部折叠
+// 输入框：两枚「图标 + 数字」紧挨在发送按钮左侧；点开输入框后计数收起，
+// 右下角只留发送按钮，把整条输入栏还给写字。
+func TestDetailComposerStats(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	cnt, ok := tt.Find("评论数")
+	if !ok {
+		t.Fatalf("折叠评论框里没有评论数：%q", tt.Texts())
+	}
+	views, ok := tt.Find("浏览数")
+	if !ok {
+		t.Fatalf("折叠评论框里没有浏览数：%q", tt.Texts())
+	}
+	send, ok := tt.Find("发送")
+	if !ok {
+		t.Fatalf("折叠评论框里没有发送按钮：%q", tt.Texts())
+	}
+	if cnt.X >= send.X || views.X >= send.X {
+		t.Errorf("评论数与浏览数应在发送按钮左侧：评论数 %+v / 浏览数 %+v / 发送 %+v",
+			cnt, views, send)
+	}
+	if cnt.X >= views.X {
+		t.Errorf("评论数应在浏览数左侧：评论数 %+v / 浏览数 %+v", cnt, views)
+	}
+	for _, r := range []struct {
+		name string
+		box  ui.Rect
+	}{{"评论数", cnt}, {"浏览数", views}} {
+		if dy := r.box.Y - send.Y; dy > 10 || dy < -10 {
+			t.Errorf("%s 应与发送按钮同一行：Δy=%.1f", r.name, dy)
+		}
+	}
+	// 原位置不再重复：正文副标题没有裸的「340 次浏览」，评论区也没有单独标题。
+	if tt.HasText("340 次浏览") {
+		t.Errorf("浏览数应只在评论框里以图标+数字呈现：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("评论区"); !ok {
+		t.Fatal("评论区面板本身应该还在，只是不再画标题行")
+	}
+
+	if err := tt.Click("写评论"); err != nil {
+		t.Fatalf("点开评论输入框失败：%v", err)
+	}
+	tt.Frame()
+	if _, ok := tt.Find("评论数"); ok {
+		t.Error("展开输入框后不该再画评论数")
+	}
+	if _, ok := tt.Find("浏览数"); ok {
+		t.Error("展开输入框后不该再画浏览数")
+	}
+	if _, ok := tt.Find("发送"); !ok {
+		t.Error("展开输入框后仍应保留发送按钮")
+	}
+}
+
 // 回复输入框默认只占一行，把高度让给评论列表；点击（选中）后展开为多行
 // 编辑器，失焦或发送成功后折回一行，有草稿或正在回复某层楼时保持展开。
 func TestReplyComposerCollapsesUnlessSelected(t *testing.T) {
@@ -1364,10 +1423,18 @@ func TestReplyComposerCollapsesUnlessSelected(t *testing.T) {
 	}
 
 	// 失焦后保持折叠；再次选中重新展开
+	// 用评论区操作组里的视图切换移开焦点：它在折叠 / 展开两态都在，
+	// 而评论数计数只在折叠态出现（点开输入框后只留发送按钮）。
 	blur := func() {
-		r, ok := tt.Find("评论数")
+		var r ui.Rect
+		var ok bool
+		for _, label := range []string{"切到扁平时间序", "切到楼层视图"} {
+			if r, ok = tt.Find(label); ok {
+				break
+			}
+		}
 		if !ok {
-			t.Fatal("找不到评论数按钮，无法移开焦点")
+			t.Fatal("找不到评论区操作按钮，无法移开焦点")
 		}
 		tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
 		tt.Frame()
@@ -2170,9 +2237,9 @@ func TestDetailBodyCollapsesLeft(t *testing.T) {
 	if !ok {
 		t.Fatalf("找不到正文标题：%q", tt.Texts())
 	}
-	comment, ok := tt.Find("评论")
+	comment, ok := tt.Find("评论区")
 	if !ok {
-		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
+		t.Fatalf("找不到评论区面板：%q", tt.Texts())
 	}
 	// 收起入口落在两栏接缝正中，而不是正文右上角：水平方向位于正文右半边、
 	// 紧贴评论区左缘，垂直方向居中，明显低于标题。它与「收起评论」并排，
@@ -2215,9 +2282,9 @@ func TestDetailBodyCollapsesLeft(t *testing.T) {
 	if !ok {
 		t.Errorf("正文收起后评论输入框不见了：%q", tt.Texts())
 	}
-	collapsed, ok := tt.Find("评论")
+	collapsed, ok := tt.Find("评论区")
 	if !ok {
-		t.Fatalf("正文收起后找不到评论卡片标题：%q", tt.Texts())
+		t.Fatalf("正文收起后找不到评论区面板：%q", tt.Texts())
 	}
 	// 评论区接管整行：起点从 55% 处挪到左边距附近，输入框明显变宽。
 	if collapsed.X >= comment.X-100 {
@@ -2252,9 +2319,9 @@ func TestDetailBodyCollapsesLeft(t *testing.T) {
 	if !ok || back.W <= 1 {
 		t.Fatalf("展开后正文标题没有恢复可见宽度：%+v / %q", back, tt.Texts())
 	}
-	restored, ok := tt.Find("评论")
+	restored, ok := tt.Find("评论区")
 	if !ok {
-		t.Fatalf("展开后找不到评论卡片标题：%q", tt.Texts())
+		t.Fatalf("展开后找不到评论区面板：%q", tt.Texts())
 	}
 	if restored.X <= collapsed.X {
 		t.Errorf("展开后评论区没有回到右栏：%+v / 收起时 %+v", restored, collapsed)
@@ -2274,9 +2341,9 @@ func TestDetailReplyCollapsesRight(t *testing.T) {
 	if !ok {
 		t.Fatalf("找不到正文标题：%q", tt.Texts())
 	}
-	comment, ok := tt.Find("评论")
+	comment, ok := tt.Find("评论区")
 	if !ok {
-		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
+		t.Fatalf("找不到评论区面板：%q", tt.Texts())
 	}
 	// 收起评论与 Lobe 自带的收起正文并排在接缝两侧：前者在右、后者在左，
 	// 垂直都居中，读屏名字各自独立。
@@ -2312,7 +2379,7 @@ func TestDetailReplyCollapsesRight(t *testing.T) {
 	if a.detail.bodyCollapsed {
 		t.Fatalf("收起评论不该同时收起正文")
 	}
-	if _, ok := tt.Find("评论"); ok {
+	if _, ok := tt.Find("评论区"); ok {
 		t.Errorf("评论收起后右栏不该还在：%q", tt.Texts())
 	}
 	// 评论区收起时整组操作都不画，视图切换也随之隐藏。
@@ -2360,9 +2427,9 @@ func TestDetailReplyCollapsesRight(t *testing.T) {
 	if !ok || back.W > title.W+1 || back.W < title.W-1 {
 		t.Fatalf("展开后正文没有回到原来的宽度：%+v / 原来 %+v", back, title)
 	}
-	restored, ok := tt.Find("评论")
+	restored, ok := tt.Find("评论区")
 	if !ok {
-		t.Fatalf("展开后找不到评论卡片标题：%q", tt.Texts())
+		t.Fatalf("展开后找不到评论区面板：%q", tt.Texts())
 	}
 	if d := restored.X - comment.X; d > 1 || d < -1 {
 		t.Errorf("展开后评论区没有回到原来的位置：%+v / 原来 %+v", restored, comment)
@@ -2476,9 +2543,9 @@ func TestDetailBodyDefaultRatio(t *testing.T) {
 	if got := a.detail.bodyWidth; got < want-1 || got > want+1 {
 		t.Errorf("正文默认宽度应约为 %.0f（40%%），实际 %.0f", want, got)
 	}
-	comment, ok := tt.Find("评论")
+	comment, ok := tt.Find("评论区")
 	if !ok {
-		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
+		t.Fatalf("找不到评论区面板：%q", tt.Texts())
 	}
 	if comment.X < float32(width)*0.38 || comment.X > float32(width)*0.52 {
 		t.Errorf("评论区应从约四成处开始，实际 X=%.0f（窗口宽 %d）", comment.X, width)
@@ -2495,9 +2562,9 @@ func TestDetailBodyResizesByDrag(t *testing.T) {
 	if !ok {
 		t.Fatalf("找不到调整宽度的接缝：%q", tt.Texts())
 	}
-	comment, ok := tt.Find("评论")
+	comment, ok := tt.Find("评论区")
 	if !ok {
-		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
+		t.Fatalf("找不到评论区面板：%q", tt.Texts())
 	}
 	before := a.detail.bodyWidth
 
@@ -2522,7 +2589,7 @@ func TestDetailBodyResizesByDrag(t *testing.T) {
 	if wide.X <= seam.X+100 {
 		t.Errorf("拖动后接缝没有跟着右移：%+v / 原来 %+v", wide, seam)
 	}
-	wideComment, _ := tt.Find("评论")
+	wideComment, _ := tt.Find("评论区")
 	if wideComment.X <= comment.X+100 {
 		t.Errorf("拖动后评论区没有跟着右移：%+v / 原来 %+v", wideComment, comment)
 	}
@@ -2536,9 +2603,9 @@ func TestDetailBodyResizesByDrag(t *testing.T) {
 	if got := a.detail.bodyWidth; got >= wideWidth-40 {
 		t.Errorf("向左拖动接缝后正文没有变窄：拖动前 %.0f / 拖动后 %.0f", wideWidth, got)
 	}
-	backComment, ok := tt.Find("评论")
+	backComment, ok := tt.Find("评论区")
 	if !ok {
-		t.Fatalf("拖回后找不到评论卡片标题：%q", tt.Texts())
+		t.Fatalf("拖回后找不到评论区面板：%q", tt.Texts())
 	}
 	if backComment.X >= wideComment.X-40 {
 		t.Errorf("向左拖动后评论区没有左移回来：%+v / 拖动前 %+v", backComment, wideComment)
@@ -2554,9 +2621,9 @@ func TestDetailBodyRatioFollowsWindowResize(t *testing.T) {
 	tt.Frame()
 
 	initial := a.detail.bodyWidth
-	comment, ok := tt.Find("评论")
+	comment, ok := tt.Find("评论区")
 	if !ok {
-		t.Fatalf("找不到评论卡片标题：%q", tt.Texts())
+		t.Fatalf("找不到评论区面板：%q", tt.Texts())
 	}
 
 	// 窗口拉大：正文等比变宽，评论区右移。
@@ -2567,9 +2634,9 @@ func TestDetailBodyRatioFollowsWindowResize(t *testing.T) {
 	if got := a.detail.bodyWidth; got < wantWide-2 || got > wantWide+2 {
 		t.Errorf("窗口拉大后正文宽度应约 %.0f（40%% 比例不变），实际 %.0f", wantWide, got)
 	}
-	wideComment, ok := tt.Find("评论")
+	wideComment, ok := tt.Find("评论区")
 	if !ok {
-		t.Fatalf("拉大后找不到评论卡片标题：%q", tt.Texts())
+		t.Fatalf("拉大后找不到评论区面板：%q", tt.Texts())
 	}
 	if wideComment.X <= comment.X+100 {
 		t.Errorf("窗口拉大后评论区没有右移：%+v / 原来 %+v", wideComment, comment)
@@ -2581,9 +2648,9 @@ func TestDetailBodyRatioFollowsWindowResize(t *testing.T) {
 	if got := a.detail.bodyWidth; got < initial-2 || got > initial+2 {
 		t.Errorf("窗口缩回后正文宽度应回到 %.0f，实际 %.0f", initial, got)
 	}
-	backComment, ok := tt.Find("评论")
+	backComment, ok := tt.Find("评论区")
 	if !ok {
-		t.Fatalf("缩回后找不到评论卡片标题：%q", tt.Texts())
+		t.Fatalf("缩回后找不到评论区面板：%q", tt.Texts())
 	}
 	if backComment.X >= wideComment.X-100 {
 		t.Errorf("窗口缩回后评论区没有左移：%+v / 拉大时 %+v", backComment, wideComment)

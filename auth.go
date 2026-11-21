@@ -828,6 +828,34 @@ func (m *AuthManager) authorizeURL(p *pendingLogin, scope string) string {
 	return m.webBase() + "/oauth/authorize?" + v.Encode()
 }
 
+// embeddedAuthorizeURL 给内置浏览器的原生授权加 redirect_mode=app：自定义协议
+// 回调直接 302，webview 能在导航发生前拦下链接并拿到 code，不必停在落地页等
+// 用户再点一次「打开应用」（oauth.md 第四节 ④）。系统浏览器不能用它 —— 没有
+// 用户手势时浏览器会拒绝唤起外部协议，页面会停在「处理中」。
+func embeddedAuthorizeURL(raw string) string {
+	return withRedirectMode(raw, "app")
+}
+
+// systemAuthorizeURL 去掉 redirect_mode，回到系统浏览器要的落地页默认行为。
+func systemAuthorizeURL(raw string) string {
+	return withRedirectMode(raw, "")
+}
+
+func withRedirectMode(raw, mode string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	q := u.Query()
+	if mode == "" {
+		q.Del("redirect_mode")
+	} else {
+		q.Set("redirect_mode", mode)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 // mergeScopes unions the default scopes with the ones a failed call asked for,
 // keeping first-seen order. A server 403 can name a scope this build never
 // requested (a revoked `write:comment`, a newer endpoint's scope); the next

@@ -46,7 +46,7 @@ func TestBadgeWallRequests(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		calls = append(calls, r.Method+" "+r.URL.Path)
-		if r.Method == http.MethodPost {
+		if r.Method == http.MethodPost || r.Method == http.MethodDelete {
 			equipKeys = append(equipKeys, r.Header.Get("Idempotency-Key"))
 		}
 		mu.Unlock()
@@ -60,7 +60,7 @@ func TestBadgeWallRequests(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me/badges/equipped":
 			fmt.Fprint(w, envelopeJSON(`[{"badge_id":"b1","badge":{"id":"b1","name":"早起鸟"}}]`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/me/badges/b1/equip":
-			fmt.Fprint(w, envelopeJSON(`{"message":"佩戴成功，扣除 5 金币"}`))
+			fmt.Fprint(w, envelopeJSON(`{"message":"佩戴成功"}`))
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/me/badges/b1/equip":
 			fmt.Fprint(w, envelopeJSON(`{"message":"已取消佩戴"}`))
 		default:
@@ -91,7 +91,7 @@ func TestBadgeWallRequests(t *testing.T) {
 	}
 
 	msg, err := a.client.setBadgeEquipped(context.Background(), "b1", "key-1", true)
-	if err != nil || msg != "佩戴成功，扣除 5 金币" {
+	if err != nil || msg != "佩戴成功" {
 		t.Errorf("佩戴失败：msg=%q err=%v", msg, err)
 	}
 	msg, err = a.client.setBadgeEquipped(context.Background(), "b1", "key-1", false)
@@ -115,8 +115,8 @@ func TestBadgeWallRequests(t *testing.T) {
 			t.Errorf("第 %d 个请求 = %s，期望 %s", i+1, calls[i], want[i])
 		}
 	}
-	if len(equipKeys) != 1 || equipKeys[0] != "key-1" {
-		t.Errorf("佩戴请求的幂等键不对：%q", equipKeys)
+	if len(equipKeys) != 2 || equipKeys[0] != "key-1" || equipKeys[1] != "key-1" {
+		t.Errorf("佩戴 / 取消佩戴的幂等键不对：%q", equipKeys)
 	}
 }
 
@@ -364,7 +364,7 @@ func TestProfileBadgeToggle(t *testing.T) {
 			fmt.Fprint(w, envelopeJSON(`{"message":"已取消佩戴"}`))
 			return
 		}
-		fmt.Fprint(w, envelopeJSON(`{"message":"佩戴成功，扣除 5 金币"}`))
+		fmt.Fprint(w, envelopeJSON(`{"message":"佩戴成功"}`))
 	})
 
 	if err := tt.Click("佩戴「全勤」"); err != nil {
@@ -380,7 +380,7 @@ func TestProfileBadgeToggle(t *testing.T) {
 	// 提示可能在请求完成的那一帧里已经被窗口领走，所以看界面而不是队列：
 	// 「我的」窗口只认领发给自己的 toast，能在它里面看到就说明目标窗口对。
 	tt.Frame()
-	if !tt.HasText("佩戴成功，扣除 5 金币") {
+	if !tt.HasText("佩戴成功") {
 		t.Errorf("徽章窗口没有显示佩戴结果：%q", tt.Texts())
 	}
 
@@ -399,13 +399,13 @@ func TestProfileBadgeToggle(t *testing.T) {
 	if keys[0] == "" {
 		t.Error("佩戴请求没有带幂等键")
 	}
-	if keys[1] != "" {
-		t.Errorf("取消佩戴不该带幂等键：%q", keys[1])
+	if keys[1] == "" {
+		t.Error("取消佩戴请求没有带幂等键")
 	}
 }
 
-// 缺 write:economy 时进入全局授权链路；授权成功后同一次点击自动重跑，并且
-// 重放沿用同一个 Idempotency-Key，不会重复扣币。
+// 缺 interact（或历史令牌只持 write:economy）时进入全局授权链路；授权成功后
+// 同一次点击自动重跑，并且重放沿用同一个 Idempotency-Key。
 func TestProfileBadgeEquipReplaysWithSameKey(t *testing.T) {
 	var mu sync.Mutex
 	var keys []string
@@ -418,7 +418,7 @@ func TestProfileBadgeEquipReplaysWithSameKey(t *testing.T) {
 		mu.Unlock()
 		if n == 1 {
 			fmt.Fprint(w, `{"c":403,"code":"insufficient_scope","m":"需要更多权限","d":null,
-				"required_scope":["write:economy"],"t":1730000000000}`)
+				"required_scope":["interact","write:economy"],"t":1730000000000}`)
 			return
 		}
 		fmt.Fprint(w, envelopeJSON(`{"message":"佩戴成功"}`))
@@ -432,7 +432,8 @@ func TestProfileBadgeEquipReplaysWithSameKey(t *testing.T) {
 	if len(a.authGate.replays) != 1 {
 		t.Fatalf("被中断的佩戴没有登记重放：%+v", a.authGate)
 	}
-	if len(a.authGate.need.Scopes) != 1 || a.authGate.need.Scopes[0] != "write:economy" {
+	if len(a.authGate.need.Scopes) != 2 ||
+		a.authGate.need.Scopes[0] != "interact" || a.authGate.need.Scopes[1] != "write:economy" {
 		t.Errorf("缺失的 scope 没有登记：%+v", a.authGate.need)
 	}
 

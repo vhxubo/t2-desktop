@@ -670,6 +670,13 @@ func TestComposeFabPaintsAboveList(t *testing.T) {
 		t.Fatal("找不到发帖按钮")
 	}
 	img := tt.Image()
+	// 发帖是 Lobe ActionIcon：44 DIP 方形热区、强调色底、居中的 SquarePen。
+	if r.W != fabPrimary || r.H != fabPrimary {
+		t.Errorf("发帖 FAB 应当是 %g DIP 方块，实际 %+v", fabPrimary, r)
+	}
+	if bg := img.RGBAAt(int(r.X)+8, int(r.Y)+8); bg.R != 0x1D || bg.G != 0x4E || bg.B != 0xD8 {
+		t.Errorf("发帖 FAB 底色 = %v，期望强调色 #1D4ED8", bg)
+	}
 	cx, cy := int(r.X+r.W/2), int(r.Y+r.H/2)
 	inside := img.RGBAAt(cx, cy)
 	if inside.R == inside.G && inside.G == inside.B {

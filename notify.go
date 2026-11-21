@@ -15,6 +15,11 @@ import (
 // 回到站内消息中心。
 const noticeTargetKeep = 200
 
+// notificationFallbackInterval 是关掉实时长连接后的轮询间隔。SSE 正常时一条
+// 连接就够；关掉后没有推送，只能定时拉未读数与新消息。一分钟既能及时发现
+// 新消息，又不至于给 API 太多压力（限流闸门仍然共用）。
+const notificationFallbackInterval = 60 * time.Second
+
 // showNativeNotice is the production notifier: a real desktop notification
 // through the platform (Windows notification-area balloon, macOS Notification
 // Center, Linux notification daemon). It is installed only once the app is
@@ -29,6 +34,7 @@ func showNativeNotice(n nativeNotice) error {
 		Title:    n.Title,
 		Subtitle: n.Subtitle,
 		Body:     n.Body,
+		Silent:   n.Silent,
 	}
 	// 一个账号一叠：macOS 的通知中心按账号分开堆，两个账号的消息不会混在
 	// 一起（其它平台忽略这个字段）。
@@ -54,6 +60,12 @@ func notificationTabIndex() int {
 // user. It is idempotent: repeated calls (login, app ready) reuse it.
 func (a *app) startNotificationWatch() {
 	if !a.autoLoad || a.watchCancel != nil || !a.auth.loggedIn() {
+		return
+	}
+	// 关掉实时长连接时只起轮询兜底：未读数、列表与桌面通知照常更新，只是
+	// 不再维持 SSE。偏好变化会调用 stop/start 这一对来切换，不会两路并存。
+	if !a.notifPrefs().streamEnabled() {
+		a.startNotificationFallbackPoll()
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -142,6 +154,47 @@ func (a *app) stopNotificationWatch() {
 		a.notifTimer.Stop()
 		a.notifTimer = nil
 	}
+	// 轮询兜底与 SSE 共用 watchGen 判过期，这里一并停掉：退出登录、窗口关闭
+	// 与切到 SSE 都会走这条路径。
+	a.stopNotificationFallbackPoll()
+}
+
+// startNotificationFallbackPoll 起一轮延时轮询，每轮回到 UI 线程后重新排下一轮。
+// 用 watchGen 判过期：start/stop 长连接、退出登录都会让它失效。
+func (a *app) startNotificationFallbackPoll() {
+	if a.notifPollTimer != nil || !a.autoLoad || !a.auth.loggedIn() {
+		return
+	}
+	gen := a.watchGen
+	a.notifPollTimer = time.AfterFunc(notificationFallbackInterval, func() {
+		a.publish(func() {
+			if a.watchGen != gen {
+				return
+			}
+			a.notifPollTimer = nil
+			if !a.notifPrefs().streamEnabled() || !a.auth.loggedIn() {
+				return
+			}
+			a.refreshUnread()
+			a.pollNotifications()
+			a.reloadNotificationTab()
+			a.startNotificationFallbackPoll()
+		})
+	})
+}
+
+func (a *app) stopNotificationFallbackPoll() {
+	if a.notifPollTimer != nil {
+		a.notifPollTimer.Stop()
+		a.notifPollTimer = nil
+	}
+}
+
+// applyNotificationStreamPref 让长连接偏好立即生效。只在 UI 线程调用：第一次
+// 开启要建立连接，关掉要断开并接管轮询；两者都复用已有的 start/stop 路径。
+func (a *app) applyNotificationStreamPref() {
+	a.stopNotificationWatch()
+	a.startNotificationWatch()
 }
 
 // refreshUnread calibrates the badge. It is a guarded job: concurrent calls
@@ -218,8 +271,8 @@ func (a *app) pollNotifications() {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	go func() {
 		defer cancel()
-		// 原生通知只播报最新一页的未读消息：不按关键词过滤，用户设的搜索条件
-		// 只影响窗口里的列表。
+		// 原生通知只播报最新一页的未读消息。窗口里的搜索条件只影响列表；
+		// 设置里的「提醒关键词 / 分类」是另一套独立偏好，在下面逐条判定。
 		page, err := a.client.fetchNotifications(ctx, 1, notificationFilterAll, "")
 		if err != nil {
 			return // 静默失败：角标与列表保持原样，SSE 会继续推进
@@ -246,8 +299,10 @@ func (a *app) pollNotifications() {
 				if a.notifSeen[n.ID] {
 					continue
 				}
+				// 先记账再过滤：用户关掉某个分类时，旧消息不会在重新打开开关后
+				// 被当成新消息补弹一遍。
 				a.notifSeen[n.ID] = true
-				if n.IsRead {
+				if n.IsRead || !a.notifPrefs().shouldNotify(n) {
 					continue
 				}
 				fresh = append(fresh, n)
@@ -259,15 +314,15 @@ func (a *app) pollNotifications() {
 			if len(fresh) == 0 {
 				return
 			}
-			// 一次事件最多弹 3 条，避免同一批消息刷屏。
-			if len(fresh) > 3 {
-				fresh = fresh[:3]
+			// 一次事件最多弹 N 条，避免同一批消息刷屏；条数由设置里的档位决定。
+			if limit := a.notifPrefs().burstLimit(); limit > 0 && len(fresh) > limit {
+				fresh = fresh[:limit]
 			}
 			notices := make([]nativeNotice, 0, len(fresh))
 			for _, n := range fresh {
 				notices = append(notices, a.notificationNative(n))
 			}
-			if !a.nativeNotify {
+			if !a.notifPrefs().notificationEnabled() {
 				return
 			}
 			a.showNotices(notices)
@@ -278,7 +333,11 @@ func (a *app) pollNotifications() {
 // notificationNative 给一条消息补上「这是哪个账号收到的」再交给系统通知。
 // 单账号不写账号名：窗口标题已经说明身份，副标题只会多占一行。
 func (a *app) notificationNative(n *notification) nativeNotice {
-	return notificationNative(n, a.accountID, a.noticeAccountName())
+	notice := notificationNative(n, a.accountID, a.noticeAccountName())
+	// 提示音是进程级偏好；离线/多账号窗口共用同一份。Silent 在 UI 线程上
+	// 由偏好决定，平台通知协程只读这一份快照。
+	notice.Silent = !a.notifPrefs().soundEnabled()
+	return notice
 }
 
 // noticeAccountName 是系统通知副标题里的账号名。没有账号（未登录窗口、旧版

@@ -16,10 +16,11 @@ import (
 // 按钮（「返回顶部」）不会把「刷新」「发帖」顶得上下跳。整列绝对定位：
 // 不占内容布局的高度，也不随内容滚动。
 const (
-	fabRight  float32 = 24 // 距内容区右边
-	fabBottom float32 = 24 // 距内容区下边
-	fabGap    float32 = 12 // 竖排按钮之间的间距
-	fabCircle float32 = 38 // 次级按钮（刷新 / 返回顶部）的方块尺寸
+	fabRight   float32 = 24 // 距内容区右边
+	fabBottom  float32 = 24 // 距内容区下边
+	fabGap     float32 = 12 // 竖排按钮之间的间距
+	fabCircle  float32 = 38 // 次级按钮（刷新 / 返回顶部 / 发动态）的方块尺寸
+	fabPrimary float32 = 44 // 主操作（发帖）的方块尺寸，比次级的大一圈
 )
 
 // fabStack 画右下角竖排的一列悬浮按钮。buttons 按从上到下的顺序给出，
@@ -61,9 +62,9 @@ func (a *app) fabButton(c *ui.Context, icon *ui.SVG, label, tip string, loading 
 	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
 
-// listFabs 是主页内容区右下角的一列悬浮按钮：发帖（主操作，强调色胶囊）、
-// 发动态、刷新，以及列表滚离顶部之后才出现的「返回顶部」。发帖固定
-// 在最下面，离手最近，其余往上排。评分榜入口已移到侧边栏「动态」下面
+// listFabs 是主页内容区右下角的一列悬浮按钮：发帖（主操作，强调色的
+// Lobe ActionIcon）、发动态、刷新，以及列表滚离顶部之后才出现的「返回顶部」。
+// 发帖固定在最下面，离手最近，其余往上排。评分榜入口已移到侧边栏「动态」下面
 // （见 sidebarNavItems），它开的是独立窗口，不适合和这些页面操作混在一起。
 func (a *app) listFabs(c *ui.Context) {
 	st := a.tabs[a.tab]

@@ -38,9 +38,9 @@ import (
 const (
 	myCollectionsPath     = "/v1/me/collections"
 	collectionsAssignPath = "/v1/me/collections/assign"
-	// collectionNameMax 是新建 / 改名时界面的字数上限。文档没有给上限，这里
-	// 只防一个明显过长的名字，不假装知道服务端的真实约束。
-	collectionNameMax = 50
+	// collectionNameMax 是新建 / 改名时界面的字数上限。文档明确 ≤30 字
+	// （api-write.md 的「合集」一节），超长会被服务端 400 invalid_request。
+	collectionNameMax = 30
 	// collectionTopicsLimit 是合集内帖子列表每页条数：与其它帖子列表一致，
 	// 该端点没有单独的 limit 上限说明。
 	collectionTopicsLimit = 50
@@ -141,22 +141,6 @@ func decodeCollectionObject(raw json.RawMessage) (collectionItem, bool) {
 	}, true
 }
 
-// createCollection 新建一个合集。响应里带创建结果时用它拿 id，没带时返回
-// 只填了名字的项，调用方据此重新读一次列表。
-func (c *Client) createCollection(ctx context.Context, name string) (collectionItem, error) {
-	return withAuthRetry(c, ctx, func(token string) (collectionItem, error) {
-		d, err := c.postJSON(ctx, c.apiURL(myCollectionsPath), token, "",
-			map[string]any{"name": name})
-		if err != nil {
-			return collectionItem{}, err
-		}
-		if item, ok := decodeCollectionObject(d); ok {
-			return item, nil
-		}
-		return collectionItem{Name: name}, nil
-	})
-}
-
 // renameCollection 给合集改名（PATCH，body 只有 name）。id 不变，名字以服务端
 // 确认为准（可能会去掉首尾空白）；响应没带结果时用提交的名字兜底。
 func (c *Client) renameCollection(ctx context.Context, id, name string) (collectionItem, error) {
@@ -195,13 +179,30 @@ func (c *Client) deleteCollection(ctx context.Context, id string) error {
 // assignTopicCollection 把帖子归入某个合集。collectionID 为空时传 null，
 // 表示移出合集。409 / 404 视为成功：目标状态已经成立。
 func (c *Client) assignTopicCollection(ctx context.Context, shortID, collectionID string) error {
+	var value any // nil 序列化成 null：移出合集
+	if collectionID != "" {
+		value = collectionID
+	}
+	return c.assignTopicPayload(ctx, map[string]any{
+		"short_id":      shortID,
+		"collection_id": value,
+	})
+}
+
+// assignTopicNewCollection 一步建新合集并把帖子归进去。文档的 new_collection_name
+// 优先于 collection_id，省掉「先建再归入」两次写请求和中间态。
+func (c *Client) assignTopicNewCollection(ctx context.Context, shortID, name string) error {
+	return c.assignTopicPayload(ctx, map[string]any{
+		"short_id":            shortID,
+		"new_collection_name": name,
+	})
+}
+
+// assignTopicPayload 是两条归入路径共用的写出口。409 / 404 表示目标状态已经
+// 成立，按成功处理；其它错误原样带回给授权链路或界面。
+func (c *Client) assignTopicPayload(ctx context.Context, payload map[string]any) error {
 	_, err := withAuthRetry(c, ctx, func(token string) (struct{}, error) {
-		var value any // nil 序列化成 null：移出合集
-		if collectionID != "" {
-			value = collectionID
-		}
-		_, err := c.postJSON(ctx, c.apiURL(collectionsAssignPath), token, "",
-			map[string]any{"short_id": shortID, "collection_id": value})
+		_, err := c.postJSON(ctx, c.apiURL(collectionsAssignPath), token, "", payload)
 		var ae *apiError
 		if errors.As(err, &ae) &&
 			(ae.Status == http.StatusConflict || ae.Status == http.StatusNotFound) {
@@ -353,8 +354,8 @@ func (a *app) assignTopicCollection(d *detailState, item collectionItem, add boo
 	}()
 }
 
-// createCollectionForTopic 新建一个合集并立刻把当前帖子归进去：用户点
-// 「新建」时想的是「把这帖放进这个新合集」，分两步做会多一次点击。
+// createCollectionForTopic 新建一个合集并立刻把当前帖子归进去：文档的
+// new_collection_name 让这一步只发一次写请求，不再「先建再归入」。
 func (a *app) createCollectionForTopic(d *detailState) {
 	if d == nil || !a.detailLive(d) || d.coll.creating || d.coll.busy || !a.canCollectTopic(d) {
 		return
@@ -376,12 +377,22 @@ func (a *app) createCollectionForTopic(d *detailState) {
 		})
 		return
 	}
+	if d.shortID == "" {
+		a.toast(a.detailToastFor(d), "缺少帖子标识，暂时无法归入合集")
+		return
+	}
 	d.coll.creating = true
-	actor := a.auth.username()
+	shortID, actor := d.shortID, a.auth.username()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	go func() {
 		defer cancel()
-		item, err := a.client.createCollection(ctx, name)
+		err := a.client.assignTopicNewCollection(ctx, shortID, name)
+		// 归入回执不保证带新合集 id：重读一次我的合集，补齐列表与 id。
+		var items []collectionItem
+		var listErr error
+		if err == nil {
+			items, listErr = a.client.fetchMyCollections(ctx)
+		}
 		a.publish(func() {
 			if !a.detailLive(d) {
 				return
@@ -398,18 +409,23 @@ func (a *app) createCollectionForTopic(d *detailState) {
 				return
 			}
 			d.coll.draft = ""
-			a.invalidateCollections()
-			if item.ID == "" {
-				// 服务端没回创建结果：重新读一次列表，让新合集出现在弹窗里。
+			d.topic.CollectionKnown = true
+			d.topic.CollectionName = name
+			d.topic.CollectionID = ""
+			if listErr == nil {
+				d.coll.items = items
+				d.coll.loaded = true
+				for _, it := range items {
+					if it.Name == name {
+						d.topic.CollectionID = it.ID
+						break
+					}
+				}
+			} else {
 				d.coll.loaded = false
-				a.ensureCollections(d)
-				a.toast(a.detailToastFor(d), "已新建合集「"+item.Name+"」")
-				return
 			}
-			// 本地先记上，避免等待重读列表；随后直接归入这个新合集。
-			d.coll.items = append(d.coll.items, item)
-			d.coll.loaded = true
-			a.assignTopicCollection(d, item, true)
+			a.invalidateCollections()
+			a.toast(a.detailToastFor(d), "已加入合集「"+name+"」")
 		})
 	}()
 }

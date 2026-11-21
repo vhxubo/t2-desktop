@@ -1,6 +1,9 @@
 package main
 
-import "github.com/egoist/mygo/ui"
+import (
+	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+)
 
 // iconActionSize 是普通图标按钮里图标的边长。按钮本身不写文字，靠图标表意，
 // hover 时由 Tooltip 给出完整说明（见 iconActionButton）。
@@ -19,36 +22,26 @@ const iconActionBox float32 = 28
 // titleBarButton、详情页标题栏那枚动作用 detailToolButton、编辑器工具条用
 // editorIconButton。这里服务的是对话框标题行、设置项与列表行这类普通位置。
 //
-// label 同时是读屏名字与点击测试的命中名；tip 要说清点了会发生什么，而不是把
+// label 是读屏名字与点击测试的命中名；tip 要说清点了会发生什么，而不是把
 // label 再抄一遍。返回值交给调用方判断点击：要改本帧的局部变量（例如批量删除
 // 先攒下要删的行号）就用 `.Clicked()`，它当场生效；只改能留到下一帧的状态才用
 // `.OnClick(fn)`，那是构建结束之后才跑的延迟动作。禁用态在返回值上补
 // `.Disabled(true)` 即可，Tooltip 仍能提示为什么点不动。
+//
+// 外观交给 Lobe 的 action.ActionIcon：方块热区、圆角、悬停底色、图标着色与
+// Tooltip 都由它按主题 token 统一处理，这里只负责把两种文案分开——Title 给
+// Tooltip 用，Label 覆盖成读屏用的短名。
 func iconActionButton(c *ui.Context, icon *ui.SVG, label, tip string) ui.Element {
-	t := c.Theme()
-	b := ui.Button(c, "").
-		Size(iconActionBox, iconActionBox).
-		Border(0, t.Border).
-		Radius(6).
-		// ui.Button 默认带 Padding(6,14)，而这里把按钮框死了 28×28：默认
-		// 左右各 14 的中度内边距会把内容盒压成 0 宽，图标贴着内容盒左沿画，
-		// 结果整枚图标偏右 8px，hover 底色却铺满整框，看着就是底色错位。
-		// 显式清成 0，让图标在方形热区里真正居中，hover 底色也与图标对齐。
-		Padding(0).
-		KeepFocus()
-	// 悬停底色要自己给：按钮自带的 hover 样式只在背景没被改过时才生效，
-	// 而这里要的是「没有边框、只有一圈浅底」的图标按钮。
-	b.Background(ui.Transparent)
-	hovered := b.Hovered()
-	if hovered {
-		b.Background(t.SurfaceHover)
-	}
-	ink := t.TextMuted
-	if hovered {
-		ink = t.Text
-	}
-	b.Children(func() {
-		ui.Icon(c, icon).Size(iconActionSize, iconActionSize).TextColor(ink)
+	b := action.ActionIcon(c, icon, action.ActionIconProps{
+		BlockSize: iconActionBox,
+		GlyphSize: iconActionSize,
+		Title:     tip,
 	})
-	return b.Label(label).Tooltip(tip)
+	// Lobe 的静止/悬停图标色都比本应用原来的 TextMuted/Text 浅一档；这里沿用
+	// 原来的两种墨色，hover 时仍由 ActionIcon 负责底色，只有字形颜色跟随。
+	ink := c.Theme().TextMuted
+	if b.Hovered() {
+		ink = c.Theme().Text
+	}
+	return b.TextColor(ink).Label(label).KeepFocus()
 }

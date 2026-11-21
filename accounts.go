@@ -152,6 +152,10 @@ type accountBook struct {
 	kv         *localKV
 	closeMode  *closeModeStore
 	disclaimer *disclaimerStore
+	// commentCostPrefs 是评论费用的两个开关，进程级一份（见 comment_cost_prefs.go）。
+	commentCostPrefs *commentCostPrefsStore
+	// notificationPrefs 是通知偏好，进程级一份（见 notification_prefs.go）。
+	notificationPrefs *notificationPrefsStore
 
 	mu       sync.Mutex
 	accounts []*account
@@ -220,14 +224,16 @@ func newAccountBook(dir string) *accountBook {
 		dir = configDir()
 	}
 	b := &accountBook{
-		dir:        dir,
-		proxy:      newProxyManager(dir),
-		theme:      newThemeManager(dir),
-		images:     newImageCache(dir),
-		kv:         newOfflineKV(dir),
-		closeMode:  newCloseModeStore(dir),
-		disclaimer: newDisclaimerStore(dir),
-		openURL:    func(u string) error { return mygo.Shell.OpenExternal(u) },
+		dir:               dir,
+		proxy:             newProxyManager(dir),
+		theme:             newThemeManager(dir),
+		images:            newImageCache(dir),
+		kv:                newOfflineKV(dir),
+		closeMode:         newCloseModeStore(dir),
+		disclaimer:        newDisclaimerStore(dir),
+		commentCostPrefs:  newCommentCostPrefsStore(dir),
+		notificationPrefs: newNotificationPrefsStore(dir),
+		openURL:           func(u string) error { return mygo.Shell.OpenExternal(u) },
 	}
 	b.imgHTTP = b.proxy.Client(20 * time.Second)
 	b.quitApp = b.quitProgram
@@ -686,7 +692,9 @@ func (b *accountBook) beginAccountLogin(auth *AuthManager, targetID string, extr
 		}
 		return
 	}
-	if err := b.openLogin(authorize); err != nil {
+	// 内置浏览器的 webview 自己拦自定义协议跳转，需要 redirect_mode=app 直跳；
+	// p.url 仍是原始地址，退回系统浏览器或用户手动切换时走落地页默认行为。
+	if err := b.openLogin(embeddedAuthorizeURL(authorize)); err != nil {
 		// 内置浏览器起不来（缺 WebView2 运行时、平台不支持）：收起那个窗口、
 		// 退回系统浏览器 —— 用户至少还有一条能走通的路。
 		b.closeLoginWindow()

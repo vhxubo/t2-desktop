@@ -11,6 +11,11 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/field"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 /* ------------------------------------------------------------------
@@ -150,7 +155,8 @@ func (a *app) netLogWindowView(c *ui.Context) {
 			Background(t.Surface).DragWindow().Children(func() {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "网络调试").FontSize(13).Bold().SingleLine().TextColor(t.Text)
+				display.Text(c, "网络调试", display.TextProps{FontSize: 13, Strong: true, Rows: 1}).
+					TextColor(t.Text)
 				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
@@ -160,52 +166,64 @@ func (a *app) netLogWindowView(c *ui.Context) {
 			})
 			titleBarButton(c, titleClose, "关闭", func() { a.closeNetLogWindow() })
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
 		// 工具栏：暂停 / 恢复、清空、分类过滤、文本筛选与条数。
 		ui.Row(c).FillWidth().Padding(8, 12).Gap(8).AlignItems(ui.Center).Children(func() {
 			if a.proxy.net.Paused() {
-				if ui.Button(c, "继续记录").Tooltip("恢复记录新的请求，已有记录保留").Clicked() {
+				b := action.Button(c, "继续记录", action.ButtonProps{Size: lobetheme.Small}).
+					Tooltip("恢复记录新的请求，已有记录保留")
+				if b.Clicked() {
 					a.proxy.net.SetPaused(false)
 				}
-			} else if ui.Button(c, "暂停记录").Tooltip("暂停记录，发出去的请求不再进入列表").Clicked() {
-				a.proxy.net.SetPaused(true)
+			} else {
+				b := action.Button(c, "暂停记录", action.ButtonProps{Size: lobetheme.Small}).
+					Tooltip("暂停记录，发出去的请求不再进入列表")
+				if b.Clicked() {
+					a.proxy.net.SetPaused(true)
+				}
 			}
 			if iconActionButton(c, trashIcon, "清空记录", "清空当前列表里的全部请求记录").Clicked() {
 				a.proxy.net.Clear()
 				a.netLogSel = 0
 			}
-			ui.Segmented(c, &a.netLogKind, netLogKindLabels...).Label("分类筛选")
-			ui.TextInput(c, &a.netLogFilter).Label("筛选").
-				Placeholder("按方法或 URL 筛选，如 /v1/topics").Grow(1).MinWidth(0)
-			ui.Text(c, fmt.Sprintf("%d 条", len(shown))).FontSize(11).
-				TextColor(t.TextMuted).SingleLine()
+			action.Segmented(c, &a.netLogKind, netLogKindLabels, action.SegmentedProps{
+				Size: lobetheme.Small,
+			}).Label("分类筛选")
+			ui.Box(c).Grow(1).MinWidth(0).Children(func() {
+				field.Input(c, &a.netLogFilter, field.InputProps{
+					Size:        lobetheme.Small,
+					Placeholder: "按方法或 URL 筛选，如 /v1/topics",
+				}).Label("筛选").Grow(1).MinWidth(0)
+			})
+			display.Text(c, fmt.Sprintf("%d 条", len(shown)), display.TextProps{FontSize: 11, Rows: 1}).
+				TextColor(t.TextMuted)
 		})
-		ui.Divider(c)
+		layout.Divider(c, layout.DividerProps{})
 
 		// 请求列表：最新在最上面，免去追着滚动条跑。
-		ui.Scroll(c).Grow(45).MinHeight(0).Children(func() {
+		layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
 			ui.Column(c).FillWidth().Gap(0).Padding(4, 6).Children(func() {
 				if len(shown) == 0 {
 					hint := "还没有请求。应用发出的每个请求都会出现在这里。"
 					if a.proxy.net.Paused() {
 						hint = "记录已暂停。点「继续记录」恢复。"
 					}
-					ui.Text(c, hint).FontSize(12).TextColor(t.TextMuted).
-						Padding(12, 8)
+					display.Text(c, hint, display.TextProps{FontSize: 12, Rows: 2}).
+						TextColor(t.TextMuted).Padding(12, 8)
 					return
 				}
 				for i := len(shown) - 1; i >= 0; i-- {
 					a.netLogRow(c, shown[i])
 				}
 			})
-		})
-		ui.Divider(c)
+		}).Grow(45).MinHeight(0)
+		layout.Divider(c, layout.DividerProps{})
 
 		// 详情：选中请求的参数、头与体。
-		ui.Scroll(c).Grow(55).MinHeight(0).Children(func() {
+		layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
 			a.netLogDetail(c, sel)
-		})
+		}).Grow(55).MinHeight(0)
 	})
 }
 
@@ -245,12 +263,14 @@ func (a *app) netLogRow(c *ui.Context, e *netEntry) {
 		methodColor = t.Accent
 	}
 	row.Children(func() {
-		ui.Text(c, e.Method).FontSize(11).Bold().Width(60).TextColor(methodColor)
-		ui.Text(c, netStatusText(e)).FontSize(11).Width(72).
-			TextColor(netStatusColor(t, e))
-		ui.Text(c, netElapsedText(e)).FontSize(11).Width(76).TextAlign(ui.End).
-			TextColor(t.TextMuted)
-		ui.Text(c, e.URL).FontSize(11).SingleLine().Grow(1).MinWidth(0).TextColor(t.Text)
+		display.Text(c, e.Method, display.TextProps{FontSize: 11, Strong: true, Rows: 1}).
+			Width(60).TextColor(methodColor)
+		display.Text(c, netStatusText(e), display.TextProps{FontSize: 11, Rows: 1}).
+			Width(72).TextColor(netStatusColor(t, e))
+		display.Text(c, netElapsedText(e), display.TextProps{FontSize: 11, Rows: 1}).
+			Width(76).TextAlign(ui.End).TextColor(t.TextMuted)
+		display.Text(c, e.URL, display.TextProps{FontSize: 11, Rows: 1}).
+			Grow(1).MinWidth(0).TextColor(t.Text)
 	})
 	row.Label(e.Method + " " + e.URL).
 		Tooltip("点击查看这次请求的参数与响应").
@@ -309,8 +329,8 @@ func (a *app) netLogDetail(c *ui.Context, e *netEntry) {
 	t := c.Theme()
 	ui.Column(c).FillWidth().Padding(12, 14).Gap(12).Children(func() {
 		if e == nil {
-			ui.Text(c, "在上方选择一条请求，查看它的参数与响应").
-				FontSize(12).TextColor(t.TextMuted)
+			display.Text(c, "在上方选择一条请求，查看它的参数与响应",
+				display.TextProps{FontSize: 12, Rows: 2}).TextColor(t.TextMuted)
 			return
 		}
 
@@ -334,13 +354,14 @@ func (a *app) netLogDetail(c *ui.Context, e *netEntry) {
 				}
 			}
 			if e.ReqBodyNote != "" {
-				ui.Text(c, e.ReqBodyNote).FontSize(11).TextColor(t.TextMuted)
+				display.Text(c, e.ReqBodyNote, display.TextProps{FontSize: 11, Rows: 2}).
+					TextColor(t.TextMuted)
 			} else if e.ReqBody != "" {
 				a.netSectionTitle(c, "请求体", 0)
 				a.netCodeBlock(c, netPrettyJSON(e.ReqBody))
 				if e.ReqBodyTruncated {
-					ui.Text(c, "请求体已截断，仅显示前 "+netHumanSize(netLogMaxBody)).
-						FontSize(11).TextColor(t.TextMuted)
+					display.Text(c, "请求体已截断，仅显示前 "+netHumanSize(netLogMaxBody),
+						display.TextProps{FontSize: 11, Rows: 1}).TextColor(t.TextMuted)
 				}
 			}
 		})
@@ -348,7 +369,8 @@ func (a *app) netLogDetail(c *ui.Context, e *netEntry) {
 		a.netSection(c, "响应", func() {
 			a.netKV(c, "状态", netDetailStatus(e))
 			if e.Err != "" {
-				ui.Text(c, "连接失败："+e.Err).FontSize(11).TextColor(t.Danger).MaxLines(3)
+				display.Text(c, "连接失败："+e.Err, display.TextProps{FontSize: 11, Rows: 3}).
+					TextColor(t.Danger)
 			}
 			if len(e.RespHeaders) > 0 {
 				a.netSectionTitle(c, "响应头", 0)
@@ -357,17 +379,19 @@ func (a *app) netLogDetail(c *ui.Context, e *netEntry) {
 				}
 			}
 			if !e.Done {
-				ui.Text(c, "响应体尚未读完，内容还在增加…").FontSize(11).TextColor(t.TextMuted)
+				display.Text(c, "响应体尚未读完，内容还在增加…",
+					display.TextProps{FontSize: 11, Rows: 1}).TextColor(t.TextMuted)
 			}
 			if e.RespNote != "" {
-				ui.Text(c, e.RespNote).FontSize(11).TextColor(t.TextMuted).MaxLines(3)
+				display.Text(c, e.RespNote, display.TextProps{FontSize: 11, Rows: 3}).
+					TextColor(t.TextMuted)
 			}
 			if e.RespBody != "" {
 				a.netSectionTitle(c, "响应体", 0)
 				a.netCodeBlock(c, netPrettyJSON(e.RespBody))
 				if e.RespTrunc {
-					ui.Text(c, "响应体已截断，仅显示前 "+netHumanSize(netLogMaxBody)).
-						FontSize(11).TextColor(t.TextMuted)
+					display.Text(c, "响应体已截断，仅显示前 "+netHumanSize(netLogMaxBody),
+						display.TextProps{FontSize: 11, Rows: 1}).TextColor(t.TextMuted)
 				}
 			}
 		})
@@ -408,7 +432,8 @@ func (a *app) netCopyActions(c *ui.Context, e *netEntry) {
 // netCopyChip 是详情区的一枚文字复制按钮：点击把 text 写进剪贴板，结果由
 // 本窗口的 toast 报告。
 func (a *app) netCopyChip(c *ui.Context, label, tip, text, okText string) {
-	if ui.Button(c, label).Tooltip(tip).Clicked() {
+	if action.Button(c, label, action.ButtonProps{Size: lobetheme.Small}).
+		Tooltip(tip).Clicked() {
 		a.copyNetValue(c, text, okText)
 	}
 }
@@ -505,7 +530,8 @@ func netDetailStatus(e *netEntry) string {
 func (a *app) netSection(c *ui.Context, title string, body func()) {
 	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
-		ui.Text(c, title).FontSize(12).Bold().TextColor(t.Text)
+		display.Text(c, title, display.TextProps{FontSize: 12, Strong: true, Rows: 1}).
+			TextColor(t.Text)
 		body()
 	})
 }
@@ -513,7 +539,8 @@ func (a *app) netSection(c *ui.Context, title string, body func()) {
 // netSectionTitle 是块内的小节标题（请求头、请求体这类），字号小一档。
 func (a *app) netSectionTitle(c *ui.Context, title string, _ int) {
 	t := c.Theme()
-	ui.Text(c, title).FontSize(11).Bold().TextColor(t.TextMuted)
+	display.Text(c, title, display.TextProps{FontSize: 11, Strong: true, Rows: 1}).
+		TextColor(t.TextMuted)
 }
 
 // netKV 画一行键值：键是固定宽度的弱化文本，值换行展示（URL 与头的值可能
@@ -522,8 +549,10 @@ func (a *app) netSectionTitle(c *ui.Context, title string, _ int) {
 func (a *app) netKV(c *ui.Context, key, value string) {
 	t := c.Theme()
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, key).FontSize(11).TextColor(t.TextMuted).Width(140)
-		ui.Text(c, value).FontSize(11).TextColor(t.Text).Grow(1).MinWidth(0)
+		display.Text(c, key, display.TextProps{FontSize: 11, Rows: 1}).
+			TextColor(t.TextMuted).Width(140)
+		display.Text(c, value, display.TextProps{FontSize: 11, Rows: 1}).
+			TextColor(t.Text).Grow(1).MinWidth(0)
 		if iconActionButton(c, copyLinkIcon, "复制 "+key, "把「"+key+"」的值复制到剪贴板").Clicked() {
 			a.copyNetValue(c, value, "已复制「"+key+"」")
 		}
@@ -545,12 +574,14 @@ func (a *app) netQuery(c *ui.Context, raw string) {
 	}
 }
 
-// netCodeBlock 画一段等宽感的正文块：浅底色圆角面板，JSON 已在传入前
-// 格式化过。
+// netCodeBlock 画一段等宽感的正文块：JSON 已在传入前格式化过，用 Lobe 的
+// Block 给出浅底圆角面板，正文用 display.Text 的等宽样式。
 func (a *app) netCodeBlock(c *ui.Context, text string) {
 	t := c.Theme()
-	ui.Column(c).FillWidth().Padding(8, 10).Radius(6).Background(t.Surface).Children(func() {
-		ui.Text(c, text).FontSize(11).TextColor(t.Text)
+	block := layout.Block(c, layout.BlockProps{Variant: layout.BlockFilled}).
+		FillWidth().Padding(8, 10).Radius(6).TextColor(t.Text)
+	block.Children(func() {
+		display.Text(c, text, display.TextProps{FontSize: 11, Rows: 0, Code: true})
 	})
 }
 

@@ -182,6 +182,13 @@ func (a *app) aboutHero(c *ui.Context) {
 					a.aboutDisclaimerOpen = true
 				}
 			})
+			// 鸿蒙字体的授权条款要求在用到它的软件里显著声明（fonts/LICENSE）。
+			// 这段放在不滚动就能看到的顶部卡片；macOS 用系统苹方，不显示。
+			if usesHarmonySans() {
+				display.Text(c, "界面字体：鸿蒙字体 HarmonyOS Sans · © 2021 Huawei", display.TextProps{
+					Type: display.TextSecondary, FontSize: 12, Rows: 2,
+				})
+			}
 			// 上一次检查若发现有新版本，这里提示一下，点「检查更新」看详情。
 			if a.updates {
 				if v := updater.AvailableVersion(); v != "" {

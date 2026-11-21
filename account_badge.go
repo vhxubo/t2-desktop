@@ -2,6 +2,9 @@ package main
 
 import (
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/display"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 「当前账号」标签
@@ -67,15 +70,16 @@ func (a *app) accountWindowTag(c *ui.Context) {
 	}
 	t := c.Theme()
 	ui.Spacer(c).Grow(1)
-	tag := ui.Row(c).Shrink(0).Gap(5).AlignItems(ui.Center).Padding(2, 7).
-		Radius(999).Background(t.Accent.Mix(t.Background, 0.88)).
-		Cursor(ui.CursorPointer)
-	tag.Children(func() {
-		ui.Text(c, "@"+name).FontSize(11).Bold().TextColor(t.Accent).SingleLine().
-			MaxWidth(accountWindowTagWidth).MinWidth(0)
-	})
+	// 标题栏里只有文字、没有头像，正好用 Lobe 的胶囊 Tag：圆角、内边距与
+	// 字号都由组件按主题统一处理，这里只换成应用的品牌色并限制宽度。
+	tag := display.Tag(c, "@"+name, display.TagProps{
+		Size: lobetheme.Small, Round: true,
+	}).Shrink(0).MaxWidth(accountWindowTagWidth + 16).
+		Background(t.Accent.Mix(t.Background, 0.88)).
+		TextColor(t.Accent).Cursor(ui.CursorPointer)
 	tag.Label("账号 " + name)
-	tag.Tooltip("这扇窗口属于 @" + name + "；点开账号面板可以查看或切换账号")
+	lobeoverlay.Tooltip(c, tag, "这扇窗口属于 @"+name+"；点开账号面板可以查看或切换账号",
+		lobeoverlay.TooltipProps{})
 	tag.OnClick(a.showAccounts)
 }
 
@@ -114,8 +118,9 @@ func (a *app) accountBadge(c *ui.Context) ui.Element {
 		if name != "" {
 			text = "当前账号 @" + name
 		}
-		ui.Text(c, text).FontSize(11).Bold().TextColor(t.Accent).SingleLine().
-			MaxWidth(accountBadgeNameMaxWidth).MinWidth(0)
+		display.Text(c, text, display.TextProps{
+			FontSize: 11, Strong: true, Rows: 1,
+		}).TextColor(t.Accent).MaxWidth(accountBadgeNameMaxWidth).MinWidth(0)
 	})
 	// 无障碍名与悬停提示说清「这个窗口是谁」，以及去哪儿换账号。
 	label := "当前账号"

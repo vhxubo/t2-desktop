@@ -911,7 +911,7 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 			if d.bodyCollapsed {
 				// 左栏已收起：评论区占满整行，左边缘的窄栏把正文拉回来。
 				replyCol := ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).
-					Radius(replyRadius).Background(replyBg)
+					Radius(replyRadius).Background(replyBg).Label("评论区")
 				replyCol.Children(func() { a.replyPane(c, d) })
 				detailExpandToggle(c, tk, false, false, "展开正文", "展开正文，恢复双栏", chevronRightIcon,
 					func() { d.bodyCollapsed = false })
@@ -935,7 +935,7 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 			}
 
 			replyCol := ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).
-				Radius(replyRadius).Background(replyBg)
+				Radius(replyRadius).Background(replyBg).Label("评论区")
 			replyCol.Children(func() { a.replyPane(c, d) })
 			// 收起按钮放在跨接缝的定位盒里：两枚各占接缝左右半边，都落在盒子
 			// 的可点击范围内。ZIndex 抬高到可拖拽面板之上，免得被它盖住。
@@ -1703,20 +1703,21 @@ func (a *app) topicAuthorLine(c *ui.Context, d *detailState) {
 	})
 }
 
-// topicSubtitle 是标题下面的两行副标题：第一行是两级分类、浏览数与帖子状态
+// topicSubtitle 是标题下面的两行副标题：第一行是两级分类与帖子状态
 // （置顶 / 评论已关闭），第二行是标签。分类和标签原来贴在页头作者旁边，收回
-// 到标题下方后，标题区一眼能读出「这帖发在哪、有多少人看过、打了什么标签」。
+// 到标题下方后，标题区一眼能读出「这帖发在哪、打了什么标签」。浏览数已经挪到
+// 评论区折叠输入框里、发送按钮左侧（见 replyComposerStats），这里不再重复。
 func (a *app) topicSubtitle(c *ui.Context, p *topicDetail) {
 	tk := lobetheme.TokensOf(c)
 	path := p.categoryPath()
-	if path == "" && p.Views <= 0 && !p.IsPinned && !p.CommentsClosed &&
+	if path == "" && !p.IsPinned && !p.CommentsClosed &&
 		len(p.Tags) == 0 {
 		return
 	}
 	// 元信息用等宽小字、弱化色，和标题的衬线体形成两层；行距收紧成一块
 	// 副标题，再靠组外间距与标题、正文分开。
 	ui.Column(c).FillWidth().Gap(6).Font(sidebarFont).Children(func() {
-		if path != "" || p.Views > 0 || p.IsPinned || p.CommentsClosed {
+		if path != "" || p.IsPinned || p.CommentsClosed {
 			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Wrap().Children(func() {
 				// 置顶用 Lobe 的金色 Tag，和列表页的置顶角标同一套视觉。
 				if p.IsPinned {
@@ -1726,10 +1727,6 @@ func (a *app) topicSubtitle(c *ui.Context, p *topicDetail) {
 				}
 				if path != "" {
 					nodeTag(c, path)
-				}
-				if p.Views > 0 {
-					ui.Textf(c, "%d 次浏览", p.Views).FontSize(tk.FontSizeSM).
-						TextColor(tk.TextDescription)
 				}
 				if p.CommentsClosed {
 					ui.Text(c, "评论已关闭").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
@@ -1831,10 +1828,9 @@ func (a *app) replyToolBar(c *ui.Context, d *detailState, first int) {
 
 func (a *app) replyPane(c *ui.Context, d *detailState) {
 	tk := lobetheme.TokensOf(c)
-	// 评论区自己有一行标题与计数，输入框只负责编写与发送；视图切换收在
-	// 右下角的操作组里（见 replyToolBar），跟着评论区一起显隐。
-	a.replyHeader(c, d)
-	layout.Divider(c, layout.DividerProps{})
+	// 评论标题与计数已经挪到评论区底部折叠输入框里、发送按钮左侧（见
+	// replyComposerStats）；视图切换收在右下角的操作组里（见 replyToolBar），
+	// 跟着评论区一起显隐。列表区因此直接从面板顶部开始。
 	// 列表区始终存在，四种状态的内容与右下角操作组都挂在它里面：没有评论时
 	// 视图切换与刷新仍可用，而评论区一旦收起整个 replyPane 不画，操作组也
 	// 随之隐藏（见 detailContent）。
@@ -1941,34 +1937,6 @@ func (a *app) flushSeenNotifications() {
 	ids := append([]string(nil), a.seenNotifications...)
 	a.seenNotifications = nil
 	a.markNotificationsRead(a.detailToast(), ids)
-}
-
-// replyHeader 是评论卡片顶部固定的一行：「评论」标题与评论数（点一下回到
-// 列表顶部）。楼层 / 扁平视图切换已收进右下角的操作组（见 replyToolBar），
-// 跟着评论区一起显隐；这里不参与滚动，也不和输入框抢位置。
-func (a *app) replyHeader(c *ui.Context, d *detailState) {
-	tk := lobetheme.TokensOf(c)
-	ui.Row(c).FillWidth().Padding(14, 18, 10, 18).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "评论").FontSize(tk.FontSizeLG).Bold().
-			LetterSpacing(-0.3).TextColor(tk.TextHeading)
-		cnt := ui.Button(c, "").
-			Background(ui.Transparent).
-			Border(0, tk.BorderSecondary).
-			TextColor(tk.TextDescription).
-			FontSize(tk.FontSizeSM).
-			Padding(3, 6).
-			Radius(tk.BorderRadiusSM)
-		cnt.Children(func() {
-			ui.Icon(c, commentBubbleIcon).Size(15, 15).TextColor(tk.TextDescription)
-			ui.Textf(c, "%d", d.replyTotal).FontSize(tk.FontSizeSM).Font(sidebarFont).
-				TextColor(tk.TextDescription)
-		})
-		cnt.Label("评论数")
-		cnt.Tooltip("回到评论顶部")
-		if cnt.Clicked() {
-			d.list.ScrollTo(0, ui.Start)
-		}
-	})
 }
 
 // replyCanLoadMore 汇报是否还能（且应）续拉下一页评论：已加载、未在读、未到底、
@@ -2767,10 +2735,22 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 			d.composerField.OnShortcut(c, ui.Ctrl, ui.KeyEnter, a.submitReply)
 			// 给浮在右下角的按钮留出正文位置：输入框本身仍吃满整行（点哪儿
 			// 都能接着写），只是文字最右一段不落到按钮底下。左右内边距沿用
-			// 输入框自己的默认值，只把右侧加宽。
+			// 输入框自己的默认值，只把右侧加宽。折叠态还并排着评论数与浏览
+			// 数两枚计数，要多让出一段，占位文字才不会钻到它们底下。
 			pad := t.Space(1.5)
 			padX := t.Space(2.5)
-			area.Padding(pad, padX+replySendFloatReserve, pad, padX)
+			reserve := replySendFloatReserve
+			if !expanded {
+				reserve += replyStatsReserve
+			}
+			// 打开「发送按钮显示金币数」后按钮会变宽，正文再多让出一段，
+			// 免得写字时最后一个字钻到数字底下。
+			if a.showCostOnSend() {
+				if _, ok := a.commentCostForDraft(d.draft); ok {
+					reserve += replySendCostReserve
+				}
+			}
+			area.Padding(pad, padX+reserve, pad, padX)
 			// @ 候选面板在插入符处展开，没有工具栏入口（见 mentions_ui.go）。
 			a.mentionPopover(c, d, replySurfaceDetail, padX, pad)
 			// 键入 ":" 时同样的位置弹出社区表情短码候选（见 emoji_shortcode_ui.go）。
@@ -2778,19 +2758,67 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 		})
 		// 发送 / 登录后评论浮在右下角：不参与上面那一行的排版，评论框因此
 		// 不再被发送按钮切掉右侧一截。Absolute 按父节点（评论框）的边框内
-		// 侧定位，和折叠 / 展开无关，两种状态都贴着右下角。
-		actions := a.replyFieldActions(c, d)
-		actions.Absolute().Bottom(replySendFloatInset).Right(replySendFloatInset)
+		// 侧定位，和折叠 / 展开无关，两种状态都贴着右下角。折叠态时发送按钮
+		// 左边还并排着评论数与浏览数；点开输入框后计数收起，只留发送按钮，
+		// 把整条输入栏还给写字（见 replyComposerStats）。
+		footer := ui.Row(c).AlignItems(ui.Center).Gap(8).Shrink(0).
+			Absolute().Bottom(replySendFloatInset).Right(replySendFloatInset)
+		footer.Children(func() {
+			if !expanded {
+				a.replyComposerStats(c, d)
+			}
+			a.replyFieldActions(c, d)
+		})
 	})
 }
 
 // 发送按钮浮在评论框右下角时的位置与留白：inset 是它离评论框边框的距离，
 // reserve 是正文让出的右侧宽度（实心发送按钮最宽 44，加上 inset 与一点间隙；
-// 空草稿时按钮只有 28 宽，同样的留白让文字离它更远）。
+// 空草稿时按钮只有 28 宽，同样的留白让文字离它更远）。折叠态还要给并排的
+// 评论数与浏览数留位，见 replyStatsReserve。
 const (
 	replySendFloatInset   float32 = 6
 	replySendFloatReserve float32 = 40
+	replyStatsReserve     float32 = 112
+	// replySendCostReserve 是发送按钮上多出「N 金币」后正文额外让出的宽度。
+	replySendCostReserve float32 = 36
 )
+
+// replyComposerStats 画折叠评论框右下角的两枚计数：评论数与浏览数。它们取代了
+// 评论区顶部的「评论」标题行与正文副标题里的浏览数，统一成「图标 + 数字」，
+// 紧挨着发送按钮的左侧。评论数沿用原来的点击回到评论顶部；浏览数只展示，
+// 悬停说明具体次数。输入框点开后这一行不再构建，右下角只留发送按钮。
+func (a *app) replyComposerStats(c *ui.Context, d *detailState) {
+	tk := lobetheme.TokensOf(c)
+	cnt := ui.Button(c, "").
+		Background(ui.Transparent).
+		Border(0, tk.BorderSecondary).
+		TextColor(tk.TextDescription).
+		FontSize(tk.FontSizeSM).
+		Padding(2, 4).
+		Radius(tk.BorderRadiusSM)
+	cnt.Children(func() {
+		ui.Icon(c, commentBubbleIcon).Size(14, 14).TextColor(tk.TextDescription)
+		ui.Textf(c, "%d", d.replyTotal).FontSize(tk.FontSizeSM).Font(sidebarFont).
+			TextColor(tk.TextDescription)
+	})
+	cnt.Label("评论数")
+	cnt.Tooltip("回到评论顶部")
+	if cnt.Clicked() {
+		d.list.ScrollTo(0, ui.Start)
+	}
+	if d.topic == nil || d.topic.Views <= 0 {
+		return
+	}
+	views := ui.Row(c).Gap(4).AlignItems(ui.Center).Shrink(0).Padding(2, 4)
+	views.Children(func() {
+		ui.Icon(c, eyeIcon).Size(14, 14).TextColor(tk.TextDescription)
+		ui.Textf(c, "%d", d.topic.Views).FontSize(tk.FontSizeSM).Font(sidebarFont).
+			TextColor(tk.TextDescription)
+	})
+	views.Label("浏览数")
+	views.Tooltip(fmt.Sprintf("%d 次浏览", d.topic.Views))
+}
 
 // replyDetachedHint 是草稿在独立窗口里时页面上的那一行：说明去哪儿了，以及
 // 把草稿收回页面评论框的入口。文字不复制一份到这里，免得两处不同步。
@@ -2879,6 +2907,12 @@ func (a *app) replyTextArea(c *ui.Context, d *detailState, host replySurface, mo
 // replyWindowBody）。发送中时转圈也在这里，跟着动作一起走。
 func (a *app) replyFieldActions(c *ui.Context, d *detailState) ui.Element {
 	t := c.Theme()
+	// 发送按钮上的金币数要用到徽章数据。开关关着时完全不碰网络（默认如此）；
+	// 打开后即使状态栏关着，也要在写评论时按需读一次。有缓存与退避，每帧调用
+	// 不会重复发请求。
+	if a.showCostOnSend() {
+		a.ensureCommentCostData()
+	}
 	row := ui.Row(c).AlignItems(ui.Center).Gap(6).Shrink(0)
 	row.Children(func() {
 		if d.posting {
@@ -2931,6 +2965,15 @@ func (a *app) replyFieldActions(c *ui.Context, d *detailState) ui.Element {
 		send.Disabled(d.posting)
 		send.Children(func() {
 			ui.Icon(c, sendIcon).Size(16, 16).TextColor(ink)
+			// 「在发送按钮上显示消耗金币数」默认关；只有数据已到才画，
+			// 不编一个不准确的数出来。数字与状态栏共用 commentCostEstimate，
+			// 两处口径一致。
+			if a.showCostOnSend() {
+				if n, ok := a.commentCostForDraft(d.draft); ok {
+					ui.Text(c, fmt.Sprintf("%d 金币", n)).FontSize(11).
+						TextColor(ink).SingleLine()
+				}
+			}
 		})
 		send.Label("发送").Tooltip("发送评论（Ctrl+Enter）")
 		if send.Clicked() {

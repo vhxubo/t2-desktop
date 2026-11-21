@@ -227,6 +227,10 @@ type app struct {
 	// （含 attributes）、佩戴状态与正在切换的那一枚（见 comment_cost.go）。
 	// 它是账号级的，与具体帖子无关，所以挂在这里而不是 detailState 上。
 	commentCost *commentCostState
+	// commentCostPrefs 是评论费用相关的两个开关（见 comment_cost_prefs.go）：
+	// 金币消耗与徽章切换状态栏、发送按钮上的消耗金币数。进程级共享，
+	// 所有账号窗口的评论框据此决定要不要画状态栏与数字。只在 UI 线程读写。
+	commentCostPrefs *commentCostPrefsStore
 
 	detail      *detailState
 	detailStack []*detailState // 正文内联跳转的返回栈
@@ -396,10 +400,18 @@ type app struct {
 	notifBaseline bool
 	notifPollGen  uint64
 	notifTimer    *time.Timer
+	// notifPollTimer 是关掉实时长连接后的兜底轮询：定时刷新未读数、列表与
+	// 桌面通知。开着 SSE 时始终为 nil，两者不会同时跑。
+	notifPollTimer *time.Timer
 	// notify 是平台通知函数；在应用就绪后才装上，headless 测试保持 nil，
 	// 因此不会触碰真实的系统通知。
-	notify       func(nativeNotice) error
-	nativeNotify bool // 原生通知开关（默认开）
+	notify            func(nativeNotice) error
+	notificationPrefs *notificationPrefsStore // 通知偏好，进程级共享并落盘
+	// notifyKeywordDraft 是设置窗口「提醒关键词」输入框的草稿，点保存才落盘。
+	notifyKeywordDraft string
+	// notifyQuietFromDraft / notifyQuietToDraft 是免打扰时段输入框的草稿。
+	notifyQuietFromDraft string
+	notifyQuietToDraft   string
 	// noticeTargets 是「原生通知 id → 目标地址」的映射：系统通知的点击回调
 	// 只带 id，靠它把点击落回对应的帖子 / 评论，进程重启后再点击则回到站点。
 	// id 里带账号段（见 notificationNativeID），多账号时点击才知道该找哪个
@@ -453,7 +465,11 @@ type appDeps struct {
 	kv         *localKV
 	closeMode  *closeModeStore
 	disclaimer *disclaimerStore
-	book       *accountBook
+	// commentCostPrefs 是评论费用的两个开关，进程级一份（见 comment_cost_prefs.go）。
+	commentCostPrefs *commentCostPrefsStore
+	// notificationPrefs 是通知偏好，进程级一份（见 notification_prefs.go）。
+	notificationPrefs *notificationPrefsStore
+	book              *accountBook
 }
 
 // newAppDeps 造一份独立的共享依赖：没有账号册（无头测试）时每个 app 自己
@@ -463,27 +479,31 @@ func newAppDeps(dir string) appDeps {
 		dir = configDir()
 	}
 	return appDeps{
-		dir:        dir,
-		proxy:      newProxyManager(dir),
-		theme:      newThemeManager(dir),
-		images:     newImageCache(dir),
-		kv:         newOfflineKV(dir),
-		closeMode:  newCloseModeStore(dir),
-		disclaimer: newDisclaimerStore(dir),
+		dir:               dir,
+		proxy:             newProxyManager(dir),
+		theme:             newThemeManager(dir),
+		images:            newImageCache(dir),
+		kv:                newOfflineKV(dir),
+		closeMode:         newCloseModeStore(dir),
+		disclaimer:        newDisclaimerStore(dir),
+		commentCostPrefs:  newCommentCostPrefsStore(dir),
+		notificationPrefs: newNotificationPrefsStore(dir),
 	}
 }
 
 // deps 是账号册那份共享依赖：所有账号窗口都从这里建，不各自造一份。
 func (b *accountBook) deps() appDeps {
 	return appDeps{
-		dir:        b.dir,
-		proxy:      b.proxy,
-		theme:      b.theme,
-		images:     b.images,
-		kv:         b.kv,
-		closeMode:  b.closeMode,
-		disclaimer: b.disclaimer,
-		book:       b,
+		dir:               b.dir,
+		proxy:             b.proxy,
+		theme:             b.theme,
+		images:            b.images,
+		kv:                b.kv,
+		closeMode:         b.closeMode,
+		disclaimer:        b.disclaimer,
+		commentCostPrefs:  b.commentCostPrefs,
+		notificationPrefs: b.notificationPrefs,
+		book:              b,
 	}
 }
 
@@ -518,27 +538,30 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 		auth = newAuthManagerAt(d.dir, d.proxy)
 	}
 	a := &app{
-		auth:       auth,
-		book:       d.book,
-		proxy:      d.proxy,
-		theme:      d.theme,
-		client:     &Client{Auth: auth, Proxy: d.proxy},
-		images:     d.images,
-		kv:         d.kv,
-		closeMode:  d.closeMode,
-		disclaimer: d.disclaimer,
-		tabs:       make([]*tabState, len(tabSpecs)),
-		lastTab:    -1,
-		navSel:     tabID(0),
-		pageName:   "list",
-		// 原生通知默认开；多账号时每个账号窗口各自弹自己收到的消息，
-		// 通知里写明是哪个账号（见 notify.go 的 notificationNative）。
-		nativeNotify: true,
-		coins:        newCoinState(),
-		pandora:      newPandoraState(),
-		profile:      newProfileState(),
-		commentCost:  newCommentCostState(),
+		auth:              auth,
+		book:              d.book,
+		proxy:             d.proxy,
+		theme:             d.theme,
+		client:            &Client{Auth: auth, Proxy: d.proxy},
+		images:            d.images,
+		kv:                d.kv,
+		closeMode:         d.closeMode,
+		disclaimer:        d.disclaimer,
+		commentCostPrefs:  d.commentCostPrefs,
+		notificationPrefs: d.notificationPrefs,
+		tabs:              make([]*tabState, len(tabSpecs)),
+		lastTab:           -1,
+		navSel:            tabID(0),
+		pageName:          "list",
+		coins:             newCoinState(),
+		pandora:           newPandoraState(),
+		profile:           newProfileState(),
+		commentCost:       newCommentCostState(),
 	}
+	// 设置窗口的关键词草稿从已保存偏好起手；无头测试直接渲染设置页时也一致。
+	a.notifyKeywordDraft = a.notifPrefs().keywordText()
+	a.notifyQuietFromDraft = a.notifPrefs().quietFromText()
+	a.notifyQuietToDraft = a.notifPrefs().quietToText()
 	if acc != nil {
 		a.accountID = acc.ID
 	}

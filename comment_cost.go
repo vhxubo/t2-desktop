@@ -102,6 +102,31 @@ func commentCostWith(n int, badge *badgeWallEntry) int {
 	return base
 }
 
+// commentCostEstimate 算一帧的预计发评金币，口径与 commentCostModelFor 里的
+// 状态文案一致：潘多拉事件优先于徽章，锁定 / 字数门槛按无徽章计费，固定扣费
+// 与改价事件直接给事件值；没有事件时用当前佩戴的那枚费用徽章比价。
+// 发送按钮上显示的数字复用这一份结果，两处不会算出不同的数。
+func commentCostEstimate(in commentCostInput) int {
+	base := commentBaseCost(in.Length)
+	pe := in.Pandora
+	if pe.Active {
+		switch {
+		case pe.LockBadge:
+			return base
+		case pe.FreeComment:
+			return 0
+		case pe.HasFixedCost:
+			return pe.FixedCost
+		case pe.Code == "coin_modifier_percent" || pe.HasModifier:
+			return int(math.Round(float64(base) * (1 + float64(pe.ModifierPct)/100)))
+		}
+	}
+	if worn := wornCommentBadges(in.Badges, in.Worn); len(worn) > 0 {
+		return commentCostWith(in.Length, &worn[0])
+	}
+	return base
+}
+
 // commentPercentText 是减免比例的中文描述：0.3 → 「减免 30%」，-0.2 → 「增加 20%」。
 func commentPercentText(ratio float64) string {
 	pct := int(math.Round(ratio * 100))
@@ -528,7 +553,7 @@ func commentCostModelFor(in commentCostInput) commentCostModel {
 		cost := commentCostWith(in.Length, &b)
 		m.Actions = append(m.Actions, commentCostAction{
 			Label: fmt.Sprintf("%s %d 金币", profileBadgeDisplayName(b), cost),
-			Tip: fmt.Sprintf("切换到「%s」 · 发评约 %d 金币；切换徽章可能扣除金币",
+			Tip: fmt.Sprintf("切换到「%s」 · 发评约 %d 金币",
 				profileBadgeDisplayName(b), cost),
 			Badge: b,
 		})
@@ -640,16 +665,34 @@ type commentCostState struct {
 func newCommentCostState() *commentCostState { return &commentCostState{} }
 
 // commentCostBarVisible 回答评论框上方要不要画状态栏：未登录时没有账号数据
-// 可算，字数仍由调用方按原样显示。
+// 可算，字数仍由调用方按原样显示；设置里关掉「金币消耗与徽章切换」后也不画，
+// 此时字数退回工具条右端。prefs 为空（少数手工构造的测试 app）按开关打开处理。
 func (a *app) commentCostBarVisible() bool {
-	return a.commentCost != nil && a.auth != nil && a.auth.loggedIn()
+	if a.commentCost == nil || a.auth == nil || !a.auth.loggedIn() {
+		return false
+	}
+	return a.commentCostPrefs == nil || a.commentCostPrefs.visible()
+}
+
+// showCostOnSend 报告是否要在评论的发送按钮上显示预计消耗金币数。
+func (a *app) showCostOnSend() bool {
+	return a.commentCostPrefs != nil && a.commentCostPrefs.onSend()
+}
+
+// commentCostDataWanted 报告当前要不要读徽章数据：状态栏开着，或发送按钮上
+// 要显示金币数（后者即使关了状态栏也得有一份数据可算）。
+func (a *app) commentCostDataWanted() bool {
+	if a.commentCostPrefs == nil || a.auth == nil || !a.auth.loggedIn() {
+		return false
+	}
+	return a.commentCostPrefs.visible() || a.commentCostPrefs.onSend()
 }
 
 // ensureCommentCostData 在评论框出现时按需加载徽章与佩戴状态。它有缓存与
 // 失败退避，所以每帧调用只会真正发一次请求。
 func (a *app) ensureCommentCostData() {
 	st := a.commentCost
-	if st == nil || !a.autoLoad || !a.auth.loggedIn() {
+	if st == nil || !a.autoLoad || !a.commentCostDataWanted() {
 		return
 	}
 	// 潘多拉事件会接管整条状态栏：和标题栏入口读同一份今日状态，已经读过就
@@ -789,12 +832,12 @@ func (a *app) syncProfileBadgeState(badgeID string, equip bool) {
 
 // setCommentCostBadge 佩戴（equip）或摘下（!equip）状态栏里的一枚徽章。
 // 费用徽章只做「替换」，摘下只给「走个面」用。key 为空表示一次新的点击；
-// 授权重放会带着同一个 key 回来，避免重复扣币。
+// 授权重放会带着同一个 key 回来，避免重复提交。
 //
 // 网页端切换前会先用 /api/badges/equip/check-cost 问一次这次要不要收费；开放
-// API v1 没有这个端点（api-economy.md 的「徽章佩戴」只有 equip），所以这里不预检，
-// 把「切换徽章可能扣除金币」写进按钮的悬停提示，服务端确认的结果（含扣费金额）
-// 用窗口内 toast 原样报告。
+// API v1 没有这个端点（api-economy.md 的「徽章佩戴」只有 equip），而按 2026-11-12
+// 的变更佩戴本身已不扣金币，所以这里不预检、也不再提示可能扣费，服务端给的
+// message 用窗口内 toast 原样报告。
 func (a *app) setCommentCostBadge(badge badgeWallEntry, equip bool, key string) {
 	st := a.commentCost
 	if st == nil || badge.BadgeID == "" || st.busyID != "" || !a.auth.loggedIn() {
@@ -883,6 +926,23 @@ func commentLength(s string) int {
 /* ------------------------------------------------------------------
    界面用的小工具
 --------------------------------------------------------------- */
+
+// commentCostForDraft 返回当前草稿的预计发评金币。数据还没到或没登录时不返回
+// （第二个返回值为 false），发送按钮据此决定要不要在图标旁画数字：宁可先不画，
+// 也不编一个不准的数出来。
+func (a *app) commentCostForDraft(draft string) (int, bool) {
+	st := a.commentCost
+	if st == nil || a.auth == nil || !a.auth.loggedIn() || !st.loaded {
+		return 0, false
+	}
+	return commentCostEstimate(commentCostInput{
+		Length:   commentLength(draft),
+		Badges:   st.sets,
+		Worn:     st.equipped,
+		Pandora:  a.commentCostPandora(),
+		Activity: st.activity,
+	}), true
+}
 
 // commentCostModelNow 按当前状态与草稿算出状态栏内容。数据还没到或者没登录
 // 时不返回模型（第二个返回值为 false），由界面只画字数与进度。

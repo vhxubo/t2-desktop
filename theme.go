@@ -166,6 +166,12 @@ var lobeCfg = func() *lobetheme.Config {
 	// 不变，TokensOf(c) 才能继续命中同一套 token。
 	cfg.Theme(false).Selection = cfg.Theme(false).Accent.Alpha(0.25)
 	cfg.Theme(true).Selection = cfg.Theme(true).Accent.Alpha(0.32)
+	// 字体是进程级外观：两个主题实例都被 homeTheme 直接复用，设置一次就
+	// 作用于所有窗口的文字（含 Markdown）。macOS 留空，走系统苹方。
+	if usesHarmonySans() {
+		cfg.Theme(false).Font = appFontFamily
+		cfg.Theme(true).Font = appFontFamily
+	}
 	return cfg
 }()
 

@@ -781,6 +781,7 @@ type nativeNotice struct {
 	Title     string
 	Body      string
 	Target    string
+	Silent    bool // 不播提示音（由通知设置里的「提示音」开关决定）
 }
 
 // notificationNative turns a message into the native notification text:

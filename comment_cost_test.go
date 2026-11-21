@@ -664,7 +664,7 @@ func TestCommentCostBarSwitchesBadge(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer tok" {
 			t.Errorf("佩戴请求没有带令牌：%q", got)
 		}
-		fmt.Fprint(w, envelopeJSON(`{"message":"已佩戴「前排打手」，扣除 5 金币"}`))
+		fmt.Fprint(w, envelopeJSON(`{"message":"已佩戴「前排打手」"}`))
 	}))
 	defer srv.Close()
 
@@ -693,7 +693,7 @@ func TestCommentCostBarSwitchesBadge(t *testing.T) {
 	}
 
 	tt.Frame()
-	if !tt.HasText("已佩戴「前排打手」，扣除 5 金币") {
+	if !tt.HasText("已佩戴「前排打手」") {
 		t.Errorf("结果没有用 toast 报告：%q", tt.Texts())
 	}
 	tt.Frame()

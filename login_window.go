@@ -21,8 +21,8 @@ var scopeLabels = map[string]string{
 	"read:economy":  "读取金币余额、流水与签到状态",
 	"write:comment": "发表评论",
 	"write:topic":   "发表帖子、动态与投票",
-	"write:economy": "金币变动（签到 / 打赏 / 佩戴徽章 / 解锁）",
-	"interact":      "收藏、关注等互动",
+	"write:economy": "金币变动（签到 / 打赏 / 解锁）",
+	"interact":      "收藏、关注、佩戴徽章等互动",
 	"upload":        "上传图片",
 }
 
@@ -55,6 +55,9 @@ func (b *accountBook) openLoginWindow(authorizeURL string) error {
 	if !b.afterReady {
 		return errLoginWindowNotReady
 	}
+	// 这个窗口只服务内置浏览器：统一成 redirect_mode=app 的直跳地址，
+	// p.url 仍由账号册保留原始地址供系统浏览器兜底使用。
+	authorizeURL = embeddedAuthorizeURL(systemAuthorizeURL(authorizeURL))
 	if win := b.loginWin; win != nil {
 		// 已经开着：换到新的授权页（重新登录、重试都会走到这里）。
 		b.loginErr = ""
@@ -179,7 +182,7 @@ func (b *accountBook) retryLoginWindow() {
 	}
 	b.loginErr = ""
 	if b.loginView != nil {
-		if err := b.loginView.Page().LoadURL(p.url); err != nil {
+		if err := b.loginView.Page().LoadURL(embeddedAuthorizeURL(p.url)); err != nil {
 			b.loginErr = "内置浏览器打不开授权页：" + err.Error()
 		}
 	}
@@ -258,7 +261,7 @@ func (b *accountBook) reauthorizeLoginWindow() {
 	b.mu.Unlock()
 	b.loginErr = ""
 	if b.loginView != nil {
-		if err := b.loginView.Page().LoadURL(authorize); err != nil {
+		if err := b.loginView.Page().LoadURL(embeddedAuthorizeURL(authorize)); err != nil {
 			b.loginErr = "内置浏览器打不开授权页：" + err.Error()
 		}
 	}

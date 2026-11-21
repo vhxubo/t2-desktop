@@ -403,7 +403,13 @@ func (c *Client) patchJSON(ctx context.Context, u, token string, payload any) (j
 // deleteJSON sends one DELETE without a body through the same write path.
 // Endpoints such as unfollow answer with the usual envelope and no payload.
 func (c *Client) deleteJSON(ctx context.Context, u, token string) (json.RawMessage, error) {
-	return c.writeJSON(ctx, http.MethodDelete, u, token, "", nil)
+	return c.deleteWithKeyJSON(ctx, u, token, "")
+}
+
+// deleteWithKeyJSON 给标 🔑 的 DELETE 端点带 Idempotency-Key：取消佩戴徽章
+// 也是幂等写（index.md #76），超时重试与授权后重放要复用同一个键。
+func (c *Client) deleteWithKeyJSON(ctx context.Context, u, token, idempotencyKey string) (json.RawMessage, error) {
+	return c.writeJSON(ctx, http.MethodDelete, u, token, idempotencyKey, nil)
 }
 
 // writeJSON is the shared implementation of the write methods. A nil payload

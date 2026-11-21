@@ -11,6 +11,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/choice"
 	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/field"
 	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	"github.com/lobehub/lobe-mygo/pkg/nav"
@@ -26,8 +27,8 @@ const (
 )
 
 // 设置窗口按分类分页：每块内容各占一页，不再堆成一条要滚很久的长页面。
-// 标签固定在内容区上方；每页的草稿都绑在 app 字段上，切页不会丢。外观页排
-// 在最后，原有几页的序号保持不变，默认打开仍是网络代理。
+// 标签固定在内容区上方；每页的草稿都绑在 app 字段上，切页不会丢。原有几页的
+// 序号保持不变，评论页追加在最后，默认打开仍是网络代理。
 const (
 	settingsTabProxy = iota
 	settingsTabHosts
@@ -35,9 +36,11 @@ const (
 	settingsTabUpdates
 	settingsTabWindow
 	settingsTabAppearance
+	settingsTabComment
+	settingsTabNotify
 )
 
-var settingsTabLabels = []string{"网络代理", "图库", "图片缓存", "更新", "窗口", "外观"}
+var settingsTabLabels = []string{"网络代理", "图库", "图片缓存", "更新", "窗口", "外观", "评论", "通知"}
 
 /* ------------------------------------------------------------------
    设置窗口：全局入口、显示与关闭
@@ -56,6 +59,9 @@ func (a *app) showSettings() {
 // 并开始统计图片缓存大小，首帧里显示的就是当前状态。
 func (a *app) showSettingsWindow() {
 	a.reloadProxyDraft()
+	// 通知偏好在别处也可能被改（通知窗口的快捷开关、另一个账号窗口），打开
+	// 设置时同步一次输入框草稿，别把上次没保存的半截文字带回来。
+	a.notifyKeywordDraft = a.notifPrefs().keywordText()
 	// 打开设置就把缓存大小重新统计一遍；统计在后台跑，结果回到主线程。
 	a.startCacheStats()
 	// 无头测试没有主循环：碰 mygo 的窗口会等待一个不存在的处理者，所以只把
@@ -209,6 +215,10 @@ func (a *app) settingsWindowView(c *ui.Context) {
 					a.windowSettingsSection(c)
 				case settingsTabAppearance:
 					a.appearanceSettingsSection(c)
+				case settingsTabComment:
+					a.commentSettingsSection(c)
+				case settingsTabNotify:
+					a.notificationSettingsSection(c)
 				default:
 					a.proxySettingsSection(c)
 				}
@@ -295,6 +305,15 @@ func settingsChoice(c *ui.Context, label string, options []string, index int) in
 	return index
 }
 
+// settingsCheckbox 画一整行的 Lobe 开关，返回这一帧勾选的状态。绑定在局部值上，
+// 点击带来的变化在构造这一帧就已经写进去了（和 settingsChoice 同一套写法），
+// 由调用方据此立即落盘；下一帧再按偏好重建，开关显示的就是新状态。
+func settingsCheckbox(c *ui.Context, label string, checked bool) bool {
+	v := checked
+	choice.Checkbox(c, &v, label, choice.CheckboxProps{})
+	return v
+}
+
 /* ------------------------------------------------------------------
    更新一块：检查更新
 ---------------------------------------------------------------- */
@@ -356,6 +375,191 @@ func (a *app) appearanceSettingsSection(c *ui.Context) {
 			a.saveThemeChoice()
 		}
 	})
+}
+
+/* ------------------------------------------------------------------
+   评论一块：金币消耗与徽章切换、发送按钮上的金币数
+ --------------------------------------------------------------- */
+
+// commentSettingsSection 是「评论」一块：两枚开关都立即落盘，进程级共享，
+// 所有账号窗口的评论框下一帧就按新状态画（见 comment_cost_prefs.go）。
+func (a *app) commentSettingsSection(c *ui.Context) {
+	settingsSection(c, "评论", func() {
+		settingsDescription(c, "控制评论框里的金币消耗提示与徽章切换入口。", 2)
+		if v := settingsCheckbox(c, "金币消耗与徽章切换",
+			a.commentCostPrefs.visible()); v != a.commentCostPrefs.visible() {
+			a.setCommentCostBarEnabled(v)
+		}
+		if v := settingsCheckbox(c, "在发送按钮上显示消耗金币数",
+			a.commentCostPrefs.onSend()); v != a.commentCostPrefs.onSend() {
+			a.setCommentCostOnSend(v)
+		}
+	})
+}
+
+/* ------------------------------------------------------------------
+   通知一块：桌面通知、提示音、角标、长连接、免打扰、分类、关键词
+  --------------------------------------------------------------- */
+
+// notificationSettingsSection 是「通知」一块。开关立即落盘、进程级共享；关键词
+// 与免打扰时段分别点「保存关键词」「保存时段」才生效，避免边打字边把半截词写进
+// 配置。这些偏好只管桌面弹窗与收消息的方式：消息列表与未读计数始终工作。
+func (a *app) notificationSettingsSection(c *ui.Context) {
+	p := a.notifPrefs()
+	settingsSection(c, "通知", func() {
+		settingsDescription(c, "这里只管桌面弹窗：关掉通知后消息仍会进通知窗口、未读数照常更新。"+
+			"多账号共用这份设置，改完所有窗口立即生效。", 3)
+
+		if v := settingsCheckbox(c, "桌面通知", p.notificationEnabled()); v != p.notificationEnabled() {
+			a.saveNotifyPref(toastSettings, func() error { return p.setEnabled(v) })
+		}
+		if v := settingsCheckbox(c, "通知提示音", p.soundEnabled()); v != p.soundEnabled() {
+			a.saveNotifyPref(toastSettings, func() error { return p.setSound(v) })
+		}
+		if v := settingsCheckbox(c, "显示未读角标", p.badgeEnabled()); v != p.badgeEnabled() {
+			a.saveNotifyPref(toastSettings, func() error { return p.setBadge(v) })
+		}
+		if v := settingsCheckbox(c, "实时长连接", p.streamEnabled()); v != p.streamEnabled() {
+			a.saveNotifyPref(toastSettings, func() error { return p.setStream(v) })
+			// 落盘成功后立即切换：开着用 SSE，关掉改用一分钟一次的轮询，
+			// 未读数与通知不会停。保存失败时偏好没变，这里不会误切。
+			if p.streamEnabled() == v {
+				a.applyNotificationStreamPref()
+			}
+		}
+		settingsDescription(c, "实时长连接靠 SSE 推送新消息；关掉后改用定时轮询，"+
+			"通知照常到达，只是没有那么即时。", 2)
+
+		display.Text(c, "弹窗提醒的消息类型", display.TextProps{
+			Type: display.TextSecondary, FontSize: 12, Rows: 1,
+		})
+		ui.Row(c).FillWidth().Gap(8).Wrap().Children(func() {
+			for _, item := range notifyCategoryItems {
+				enabled := p.categoryEnabled(item.Key)
+				if v := settingsCheckbox(c, item.Label, enabled); v != enabled {
+					key, on := item.Key, v
+					a.saveNotifyPref(toastSettings, func() error { return p.setCategory(key, on) })
+				}
+			}
+		})
+
+		settingsField(c, "提醒关键词（留空则所有消息都提醒）", func() ui.Element {
+			in := composeInput(c, &a.notifyKeywordDraft, field.InputProps{
+				Placeholder: "按消息内容过滤弹窗", Size: lobetheme.Small,
+			})
+			in.Label("提醒关键词").MaxLength(notificationKeywordMax)
+			return in
+		})
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			if action.Button(c, "保存关键词", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+				a.saveNotifyPref(toastSettings, func() error {
+					return p.setKeyword(a.notifyKeywordDraft)
+				})
+			}
+			if mode := settingsChoice(c, "关键词匹配",
+				[]string{"包含时提醒", "包含时不提醒"}, keywordModeIndex(p.keywordIsBlacklist())); mode != keywordModeIndex(p.keywordIsBlacklist()) {
+				a.saveNotifyPref(toastSettings, func() error { return p.setKeywordBlacklist(mode == 1) })
+			}
+		})
+
+		if choice := settingsChoice(c, "每次事件最多弹",
+			notifyBurstLabels(), p.burstChoice()); choice != p.burstChoice() {
+			a.saveNotifyPref(toastSettings, func() error { return p.setBurst(choice) })
+		}
+
+		display.Text(c, "免打扰时段（只挡弹窗，消息照常收）", display.TextProps{
+			Type: display.TextSecondary, FontSize: 12, Rows: 1,
+		})
+		if v := settingsCheckbox(c, "启用免打扰", p.quietOn()); v != p.quietOn() {
+			a.saveNotifyPref(toastSettings, func() error { return p.setQuiet(v) })
+		}
+		ui.Row(c).FillWidth().Gap(8).Children(func() {
+			settingsHalfField(c, "开始时间", func() ui.Element {
+				in := composeInput(c, &a.notifyQuietFromDraft, field.InputProps{
+					Placeholder: "22:00", Size: lobetheme.Small,
+				})
+				in.Label("免打扰开始时间").MaxLength(5)
+				return in
+			})
+			settingsHalfField(c, "结束时间", func() ui.Element {
+				in := composeInput(c, &a.notifyQuietToDraft, field.InputProps{
+					Placeholder: "08:00", Size: lobetheme.Small,
+				})
+				in.Label("免打扰结束时间").MaxLength(5)
+				return in
+			})
+		})
+		if action.Button(c, "保存时段", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+			from, to := a.notifyQuietFromDraft, a.notifyQuietToDraft
+			switch {
+			case !validQuietTime(from):
+				a.toast(toastSettings, "开始时间要写成 HH:MM（例如 22:00）")
+			case !validQuietTime(to):
+				a.toast(toastSettings, "结束时间要写成 HH:MM（例如 08:00）")
+			default:
+				a.saveNotifyPref(toastSettings, func() error { return p.setQuietWindow(from, to) })
+			}
+		}
+	})
+}
+
+func validQuietTime(raw string) bool {
+	_, _, ok := parseQuietTime(raw)
+	return ok
+}
+
+func keywordModeIndex(blacklist bool) int {
+	if blacklist {
+		return 1
+	}
+	return 0
+}
+
+func notifyBurstLabels() []string {
+	labels := make([]string, len(notifyBurstChoices))
+	for i, n := range notifyBurstChoices {
+		labels[i] = fmt.Sprintf("%d 条", n)
+	}
+	return labels
+}
+
+// setCommentCostBarEnabled 开关评论框上方的费用状态栏。关掉后状态栏不再绘制，
+// 也不再读取徽章与佩戴状态；字数退回工具条右端照常显示。
+func (a *app) setCommentCostBarEnabled(on bool) {
+	if a.commentCostPrefs == nil || a.commentCostPrefs.visible() == on {
+		return
+	}
+	if err := a.commentCostPrefs.setVisible(on); err != nil {
+		a.toast(toastSettings, err.Error())
+		return
+	}
+	// 开关是进程级共享状态：已经开着的评论框下一帧就据此重建，否则它们
+	// 还停在上一帧（状态栏还在画 / 数字还没出现）。
+	a.publish(func() {})
+	if on {
+		a.toast(toastSettings, "已开启金币消耗与徽章切换")
+	} else {
+		a.toast(toastSettings, "已关闭金币消耗与徽章切换")
+	}
+}
+
+// setCommentCostOnSend 开关发送按钮上的消耗金币数；默认关。数字与状态栏共用
+// 同一份估算，关掉徽章状态栏时也能单独开这一项。
+func (a *app) setCommentCostOnSend(on bool) {
+	if a.commentCostPrefs == nil || a.commentCostPrefs.onSend() == on {
+		return
+	}
+	if err := a.commentCostPrefs.setOnSend(on); err != nil {
+		a.toast(toastSettings, err.Error())
+		return
+	}
+	// 同上，让开着的评论框把发送按钮按新状态重建。
+	a.publish(func() {})
+	if on {
+		a.toast(toastSettings, "发送按钮将显示消耗金币数")
+	} else {
+		a.toast(toastSettings, "发送按钮不再显示消耗金币数")
+	}
 }
 
 /* ------------------------------------------------------------------

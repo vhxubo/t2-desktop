@@ -6,6 +6,7 @@ import (
 	"unicode"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/display"
 )
 
 // 全应用统一的用户标识：昵称旁永远画头像，头像边长按昵称字号换算，
@@ -89,15 +90,11 @@ func (a *app) userTag(c *ui.Context, u userTagSpec) ui.Element {
 			if label == "" {
 				label = u.Name
 			}
-			text := ui.Text(c, label).FontSize(size)
+			props := display.TextProps{FontSize: size, Rows: 1, Strong: u.Bold}
 			if u.MaxLines > 1 {
-				text.MaxLines(u.MaxLines)
-			} else {
-				text.SingleLine()
+				props.Rows = u.MaxLines
 			}
-			if u.Bold {
-				text.Bold()
-			}
+			text := display.Text(c, label, props)
 			if u.Color != ui.Transparent {
 				text.TextColor(u.Color)
 			}

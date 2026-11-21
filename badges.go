@@ -17,13 +17,14 @@ import (
 //
 //	GET    /v1/me/badges                  我拥有的全部徽章（scope profile）
 //	GET    /v1/me/badges/equipped         我佩戴中的徽章（scope profile）
-//	POST   /v1/me/badges/:badgeId/equip   佩戴（scope write:economy，需开通）
-//	DELETE /v1/me/badges/:badgeId/equip   取消佩戴（scope write:economy，需开通）
+//	POST   /v1/me/badges/:badgeId/equip   佩戴（scope interact 或 write:economy）🔑
+//	DELETE /v1/me/badges/:badgeId/equip   取消佩戴（同上）🔑
 //
-// 佩戴 / 取消佩戴是这里唯一的写操作。它挂在 write:economy 而不是 interact，
-// 因为首次佩戴之后每次都可能扣金币；缺这个 scope 时交给 auth_gate 补授权，
-// 授权成功后同一次操作自动重跑。写请求带 Idempotency-Key：一次点击（含超时
-// 重试与授权后重放）用同一个键，避免重复扣币。
+// 佩戴 / 取消佩戴是这里唯一的写操作。按 2026-11-12 的变更，佩戴不消耗金币、
+// 也不占金币变动额度：默认 scope 里的 interact 已足够，历史令牌只持
+// write:economy 也照常放行。缺权限时交给 auth_gate 补授权，授权成功后同一次
+// 操作自动重跑。两个方向都标 🔑：一次点击（含超时重试与授权后重放）带同一
+// 个 Idempotency-Key，避免重复提交。
 //
 // 徽章图有两个尺寸：icon_url 是 22×15 的小图，只用于用户名旁 ≤32px 的槽位；
 // icon_url_large 才是徽章墙用的图。部分徽章只有小图，这时回退到小图，绝不
@@ -251,7 +252,7 @@ func (c *Client) setBadgeEquipped(ctx context.Context, badgeID, key string, equi
 		if equip {
 			d, err = c.postJSON(ctx, c.apiURL(myBadgeEquipPath(badgeID)), token, key, nil)
 		} else {
-			d, err = c.deleteJSON(ctx, c.apiURL(myBadgeEquipPath(badgeID)), token)
+			d, err = c.deleteWithKeyJSON(ctx, c.apiURL(myBadgeEquipPath(badgeID)), token, key)
 		}
 		var ae *apiError
 		if errors.As(err, &ae) && ae.Status == http.StatusConflict {
@@ -345,8 +346,8 @@ func (a *app) prefetchBadgeIcons(badges []badgeWallEntry) {
 
 // toggleProfileBadge 佩戴或取消佩戴一枚徽章。name 是这次操作对应的徽章名，
 // 用来组装结果的 toast；授权重放时界面状态可能已经被重置，但名字仍然对得上。
-// key 为空表示一次新的点击；重放会带着同一个 key 回来。不先乐观更新：扣币
-// 操作要等服务的确认。
+// key 为空表示一次新的点击；重放会带着同一个 key 回来。不先乐观更新：佩戴
+// 状态以服务端的确认为准。
 func (a *app) toggleProfileBadge(badgeID, name string, equip bool, key string) {
 	ps := a.profile
 	if ps == nil || badgeID == "" || !a.auth.loggedIn() {

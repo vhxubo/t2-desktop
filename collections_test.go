@@ -13,8 +13,8 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 合集的两个写端点必须打到文档路径，新建只带 name，归入带 short_id 与
-// collection_id（移出时是 null）。
+// 合集的写端点必须打到文档路径：归入带 short_id 与 collection_id（移出时是
+// null），一步新建并归入用 new_collection_name。
 func TestClientCollectionEndpoints(t *testing.T) {
 	var mu sync.Mutex
 	var calls []string
@@ -26,38 +26,31 @@ func TestClientCollectionEndpoints(t *testing.T) {
 		calls = append(calls, r.Method+" "+r.URL.Path)
 		bodies = append(bodies, string(body))
 		mu.Unlock()
-		switch r.URL.Path {
-		case "/api/v1/me/collections":
-			_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"c9","name":"新合集","topic_count":0}`))
-		case "/api/v1/me/collections/assign":
-			_, _ = fmt.Fprint(w, envelopeJSON(`{"success":true}`))
-		default:
+		if r.URL.Path != "/api/v1/me/collections/assign" {
 			t.Errorf("意外路径 %s", r.URL.Path)
 			http.NotFound(w, r)
+			return
 		}
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"success":true}`))
 	}))
 	defer srv.Close()
 	c := &Client{HTTP: srv.Client(), Base: srv.URL + "/api", bearer: func() string { return "tok" }}
 	ctx := context.Background()
 
-	item, err := c.createCollection(ctx, "新合集")
-	if err != nil {
-		t.Fatalf("新建合集失败：%v", err)
-	}
-	if item.ID != "c9" || item.Name != "新合集" {
-		t.Errorf("新建结果解析不对：%+v", item)
-	}
 	if err := c.assignTopicCollection(ctx, "T1", "c9"); err != nil {
 		t.Fatalf("归入合集失败：%v", err)
 	}
 	if err := c.assignTopicCollection(ctx, "T1", ""); err != nil {
 		t.Fatalf("移出合集失败：%v", err)
 	}
+	if err := c.assignTopicNewCollection(ctx, "T1", "新合集"); err != nil {
+		t.Fatalf("新建并归入失败：%v", err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
 	wantCalls := []string{
-		"POST /api/v1/me/collections",
+		"POST /api/v1/me/collections/assign",
 		"POST /api/v1/me/collections/assign",
 		"POST /api/v1/me/collections/assign",
 	}
@@ -66,14 +59,14 @@ func TestClientCollectionEndpoints(t *testing.T) {
 			t.Errorf("第 %d 个请求 = %q，期望 %q（实际 %v）", i, at(calls, i), w, calls)
 		}
 	}
-	if got := strings.TrimSpace(at(bodies, 0)); got != `{"name":"新合集"}` {
-		t.Errorf("新建请求体 = %s", got)
-	}
-	if got := strings.TrimSpace(at(bodies, 1)); got != `{"collection_id":"c9","short_id":"T1"}` {
+	if got := strings.TrimSpace(at(bodies, 0)); got != `{"collection_id":"c9","short_id":"T1"}` {
 		t.Errorf("归入请求体 = %s", got)
 	}
-	if got := strings.TrimSpace(at(bodies, 2)); got != `{"collection_id":null,"short_id":"T1"}` {
+	if got := strings.TrimSpace(at(bodies, 1)); got != `{"collection_id":null,"short_id":"T1"}` {
 		t.Errorf("移出请求体 = %s", got)
+	}
+	if got := strings.TrimSpace(at(bodies, 2)); got != `{"new_collection_name":"新合集","short_id":"T1"}` {
+		t.Errorf("新建并归入请求体 = %s", got)
 	}
 }
 
@@ -231,8 +224,8 @@ func TestDetailCollectionAssign(t *testing.T) {
 	}
 }
 
-// 新建合集后直接归入：两次写请求，气泡里的名字立刻可用，按钮同步变成
-// 「已在合集」。
+// 新建合集后直接归入：只发一次写请求（new_collection_name），随后重读合集
+// 列表补齐 id，按钮同步变成「已在合集」。
 func TestDetailCollectionCreateAndAssign(t *testing.T) {
 	var mu sync.Mutex
 	var creates int
@@ -240,10 +233,12 @@ func TestDetailCollectionCreateAndAssign(t *testing.T) {
 	a, _ := collectionTestApp(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/me/collections":
-			mu.Lock()
-			creates++
-			mu.Unlock()
-			_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"c7","name":"临时夹"}`))
+			if r.Method == http.MethodPost {
+				mu.Lock()
+				creates++
+				mu.Unlock()
+			}
+			_, _ = fmt.Fprint(w, envelopeJSON(`[{"id":"c7","name":"临时夹"}]`))
 		case "/api/v1/me/collections/assign":
 			body := make([]byte, r.ContentLength)
 			_, _ = r.Body.Read(body)
@@ -265,11 +260,14 @@ func TestDetailCollectionCreateAndAssign(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if creates != 1 {
-		t.Errorf("新建请求次数 = %d，期望 1", creates)
+	if creates != 0 {
+		t.Errorf("独立的新建请求次数 = %d，期望 0（应一次写入完成）", creates)
 	}
-	if !strings.Contains(assignBody, `"collection_id":"c7"`) {
-		t.Errorf("归入请求体没有带上新合集：%s", assignBody)
+	if !strings.Contains(assignBody, `"new_collection_name":"临时夹"`) {
+		t.Errorf("归入请求体没有带上新合集名：%s", assignBody)
+	}
+	if strings.Contains(assignBody, `"collection_id"`) {
+		t.Errorf("一步新建不该带 collection_id：%s", assignBody)
 	}
 	if a.detail.coll.draft != "" {
 		t.Errorf("新建成功后输入框没有清空：%q", a.detail.coll.draft)
@@ -297,6 +295,30 @@ func TestDetailCollectionCreateRejectsEmptyName(t *testing.T) {
 	}
 	if !tt.HasText("请先填写合集名称") {
 		t.Errorf("没有提示名称必填：%q", tt.Texts())
+	}
+}
+
+// 文档给的合集名上限是 30 字（api-write.md 的「合集」一节），界面按它挡掉超长输入。
+func TestCollectionNameLimit(t *testing.T) {
+	if collectionNameMax != 30 {
+		t.Fatalf("合集名上限 = %d，期望 30", collectionNameMax)
+	}
+	var calls int
+	a, _ := collectionTestApp(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/me/collections") {
+			calls++
+		}
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"success":true}`))
+	})
+	a.detail.coll.draft = strings.Repeat("字", 31)
+	a.createCollectionForTopic(a.detail)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if calls != 0 {
+		t.Errorf("超长名字不该发请求：%d 次", calls)
+	}
+	if !tt.HasText("合集名称最多 30 个字") {
+		t.Errorf("没有提示名称上限：%q", tt.Texts())
 	}
 }
 

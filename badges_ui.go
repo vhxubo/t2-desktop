@@ -169,7 +169,7 @@ func profileBadgeCounts(badges []badgeWallEntry) (total, equipped int) {
 }
 
 // profileBadgeCard 是一枚徽章的卡片。佩戴中的卡片用强调色描边并标「佩戴中」；
-// 提交期间按钮显示「正在提交…」并禁用，避免连点重复扣币。
+// 提交期间按钮显示「正在提交…」并禁用，避免连点重复提交。
 func (a *app) profileBadgeCard(c *ui.Context, ps *profileState, b badgeWallEntry) {
 	t := c.Theme()
 	name := profileBadgeDisplayName(b)

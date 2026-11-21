@@ -881,6 +881,9 @@ func TestAddAccountOpensSystemBrowserWithNoAccounts(t *testing.T) {
 		!strings.Contains(opened, "code_challenge_method=S256") {
 		t.Errorf("授权地址不对：%s", opened)
 	}
+	if strings.Contains(opened, "redirect_mode=") {
+		t.Errorf("系统浏览器的授权地址不该带 redirect_mode：%s", opened)
+	}
 	p := b.pendingLogin()
 	if p == nil {
 		t.Fatal("没有登记等待中的授权")
@@ -914,6 +917,9 @@ func TestEmbeddedLoginFailureFallsBackToSystemBrowser(t *testing.T) {
 	p := b.pendingLogin()
 	if p == nil || p.embedded {
 		t.Fatalf("等待中的授权 = %+v，期望退回系统浏览器", p)
+	}
+	if strings.Contains(opened, "redirect_mode=") {
+		t.Errorf("退回系统浏览器后不该带 redirect_mode=app：%s", opened)
 	}
 }
 
@@ -1035,6 +1041,12 @@ func TestReloginPreservesGrantedScopes(t *testing.T) {
 	}
 	if scope := " " + u.Query().Get("scope") + " "; !strings.Contains(scope, " write:topic ") {
 		t.Errorf("重新登录地址没有保留 write:topic：%q", scope)
+	}
+	if got := u.Query().Get("redirect_mode"); got != "app" {
+		t.Errorf("内置浏览器的授权地址缺 redirect_mode=app：%s", authorizeURL)
+	}
+	if p := b.pendingLogin(); p == nil || strings.Contains(p.url, "redirect_mode=") {
+		t.Errorf("登记的原始地址不该带 redirect_mode：%v", p)
 	}
 }
 
