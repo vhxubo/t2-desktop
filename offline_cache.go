@@ -84,6 +84,27 @@ func (a *app) watchLaterCacheKey() string {
 	return laterCachePrefix + scope
 }
 
+// detailScopePrefix 是某个账号作用域下全部详情缓存的键前缀。详情缓存按
+// 账号分开：一个窗口打开的正文、评论与收藏 / 编辑状态不能被另一个账号
+// 读出来；退出账号时按这个前缀整组清掉。
+func detailScopePrefix(scope string) string {
+	return detailCachePrefix + scope + ":"
+}
+
+// detailCacheKey 是某篇贴子在当前账号作用域下的缓存键。已登录但昵称还没
+// 回来时返回空：那段窗口里任何键都会被下一个账号复用，详情（含收藏 /
+// 编辑状态）宁可不缓存，等昵称到了再按 user:<昵称> 写。
+func (a *app) detailCacheKey(shortID string) string {
+	if shortID == "" {
+		return ""
+	}
+	scope := a.accountScope()
+	if scope == sessionScope {
+		return ""
+	}
+	return detailScopePrefix(scope) + shortID
+}
+
 // formatCacheTime 是缓存时间在界面上的统一写法。秒没有意义，统一到分钟。
 func formatCacheTime(t time.Time) string {
 	if t.IsZero() {

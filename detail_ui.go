@@ -994,6 +994,8 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 		a.rewardPoolDialog(c, d)
 		a.betDialog(c, d)
 		a.restrictedUnlockDialog(c, d)
+		// 抽奖确认框：帖主点「发起抽奖」后展开，选人数、确认后才发触发评论。
+		a.lotteryDialog(c, d)
 	})
 }
 
@@ -1153,6 +1155,21 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 		acts = append(acts, detailToolAction{
 			key: "postscript", icon: lucide.FilePlus2(), label: "追加附言", tip: "在帖子末尾追加一段附言",
 			onClick: func() { a.showPostscript(d) }, more: true,
+		})
+	}
+	// 抽奖只给帖主：点开先确认（人数可调），确认后才发触发评论。已经开过奖
+	// 的帖子把同一入口改成「查看开奖结果」，只报结果不再发起。
+	if a.canLottery(d) {
+		icon, label, tip := lotteryIcon, "发起抽奖", "以评论触发抽奖助手，随机抽取中奖者"
+		if d.topic != nil && d.topic.Lottery != nil {
+			label, tip = "查看开奖结果", "这篇帖子已经开过奖"
+		}
+		if d.lottery.busy {
+			label, tip = "正在抽奖", "开奖进行中…"
+		}
+		acts = append(acts, detailToolAction{
+			key: "lottery", icon: icon, label: label, tip: tip, busy: d.lottery.busy, more: true,
+			onClick: func() { a.askLottery(d) },
 		})
 	}
 	if a.canEditNode(d) {

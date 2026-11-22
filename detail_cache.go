@@ -11,8 +11,12 @@ import (
 // 历史或列表再打开时先显示缓存，网络请求回来后再覆盖。弱网 / 无网时
 // 正文立刻可读，不再先给用户一页"加载失败"。
 //
-// 缓存按 short_id 全局共享（帖子是公开内容），但只保留最近打开的若干篇；
-// 清空阅读历史时会一并删除，避免留下没有人再引用的正文。
+// 缓存按账号作用域分开（见 offline_cache.go 的 detailCacheKey）：同一个
+// 账号的窗口之间可以共用，换账号后不会读到上一个账号的正文与个人状态。
+// 每个作用域只保留最近打开的若干篇；清空阅读历史时整组删除。
+//
+// 受限内容的付费正文不落盘：写入前把 Restricted.Content 剥掉，只留门槛
+// 信息。解锁后的正文必须每次向服务端重新读取，不能留在本机让别人翻到。
 
 const detailCacheMax = 60
 
@@ -32,7 +36,7 @@ func (a *app) readCachedDetail(shortID string) (cachedDetail, bool) {
 		return cachedDetail{}, false
 	}
 	var c cachedDetail
-	if _, ok := a.kv.get(detailCachePrefix+shortID, &c); !ok {
+	if _, ok := a.kv.get(a.detailCacheKey(shortID), &c); !ok {
 		return cachedDetail{}, false
 	}
 	if c.Topic.ShortID == "" || c.SavedAt.IsZero() {
@@ -81,9 +85,12 @@ func (a *app) saveCachedDetail(d *detailState) {
 	if a.kv == nil || d == nil || d.topic == nil || d.shortID == "" {
 		return
 	}
-	key := detailCachePrefix + d.shortID
+	key := a.detailCacheKey(d.shortID)
+	if key == "" {
+		return
+	}
 	now := time.Now()
-	c := cachedDetail{Topic: *d.topic, SavedAt: now}
+	c := cachedDetail{Topic: cacheableTopic(*d.topic), SavedAt: now}
 	if d.replyPage <= 1 {
 		c.Replies = d.replyList
 		c.ReplyLoaded = d.replyLoaded
@@ -107,7 +114,21 @@ func (a *app) saveCachedDetail(d *detailState) {
 		log.Printf("帖子正文缓存写入失败：%v", err)
 		return
 	}
-	a.kv.prune(detailCachePrefix, detailCacheMax)
+	a.kv.prune(detailScopePrefix(a.accountScope()), detailCacheMax)
+}
+
+// cacheableTopic 是写进本地缓存的正文副本。受限内容的付费正文（解锁后才
+// 由服务端下发的 Restricted.Content）不能落盘：这里只保留门槛信息，把正文
+// 清空；其余字段仍按账号作用域共享。
+func cacheableTopic(t topicDetail) topicDetail {
+	out := t
+	if r := t.Restricted; r != nil {
+		bare := *r
+		bare.Content = ""
+		bare.ContentKnown = false
+		out.Restricted = &bare
+	}
+	return out
 }
 
 // markDetailOffline 在网络刷新失败、但页面上已有缓存正文时调用：保留正文，

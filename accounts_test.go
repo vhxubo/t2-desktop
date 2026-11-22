@@ -324,6 +324,32 @@ func TestLogoutAccountRemovesOnlyThatAccount(t *testing.T) {
 	}
 }
 
+// 退出账号时把它的详情缓存整组删掉：正文、评论与个人状态不再留在本机；
+// 另一个账号的详情缓存不受影响。
+func TestLogoutAccountClearsItsDetailCache(t *testing.T) {
+	b := newAccountBook(t.TempDir())
+	jimmy := addTestAccount(t, b, "jimmy")
+	addTestAccount(t, b, "amy")
+	jimmyKey := detailScopePrefix("user:jimmy") + "A1"
+	amyKey := detailScopePrefix("user:amy") + "A1"
+	if err := b.kv.put(jimmyKey, "jimmy 的正文", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.kv.put(amyKey, "amy 的正文", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	b.logoutAccount(jimmy.ID)
+
+	var got string
+	if _, ok := b.kv.get(jimmyKey, &got); ok {
+		t.Error("退出账号后它的详情缓存应被清掉")
+	}
+	if _, ok := b.kv.get(amyKey, &got); !ok || got != "amy 的正文" {
+		t.Errorf("别的账号的详情缓存不该受影响：%q %v", got, ok)
+	}
+}
+
 // 退出账号要压过还在等回调的授权：否则浏览器里点一下同意，刚退出的账号又被
 // 签回来，还会在凭据目录里留下一个没有索引的令牌文件。
 func TestLogoutAccountCancelsPendingAuthorization(t *testing.T) {

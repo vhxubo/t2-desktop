@@ -41,6 +41,11 @@ type tabState struct {
 	totalPages int
 	loaded     bool
 	loading    bool
+	// refreshing 表示后台静默刷新第一页正在进行；refreshGen 是它的回包
+	// 代次，只认最新一次。它与分页加载用的 gen 分开，静默刷新不会顶掉
+	// 正在续拉的下一页。
+	refreshing bool
+	refreshGen uint64
 	noMore     bool // 分页已到底（空页 / 无新增），用于无限滚动停止
 	err        string
 	// moreErr 是「续拉下一页」失败的原因：首屏已经有内容时，续拉失败不能
@@ -1097,15 +1102,18 @@ func (a *app) reloadCurrent() {
 	a.load(a.tab, 1)
 }
 
-// refreshTab 把某一页的第一页内容重新拉一遍，对应「进入这一页就刷新一次」。
-// 不先清空列表：切页时先看到上一次的内容，新数据到了再整体换掉并回到顶部，
-// 不会闪一下空白。正在加载、正在等授权时不动，免得两次请求抢同一份结果。
+// refreshTab 是用户主动刷新（点当前页、失败重试）：重新拉第一页，成功后
+// 整份列表换成最新内容并回到顶部。切页走 refreshTabSilently，不会把已经
+// 读到第 50 条的位置丢掉。
+//
+// 请求期间先留着旧内容，不先清空列表，不会闪一下空白。正在加载、正在等
+// 授权时不动，免得两次请求抢同一份结果。
 func (a *app) refreshTab(idx int) {
 	if idx < 0 || idx >= len(a.tabs) {
 		return
 	}
 	st := a.tabs[idx]
-	if st == nil || st.loading || st.authWait {
+	if st == nil || st.loading || st.refreshing || st.authWait {
 		return
 	}
 	if spec := a.specFor(idx); spec.NeedsAuth && !a.auth.loggedIn() {
@@ -1118,6 +1126,139 @@ func (a *app) refreshTab(idx int) {
 	st.err = ""
 	st.moreErr = ""
 	a.load(idx, 1)
+}
+
+// refreshTabSilently 是切到某一页时的刷新：已经加载过的页在后台合并新的
+// 第一页，不重置 page、不清掉第 2 页以后的内容，也不把滚动位置弹回顶部。
+// 第一次进入（尚未加载）仍按首屏处理。
+func (a *app) refreshTabSilently(idx int) {
+	if idx < 0 || idx >= len(a.tabs) {
+		return
+	}
+	st := a.tabs[idx]
+	if st == nil || st.loading || st.refreshing || st.authWait {
+		return
+	}
+	if spec := a.specFor(idx); spec.NeedsAuth && !a.auth.loggedIn() {
+		return
+	}
+	a.markTabRead(idx)
+	st.err = ""
+	st.moreErr = ""
+	if !st.loaded {
+		a.load(idx, 1)
+		return
+	}
+	a.silentRefreshTab(toastMain, idx)
+}
+
+// silentRefreshTab 在后台重拉第 1 页，并把新头部合并进现有列表。它不清空
+// items、不重置 page、也不调用 ScrollTo：切走再切回来时，用户读到的位置与
+// 翻过的页都还在。合并只动第一页覆盖到的行，第 2 页以后的内容原样保留；
+// ListState 按条目的 Key 对齐，滚动位置跟着原来那条内容走。
+func (a *app) silentRefreshTab(owner toastTarget, idx int) {
+	if a.client == nil {
+		return
+	}
+	if idx < 0 || idx >= len(a.tabs) {
+		return
+	}
+	st := a.tabs[idx]
+	spec := a.specFor(idx)
+	if st == nil || st.loading || st.refreshing || st.authWait {
+		return
+	}
+	if spec.NeedsAuth && !a.auth.loggedIn() {
+		return
+	}
+	// 被限流、断网时连静默请求也别发：界面上的列表保持上次内容。
+	if a.client.rateGate().remaining() > 0 {
+		return
+	}
+	if net := a.proxy.netStatus(); net != nil && net.isOffline() {
+		return
+	}
+	st.refreshing = true
+	a.reqSeq++
+	gen := a.reqSeq
+	st.refreshGen = gen
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	go func() {
+		defer cancel()
+		res, err := a.client.fetch(ctx, spec, 1)
+		a.publish(func() {
+			if st.refreshGen != gen {
+				return
+			}
+			st.refreshing = false
+			if err != nil {
+				// 失败不打扰正在读列表的用户：旧列表继续显示。授权问题仍走
+				// 全球授权链路，补上权限后重跑这次静默刷新。
+				if a.handleAuthErrorFor(owner, err, func() {
+					a.silentRefreshTab(owner, idx)
+				}) {
+					st.authWait = true
+				}
+				return
+			}
+			a.mergeFreshPage(st, spec, res)
+		})
+	}()
+}
+
+// mergeFreshPage 把静默刷新拿到的第 1 页并进现有列表。第 1 页以外的旧条目
+// 保留：用户已经翻到第 3 页时不能只留下新的 50 条。第一页整体替换而不是
+// 逐条插入，避免已删除 / 已改序的帖子留在头部。
+func (a *app) mergeFreshPage(st *tabState, spec tabSpec, res pageResult) {
+	if st == nil {
+		return
+	}
+	// 兼容直接给 items 塞数据的旧状态（无头测试、本地恢复）：把它当成
+	// 已加载的原始行，才能保住已有内容与滚动位置。
+	if len(st.raw) == 0 && len(st.items) > 0 {
+		st.raw = append([]Item(nil), st.items...)
+	}
+	if st.page <= 1 || len(st.raw) == 0 {
+		// 还没翻过页：整份换成最新的第一页。滚动位置不重置，行数相同时
+		// 用户停在原来那一行附近。
+		st.raw = append([]Item(nil), res.Items...)
+		st.page = 1
+		st.noMore = len(res.Items) == 0
+		st.filterSkip = 0
+	} else {
+		fresh := make(map[string]bool, len(res.Items))
+		merged := make([]Item, 0, len(res.Items)+len(st.raw))
+		for _, it := range res.Items {
+			merged = append(merged, it)
+			fresh[it.Key] = true
+		}
+		for _, it := range st.raw {
+			if !fresh[it.Key] {
+				merged = append(merged, it)
+			}
+		}
+		st.raw = merged
+	}
+	st.total = res.Total
+	st.totalPages = res.TotalPages
+	st.loaded = true
+	st.items, st.hidden = a.filterItems(spec, st.raw)
+	st.refold(spec)
+
+	// 只预取本次第一页里可见条目的头像，被屏蔽作者不必下载。
+	if len(res.Items) > 0 {
+		visible := make(map[string]bool, len(st.items))
+		for _, it := range st.items {
+			visible[it.Key] = true
+		}
+		freshItems := make([]Item, 0, len(res.Items))
+		for _, it := range res.Items {
+			if visible[it.Key] {
+				freshItems = append(freshItems, it)
+			}
+		}
+		a.prefetchItemAvatars(freshItems)
+	}
 }
 
 // reclickTab 是侧边栏一行的点击：点的不是当前这一页就交给选中变化去切页，
@@ -1623,7 +1764,8 @@ func (a *app) selectTab(idx int) {
 		a.requestLogin("「"+spec.Label+"」需要登录 2Libra 后才能查看。",
 			func() { a.load(idx, 1) })
 	} else {
-		a.refreshTab(idx)
+		// 切页只做后台静默刷新：保留这一页已加载的多页与滚动位置。
+		a.refreshTabSilently(idx)
 	}
 	if a.tab != a.lastTab {
 		a.lastTab = a.tab

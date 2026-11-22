@@ -1128,6 +1128,13 @@ func (b *accountBook) logoutAccount(id string) {
 	if err := acc.auth.clearToken(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("退出账号 %s：删除凭据失败：%v", id, err)
 	}
+	// 这个账号的详情缓存（正文、评论、收藏与编辑状态）整组删掉。键已经按
+	// 账号作用域分开，别的账号读不到；退出账号本身也该把它从本机清掉。
+	if name := strings.ToLower(strings.TrimSpace(acc.Username)); name != "" && b.kv != nil {
+		if _, err := b.kv.clearPrefixes(detailScopePrefix("user:" + name)); err != nil {
+			log.Printf("退出账号 %s：清理详情缓存失败：%v", id, err)
+		}
+	}
 	// 草稿文件按账号 id 留在配置目录里，退出只删凭据：账号 id 由昵称哈希得
 	// 出，重新登录同一昵称就能取回，刻意不删。
 	b.mu.Lock()

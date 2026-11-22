@@ -316,6 +316,58 @@ func TestLotteryTimeoutShowsReason(t *testing.T) {
 	}
 }
 
+// 抽奖确认框接在详情工具条上：入口只在帖主的「更多」菜单里；点开先选人数
+// 并确认，确认之后才发触发评论。
+func TestLotteryDialogConfirmsAndStarts(t *testing.T) {
+	srv := &lotteryServer{lotteryFrom: 1}
+	s := httptest.NewServer(srv)
+	defer s.Close()
+	a := lotteryTestApp(t, s)
+	fastLotteryPoll(t)
+
+	found := false
+	for _, act := range a.detailToolActions(a.detail) {
+		if act.key == "lottery" {
+			found = true
+			if act.label != "发起抽奖" {
+				t.Errorf("抽奖入口文案 = %q，期望「发起抽奖」", act.label)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("帖主的详情工具条里没有抽奖入口")
+	}
+
+	a.detail.lottery.count = 2
+	a.askLottery(a.detail)
+	if !a.detail.lottery.awaiting {
+		t.Fatal("点抽奖入口应展开确认框")
+	}
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	for _, want := range []string{"发起抽奖？", "中奖人数", "确认发起抽奖"} {
+		if !tt.HasText(want) {
+			t.Errorf("抽奖确认框缺少 %q：%q", want, tt.Texts())
+		}
+	}
+	if posts, _ := srv.snapshot(); len(posts) != 0 {
+		t.Fatalf("只展开确认框不该发请求：%+v", posts)
+	}
+
+	if err := tt.Click("确认发起抽奖"); err != nil {
+		t.Fatalf("点不到确认按钮：%v（%q）", err, tt.Texts())
+	}
+	waitFor(t, func() bool {
+		return !a.detail.lottery.busy && !a.detail.lottery.awaiting
+	}, "确认后抽奖没有发起")
+
+	posts, _ := srv.snapshot()
+	if len(posts) != 1 || !strings.Contains(posts[0].body, "抽 2 个") {
+		t.Errorf("确认后没有按选中人数发触发评论：%+v", posts)
+	}
+}
+
 // 抽奖的三个网络出口（触发评论、轮询详情、系统通知）都必须走配置的代理。
 func TestLotteryEndpointsUseConfiguredProxy(t *testing.T) {
 	clearProxyEnv(t)

@@ -458,8 +458,10 @@ func (a *app) showNotices(notices []nativeNotice) {
 }
 
 // reloadNotificationTab silently refreshes the open message list after an
-// event. Unloaded / loading tabs are left alone: ensureLoaded and the user's
-// own actions take care of them.
+// event. 它不再清空列表重拉第一页：用户可能正看第 2、3 页，SSE 每来一条
+// 消息就把视线弹回顶部是明显的问题。这里只做静默合并：新消息插到已加载
+// 内容前面，后续页与滚动位置都保留。未加载 / 正在加载的列表留给
+// ensureLoaded 和用户自己的操作。
 func (a *app) reloadNotificationTab() {
 	if !a.autoLoad || !a.auth.loggedIn() {
 		return
@@ -469,10 +471,10 @@ func (a *app) reloadNotificationTab() {
 		return
 	}
 	st := a.tabs[idx]
-	if !st.loaded || st.loading {
+	if !st.loaded || st.loading || st.refreshing {
 		return
 	}
-	a.loadFor(toastNotifications, idx, 1)
+	a.silentRefreshTab(toastNotifications, idx)
 }
 
 // onBecameActive calibrates the badge when the window returns to the front.
