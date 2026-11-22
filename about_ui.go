@@ -251,16 +251,29 @@ func (a *app) aboutTechSection(c *ui.Context) {
 	})
 }
 
-// aboutTermsSection 是第三方接入条款：用户打开应用就能看到 T2 全称、本应用与
-// 2Libra 的关系、授权撤回方式与版权说明。整段展示不截断。
+// aboutTermsSection 是第三方接入条款：用户打开应用就能看到 T2 全称、与 2Libra
+// 的关系、权限逐项用途、授权撤回方式与责任划分。窗口本身可滚动，整段不截断。
 func (a *app) aboutTermsSection(c *ui.Context) {
 	aboutSection(c, lucide.FileText(), "条款", func() {
+		props := display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 0}
 		display.Text(c, "T2 是 Third Party 2Libra（第三方 2Libra）的简称。"+
 			"本应用由第三方开发者 vhxubo 独立开发运营，与 2Libra 无隶属或合作关系。"+
 			"2Libra 仅提供账号授权与接口，不对本应用的可用性、内容与数据处理负责。"+
-			"你可以随时在 2Libra 的「授权应用」页面撤销本应用的授权。"+
-			"应用内展示的内容版权归原作者所有，详情页保留作者昵称与原文链接。",
-			display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 12})
+			"应用内展示的内容版权归原作者所有，详情页保留作者昵称与原文链接。", props)
+		// 接入条款附录要求逐项列出申请的权限与用途；追加权限由 auth_gate 触发，
+		// 授权弹窗里会展示本次重新申请的范围，这里只说明各自用来做什么。
+		display.Text(c, "授权与权限：可随时在 2Libra 的「授权应用」页撤销授权或逐项关闭权限，"+
+			"撤销后下一个请求即失效。默认申请的权限及用途："+
+			"profile（公开资料）、read（公开内容与评论）、read:me（通知、收藏、关注与合集）、"+
+			"read:economy（金币余额与流水）、write:comment（发表与编辑评论）、interact（收藏、表态、书签与关注）。"+
+			"发帖与金币相关功能按需追加 write:topic（发帖、编辑与投票）、"+
+			"write:economy（签到、打赏、盲盒等金币变动）、upload（上传图片）。", props)
+		display.Text(c, "责任与风险：您因授权或正常使用本应用而对账号产生的任何影响均由您自行评估并承担；"+
+			"以您名义发布的内容视为您发布，须自行确保合规。打赏、签到、盲盒、竞猜等金币变动不可撤销，"+
+			"本应用仅在您逐次确认后执行。令牌仅存于本机系统凭据库，不上传、不共享；请妥善保管设备与账号。", props)
+		display.Text(c, "第三方服务与可用性：图片可选用第三方图床，上传后按该服务条款处理。"+
+			"接口按现状提供，2Libra 可调整配额、端点或响应；因限流、维护、接口变更或不可抗力导致的功能受限，"+
+			"本应用不承担责任。未成年人应在监护人同意下使用与授权；条款更新后继续使用视为接受。", props)
 		a.aboutRow(c, lucide.FileBadge(), "服务条款", "2Libra 第三方接入条款",
 			"https://r2.2libra.com/openapi/v1/terms.md")
 	})

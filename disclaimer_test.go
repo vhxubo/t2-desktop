@@ -41,7 +41,11 @@ func TestFirstLaunchDisclaimerDialog(t *testing.T) {
 	a.disclaimerOpen = true
 	tt := ui.NewTester(a.disclaimerDialog, 600, 420)
 	tt.Frame()
-	for _, want := range []string{"关于 T2", "Third Party 2Libra", "非官方桌面客户端", "基于开放 API 开发", "与开发者无关", "如果继续使用", "退出", "继续使用"} {
+	for _, want := range []string{
+		"关于 T2", "Third Party 2Libra", "非官方桌面客户端", "基于开放 API 开发",
+		"界面完整性与接口一致性", "与开发者无关", "继续使用视为您已知悉并同意本条款",
+		"系统凭据库", "授权应用", "不可撤销", "退出", "继续使用",
+	} {
 		if !tt.HasText(want) {
 			t.Errorf("首次启动声明弹窗缺少 %q：%q", want, tt.Texts())
 		}
@@ -83,7 +87,11 @@ func TestAboutReplayDisclaimer(t *testing.T) {
 	}
 
 	tt.Frame()
-	for _, want := range []string{"关于 T2", "Third Party 2Libra", "非官方桌面客户端", "基于开放 API 开发", "与开发者无关", "如果继续使用", "退出", "继续使用"} {
+	for _, want := range []string{
+		"关于 T2", "Third Party 2Libra", "非官方桌面客户端", "基于开放 API 开发",
+		"界面完整性与接口一致性", "与开发者无关", "继续使用视为您已知悉并同意本条款",
+		"系统凭据库", "授权应用", "不可撤销", "退出", "继续使用",
+	} {
 		if !tt.HasText(want) {
 			t.Errorf("重看声明弹窗缺少 %q：%q", want, tt.Texts())
 		}

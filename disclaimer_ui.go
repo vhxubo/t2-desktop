@@ -11,14 +11,21 @@ import (
 func disclaimerContent(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
-		ui.Text(c, "T2 全称 Third Party 2Libra（第三方 2Libra），是由 vhxubo 独立开发运营的非官方桌面客户端。").
+		ui.Text(c, "T2 全称 Third Party 2Libra（第三方 2Libra），是由 vhxubo 独立开发运营的非官方桌面客户端，"+
+			"与 2Libra 无隶属、合作或背书关系。").
 			TextColor(t.Text).MaxLines(3)
-		ui.Text(c, "与 2Libra 无隶属或背书关系；2Libra 仅提供账号授权与开放接口。"+
-			"内容版权归原作者所有，详情页保留作者昵称与原文链接。").
+		ui.Text(c, "2Libra 仅提供账号授权与开放接口，内容版权归原作者所有。"+
+			"本应用基于开放 API 开发，仅就界面完整性与接口一致性承担责任。").
 			FontSize(12).TextColor(t.TextMuted).MaxLines(4)
-		ui.Text(c, "本应用基于开放 API 开发，接口本身可能出现问题；使用过程中遇到的"+
-			"任何问题都与开发者无关。如果继续使用，则视为您同意该条款。").
+		ui.Text(c, "您因授权或使用本应用而对账号产生的任何影响，均应自行评估并承担，与开发者无关。"+
+			"继续使用视为您已知悉并同意本条款；如不接受，请退出本应用。").
 			FontSize(12).TextColor(t.TextMuted).MaxLines(4)
+		// 条款要求的另外三件事也放进首启弹窗：授权可撤销、金币与内容的后果自负、
+		// 令牌的存放方式。更细的权限逐项用途与责任划分放在「关于」窗口的「条款」。
+		ui.Text(c, "授权令牌仅存于本机系统凭据库，本应用不上传、不共享；您可随时在 2Libra 的「授权应用」页"+
+			"撤销授权或逐项关闭权限，撤销后下一个请求即失效。以您名义发布的内容及打赏、盲盒等金币变动不可撤销，"+
+			"仅在您确认后执行，相关后果由您承担。未成年人须在监护人同意下使用。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(6)
 	})
 }
 
