@@ -759,6 +759,7 @@ func profileContentTotal(st *tabState) int {
 
 // profileContentRow 和主窗口的列表行用同一套画法：收藏是帖子、书签是评论，
 // 书签因此会走评论的富行；点开后由 openProfileItem 在主窗口打开正文。
+// 稍后再看只在主窗口信息流里出现，这里走 rowWithNoWatchLater，不带那枚按钮。
 // 「书签」分段的行右侧多一枚移除按钮：书签本来就是这个窗口里能删的东西，
 // 让用户为了删一条书签再进帖子是把断头路接了一半。「合集」分段同理：整行
 // 点开合集里的帖子，右侧是改名与删除（合集是我自己的，见 collections.go）。
@@ -769,7 +770,7 @@ func (a *app) profileContentRow(c *ui.Context, kind int, it Item) {
 	case kind == profileContentBookmarks && it.CommentID != "":
 		a.profileBookmarkRow(c, it)
 	default:
-		a.rowWith(c, it, a.openProfileItem)
+		a.rowWithNoWatchLater(c, it, a.openProfileItem)
 	}
 }
 
@@ -779,7 +780,7 @@ func (a *app) profileBookmarkRow(c *ui.Context, it Item) {
 	busy := a.profile != nil && a.profile.bookmarkBusy == it.CommentID
 	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Grow(1).MinWidth(0).Children(func() {
-			a.rowWith(c, it, a.openProfileItem)
+			a.rowWithNoWatchLater(c, it, a.openProfileItem)
 		})
 		if busy {
 			b := ui.Box(c).Size(28, 28).Center()
@@ -818,7 +819,7 @@ func (a *app) profileCollectionRow(c *ui.Context, it Item) {
 	row.Clickable = !busy
 	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Grow(1).MinWidth(0).Children(func() {
-			a.rowWith(c, row, func(Item) { a.openProfileCollection(it) })
+			a.rowWithNoWatchLater(c, row, func(Item) { a.openProfileCollection(it) })
 		})
 
 		rename := iconActionButton(c, editIcon, "重命名合集 "+title, "给这个合集改名")

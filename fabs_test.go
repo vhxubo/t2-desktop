@@ -76,8 +76,8 @@ func TestListFabsRenderRefreshAndBackTop(t *testing.T) {
 	}
 }
 
-// 评论区右下角的横排操作组是绝对定位的，列表滚到底时不能压住最后一条评论
-// 最右侧的「回复」图标：列表底部要留出它那一排的高度，让回复停在上方。
+// 评论区操作组已经嵌到输入栏发送按钮右侧，不再悬在列表上；列表滚到底时
+// 最后一条评论的「回复」图标不该被它压住。
 func TestDetailCommentToolbarDoesNotCoverLastReply(t *testing.T) {
 	a := detailAppWithReplies(t)
 	rows := make([]replyItem, 0, 60)
@@ -98,7 +98,7 @@ func TestDetailCommentToolbarDoesNotCoverLastReply(t *testing.T) {
 		t.Fatalf("评论没有滚到底：%q", tt.Texts())
 	}
 
-	// 取最后一条可见评论的回复按钮，和整列工具栏里最靠上的一枚比高度。
+	// 取最后一条可见评论的回复按钮，和输入栏那排操作里最靠上的一枚比高度。
 	var lastReply, toolbarTop ui.Rect
 	var hasReply, hasToolbar bool
 	for _, n := range tt.AccessAll() {
@@ -263,9 +263,8 @@ func TestListFabRefreshReloads(t *testing.T) {
 	}
 }
 
-// 正文与评论区各有自己的一键回顶与刷新：正文那组只滚正文，评论那组只滚
-// 评论列表。两组都竖排贴在各自面板右下角，不占正文高度，也不和评论卡片
-// 底部的「发送」抢位置。
+// 正文与评论区各有自己的一键回顶与刷新：正文那组竖排贴在正文面板右下角，
+// 评论那组横排嵌在输入栏发送按钮右侧；两组只滚各自那一栏，互不干扰。
 func TestDetailToolbarRefreshAndBackToTop(t *testing.T) {
 	a := detailAppWithReplies(t)
 	rows := make([]replyItem, 0, 60)
@@ -301,14 +300,14 @@ func TestDetailToolbarRefreshAndBackToTop(t *testing.T) {
 	if r, ok := tt.Find("返回顶部"); ok {
 		t.Errorf("正文没滚时不该出现正文回顶：%+v", r)
 	}
-	// 评论组横排贴在列表右下角：回顶在刷新左边，两枚同一行。
+	// 评论组横排嵌在输入栏右下、发送右侧：回顶在刷新左边，两枚同一行。
 	if commentTop.Y != commentRefresh.Y {
 		t.Errorf("评论回顶与刷新应排在同一行：%+v / %+v", commentTop, commentRefresh)
 	}
 	if commentTop.X+commentTop.W > commentRefresh.X {
 		t.Errorf("评论回顶应排在刷新左边：%+v / %+v", commentTop, commentRefresh)
 	}
-	// 两组各在自那一栏：正文组在左，评论组在右，都落在面板下部。
+	// 两组各管一栏：正文组在左栏下部，评论组在右栏底部的输入栏里。
 	bar, ok := tt.Access("正文互动栏")
 	if !ok {
 		t.Fatalf("找不到正文互动栏：%q", tt.Texts())
@@ -322,7 +321,7 @@ func TestDetailToolbarRefreshAndBackToTop(t *testing.T) {
 	if commentRefresh.Y < 380 {
 		t.Errorf("评论组应贴在评论区下部：%+v", commentRefresh)
 	}
-	// 评论输入栏固定在卡片底部，不再需要为操作组让宽度。
+	// 评论输入栏固定在卡片底部，发送与操作组同处这一行。
 	send, ok := tt.Find("发送")
 	if !ok {
 		t.Fatalf("找不到发送按钮：%q", tt.Texts())
@@ -418,8 +417,8 @@ func TestDetailRefreshIsSplitBetweenBodyAndComments(t *testing.T) {
 
 // 收起正文后，正文右下角那一列悬浮操作组要跟着正文面板一起隐藏：正文已经
 // 不在画面上，再把它画到内容区右下角，正好压住评论区最下方评论的「回复」入口。
-// 评论区自己的操作组（刷新 / 视图切换 / 回顶）仍留在原处，展开正文后正文那组
-// 再回来。
+// 评论区自己的操作组（刷新 / 视图切换 / 回顶）嵌在输入栏发送右侧，仍留在原处，
+// 展开正文后正文那组再回来。
 func TestDetailBodyCollapseHidesBodyToolbar(t *testing.T) {
 	a := detailAppWithReplies(t)
 	tt := ui.NewTester(a.view, 1100, 760)

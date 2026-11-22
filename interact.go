@@ -474,6 +474,9 @@ func (a *app) openReactionPopup(d *detailState, target string) {
 	if d == nil || !a.detailLive(d) {
 		return
 	}
+	if a.isOwnTarget(d, target) {
+		return
+	}
 	if !a.auth.loggedIn() {
 		a.requestLogin("登录后才能添加表情。", func() {
 			if a.detailLive(d) {
@@ -497,6 +500,9 @@ func (a *app) prepareReactionPopup(d *detailState, target string) {
 // 切换目标；这里供登录回调与显式打开用。
 func (a *app) openRewardPopup(d *detailState, target string) {
 	if d == nil || !a.detailLive(d) {
+		return
+	}
+	if a.isOwnTarget(d, target) {
 		return
 	}
 	if !a.auth.loggedIn() {
@@ -539,17 +545,32 @@ func (a *app) prepareReactionDetails(d *detailState, target string) {
 	d.react.detailsFor = target
 }
 
-// isOwnReply 报告这条评论是不是当前登录用户自己写的。表态与打赏都要通知
-// 目标作者，发给自己的评论没有意义，入口直接隐藏。
-func (a *app) isOwnReply(r replyItem) bool {
+// isOwnAuthor 报告作者昵称是不是当前登录用户。详情里只可靠地拿到用户名，
+// 没有缓存当前用户的 uuid，所以这里沿用原有的按昵称比对口径（评论一直这么
+// 判断），避免为了一个入口去依赖未必已加载的资料页状态。
+func (a *app) isOwnAuthor(author string) bool {
 	name := strings.TrimSpace(a.auth.username())
-	return name != "" && strings.EqualFold(name, strings.TrimSpace(r.Author))
+	return name != "" && strings.EqualFold(name, strings.TrimSpace(author))
 }
 
-// canActOn 报告某个表态目标能不能操作：帖子要有作者 uuid / 节点 / 标题与
-// 原文路径；评论还要有作者 uuid，且不能是自己写的。匿名帖没有可通知的人，
-// 只读展示。
-func (a *app) canActOn(d *detailState, target string) bool {
+// isOwnTarget 报告表态 / 打赏目标是不是当前登录用户自己的帖子或评论。这两种
+// 动作都会通知目标作者，发给自己没有意义，也不该花自己的金币打赏自己，所以
+// 界面不加入口，动作本身也直接拦下。
+func (a *app) isOwnTarget(d *detailState, target string) bool {
+	if d == nil || d.topic == nil {
+		return false
+	}
+	if target == reactionTopic {
+		return a.isOwnAuthor(d.topic.Author)
+	}
+	r, ok := findReply(d.replyList, target)
+	return ok && a.isOwnAuthor(r.Author)
+}
+
+// reactionTargetReady / rewardTargetReady 只检查目标本身的信息齐不齐，不管
+// 是不是自己的内容。互动栏是否占位要看这两个条件，这样自己的帖子只是不画
+// 入口，不会让整条栏消失、把右下角的操作组挪到 toast 区。
+func reactionTargetReady(d *detailState, target string) bool {
 	if d == nil || d.topic == nil {
 		return false
 	}
@@ -557,14 +578,11 @@ func (a *app) canActOn(d *detailState, target string) bool {
 		return canReactTopic(d.topic)
 	}
 	r, ok := findReply(d.replyList, target)
-	return ok && !a.isOwnReply(r) && r.AuthorID != "" &&
+	return ok && r.AuthorID != "" &&
 		d.topic.NodeID != "" && topicSitePath(d.topic) != ""
 }
 
-// canRewardOn 报告能不能打赏这个目标：打赏是金币变动，必须有接收方与目标
-// 标识；匿名内容的 author 是 null，没有接收方，只能表态展示。自己的评论
-// 同样不打赏。
-func (a *app) canRewardOn(d *detailState, target string) bool {
+func rewardTargetReady(d *detailState, target string) bool {
 	if d == nil || d.topic == nil {
 		return false
 	}
@@ -572,7 +590,20 @@ func (a *app) canRewardOn(d *detailState, target string) bool {
 		return d.topic.AuthorID != "" && d.shortID != ""
 	}
 	r, ok := findReply(d.replyList, target)
-	return ok && !a.isOwnReply(r) && r.AuthorID != "" && d.shortID != ""
+	return ok && r.AuthorID != "" && d.shortID != ""
+}
+
+// canActOn 报告某个表态目标能不能操作：目标本身要有作者 uuid / 节点 / 标题
+// 与原文路径（评论只要作者 uuid），且不能是自己的帖子或评论。匿名帖没有可
+// 通知的人，只读展示。
+func (a *app) canActOn(d *detailState, target string) bool {
+	return reactionTargetReady(d, target) && !a.isOwnTarget(d, target)
+}
+
+// canRewardOn 报告能不能打赏这个目标：打赏是金币变动，必须有接收方与目标
+// 标识；匿名内容的 author 是 null，没有接收方。自己的帖子和评论都不打赏。
+func (a *app) canRewardOn(d *detailState, target string) bool {
+	return rewardTargetReady(d, target) && !a.isOwnTarget(d, target)
 }
 
 // reactionEmojisOf 是表态弹层里的表情：节点推荐 + 已有的聚合表情（保证已经
@@ -589,6 +620,11 @@ func reactionEmojisOf(d *detailState, target string) []string {
 // 不带「要加还是取消」，本地状态就是唯一的依据。
 func (a *app) toggleReaction(d *detailState, target, emoji string) {
 	if d == nil || !a.detailLive(d) || d.topic == nil || emoji == "" || d.react.busy {
+		return
+	}
+	// 入口已按 canActOn 隐藏；这里再拦一次，防止已经打开的气泡在内容换成
+	// 自己的之后仍能提交。
+	if a.isOwnTarget(d, target) {
 		return
 	}
 	if !a.auth.loggedIn() {
@@ -786,7 +822,7 @@ func (a *app) topicInteractionVisible(d *detailState) bool {
 		return false
 	}
 	return len(visibleReactions(p.Reactions)) > 0 || p.Rewards.Total > 0 ||
-		a.canActOn(d, reactionTopic) || a.canRewardOn(d, reactionTopic)
+		reactionTargetReady(d, reactionTopic) || rewardTargetReady(d, reactionTopic)
 }
 
 // topicInteractionBar 是左栏正文底部固定的一条互动栏：帖子收到的表态 /
@@ -1308,6 +1344,10 @@ func rewardNeed(d *detailState, target string) (rewardBody, bool) {
 // 幂等键；金额或目标变了才换新键。成功后本地先记账，并刷新标题栏余额。
 func (a *app) submitReward(d *detailState, target string) {
 	if d == nil || !a.detailLive(d) || d.react.rewardBusy || d.react.busy {
+		return
+	}
+	// 与表态同理：入口隐藏之外再拦一次，避免打赏弹层还开着时内容变成自己的。
+	if a.isOwnTarget(d, target) {
 		return
 	}
 	if !a.auth.loggedIn() {

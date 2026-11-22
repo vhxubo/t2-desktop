@@ -2027,7 +2027,7 @@ func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
 				ui.Text(c, spec.Label).FontSize(tk.FontSizeHeading4).FontWeight(600).
 					LetterSpacing(-0.4).TextColor(tk.TextHeading).SingleLine()
 			})
-			if count := feedCountLabel(spec, st); count != "" {
+			if count := feedCountLabel(st); count != "" {
 				ui.Text(c, count).FontSize(tk.FontSizeSM).Font(sidebarFont).
 					TextColor(tk.TextDescription).SingleLine().Shrink(0)
 			}
@@ -2040,9 +2040,7 @@ func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
 
 // feedCountLabel 是页头右端的小字：有总数时写「共 N 条」，服务端没给
 // 总数的页（最新评论）只写已拿到的条数。滚动加载不显示当前页码。
-// 开了内容屏蔽时再补「· 已屏蔽 M」：总数仍是服务端口径（诚实），M 是已
-// 加载页里被剔除的条数，也是「为什么列表变少了」的唯一解释。
-func feedCountLabel(spec tabSpec, st *tabState) string {
+func feedCountLabel(st *tabState) string {
 	n := st.total
 	if n <= 0 {
 		n = len(st.raw)
@@ -2050,11 +2048,7 @@ func feedCountLabel(spec tabSpec, st *tabState) string {
 	if n <= 0 {
 		return ""
 	}
-	label := "共 " + strconv.Itoa(n) + " 条"
-	if spec.FilterBlocked && st.hidden > 0 {
-		label += " · 已屏蔽 " + strconv.Itoa(st.hidden)
-	}
-	return label
+	return "共 " + strconv.Itoa(n) + " 条"
 }
 
 func (a *app) body(c *ui.Context) {
@@ -2200,15 +2194,15 @@ func (a *app) loadMoreFooter(c *ui.Context, errText string, loading bool, retry 
 	})
 }
 
-// rowWith 画一行列表项，但由调用方决定点开它的动作。「我的」窗口渲染同一
-// 批行时传 openProfileItem：正文在主窗口打开，本窗口留着不动。
-// 文章行默认带悬浮的「加入稍后再看」按钮。
+// rowWith 画一行列表项，由调用方决定点开它的动作。它带悬浮的「加入稍后再看」
+// 按钮，只给主窗口信息流（首页等各 tab）用；其它窗口走 rowWithNoWatchLater。
 func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 	a.rowWithOptions(c, it, open, true)
 }
 
-// rowWithNoWatchLater 给已经在稍后再看窗口里的行用：那扇窗口本身就是待读
-// 清单与历史，行尾再挂「加入稍后再看」没有意义，浏览历史尤其要干净。
+// rowWithNoWatchLater 是不带「加入稍后再看」按钮的行，给主窗口以外的所有
+// 列表用：我的、搜索、合集浏览、稍后再看与浏览历史等窗口。稍后再看窗口本身
+// 就是待读清单与历史，行尾再挂这个按钮没有意义，浏览历史尤其要干净。
 func (a *app) rowWithNoWatchLater(c *ui.Context, it Item, open func(Item)) {
 	a.rowWithOptions(c, it, open, false)
 }

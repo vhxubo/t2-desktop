@@ -116,10 +116,11 @@ func TestReplyFooterNamesCurrentAccount(t *testing.T) {
 		t.Fatalf("找不到发送按钮：%q", tt.Texts())
 	}
 	// 输入框铺到右端、发送按钮浮在它的右下角：账号标签也没有回来占位置。
+	// 发送右侧还嵌着评论区操作组，所以它不必贴住输入框右边缘。
 	if send.X >= field.X+field.W {
 		t.Errorf("发送按钮应浮在输入框右下角：field=%+v send=%+v", field, send)
 	}
-	if gap := (field.X + field.W) - (send.X + send.W); gap < -6 || gap > 14 {
+	if gap := (field.X + field.W) - (send.X + send.W); gap < -6 || gap > replyComposerToolReserve+8 {
 		t.Errorf("输入框应铺到右端：差 %.1f（field=%+v send=%+v）", gap, field, send)
 	}
 

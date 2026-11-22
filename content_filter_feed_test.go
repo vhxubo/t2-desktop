@@ -137,14 +137,10 @@ func TestBlockAndUnblockRecomputeWithoutRefetch(t *testing.T) {
 	}
 }
 
-func TestFeedCountLabelWithHidden(t *testing.T) {
+func TestFeedCountLabelIgnoresHidden(t *testing.T) {
 	st := &tabState{total: 50, raw: make([]Item, 5), items: make([]Item, 2), hidden: 3}
-	if got, want := feedCountLabel(tabSpecs[0], st), "共 50 条 · 已屏蔽 3"; got != want {
-		t.Errorf("页头计数 = %q，期望 %q", got, want)
-	}
-	st.hidden = 0
-	if got, want := feedCountLabel(tabSpecs[0], st), "共 50 条"; got != want {
-		t.Errorf("没有隐藏项时应保持原样，得到 %q", got)
+	if got, want := feedCountLabel(st), "共 50 条"; got != want {
+		t.Errorf("页头计数不应展示被屏蔽条数，得到 %q，期望 %q", got, want)
 	}
 }
 

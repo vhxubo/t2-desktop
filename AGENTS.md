@@ -49,6 +49,14 @@ a pure white page.
   `tokenStoreFactory` 改用文件实现以隔离并保留 `token.json` 断言。terms.md 要求
   令牌加密存储，这条硬规则对应。
 
+### 界面参考：不得使用截图 / docs/image
+
+- 后续开发**禁止以截图或文档图片作为界面参考**：`docs/image`、README 截图、
+  历史 `screenshots/`、调试产物等都不可再当作依据，相关 png 已清理。
+- UI 改动只以当前代码、`.agents/skills/mygo-maintenance/SKILL.md` 的 mygo/API
+  约定、`ui.NewTester` 无头渲染断言和 2Libra 开放 API 文档为准。
+- 需要核对旧界面行为就读代码与测试，不要重建截图目录或往文档里加图片。
+
 ## 多账号：每个账号一个窗口
 
 本机可以同时挂多个账号，实现分三处，改动前先弄清分工：

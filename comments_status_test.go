@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -315,6 +316,7 @@ func TestCommentsStatusTogglesThroughConfirm(t *testing.T) {
 		t.Errorf("开启评论没有 toast：%q", tt.Texts())
 	}
 	tt.Frame()
+	tt.Advance(6 * time.Second) // 等开启成功的 toast 退场，免得盖住右下角操作组
 	openDetailMoreMenu(t, tt)
 	if _, ok := tt.Find("关闭评论"); !ok {
 		t.Errorf("开启后入口应回到「关闭评论」：%q", tt.Texts())

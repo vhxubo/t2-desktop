@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -49,10 +50,10 @@ func TestDetailBottomBarsAligned(t *testing.T) {
 	}
 }
 
-// 评论区列表必须吃满面板高度，底部只空出右下角操作组那一条窄带。列表容器
-// 里曾用一个 ui.Spacer 垫高操作组：Spacer 默认 Grow(1)，和列表均分了整列
-// 高度，评论只占一半、下面空出一大片。换成固定高度的占位后列表铺满，
-// 这里用「最后一条可见评论要一直画到输入栏上方」把它锁住。
+// 评论区列表必须吃满面板高度，最后一条评论一直铺到输入栏上方。列表容器
+// 里曾用一个 ui.Spacer 垫高右下角操作组：Spacer 默认 Grow(1)，和列表均分了
+// 整列高度，评论只占一半、下面空出一大片。操作组已经移到输入栏发送按钮
+// 右侧，列表底部不再预留空带，这里用「最后一条可见评论紧贴输入栏」锁住。
 func TestReplyListFillsPaneAboveToolBar(t *testing.T) {
 	a := detailWindowsApp(t)
 	a.openDetailWindow(itemForWindow("POST001"))
@@ -95,9 +96,132 @@ func TestReplyListFillsPaneAboveToolBar(t *testing.T) {
 	if visible < 5 {
 		t.Errorf("评论可视行数过少：%d 行，列表应铺满评论面板", visible)
 	}
-	// 列表底部只留操作组那一条窄带（约 52 DIP），不该空出一大片。
-	if gap := editor.Y - lastBottom; gap > replyToolBarReserve+40 {
+	// 操作组已嵌进输入栏，列表底部不该再留一条空白。
+	if gap := editor.Y - lastBottom; gap > 40 {
 		t.Errorf("评论列表底部空出过多：最后一行底边 %.1f，输入栏顶 %.1f，空隙 %.1f",
 			lastBottom, editor.Y, gap)
+	}
+}
+
+// 评论区自己的操作已经嵌入折叠输入框右下角：发送按钮右侧是视图切换与刷新，
+// 已有的评论数 / 浏览数留在发送左侧。两组之间靠竖线区分，位置写死在测试里，
+// 免得以后又飘回评论列表上压住最后一条评论的回复入口。
+func TestReplyToolsEmbeddedBesideSend(t *testing.T) {
+	a := detailWindowsApp(t)
+	a.openDetailWindow(itemForWindow("POST001"))
+	h := a.detailWindows[0]
+	d := h.states[0]
+	topic, err := decodeTopic([]byte(detailTopicJSON), "POST001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.topic = &topic
+	for i := 1; i <= 30; i++ {
+		d.replyList = append(d.replyList, replyItem{
+			ID: fmt.Sprintf("c%d", i), Content: fmt.Sprintf("第 %d 楼评论内容", i),
+			Author: fmt.Sprintf("user%d", i), Floor: i, Level: 1,
+		})
+	}
+	d.replyLoaded = true
+	// 滚离顶部，让「评论回到顶部」也出现在这排里。
+	d.list.ScrollTo(29, ui.End)
+
+	tt := ui.NewTester(func(c *ui.Context) { a.detailWindowView(h, c) }, detailWindowWidth, detailWindowHeight)
+	tt.Frame()
+
+	send, ok := tt.Find("发送")
+	if !ok {
+		t.Fatalf("找不到发送按钮：%q", tt.Texts())
+	}
+	view, ok := tt.Find("切到扁平时间序")
+	if !ok {
+		t.Fatalf("找不到视图切换：%q", tt.Texts())
+	}
+	refresh, ok := tt.Find("刷新评论")
+	if !ok {
+		t.Fatalf("找不到评论刷新：%q", tt.Texts())
+	}
+	top, ok := tt.Find("评论回到顶部")
+	if !ok {
+		t.Fatalf("滚离顶部后找不到评论回顶：%q", tt.Texts())
+	}
+	count, ok := tt.Find("评论数")
+	if !ok {
+		t.Fatalf("找不到评论数：%q", tt.Texts())
+	}
+	composer, ok := tt.Find("评论输入栏")
+	if !ok {
+		t.Fatalf("找不到评论输入栏：%q", tt.Texts())
+	}
+	area, ok := tt.Find("写评论")
+	if !ok {
+		t.Fatalf("找不到评论输入框：%q", tt.Texts())
+	}
+	if count.X+count.W > send.X {
+		t.Errorf("评论数应在发送左侧：count=%+v send=%+v", count, send)
+	}
+	// 右侧整排在输入框内上下居中：计数、发送、操作组的中线都落在输入框中线上。
+	for _, part := range []struct {
+		name string
+		rect ui.Rect
+	}{{"评论数", count}, {"发送", send}, {"视图切换", view}, {"刷新", refresh}, {"回顶", top}} {
+		if dy := (part.rect.Y + part.rect.H/2) - (area.Y + area.H/2); dy < -2 || dy > 2 {
+			t.Errorf("%s应在输入框内上下居中：Δy=%.1f（输入框中线 %.1f，%+v）",
+				part.name, dy, area.Y+area.H/2, part.rect)
+		}
+	}
+	for _, tool := range []struct {
+		name string
+		rect ui.Rect
+	}{{"视图切换", view}, {"刷新", refresh}, {"回顶", top}} {
+		if tool.rect.X < send.X+send.W {
+			t.Errorf("%s应在发送右侧：send=%+v %s=%+v", tool.name, send, tool.name, tool.rect)
+		}
+		if tool.rect.X+tool.rect.W > composer.X+composer.W {
+			t.Errorf("%s越出了评论输入栏：tool=%+v composer=%+v", tool.name, tool.rect, composer)
+		}
+	}
+
+	// 嵌进输入栏后这组仍可用：点视图切换照旧切到扁平时间序。
+	if err := tt.Click("切到扁平时间序"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !d.flat {
+		t.Error("点视图切换没有切到扁平时间序")
+	}
+}
+
+// 右侧评论区收起后，输入框照旧平铺在正文底部，但那组评论操作不该跟着过来：
+// 此刻没有评论列表可回顶 / 切换 / 刷新。展开后整组回到发送右侧。
+func TestReplyToolsHiddenWhenReplyCollapsed(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if _, ok := tt.Find("刷新评论"); !ok {
+		t.Fatalf("展开态找不到评论操作组：%q", tt.Texts())
+	}
+	if err := tt.Click("收起评论"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Advance(500 * time.Millisecond)
+	if !a.detail.replyCollapsed {
+		t.Fatal("点收起评论没有生效")
+	}
+	if _, ok := tt.Find("刷新评论"); ok {
+		t.Errorf("右栏收起后不该再画评论操作组：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("切到扁平时间序"); ok {
+		t.Errorf("右栏收起后不该再画视图切换：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("写评论"); !ok {
+		t.Errorf("右栏收起后输入框仍应平铺在正文底部：%q", tt.Texts())
+	}
+	if err := tt.Click("展开评论"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Advance(500 * time.Millisecond)
+	if _, ok := tt.Find("刷新评论"); !ok {
+		t.Errorf("展开右栏后评论操作组应回到发送右侧：%q", tt.Texts())
 	}
 }

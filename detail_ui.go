@@ -981,7 +981,7 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 		a.topicSourceFooter(c, d)
 		// 正文收起时整列操作组跟着正文面板一起隐藏：正文已经不在画面上，这
 		// 一列本就属于它；再画到内容区右下角只会压住评论区最下方那条评论的
-		// 回复入口（评论区自己的操作组仍在，见 replyToolBar）。
+		// 回复入口（评论区自己的操作组已移到输入框发送右侧，见 replyComposerToolBar）。
 
 		// 「关闭 / 开启评论」的确认框：作者点了操作组里的图标才展开，盖在整页上。
 		a.commentsStatusDialog(c, d)
@@ -1129,11 +1129,6 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 			label: "复制帖子链接", tip: "把这篇帖子的链接复制到剪贴板", href: href,
 		})
 	}
-	// 稍后再看：本地待读清单，和正文一起常驻。图标与文案按当前是否已在
-	// 列表里切换，点一下就有结果（见 watch_later.go）。
-	if d.shortID != "" {
-		acts = append(acts, a.detailWatchLaterAction(d))
-	}
 	// 只在正文滚离顶部时出现，且只管正文：评论区有自己的一键回顶。正文
 	// 展开时操作组常驻右下角可达，不会像旧版页头那样为了放它固定占掉一行；
 	// 正文收起时整组都不画，自然也没有正文的回顶。
@@ -1213,11 +1208,10 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 // detailToolGroupInset 是竖排操作组离正文面板右下角的留白。
 const detailToolGroupInset float32 = 14
 
-// replyToolBarReserve 是评论区列表底部给右下角横排操作组预留的高度（DIP）。
-// 那一排绝对定位、不占布局；不预留的话列表滚到底时最后一条评论最右侧的
-// 「回复」图标正好落在它下面被遮住。横排只有一枚 Small 按钮高，加上底部
-// 留白与阴影留一点余量，底部因此只空出很窄一条。
-const replyToolBarReserve float32 = 52
+// replyComposerToolReserve 是评论区操作组嵌到发送按钮右侧后，输入框文字
+// 右侧额外让出的宽度（DIP）。三枚 Small 图标约 78，加上分隔线与间隙留一点
+// 余量；不预留的话最后一个字会钻到图标底下。
+const replyComposerToolReserve float32 = 96
 
 // detailToolBar 把页面操作收成正文区右下角的一列 Lobe ActionIconGroup：竖排、
 // 绝对定位在正文面板内，不占正文高度，也不随正文滚走。作者专属的改帖 / 附言 /
@@ -1858,15 +1852,20 @@ func (a *app) topicSourceFooter(c *ui.Context, d *detailState) {
 	})
 }
 
-// replyToolBar 是评论区右下角的横排 Lobe ActionIconGroup，和正文区那一列
-// 各管一栏：回顶只滚评论列表，视图切换只切楼层 / 扁平，刷新只重拉评论第一页。
-// 评论滚离顶部才露出回顶，视图切换与刷新则一直在；输入栏展开时它仍贴着列表
-// 底部，不压住输入框。横排只占一枚按钮的高度，列表底部预留一条窄带即可
-// （见 replyToolBarReserve），不再像竖排那样空出一大片。视图切换收进这一组
-// 后跟评论区一起显隐：评论区收起时整组不画，切换入口也随之隐藏，不再单独
-// 挂在评论标题行里。
-func (a *app) replyToolBar(c *ui.Context, d *detailState, first int) {
+// replyComposerToolBar 把评论区自己的操作（回顶 / 视图切换 / 刷新）画在
+// 评论输入框右下角、发送按钮的右侧：回顶只滚评论列表，视图切换只切楼层 /
+// 扁平，刷新只重拉评论第一页。评论滚离顶部才露出回顶，另外两枚一直在。
+// 不再悬在评论列表上，列表因此不用为它预留一条空带（修复底部空行）。
+// 只在未点击输入框的折叠态出现：进入编辑态、或右侧评论栏收起时整组不画，
+// 输入框照旧平铺在正文底部，只是此刻没有评论区可操作。
+func (a *app) replyComposerToolBar(c *ui.Context, d *detailState) {
 	items := make([]action.ActionGroupItem, 0, 3)
+	// 列表在 replyPane 里按 display 构建；这里从同一份 list 状态读可视行号，
+	// 决定要不要给回顶留位。没有评论时 first 保持 -1。
+	first := -1
+	if len(d.replyList) > 0 {
+		first, _ = d.list.Visible()
+	}
 	if first > 0 {
 		items = append(items, action.ActionGroupItem{
 			Key: "top", Icon: lucide.ArrowUp(), Label: "评论回到顶部",
@@ -1883,47 +1882,43 @@ func (a *app) replyToolBar(c *ui.Context, d *detailState, first int) {
 	items = append(items, action.ActionGroupItem{
 		Key: "refresh", Icon: lucide.RefreshCw(), Label: "刷新评论", Disabled: d.replyLoading,
 	})
-	ui.Box(c).Absolute().Right(detailToolGroupInset).Bottom(detailToolGroupInset).
-		ZIndex(2).Children(func() {
-		if key := action.ActionIconGroup(c, action.ActionIconGroupProps{
-			Items: items, Size: lobetheme.Small, Vertical: false,
-			Variant: action.GroupOutlined, Shadow: true,
-		}); key != "" {
-			switch key {
-			case "top":
-				d.list.ScrollTo(0, ui.Start)
-			case "view":
-				d.flat = !d.flat
-				d.replyList = nil
-				d.replyLoaded = false
-				d.replyNoMore = false
-				d.replyMoreErr = ""
-				// 换了视图重新找一次被定位的评论：楼层/扁平的分页位置不同。
-				d.focusPending = d.focusID != ""
-				d.focusTries = 0
-				d.focusMiss = false
-				a.loadReplies(1)
-				// 视图偏好按账号立即落盘：换一篇帖子打开也沿用（见 reply_view.go）。
-				a.saveReplyViewMode(d.flat)
-			case "refresh":
-				if !d.replyLoading {
-					a.refreshReplies()
-				}
+	if key := action.ActionIconGroup(c, action.ActionIconGroupProps{
+		Items: items, Size: lobetheme.Small, Vertical: false,
+		Variant: action.GroupOutlined,
+	}); key != "" {
+		switch key {
+		case "top":
+			d.list.ScrollTo(0, ui.Start)
+		case "view":
+			d.flat = !d.flat
+			d.replyList = nil
+			d.replyLoaded = false
+			d.replyNoMore = false
+			d.replyMoreErr = ""
+			// 换了视图重新找一次被定位的评论：楼层/扁平的分页位置不同。
+			d.focusPending = d.focusID != ""
+			d.focusTries = 0
+			d.focusMiss = false
+			a.loadReplies(1)
+			// 视图偏好按账号立即落盘：换一篇帖子打开也沿用（见 reply_view.go）。
+			a.saveReplyViewMode(d.flat)
+		case "refresh":
+			if !d.replyLoading {
+				a.refreshReplies()
 			}
 		}
-	})
+	}
 }
 
 func (a *app) replyPane(c *ui.Context, d *detailState) {
 	tk := lobetheme.TokensOf(c)
 	// 评论标题与计数已经挪到评论区底部折叠输入框里、发送按钮左侧（见
-	// replyComposerStats）；视图切换收在右下角的操作组里（见 replyToolBar），
-	// 跟着评论区一起显隐。列表区因此直接从面板顶部开始。
-	// 列表区始终存在，四种状态的内容与右下角操作组都挂在它里面：没有评论时
-	// 视图切换与刷新仍可用，而评论区一旦收起整个 replyPane 不画，操作组也
-	// 随之隐藏（见 detailContent）。
+	// replyComposerStats）；视图切换、回顶与刷新嵌在同一行的发送按钮右侧
+	// （见 replyComposerToolBar），跟着评论区一起显隐。列表区因此直接从面板
+	// 顶部铺到输入栏，底部不再留一条空白。评论区收起时 replyPane 不画，
+	// 输入框平铺到正文底部，但那组评论操作也不再出现；编辑态同样收起。
 	ui.Column(c).Grow(1).FillWidth().MinHeight(0).Children(func() {
-		first := -1 // 没有评论列表时没有「评论回到顶部」
+		first := -1 // 没有评论列表时没有可视行号，通知已读判断据此跳过
 		switch {
 		case d.replyLoading && len(d.replyList) == 0:
 			ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
@@ -1991,12 +1986,6 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 				a.loadReplies(d.replyPage + 1)
 			}
 		}
-		// 右下角横排操作组绝对定位、不占列表高度，滚到底会压住最后一条评论
-		// 最右侧的「回复」图标。这里垫一块固定高度的空白把列表顶上去。
-		// 不能用 ui.Spacer：它默认 Grow(1)，会跟列表均分整列高度，让评论
-		// 区只剩一半（列表实测只有容器高度的 51%）。
-		ui.Box(c).Height(replyToolBarReserve)
-		a.replyToolBar(c, d, first)
 	})
 	a.replyComposer(c, d)
 }
@@ -2719,9 +2708,9 @@ func (a *app) replyAction(c *ui.Context, label string, onClick func()) {
 func (a *app) replyComposer(c *ui.Context, d *detailState) {
 	tk := lobetheme.TokensOf(c)
 	layout.Divider(c, layout.DividerProps{})
-	// 输入栏固定在评论卡片底部，不再为悬浮按钮让出宽度：两栏各自的刷新
-	// 与回顶都收在右下角的操作组里，这里只需要普通的内边距。折叠态
-	// 的内层输入框会补足高度，让整条和左栏正文互动栏齐平。
+	// 输入栏固定在评论卡片底部：评论区的刷新与回顶已经嵌在发送按钮右侧，
+	// 输入框的文字自己让出那一段宽度，这里只需要普通的内边距。折叠态的
+	// 内层输入框会补足高度，让整条和左栏正文互动栏齐平。
 	ui.Column(c).FillWidth().Padding(replyComposerPadY, 14).Gap(4).
 		Label("评论输入栏").Children(func() {
 		if d.replyTo.ID != "" {
@@ -2873,8 +2862,8 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 		// 会把输入框挤到另一个 ID 上，焦点随之丢失（发送后折不回一行）。
 		// 输入框本身是复合控件不能带 key，key 给包着它的 Row。
 		c.Key("reply-composer-row")
-		// 输入框铺满整条：发送按钮不在行尾占一格，而是浮在评论框右下角
-		// （下面用 Absolute 摆位），输入栏整行都归输入。
+		// 输入框铺满整条：发送按钮不在行尾占一格，而是浮在输入框这一行的
+		// 右端、垂直居中（下面用 Absolute 以这一行为基准摆位），整行都归输入。
 		ui.Row(c).FillWidth().Children(func() {
 			area := a.replyTextArea(c, d, replySurfaceDetail, replyFieldInline, expanded)
 			// 从草稿箱恢复后一次性聚焦：只恢复「回谁」，不恢复面板与预览态。
@@ -2904,34 +2893,46 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 					reserve += replySendCostReserve
 				}
 			}
+			// 评论区自己的操作嵌在发送按钮右侧，文字再让出一段，免得
+			// 最后一个字钻到图标底下。编辑态与右栏收起时那组不画，不用留。
+			if !expanded && !d.replyCollapsed {
+				reserve += replyComposerToolReserve
+			}
 			area.Padding(pad, padX+reserve, pad, padX)
 			// @ 候选面板在插入符处展开，没有工具栏入口（见 mentions_ui.go）。
 			a.mentionPopover(c, d, replySurfaceDetail, padX, pad)
 			// 键入 ":" 时同样的位置弹出社区表情短码候选（见 emoji_shortcode_ui.go）。
 			a.emojiShortcodePopover(c, d, replySurfaceDetail, padX, pad)
-		})
-		// 发送 / 登录后评论浮在右下角：不参与上面那一行的排版，评论框因此
-		// 不再被发送按钮切掉右侧一截。Absolute 按父节点（评论框）的边框内
-		// 侧定位，和折叠 / 展开无关，两种状态都贴着右下角。折叠态时发送按钮
-		// 左边还并排着评论数与浏览数；点开输入框后计数收起，只留发送按钮，
-		// 把整条输入栏还给写字（见 replyComposerStats）。
-		footer := ui.Row(c).AlignItems(ui.Center).Gap(8).Shrink(0).
-			Absolute().Bottom(replySendFloatInset).Right(replySendFloatInset)
-		footer.Children(func() {
-			if !expanded {
-				a.replyComposerStats(c, d)
-			}
-			a.replyFieldActions(c, d)
+			// 发送 / 登录后评论浮在这一行的右端，不参与排版，输入框因此不被
+			// 按钮切掉右侧一截。Absolute 以输入框这一行为基准：TopPercent +
+			// TranslatePercent 让整排按输入框自身高度上下居中，折叠态和编辑态
+			// （输入框长高）都贴着同一条中线，不再沉到整个评论框的底部。
+			// 折叠态发送左边并排着评论数与浏览数、右边嵌着评论操作组；进入
+			// 编辑态后两组都收起，只留发送按钮（见 replyComposerStats）。
+			footer := ui.Row(c).AlignItems(ui.Center).Gap(8).Shrink(0).
+				Absolute().TopPercent(50).TranslatePercent(0, -50).Right(0)
+			footer.Children(func() {
+				if !expanded {
+					a.replyComposerStats(c, d)
+				}
+				a.replyFieldActions(c, d)
+				// 评论区操作只在未点击输入框时嵌在发送按钮右侧；已有计数在
+				// 发送左边，两组之间加一条竖线区分，整排是「计数 → 发送 → 操作」。
+				// 进入编辑态后这一组和计数一起收起，把输入栏还给写字；右栏收起
+				// 时同理——输入框照旧平铺在正文底部，但此刻没有评论区可操作。
+				if !expanded && !d.replyCollapsed {
+					ui.Box(c).Size(1, 18).Background(tk.BorderSecondary)
+					a.replyComposerToolBar(c, d)
+				}
+			})
 		})
 	})
 }
 
-// 发送按钮浮在评论框右下角时的位置与留白：inset 是它离评论框边框的距离，
-// reserve 是正文让出的右侧宽度（实心发送按钮最宽 44，加上 inset 与一点间隙；
-// 空草稿时按钮只有 28 宽，同样的留白让文字离它更远）。折叠态还要给并排的
-// 评论数与浏览数留位，见 replyStatsReserve。
+// 发送按钮浮在输入框右端时的留白：reserve 是正文让出的右侧宽度（实心发送
+// 按钮最宽 44，加上一点间隙；空草稿时按钮只有 28 宽，同样的留白让文字离它
+// 更远）。折叠态还要给并排的评论数与浏览数留位，见 replyStatsReserve。
 const (
-	replySendFloatInset   float32 = 6
 	replySendFloatReserve float32 = 40
 	replyStatsReserve     float32 = 112
 	// replySendCostReserve 是发送按钮上多出「N 金币」后正文额外让出的宽度。

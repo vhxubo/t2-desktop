@@ -1444,18 +1444,12 @@ func TestReplyComposerCollapsesUnlessSelected(t *testing.T) {
 	}
 
 	// 失焦后保持折叠；再次选中重新展开
-	// 用评论区操作组里的视图切换移开焦点：它在折叠 / 展开两态都在，
-	// 而评论数计数只在折叠态出现（点开输入框后只留发送按钮）。
+	// 点正文标题移开焦点：编辑态下评论操作组和计数都收起，只剩发送按钮，
+	// 不能再拿它们当落点（点发送会真的提交）。
 	blur := func() {
-		var r ui.Rect
-		var ok bool
-		for _, label := range []string{"切到扁平时间序", "切到楼层视图"} {
-			if r, ok = tt.Find(label); ok {
-				break
-			}
-		}
+		r, ok := tt.Find("正文与评论的测试帖")
 		if !ok {
-			t.Fatal("找不到评论区操作按钮，无法移开焦点")
+			t.Fatalf("找不到正文标题，无法移开焦点：%q", tt.Texts())
 		}
 		tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
 		tt.Frame()
@@ -1567,18 +1561,17 @@ func TestReplyComposerSendFloatsBottomRight(t *testing.T) {
 			t.Errorf("%s发送按钮应浮在输入框右下角，而不是又占一列：area=%+v send=%+v",
 				state, area, send)
 		}
-		// 输入框铺到评论框右端，按钮右边缘与它基本齐平（最多差一点内边距）。
-		if gap := (area.X + area.W) - (send.X + send.W); gap < -6 || gap > 14 {
+		// 输入框铺到评论框右端。发送按钮右侧还嵌着评论区操作组，所以它
+		// 不再贴着右边缘，但整排仍压在输入框上。
+		if gap := (area.X + area.W) - (send.X + send.W); gap < -6 || gap > replyComposerToolReserve+8 {
 			t.Errorf("%s输入框应铺到评论框右端，发送按钮浮在它上面：差 %.1f（area=%+v send=%+v）",
 				state, gap, area, send)
 		}
-		// 右下角：按钮中线在输入框中线以下，底边贴着输入框底边。
-		if mid(send) <= mid(area) {
-			t.Errorf("%s发送按钮应浮在输入框右下角：输入框中线 %.1f / 按钮中线 %.1f",
+		// 上下居中：发送中线与输入框中线重合，折叠态和编辑态都一样。
+		// 编辑态输入框长高，按钮跟着抬到中间，不再沉到整个评论框底部。
+		if dy := mid(send) - mid(area); dy < -2 || dy > 2 {
+			t.Errorf("%s发送按钮应在输入框内上下居中：输入框中线 %.1f / 按钮中线 %.1f",
 				state, mid(area), mid(send))
-		}
-		if gap := (area.Y + area.H) - (send.Y + send.H); gap < -6 || gap > 8 {
-			t.Errorf("%s发送按钮应与输入框底边齐平：差 %.1f", state, gap)
 		}
 		return area, send
 	}
@@ -1592,6 +1585,18 @@ func TestReplyComposerSendFloatsBottomRight(t *testing.T) {
 		t.Fatalf("输入框应已展开：%+v", area)
 	}
 	check("展开态")
+	// 操作组收起后发送重新贴回输入栏右端，不必再为它留一整排宽度。
+	expandedArea, _ := tt.Find("写评论")
+	expandedSend, _ := tt.Find("发送")
+	if gap := (expandedArea.X + expandedArea.W) - (expandedSend.X + expandedSend.W); gap < -6 || gap > 14 {
+		t.Errorf("编辑态发送按钮应贴回输入栏右端：差 %.1f（area=%+v send=%+v）", gap, expandedArea, expandedSend)
+	}
+	// 进入编辑态后评论操作组和计数一起收起，整条输入栏只留给写字与发送。
+	for _, label := range []string{"评论回到顶部", "切到扁平时间序", "切到楼层视图", "刷新评论", "评论数"} {
+		if r, ok := tt.Find(label); ok {
+			t.Errorf("编辑态不该再画 %q：%+v", label, r)
+		}
+	}
 }
 
 // 浮在右下角的发送按钮仍然点得到：它压在输入框上，但要点在按钮上，不能被

@@ -286,41 +286,6 @@ func TestSidebarWatchLaterEntry(t *testing.T) {
 	checkDot(false, "1")
 }
 
-// 详情页操作组里那枚图标跟着状态切换：加入后变成移出。
-func TestDetailWatchLaterActionToggles(t *testing.T) {
-	a := testApp(t)
-	a.openDetail(Item{ShortID: "P1", Title: "正在读的帖子", URL: topicURL("P1", "")})
-	d := a.detail
-	if d == nil {
-		t.Fatal("没有打开详情")
-	}
-
-	find := func() detailToolAction {
-		for _, act := range a.detailToolActions(d) {
-			if act.key == "later" {
-				return act
-			}
-		}
-		t.Fatal("详情操作组里没有稍后再看")
-		return detailToolAction{}
-	}
-	act := find()
-	if act.label != "加入稍后再看" {
-		t.Errorf("未加入时文案 = %q", act.label)
-	}
-	act.onClick()
-	if !a.inWatchLater("P1") {
-		t.Error("点击后没有加入稍后再看")
-	}
-	if got := find().label; got != "移出稍后再看" {
-		t.Errorf("已加入时文案 = %q", got)
-	}
-	find().onClick()
-	if a.inWatchLater("P1") {
-		t.Error("再点一次没有移出")
-	}
-}
-
 // 悬浮露出的稍后再看按钮紧跟发帖时间放在副标题这一行，不独占最右侧那一列；
 // 回复数仍在行尾。
 func TestFeedRowWatchLaterButtonAfterTime(t *testing.T) {
@@ -439,6 +404,75 @@ func TestFeedRowWatchLaterButton(t *testing.T) {
 	}
 	if len(a.later) != 0 {
 		t.Errorf("移出后清单应为空，实际 %+v", a.later)
+	}
+}
+
+// 稍后再看只在主窗口信息流的行里出现：同一篇帖子放到「我的」、搜索、详情页
+// 都不该再挂这枚按钮，免得用户从一个入口加、又从另一个入口看到两套状态。
+func TestWatchLaterOnlyOnMainFeed(t *testing.T) {
+	it := Item{Key: "WL1", ShortID: "WL1", Title: "待读测试帖", Author: "jimmy",
+		SubtitleSuffix: " · 刚刚"}
+
+	// 主窗口信息流的行：悬浮后有按钮。
+	a := testApp(t)
+	a.tabs[0].loaded = true
+	a.tabs[0].noMore = true
+	a.tabs[0].items = []Item{it}
+	mt := ui.NewTester(a.view, 1100, 760)
+	mt.Frame()
+	title, ok := mt.Find("待读测试帖")
+	if !ok {
+		t.Fatalf("主列表没渲染出来：%q", mt.Texts())
+	}
+	mt.Move(title.X+title.W/2, title.Y+title.H/2)
+	mt.Frame()
+	if _, ok := mt.Find("加入稍后再看"); !ok {
+		t.Errorf("主列表悬浮后应有稍后再看按钮：%q", mt.Texts())
+	}
+
+	// 「我的」窗口的同一行：悬浮也不露出按钮。
+	b := profileWindowApp(t)
+	b.profile.tab = profileTabContent
+	b.profile.contentKind = profileContentTopics
+	bst := &b.profile.content[profileContentTopics]
+	bst.loaded, bst.items = true, []Item{it}
+	pt := ui.NewTester(b.profileWindowView, profileWindowWidth, profileWindowHeight)
+	pt.Frame()
+	ptitle, ok := pt.Find("待读测试帖")
+	if !ok {
+		t.Fatalf("「我的」窗口没渲染出来：%q", pt.Texts())
+	}
+	pt.Move(ptitle.X+ptitle.W/2, ptitle.Y+ptitle.H/2)
+	pt.Frame()
+	if _, ok := pt.Find("加入稍后再看"); ok {
+		t.Errorf("「我的」窗口不该有稍后再看按钮：%q", pt.Texts())
+	}
+
+	// 搜索窗口的同一行：同样不挂按钮。
+	c := testApp(t)
+	c.showSearchWindow()
+	cs := c.search
+	cs.q, cs.kind, cs.loaded = "待读", int(searchPosts), true
+	cs.hits = []searchHit{{kind: searchPosts, item: it}}
+	ct := ui.NewTester(c.searchWindowView, 620, 680)
+	ct.Frame()
+	ctitle, ok := ct.Find("待读测试帖")
+	if !ok {
+		t.Fatalf("搜索窗口没渲染出来：%q", ct.Texts())
+	}
+	ct.Move(ctitle.X+ctitle.W/2, ctitle.Y+ctitle.H/2)
+	ct.Frame()
+	if _, ok := ct.Find("加入稍后再看"); ok {
+		t.Errorf("搜索窗口不该有稍后再看按钮：%q", ct.Texts())
+	}
+
+	// 详情页操作组里也不再有稍后再看。
+	d := testApp(t)
+	d.openDetail(it)
+	for _, act := range d.detailToolActions(d.detail) {
+		if act.key == "later" {
+			t.Error("详情页不该有稍后再看动作")
+		}
 	}
 }
 

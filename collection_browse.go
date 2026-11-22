@@ -140,7 +140,7 @@ func (a *app) collectionTopicsBody(c *ui.Context, b *collectionBrowse, open func
 		return i
 	}
 	ui.List(c, &st.list, len(items), func(i int) {
-		a.rowWith(c, items[i], open)
+		a.rowWithNoWatchLater(c, items[i], open)
 	}).Grow(1).MinHeight(0).Gap(8)
 	a.collectionTopicsMore(c, b)
 }

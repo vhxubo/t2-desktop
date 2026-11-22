@@ -409,13 +409,14 @@ func (a *app) searchHotTagsBlock(c *ui.Context, st *searchState) {
 	})
 }
 
-// searchRow 画一条结果：帖子 / 收藏用主窗口同一套列表行；用户点开资料卡；
-// 节点与标签在浏览器打开站点对应页面（应用内还没有节点页与标签页）。
+// searchRow 画一条结果：帖子 / 收藏用主窗口同一套列表行，但稍后再看只在主窗口
+// 信息流里出现，这里走 rowWithNoWatchLater；用户点开资料卡；节点与标签在浏览器
+// 打开站点对应页面（应用内还没有节点页与标签页）。
 // 非帖子的行是一张可点的 Lobe Block：描边卡片与悬停底色都来自主题。
 func (a *app) searchRow(c *ui.Context, st *searchState, hit searchHit) {
 	switch hit.kind {
 	case searchPosts, searchFavorites:
-		a.rowWith(c, hit.item, a.openSearchTopic)
+		a.rowWithNoWatchLater(c, hit.item, a.openSearchTopic)
 		return
 	}
 	row := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockOutlined}).

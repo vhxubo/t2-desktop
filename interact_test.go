@@ -947,6 +947,78 @@ func TestOwnCommentHidesReactionAndReward(t *testing.T) {
 	}
 }
 
+// 自己的帖子同样不显示表态与打赏入口：已有的汇总照常展示，但不能给自己
+// 发通知，也不该把金币打赏给自己。
+func TestOwnTopicHidesReactionAndReward(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	a := loginApp(t, srv) // 登录用户名是 reader
+
+	topic := topicDetail{
+		ShortID: "AB12", Title: "标题", NodeID: "node-1",
+		Author: "reader", AuthorID: "user-1",
+		URL: "https://2libra.com/post/work/AB12", NodeEmojis: []string{"👍"},
+		Reactions: []reactionStat{{Emoji: "👍", Count: 2}},
+		Rewards:   rewardStat{Total: 10, Count: 1},
+	}
+	a.pageName = "detail"
+	a.detail = &detailState{shortID: "AB12", topic: &topic}
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	for _, entry := range []string{"表情", "打赏"} {
+		if _, ok := tt.Find(entry); ok {
+			t.Errorf("自己的帖子不该有「%s」入口：%q", entry, tt.Texts())
+		}
+	}
+	if _, ok := tt.Find("表情，共 2 次"); !ok {
+		t.Errorf("已有的表态汇总仍应展示：%q", tt.Texts())
+	}
+	if a.canActOn(a.detail, reactionTopic) || a.canRewardOn(a.detail, reactionTopic) {
+		t.Error("自己的帖子不应允许表态或打赏")
+	}
+}
+
+// 即使有人绕过入口直接调用动作函数，自己的帖子与评论也不会发出请求。
+func TestOwnContentRejectsReactionAndRewardRequests(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		io.WriteString(w, envelopeJSON(`{}`))
+	}))
+	defer srv.Close()
+	a := loginApp(t, srv) // 登录用户名是 reader
+
+	topic := topicDetail{
+		ShortID: "AB12", Title: "标题", NodeID: "node-1",
+		Author: "reader", AuthorID: "user-1",
+		URL: "https://2libra.com/post/work/AB12", NodeEmojis: []string{"👍"},
+	}
+	a.pageName = "detail"
+	a.detail = &detailState{
+		shortID: "AB12",
+		topic:   &topic,
+		replyList: []replyItem{{
+			ID: "r1", AuthorID: "u2", Author: "reader", Content: "自己的评论", Floor: 1,
+		}},
+	}
+	done := make(chan error, 1)
+	a.onInteractDone = func(err error) { done <- err }
+
+	a.toggleReaction(a.detail, reactionTopic, "👍")
+	a.toggleReaction(a.detail, "r1", "👍")
+	a.submitReward(a.detail, reactionTopic)
+	a.submitReward(a.detail, "r1")
+
+	select {
+	case err := <-done:
+		t.Fatalf("自己的内容不该发出互动请求，却收到回调：%v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("自己的内容发出了 %d 个表态 / 打赏请求", n)
+	}
+}
+
 // 匿名帖没有作者 uuid：表态通知与打赏都没有接收方，所以只展示已有表态，
 // 不提供任何操作入口。
 func TestAnonymousTopicHasNoReactionEntry(t *testing.T) {
