@@ -60,15 +60,13 @@ func nodeCascader(c *ui.Context, nodes []composeNode, p nodeCascadeProps) {
 	if p.Value.Kind == nodeFilterNode && p.Value.Ref.ID == "" {
 		fg = c.Theme().TextMuted
 	}
-	trigger := action.StyleButton(c, ui.ButtonBase(c), "", action.ButtonProps{
-		Variant: action.Filled,
-		Size:    lobetheme.Small,
-	})
-	if !p.Chip {
-		trigger = action.StyleButton(c, ui.ButtonBase(c), "", action.ButtonProps{
-			Variant: action.Filled,
-		})
+	// ButtonBase 在构造时就进入布局：先建一个再覆盖会在触发框上方留下一条
+	// 没有任何内容的灰色按钮。尺寸先选好，这里只构造一次。
+	props := action.ButtonProps{Variant: action.Filled}
+	if p.Chip {
+		props.Size = lobetheme.Small
 	}
+	trigger := action.StyleButton(c, ui.ButtonBase(c), "", props)
 	trigger.Label(p.Label + "：" + label).TextColor(fg)
 	trigger.Children(func() {
 		ui.Icon(c, lucide.Hash()).FontSize(13).TextColor(fg)

@@ -131,6 +131,30 @@ func TestComposeNodeCascader(t *testing.T) {
 	}
 }
 
+// 节点触发框上方不该残留一条没有内容的空按钮：mygo 的控件在构造时就进入
+// 布局，先把按钮建出来再按 Chip 覆盖，会把第一条留在界面上（浅色主题里是
+// 一条灰色空条）。
+func TestComposeNodePickerNoEmptyButtonAbove(t *testing.T) {
+	a := testApp(t)
+	composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, composeWindowHeight)
+	tt.Frame()
+	trigger, ok := tt.Find("节点：社区 · 社区讨论")
+	if !ok {
+		t.Fatalf("没有找到节点触发框：%q", tt.Texts())
+	}
+	img := tt.Image()
+	// 取触发框右侧（文字之外）的填充色，再往上扫过整条空按钮的位置：
+	// 两个按钮用同一种填充色，扫到相同颜色就说明空按钮又被构造了一次。
+	x := int(trigger.X + trigger.W - 8)
+	fill := img.RGBAAt(x, int(trigger.Y+trigger.H/2))
+	for y := int(trigger.Y) - 8; y > int(trigger.Y)-40; y-- {
+		if got := img.RGBAAt(x, y); got == fill {
+			t.Fatalf("节点触发框上方 y=%d 还有一条空按钮（颜色 %v）", y, got)
+		}
+	}
+}
+
 // 节点级联选择：GET /v1/nodes 的响应 d 是数组；子节点要按 parent 再问一次，
 // 拼成一份带父节点名的扁平列表。发帖必须用 uuid，所以列表项要带着 id。
 func TestComposeNodesLoadTree(t *testing.T) {
