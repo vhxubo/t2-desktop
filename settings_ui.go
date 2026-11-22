@@ -39,9 +39,10 @@ const (
 	settingsTabComment
 	settingsTabNotify
 	settingsTabReading
+	settingsTabShortcuts
 )
 
-var settingsTabLabels = []string{"网络代理", "图库", "图片缓存", "更新", "窗口", "外观", "评论", "通知", "阅读"}
+var settingsTabLabels = []string{"网络代理", "图库", "图片缓存", "更新", "窗口", "外观", "评论", "通知", "阅读", "快捷键"}
 
 /* ------------------------------------------------------------------
    设置窗口：全局入口、显示与关闭
@@ -222,6 +223,8 @@ func (a *app) settingsWindowView(c *ui.Context) {
 					a.notificationSettingsSection(c)
 				case settingsTabReading:
 					a.readingSettingsSection(c)
+				case settingsTabShortcuts:
+					a.shortcutSettingsSection(c)
 				default:
 					a.proxySettingsSection(c)
 				}

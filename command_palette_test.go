@@ -128,19 +128,20 @@ func TestCommandPaletteKeyboardNavigation(t *testing.T) {
 	}
 	tt.Frame()
 
-	cmds := filterPalette(a.paletteCommands(), "")
-	if len(cmds) < 3 {
-		t.Fatalf("命令太少，测不了导航：%d", len(cmds))
+	// 面板按分组重排过， ↑↓ 的下标对应显示行而不是注册顺序。
+	rows := a.paletteRows("")
+	if len(rows) < 3 {
+		t.Fatalf("命令太少，测不了导航：%d", len(rows))
 	}
 	// ↓ 把高亮移到「设置」。
 	idx := -1
-	for i, cmd := range cmds {
-		if cmd.id == "settings" {
+	for i, row := range rows {
+		if row.cmd.id == "settings" {
 			idx = i
 			break
 		}
 	}
-	for try := 0; a.palette.selected != idx && try < len(cmds)+2; try++ {
+	for try := 0; a.palette.selected != idx && try < len(rows)+2; try++ {
 		tt.Key(0, ui.KeyDown)
 		tt.Frame()
 	}
@@ -160,7 +161,11 @@ func TestCommandPaletteKeyboardNavigation(t *testing.T) {
 	}
 	tt.Frame()
 	a.palette.text = "金币"
-	a.palette.selected = len(cmds) - 1
+	filtered := a.paletteRows("金币")
+	if len(filtered) == 0 {
+		t.Fatal("「金币」没有匹配到命令")
+	}
+	a.palette.selected = len(filtered) - 1
 	tt.Frame()
 	tt.Key(0, ui.KeyDown)
 	tt.Frame()

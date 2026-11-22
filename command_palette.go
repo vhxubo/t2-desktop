@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -11,13 +10,14 @@ import (
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 命令面板：标题栏输入框点击即展开，默认在「命令」模式，列出全部命令；切到
-// 「搜索」模式才是原来的搜索窗口入口。输入框用闪电作前导图标，有内容时右侧
-// 出现一键清空按钮。命令本身不重复实现动作，只是调用已有的入口。
+// 命令面板：标题栏输入框点击即展开，默认在「命令」模式，列出注册表里的全部
+// 命令；切到「搜索」模式才是原来的搜索窗口入口。输入框用闪电作前导图标，有
+// 内容时右侧出现一键清空按钮。命令本身不重复实现动作，只是调用注册时的 Run。
 //
 // 输入框的文字存在 palette.text：命令模式下它是过滤词，搜索模式下它是关键词。
 // 回车成功后文字交给搜索窗口（a.search.q）并就地清空；切回空输入时也自动回到
-// 默认的命令模式。
+// 默认的命令模式。没有过滤词时列表按「收藏 / 最近使用 / 分类」分组；一输入
+// 过滤词就摊平显示命中项，顺序仍是注册顺序。
 
 const (
 	paletteWidth     float32 = 360 // 下拉面板宽度，略宽于标题栏搜索框
@@ -77,15 +77,26 @@ const (
 
 var paletteModeLabels = []string{"命令", "搜索"}
 
-// paletteCommand 是面板里的一条命令。keywords 是拼音 / 英文 / 别名，让中文
-// 标题也能被拉丁字母搜到（「发帖」打 fa 或 post 都能命中）。
+// paletteCommand 是面板里的一条命令，由注册表的定义加上当前偏好生成。
+// keywords 是拼音 / 英文 / 别名，让中文标题也能被拉丁字母搜到；shortcut 是
+// 当前生效的键位文字，直接显示在行尾。
 type paletteCommand struct {
 	id       string
 	title    string
 	hint     string
 	keywords string
+	category string
+	shortcut string
+	favorite bool
 	icon     *ui.SVG
 	run      func()
+}
+
+// paletteRow 是一条可显示的命令；heading 非空时先画一个分组标题。选中下标
+// 只数命令，不数标题，这样 ↑↓ 与回车始终对得上。
+type paletteRow struct {
+	heading string
+	cmd     paletteCommand
 }
 
 // paletteState 是命令面板跨帧保存的状态：面板是否展开、当前高亮哪一项、当前
@@ -108,83 +119,32 @@ type paletteState struct {
 	blurPending bool
 }
 
-// paletteCommands 列全部命令。顺序就是没有过滤词时的展示顺序：先页面导航，
-// 再常用动作，最后按登录态给「退出登录」或「登录」。
+// paletteCommands 从注册表取当前可用的命令，并附上收藏状态与键位文字。
+// 顺序就是注册顺序；可用性（例如登录态）在注册表里已经过滤过。
 func (a *app) paletteCommands() []paletteCommand {
-	nav := []struct {
-		label string
-		kw    string
-		icon  *ui.SVG
-		idx   int
-	}{
-		{"首页", "home shouye index", lucide.Home(), 0},
-		{"今日热议", "hot remen today", lucide.Flame(), 1},
-		{"近期热议", "recent zuijin", lucide.Clock(), 2},
-		{"新发表", "new xin fabiao", lucide.PenLine(), 3},
-		{"最新评论", "comments pinglun latest", lucide.MessagesSquare(), 4},
-		{"社区讨论", "community shequ", lucide.Activity(), 5},
-		{"动态", "follows dongtai timeline", lucide.UsersRound(), 6},
+	defs := a.commands.available()
+	out := make([]paletteCommand, 0, len(defs))
+	if a.commands == nil {
+		return out
 	}
-	cmds := make([]paletteCommand, 0, len(nav)+16)
-	for _, n := range nav {
-		idx := n.idx
-		cmds = append(cmds, paletteCommand{
-			id: "tab-" + strconv.Itoa(idx), title: n.label,
-			hint: "切换到「" + n.label + "」", keywords: n.kw, icon: n.icon,
-			run: func() { a.selectTab(idx) },
+	favorites := map[string]bool{}
+	if a.commands.prefs != nil {
+		for _, id := range a.commands.prefs.snapshot().Favorites {
+			favorites[id] = true
+		}
+	}
+	for _, def := range defs {
+		out = append(out, paletteCommand{
+			id: def.ID, title: def.Title, hint: def.Hint, keywords: def.Keywords,
+			category: def.Category, shortcut: a.commands.bindingLabel(def.ID),
+			favorite: favorites[def.ID], icon: def.Icon, run: def.Run,
 		})
 	}
-	cmds = append(cmds,
-		paletteCommand{id: "search", title: "搜索", hint: "打开搜索窗口",
-			keywords: "search sousuo", icon: lucide.Search(), run: a.showSearch},
-		paletteCommand{id: "post", title: "发帖", hint: "写一篇带标题的帖子",
-			keywords: "post fabie tie", icon: lucide.SquarePen(), run: a.showCompose},
-		paletteCommand{id: "moment", title: "发短动态", hint: "不发标题直接说点什么",
-			keywords: "moment duan dongtai", icon: lucide.PenLine(), run: a.showMomentCompose},
-		paletteCommand{id: "notifications", title: "通知", hint: "打开通知窗口",
-			keywords: "notice tongzhi message", icon: lucide.Bell(), run: a.showNotifications},
-		paletteCommand{id: "profile", title: "我的", hint: "打开个人资料窗口",
-			keywords: "me wode profile", icon: lucide.UserRound(), run: a.showProfile},
-		paletteCommand{id: "coins", title: "金币", hint: "余额、明细与排行",
-			keywords: "coin jinbi money", icon: lucide.Coins(), run: a.showCoins},
-		paletteCommand{id: "sign", title: "签到", hint: "提交今日签到领金币",
-			keywords: "sign qiandao checkin", icon: lucide.CalendarCheck2(), run: a.signInNow},
-		paletteCommand{id: "pandora", title: "盲盒", hint: "打开潘多拉抽卡",
-			keywords: "pandora manghe blind", icon: lucide.Gift(), run: a.showPandora},
-		paletteCommand{id: "scores", title: "评分榜", hint: "打开评分榜窗口",
-			keywords: "score pingfen ranking", icon: lucide.Trophy(), run: a.showScores},
-		paletteCommand{id: "follows", title: "关注与粉丝", hint: "查看关注与粉丝名单",
-			keywords: "follow guanzhu fans fensi", icon: lucide.UsersRound(),
-			run: func() { a.showFollows(0) }},
-		paletteCommand{id: "accounts", title: "账号", hint: "打开账号面板切换账号",
-			keywords: "account zhanghao switch", icon: lucide.UsersRound(), run: a.showAccounts},
-		paletteCommand{id: "settings", title: "设置", hint: "代理、外观与图片缓存",
-			keywords: "settings shezhi proxy config", icon: lucide.Settings(), run: a.showSettings},
-		paletteCommand{id: "about", title: "关于", hint: "版本、开发者与协议",
-			keywords: "about guanyu version", icon: lucide.Info(), run: a.showAbout},
-		paletteCommand{id: "netlog", title: "网络日志", hint: "查看应用发出的 HTTP 请求",
-			keywords: "network wangluo log request", icon: lucide.Network(), run: a.showNetLog},
-		paletteCommand{id: "refresh", title: "刷新", hint: "重新加载当前列表",
-			keywords: "refresh shuaxin reload", icon: lucide.RefreshCw(), run: a.reloadCurrent},
-		paletteCommand{id: "update", title: "检查更新", hint: "看看有没有新版本",
-			keywords: "update gengxin upgrade", icon: lucide.Zap(), run: a.checkForUpdates},
-	)
-	if a.auth.loggedIn() {
-		cmds = append(cmds, paletteCommand{
-			id: "logout", title: "退出登录", hint: "退出当前账号",
-			keywords: "logout tuichu signout", icon: lucide.LogOut(), run: a.logoutAccount,
-		})
-	} else {
-		cmds = append(cmds, paletteCommand{
-			id: "login", title: "登录", hint: "授权登录 2Libra",
-			keywords: "login denglu signin", icon: lucide.LogIn(), run: func() { a.startLogin() },
-		})
-	}
-	return cmds
+	return out
 }
 
-// filterPalette 按过滤词筛命令。标题、说明与 keywords 都参与匹配，大小写不敏感；
-// 空词返回全量（保持定义时的顺序）。
+// filterPalette 按过滤词筛命令。标题、说明、分组名与 keywords 都参与匹配，
+// 大小写不敏感；空词返回全量（保持注册顺序）。
 func filterPalette(cmds []paletteCommand, q string) []paletteCommand {
 	q = strings.ToLower(strings.TrimSpace(q))
 	if q == "" {
@@ -192,12 +152,68 @@ func filterPalette(cmds []paletteCommand, q string) []paletteCommand {
 	}
 	out := make([]paletteCommand, 0, len(cmds))
 	for _, c := range cmds {
-		hay := strings.ToLower(c.title + " " + c.hint + " " + c.keywords)
+		hay := strings.ToLower(c.title + " " + c.hint + " " + c.keywords + " " + c.category)
 		if strings.Contains(hay, q) {
 			out = append(out, c)
 		}
 	}
 	return out
+}
+
+// paletteRows 决定面板里显示哪些行。有过滤词时摊平命中项；没有过滤词时先
+// 显示收藏与最近使用，剩下的按分类分组，每条命令只出现一次。
+func (a *app) paletteRows(q string) []paletteRow {
+	cmds := a.paletteCommands()
+	if strings.TrimSpace(q) != "" {
+		filtered := filterPalette(cmds, q)
+		rows := make([]paletteRow, 0, len(filtered))
+		for _, cmd := range filtered {
+			rows = append(rows, paletteRow{cmd: cmd})
+		}
+		return rows
+	}
+
+	byID := make(map[string]paletteCommand, len(cmds))
+	for _, cmd := range cmds {
+		byID[cmd.id] = cmd
+	}
+	var favorites, recent []string
+	if a.commands != nil && a.commands.prefs != nil {
+		snap := a.commands.prefs.snapshot()
+		favorites, recent = snap.Favorites, snap.Recent
+	}
+	rows := make([]paletteRow, 0, len(cmds))
+	shown := make(map[string]bool, len(cmds))
+	add := func(id, heading string) {
+		cmd, ok := byID[id]
+		if !ok || shown[id] {
+			return
+		}
+		shown[id] = true
+		rows = append(rows, paletteRow{heading: heading, cmd: cmd})
+	}
+	for _, id := range favorites {
+		add(id, "收藏")
+	}
+	for _, id := range recent {
+		if len(rows) >= len(cmds) {
+			break
+		}
+		add(id, "最近使用")
+	}
+	for _, category := range commandCategories {
+		for _, cmd := range cmds {
+			if cmd.category != category {
+				continue
+			}
+			add(cmd.id, category)
+		}
+	}
+	// 插件注册的自定义命令可能用了新的分类名，统一收在「工具」后面。
+	for _, cmd := range cmds {
+		add(cmd.id, commandCategoryTools)
+	}
+	return rows
 }
 
 // paletteMove 让 ↑ / ↓ 在过滤后的列表里移动高亮，首尾循环。搜索模式没有列表，
@@ -206,11 +222,11 @@ func (a *app) paletteMove(q string, delta int) {
 	if a.palette.mode != paletteModeCommands {
 		return
 	}
-	cmds := filterPalette(a.paletteCommands(), q)
-	if len(cmds) == 0 {
+	rows := a.paletteRows(q)
+	if len(rows) == 0 {
 		return
 	}
-	a.palette.selected = (a.palette.selected + delta + len(cmds)) % len(cmds)
+	a.palette.selected = (a.palette.selected + delta + len(rows)) % len(rows)
 }
 
 // paletteRun 处理回车：命令模式执行高亮的命令，搜索模式打开搜索窗口。
@@ -219,19 +235,17 @@ func (a *app) paletteRun(q string) bool {
 		a.commitTitleSearch(q)
 		return true
 	}
-	cmds := filterPalette(a.paletteCommands(), q)
-	if len(cmds) == 0 {
+	rows := a.paletteRows(q)
+	if len(rows) == 0 {
 		// 没有匹配的命令：把这个词当成关键词，直接进搜索窗口。
 		a.commitTitleSearch(q)
 		return true
 	}
 	i := a.palette.selected
-	if i < 0 || i >= len(cmds) {
+	if i < 0 || i >= len(rows) {
 		i = 0
 	}
-	cmd := cmds[i]
-	a.closePalette()
-	cmd.run()
+	a.runCommandByID(rows[i].cmd.id)
 	return true
 }
 
@@ -259,17 +273,28 @@ func (a *app) commitTitleSearch(q string) {
 	a.showSearch()
 }
 
+// toggleFavoriteCommand 切换命令收藏，结果立即落盘并让下一帧按新分组重排。
+func (a *app) toggleFavoriteCommand(id string) {
+	if a.commands == nil || a.commands.prefs == nil {
+		return
+	}
+	if _, err := a.commands.prefs.toggleFavorite(id); err != nil {
+		a.toast(toastMain, err.Error())
+	}
+	a.publish(func() {})
+}
+
 // commandPalette 把下拉面板挂在搜索框下方。面板开合由 palette.open 驱动：点输入
 // 框展开，执行命令、失焦或点窗外关闭。
 func (a *app) commandPalette(c *ui.Context, anchor ui.Element, q string) {
 	st := &a.palette
 	tk := lobetheme.TokensOf(c)
-	cmds := filterPalette(a.paletteCommands(), q)
+	rows := a.paletteRows(q)
 	if st.selected < 0 {
 		st.selected = 0
 	}
-	if st.selected >= len(cmds) {
-		st.selected = len(cmds) - 1
+	if st.selected >= len(rows) {
+		st.selected = len(rows) - 1
 	}
 
 	lobeoverlay.Popover(c, anchor, &st.open, lobeoverlay.PopoverProps{
@@ -311,7 +336,7 @@ func (a *app) commandPalette(c *ui.Context, anchor ui.Element, q string) {
 				})
 				return
 			}
-			if len(cmds) == 0 {
+			if len(rows) == 0 {
 				label := "没有匹配的命令"
 				if strings.TrimSpace(q) != "" {
 					label = "没有匹配的命令，按回车搜索「" + strings.TrimSpace(q) + "」"
@@ -322,29 +347,48 @@ func (a *app) commandPalette(c *ui.Context, anchor ui.Element, q string) {
 				return
 			}
 			ui.Scroll(c).Width(paletteWidth).MaxHeight(paletteMaxHeight).Children(func() {
-				for i := range cmds {
+				lastHeading := ""
+				for i := range rows {
 					idx := i
-					cmd := &cmds[i]
-					row := ui.ButtonBase(c).FillWidth().Padding(7, 9).Radius(tk.BorderRadiusSM).
+					row := &rows[i]
+					if row.heading != "" && row.heading != lastHeading {
+						ui.Text(c, row.heading).FontSize(10).TextColor(tk.TextTertiary).
+							Padding(8, 9, 2, 9)
+					}
+					lastHeading = row.heading
+					cmd := &row.cmd
+					button := ui.ButtonBase(c).FillWidth().Padding(7, 9).Radius(tk.BorderRadiusSM).
 						Gap(9).AlignItems(ui.Center)
 					switch {
 					case idx == st.selected:
-						row.Background(tk.PrimaryBg)
-					case row.Hovered():
-						row.Background(tk.FillSecondary)
+						button.Background(tk.PrimaryBg)
+					case button.Hovered():
+						button.Background(tk.FillSecondary)
 					}
-					row.Children(func() {
+					button.Children(func() {
 						ui.Icon(c, cmd.icon).Size(15, 15).TextColor(tk.Primary).Shrink(0)
 						ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
 							ui.Text(c, cmd.title).FontSize(12).SingleLine().TextColor(tk.Text)
 							ui.Text(c, cmd.hint).FontSize(10).SingleLine().TextColor(tk.TextSecondary)
 						})
+						if cmd.shortcut != "" {
+							ui.Text(c, cmd.shortcut).FontSize(10).SingleLine().
+								TextColor(tk.TextTertiary).Shrink(0)
+						}
+						// 星标是行内的独立按钮：点它只改收藏，不执行命令、不关面板。
+						icon := lucide.Star()
+						if !cmd.favorite {
+							icon = lucide.StarOff()
+						}
+						star := ui.ButtonBase(c).Width(18).Height(18).Center().Radius(tk.BorderRadiusSM).
+							KeepFocus().Label("收藏 " + cmd.title).Tooltip("收藏或取消收藏")
+						star.Children(func() {
+							ui.Icon(c, icon).Size(12, 12).Shrink(0).TextColor(tk.Primary)
+						})
+						star.OnClick(func() { a.toggleFavoriteCommand(cmd.id) })
 					})
-					row.Label("命令 " + cmd.title).Tooltip(cmd.hint)
-					row.OnClick(func() {
-						a.closePalette()
-						cmd.run()
-					})
+					button.Label("命令 " + cmd.title).Tooltip(cmd.hint)
+					button.OnClick(func() { a.runCommandByID(cmd.id) })
 				}
 			})
 		})

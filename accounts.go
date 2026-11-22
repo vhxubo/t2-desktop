@@ -158,6 +158,8 @@ type accountBook struct {
 	notificationPrefs *notificationPrefsStore
 	// watchLaterPrefs 是稍后再看的打开行为，进程级一份（见 watch_later_prefs.go）。
 	watchLaterPrefs *watchLaterPrefsStore
+	// commands 是命令中心的快捷键 / 收藏 / 最近使用偏好，进程级一份。
+	commands *commandPrefs
 
 	mu       sync.Mutex
 	accounts []*account
@@ -236,6 +238,7 @@ func newAccountBook(dir string) *accountBook {
 		commentCostPrefs:  newCommentCostPrefsStore(dir),
 		notificationPrefs: newNotificationPrefsStore(dir),
 		watchLaterPrefs:   newWatchLaterPrefsStore(dir),
+		commands:          newCommandPrefs(dir),
 		openURL:           func(u string) error { return mygo.Shell.OpenExternal(u) },
 	}
 	b.imgHTTP = b.proxy.Client(20 * time.Second)

@@ -142,6 +142,16 @@ type app struct {
 	// settingsTab 是设置窗口当前显示的分类。原来五块内容全堆在一个滚动区，
 	// 页面长到要滚很久；分栏后每页只画一块，切换分类不丢已填的草稿。
 	settingsTab int
+	// commands 是这个窗口的命令注册表。定义随窗口注册（Run 闭包要绑到本
+	// 窗口），绑定 / 收藏 / 最近使用的偏好来自进程级共享的 commands.json。
+	commands *commandRegistry
+	// shortcutRecordingID 非空表示设置页正在等用户按下组合键；
+	// shortcutCapture / shortcutCaptureFocus 把焦点交给录制框，好收到原始按键；
+	// shortcutConflict 是最近一次录制遇到的冲突说明。
+	shortcutRecordingID  string
+	shortcutCapture      ui.Handle
+	shortcutCaptureFocus int
+	shortcutConflict     string
 
 	// settingsWin 是设置窗口：代理、检查更新与图片缓存都收在这一个窗口里，
 	// 不再是标题栏上的两个按钮。入口在主页侧边栏底部，见 sidebarFooter
@@ -550,7 +560,9 @@ type appDeps struct {
 	watchLaterPrefs *watchLaterPrefsStore
 	// notificationPrefs 是通知偏好，进程级一份（见 notification_prefs.go）。
 	notificationPrefs *notificationPrefsStore
-	book              *accountBook
+	// commands 是命令快捷键 / 收藏 / 最近使用的偏好，进程级一份。
+	commands *commandPrefs
+	book     *accountBook
 }
 
 // newAppDeps 造一份独立的共享依赖：没有账号册（无头测试）时每个 app 自己
@@ -570,6 +582,7 @@ func newAppDeps(dir string) appDeps {
 		commentCostPrefs:  newCommentCostPrefsStore(dir),
 		notificationPrefs: newNotificationPrefsStore(dir),
 		watchLaterPrefs:   newWatchLaterPrefsStore(dir),
+		commands:          newCommandPrefs(dir),
 	}
 }
 
@@ -586,6 +599,7 @@ func (b *accountBook) deps() appDeps {
 		commentCostPrefs:  b.commentCostPrefs,
 		notificationPrefs: b.notificationPrefs,
 		watchLaterPrefs:   b.watchLaterPrefs,
+		commands:          b.commands,
 		book:              b,
 	}
 }
@@ -635,6 +649,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 		commentCostPrefs:  d.commentCostPrefs,
 		notificationPrefs: d.notificationPrefs,
 		watchLaterPrefs:   d.watchLaterPrefs,
+		commands:          newCommandRegistry(d.commands),
 		draftDir:          d.dir,
 		tabs:              make([]*tabState, len(tabSpecs)),
 		lastTab:           -1,
@@ -696,6 +711,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 	a.commentMdLight = a.newCommentMarkdownOptions(true)
 	a.bioMd = newMarkdownOptions(a, bioTextStyle, false)
 	a.viewer = &imageViewer{}
+	a.registerBuiltinCommands()
 	return a
 }
 
@@ -1286,6 +1302,9 @@ func (a *app) view(c *ui.Context) {
 	defer a.drainToasts(c, a.mainClaimsToasts)
 	// 帧尾算草稿指纹：输入必然触发重建，非键入改动（表情、图片、选节点）也能捕捉到。
 	defer a.draftTick()
+	// 命令快捷键是窗口级的：在标题栏、列表或正文里按都能触发。放在建树前，
+	// 让这一帧注册的处理器覆盖整个窗口。
+	a.bindCommandShortcuts(c)
 
 	switch a.pageName {
 	case "login":
