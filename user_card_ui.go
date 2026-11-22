@@ -254,15 +254,12 @@ func (a *app) userCardTitleBar(c *ui.Context) {
 func (a *app) userCardHeader(c *ui.Context, cs *userCardState) {
 	u := cs.user
 	ui.Row(c).FillWidth().Padding(12, 16).Gap(14).AlignItems(ui.Center).Children(func() {
-		avatarView(c, cs.username, a.avatarBitmap(u.Avatar), userCardAvatar)
+		a.avatarWithPro(c, cs.username, a.avatarBitmap(u.Avatar), userCardAvatar, u.IsPro)
 		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				display.Text(c, cs.title(), display.TextProps{Strong: true, FontSize: 16, Rows: 1})
 				if u.Level > 0 {
 					userCardTag(c, fmt.Sprintf("Lv.%d", u.Level), display.TagGray)
-				}
-				if u.IsPro {
-					userCardTag(c, "PRO", display.TagBlue)
 				}
 			})
 			// 第二行：@用户名 + 注册时间 + 佩戴中的徽章。徽章名字来自接口，

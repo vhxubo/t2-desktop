@@ -2460,6 +2460,88 @@ func TestDetailReplyCollapsesRight(t *testing.T) {
 	}
 }
 
+// 帖子一条评论都没有时，评论区默认收起，把整行让给正文；用户仍可从右边缘
+// 展开看到「暂无评论」，也能在正文底部写第一条评论。
+func TestDetailCollapsesReplyWhenNoComments(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/replies") {
+			_, _ = fmt.Fprint(w, envelopeJSON(`{"items":[],"total":0,"page":1,"limit":100,"total_pages":1}`))
+			return
+		}
+		_, _ = fmt.Fprint(w, envelopeJSON(`null`))
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	m := newAuthManager(t.TempDir())
+	_ = m.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"})
+	a.auth = m
+	a.client = &Client{HTTP: srv.Client(), Base: srv.URL + "/api", Auth: m}
+	a.autoLoad = true
+	a.openDetail(Item{ShortID: "EMPTY1", URL: "https://2libra.com/post/work/EMPTY1"})
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := tt.Find("展开评论"); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("空评论没有触发默认收起：%q", tt.Texts())
+		}
+		tt.Frame()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, ok := tt.Find("评论区"); ok {
+		t.Errorf("评论区已收起，不该再画评论区面板：%q", tt.Texts())
+	}
+	// 展开后空状态仍在，用户能确认这是「真的没人评论」而不是加载丢了的。
+	if err := tt.Click("展开评论"); err != nil {
+		t.Fatalf("展开评论失败：%v", err)
+	}
+	tt.Frame()
+	if !tt.HasText("暂无评论") {
+		t.Errorf("展开后应看到空状态：%q", tt.Texts())
+	}
+}
+
+// 加载评论失败（还没拿到任何评论）不能默认收起：错误说明与「重试」入口
+// 必须留在评论区里，等用户点重试。
+func TestDetailKeepsReplyPaneWhenCommentsFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/replies") {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = fmt.Fprint(w, envelopeJSON(`null`))
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	m := newAuthManager(t.TempDir())
+	_ = m.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"})
+	a.auth = m
+	a.client = &Client{HTTP: srv.Client(), Base: srv.URL + "/api", Auth: m}
+	a.autoLoad = true
+	a.openDetail(Item{ShortID: "FAIL1", URL: "https://2libra.com/post/work/FAIL1"})
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	deadline := time.Now().Add(2 * time.Second)
+	for !tt.HasText("评论加载失败") {
+		if time.Now().After(deadline) {
+			t.Fatalf("评论失败没有画出来：%q", tt.Texts())
+		}
+		tt.Frame()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, ok := tt.Find("评论区"); !ok {
+		t.Errorf("加载失败时评论区应留着显示错误与重试：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("展开评论"); ok {
+		t.Errorf("加载失败不该默认收起评论区：%q", tt.Texts())
+	}
+}
+
 // 右栏评论区收起后，评论输入框挪到左栏正文底部、表态互动栏下方继续展示，
 // 收起评论也能直接写回复；展开后它回到右栏，且始终只有一份。
 func TestDetailReplyComposerMovesLeftWhenCollapsed(t *testing.T) {

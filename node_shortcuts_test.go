@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -47,15 +50,49 @@ func TestNodeEditorCancelDiscards(t *testing.T) {
 	}
 }
 
+// 配置弹窗里没有全局排序 / 启动表单：排序是节点行上的小切换。
+func TestNodeEditorPerNodeSort(t *testing.T) {
+	e := newNodeFeedEnv(t)
+	a := nodeFeedApp(t, e)
+	a.openNodeEditorOnMain()
+	a.nodeEditor.draft = []nodeRef{
+		{ID: "n-life", Slug: "life", Name: "生活"},
+		{ID: "n-work", Slug: "work", Name: "职场", ParentSlug: "life", ParentName: "生活"},
+	}
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Advance(400 * time.Millisecond)
+	tt.Frame()
+	for _, label := range []string{"搜索节点", "排序方式", "启动时", "筛选设置"} {
+		if _, ok := tt.Find(label); ok {
+			t.Errorf("弹窗里还有不该出现的控件 %q：%q", label, tt.Texts())
+		}
+	}
+	if err := tt.Click("切换排序：生活 · 职场"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.nodeEditor.draft[1].Sort != nodeSortLatest {
+		t.Errorf("排序没写到这个节点上：%+v", a.nodeEditor.draft)
+	}
+	if a.nodeEditor.draft[0].Sort != "" {
+		t.Errorf("不该顺带改别的节点：%+v", a.nodeEditor.draft)
+	}
+	if err := tt.Click("切换排序：生活 · 职场"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.nodeEditor.draft[1].Sort != nodeSortValue {
+		t.Errorf("再点一次没切回价值优先：%+v", a.nodeEditor.draft[1])
+	}
+}
+
 func TestNodeEditorSavePersists(t *testing.T) {
 	e := newNodeFeedEnv(t)
 	a := nodeFeedApp(t, e)
 	a.openNodeEditor()
 	a.nodeEditor.draft = []nodeRef{
-		{ID: "n-work", Slug: "work", Name: "职场", ParentSlug: "life", ParentName: "生活"},
+		{ID: "n-work", Slug: "work", Name: "职场", ParentSlug: "life", ParentName: "生活", Sort: nodeSortLatest},
 	}
-	a.nodeEditor.sort = 1
-	a.nodeEditor.remember = nodeRememberOn
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 	if err := tt.Click("保存"); err != nil {
@@ -65,29 +102,31 @@ func TestNodeEditorSavePersists(t *testing.T) {
 	if a.nodeEditor.open {
 		t.Error("保存后弹窗没关")
 	}
-	if len(a.nodeShortcuts) != 1 {
-		t.Errorf("保存时没去重：%+v", a.nodeShortcuts)
-	}
-	if a.nodePrefs.Sort != nodeSortLatest || !a.nodePrefs.RememberFilter {
-		t.Errorf("偏好没保存：%+v", a.nodePrefs)
+	if len(a.nodeShortcuts) != 1 || a.nodeShortcuts[0].Sort != nodeSortLatest {
+		t.Errorf("保存时没把节点排序写进去：%+v", a.nodeShortcuts)
 	}
 	dir := filepath.Dir(filepath.Dir(a.kv.path))
 	second := newApp(dir)
 	second.loadNodePrefs()
-	if len(second.nodeShortcuts) != 1 || second.nodePrefs.Sort != nodeSortLatest {
-		t.Errorf("重启后偏好或快捷入口丢失：%+v %+v", second.nodeShortcuts, second.nodePrefs)
+	if len(second.nodeShortcuts) != 1 || second.nodeShortcuts[0].Sort != nodeSortLatest {
+		t.Errorf("重启后快捷入口或它的排序丢失：%+v", second.nodeShortcuts)
 	}
 }
 
-func TestNodeEditorSearchAddsWithoutClosing(t *testing.T) {
+func TestNodeEditorSearchAddsAndCloses(t *testing.T) {
 	e := newNodeFeedEnv(t)
 	a := nodeFeedApp(t, e)
 	a.openNodeEditor()
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	if err := tt.Click("选择节点：全部节点"); err != nil {
+	if err := tt.Click("添加节点"); err != nil {
 		t.Fatal(err)
 	}
+	tt.Frame()
+	if !a.nodeEditor.pickerOpen {
+		t.Fatal("点「添加节点」应打开二级添加面板")
+	}
+	tt.Advance(400 * time.Millisecond)
 	tt.Frame()
 	if err := tt.Click("搜索节点"); err != nil {
 		t.Fatal(err)
@@ -101,15 +140,51 @@ func TestNodeEditorSearchAddsWithoutClosing(t *testing.T) {
 	if len(a.nodeEditor.draft) != 1 || a.nodeEditor.draft[0].ID != "n-work" {
 		t.Fatalf("搜索结果没有加入草稿：%+v", a.nodeEditor.draft)
 	}
-	if !a.nodeEditor.pickOpen {
-		t.Error("配置弹窗里选完应该保持浮层打开，方便连续添加")
+	if a.nodeEditor.pickerOpen {
+		t.Error("选完节点应该直接关掉二级面板，回到配置弹窗")
 	}
 	if a.nodeEditor.search != "" {
 		t.Errorf("选完应该清空搜索词，实际 %q", a.nodeEditor.search)
 	}
 }
 
-func TestFilterSortPersists(t *testing.T) {
+// 二级添加面板里的列表要按窗口高度铺开，不能被旧的 260 上限截成几行。
+func TestNodeEditorPickerFillsDrawerHeight(t *testing.T) {
+	e := newNodeFeedEnv(t)
+	a := nodeFeedApp(t, e)
+	nodes := []composeNode{{ID: "n-life", Slug: "life", Name: "生活"}}
+	for i := 0; i < 30; i++ {
+		nodes = append(nodes, composeNode{
+			ID: "n-row-" + strconv.Itoa(i), Slug: "row-" + strconv.Itoa(i),
+			Name: fmt.Sprintf("列表节点%02d", i), ParentSlug: "life", ParentName: "生活",
+		})
+	}
+	a.nodeCat.nodes = nodes
+	a.nodeCat.loaded = true
+	a.nodeCat.at = time.Now()
+	a.openNodeEditorOnMain()
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Advance(400 * time.Millisecond)
+	tt.Frame()
+	if err := tt.Click("添加节点"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Advance(400 * time.Millisecond)
+	tt.Frame()
+	if info, ok := tt.Access("生活"); !ok || info.Bounds.W < 100 {
+		t.Fatalf("左列父分类被压扁：%+v %v", info.Bounds, ok)
+	}
+	r, ok := tt.Find("列表节点15")
+	if !ok {
+		t.Fatalf("抽屉列表被截断，第 16 行没画出来：%q", tt.Texts())
+	}
+	if r.Y+r.H > 760 {
+		t.Errorf("第 16 行超出窗口：%+v", r)
+	}
+}
+
+// 首页筛选浮层不再有全局排序开关，默认按价值优先。
+func TestFilterPopoverHasNoGlobalSort(t *testing.T) {
 	e := newNodeFeedEnv(t)
 	a := nodeFeedApp(t, e)
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -118,12 +193,8 @@ func TestFilterSortPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if err := tt.Click("最新"); err != nil {
-		t.Fatal(err)
+	if _, ok := tt.Find("排序"); ok {
+		t.Fatalf("筛选浮层里还有排序开关：%q", tt.Texts())
 	}
-	tt.Frame()
-	if a.nodePrefs.Sort != nodeSortLatest {
-		t.Fatalf("排序偏好没切换：%+v", a.nodePrefs)
-	}
-	waitQuery(t, e, "sort=latest")
+	waitQuery(t, e, "sort=value")
 }

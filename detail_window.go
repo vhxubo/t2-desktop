@@ -261,6 +261,8 @@ func (a *app) disposeDetailState(d *detailState) {
 	if d == nil || d.dead {
 		return
 	}
+	// 状态马上就 dead，之后没有帧尾能替它算指纹，先同步落盘。
+	a.flushDrafts()
 	a.stopDetailNodeWatch(d)
 	a.saveReplyView(d)
 	if d.composerDetached && a.replyWinFor == d {
@@ -410,6 +412,7 @@ func (a *app) detailWindowView(h *detailWindow, c *ui.Context) {
 	a.srv = c.Services()
 	c.Root().Background(t.Background)
 	defer a.drainToasts(c, h.claimsToasts)
+	defer a.draftTick()
 	c.OnShortcut(0, ui.KeyEscape, func() { a.closeDetailTab(h, h.active) })
 	if d := h.current(); d != nil {
 		a.detail = d
@@ -536,6 +539,9 @@ func (a *app) detailTabBar(h *detailWindow, c *ui.Context) {
 		}
 	})
 	if sel != h.active && sel >= 0 && sel < len(h.states) {
+		// 隐藏的标签不再重建，帧尾不会再算它的指纹：先把要走的那一篇落盘。
+		// flushDrafts 会遍历所有 live 状态，用本帧刚算好的 draftFP 判断改动。
+		a.flushDrafts()
 		h.active = sel
 		a.detail = h.current()
 		a.detailStack = h.stacks[h.active]

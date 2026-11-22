@@ -15,6 +15,7 @@ import (
 const (
 	coinCachePrefix    = "coin:"
 	readingCachePrefix = "reading:"
+	laterCachePrefix   = "later:"
 	readCachePrefix    = "read:"
 	detailCachePrefix  = "detail:"
 
@@ -71,6 +72,16 @@ func (a *app) postReadKey() string {
 		return ""
 	}
 	return readCachePrefix + scope
+}
+
+// watchLaterCacheKey 是稍后再看的存储键，同样按账号隔离：换一个账号登录时
+// 不会看到上一个账号攒下的待读清单。
+func (a *app) watchLaterCacheKey() string {
+	scope := a.persistableScope()
+	if scope == "" {
+		return ""
+	}
+	return laterCachePrefix + scope
 }
 
 // formatCacheTime 是缓存时间在界面上的统一写法。秒没有意义，统一到分钟。

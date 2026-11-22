@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo"
@@ -345,6 +347,7 @@ func (a *app) applyNotificationKeyword(st *tabState, keyword string) {
 	}
 	st.keyword = keyword
 	st.keywordDraft = keyword
+	resetNotificationQuickReply(st)
 	st.items = nil
 	st.selected = nil
 	st.loaded = false
@@ -552,6 +555,7 @@ func (a *app) setNotificationFilter(filter int) {
 		return
 	}
 	st.filter = filter
+	resetNotificationQuickReply(st)
 	st.items = nil
 	st.selected = nil
 	st.loaded = false
@@ -573,6 +577,7 @@ func (a *app) reloadNotifications() {
 	if st.loading {
 		return
 	}
+	resetNotificationQuickReply(st)
 	st.loaded = false
 	st.items = nil
 	st.selected = nil
@@ -581,6 +586,17 @@ func (a *app) reloadNotifications() {
 	st.noMore = false
 	st.list.ScrollTo(0, ui.Start)
 	a.loadFor(toastNotifications, idx, 1)
+}
+
+// resetNotificationQuickReply 收起快捷回复并丢掉草稿：列表要被整份替换时，
+// 旧消息卡片上的输入框不该继续挂在新列表里。
+func resetNotificationQuickReply(st *tabState) {
+	if st == nil {
+		return
+	}
+	st.quickReplyOpen = ""
+	st.quickReplyDraft = ""
+	st.quickReplyFocus = false
 }
 
 // notificationRow 一条消息就是一张和列表同宽的卡片：勾选框、未读点与「标为
@@ -634,6 +650,7 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 				}
 				ui.Spacer(c).Grow(1)
 				if unread {
+					a.notificationQuickReplyAction(c, st, n, v)
 					a.notificationReadAction(c, reading, func() { a.markNotificationRead(toastNotifications, n.ID) })
 				}
 			})
@@ -681,6 +698,9 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 					Type: display.TextSecondary, FontSize: tk.FontSizeSM, Rows: 2,
 				})
 			}
+			if st != nil && st.quickReplyOpen == n.ID {
+				a.notificationQuickReplyEditor(c, st, n, v)
+			}
 		})
 	})
 	// 可访问名说明这一下点开的是什么：读屏读得到，测试也按它取卡片的位置。
@@ -708,6 +728,148 @@ func (a *app) notificationReadAction(c *ui.Context, busy bool, onClick func()) {
 	if b.Clicked() {
 		onClick()
 	}
+}
+
+/* ------------------------------------------------------------------
+   通知快捷回复
+---------------------------------------------------------------- */
+
+// notificationQuickReplyAction 是未读消息卡片右上角的「快捷回复」入口，与
+// 「标为已读」同排，不额外占一行。只对未读消息显示：已读消息已经看过，不再
+// 需要从通知里直接回一句。v.CanReply 由 notificationQuickReplyTarget 判定；
+// 缺帖子定位、或三级评论缺挂载点的消息不出现入口。
+func (a *app) notificationQuickReplyAction(c *ui.Context, st *tabState, n *notification, v notificationView) {
+	if st == nil || n == nil || !v.CanReply || v.ReplyShortID == "" || st.quickReplyOpen == n.ID {
+		return
+	}
+	b := action.Button(c, "快捷回复", action.ButtonProps{
+		Size: lobetheme.Small, Variant: action.Text,
+	})
+	b.Tooltip("直接在这里回复这条消息")
+	if b.Clicked() {
+		if st.quickReplyPosting {
+			a.toast(toastNotifications, "上一条回复还在发送，请稍候")
+			return
+		}
+		st.quickReplyOpen = n.ID
+		st.quickReplyDraft = ""
+		st.quickReplyFocus = true
+	}
+}
+
+// notificationQuickReplyEditor 是展开后的单行回复：输入框与取消 / 发送同一行，
+// 回车发送，只为快速回一句，不铺开评论编辑器。
+func (a *app) notificationQuickReplyEditor(c *ui.Context, st *tabState, n *notification, v notificationView) {
+	if st == nil || n == nil || !v.CanReply || v.ReplyShortID == "" {
+		return
+	}
+	posting := st.quickReplyPosting
+	placeholder := "写一条回复…"
+	if v.ActorName != "" {
+		placeholder = "回复 @" + v.ActorName + "…"
+	}
+	// 输入框的 key 固定成这条消息：展开后上下方的兄弟节点变化，焦点不会漂到
+	// 别的控件上。
+	c.Key("notification-quick-reply-" + n.ID)
+	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Grow(1).MinWidth(0).Children(func() {
+			in := composeInput(c, &st.quickReplyDraft, field.InputProps{
+				Placeholder: placeholder, Size: lobetheme.Small,
+			})
+			in.Label("快捷回复内容").Bind(&st.quickReplyField)
+			if st.quickReplyFocus {
+				st.quickReplyField.Focus(c)
+				st.quickReplyFocus = false
+			}
+			st.quickReplyField.OnShortcut(c, 0, ui.KeyEnter, func() {
+				a.submitNotificationQuickReply(st, n, v)
+			})
+		})
+		if action.Button(c, "取消", action.ButtonProps{
+			Size: lobetheme.Small, Variant: action.Text,
+		}).Disabled(posting).Clicked() {
+			st.quickReplyOpen = ""
+			st.quickReplyDraft = ""
+			st.quickReplyFocus = false
+		}
+		if a.auth == nil || !a.auth.loggedIn() {
+			if action.Button(c, "登录", action.ButtonProps{
+				Size: lobetheme.Small, Variant: action.Primary,
+			}).Tooltip("登录后回复").Disabled(posting).Clicked() {
+				a.submitNotificationQuickReply(st, n, v)
+			}
+			return
+		}
+		sendLabel := "发送"
+		if posting {
+			sendLabel = "发送中"
+		}
+		if action.Button(c, sendLabel, action.ButtonProps{
+			Size: lobetheme.Small, Variant: action.Primary,
+		}).Disabled(posting).Clicked() {
+			a.submitNotificationQuickReply(st, n, v)
+		}
+	})
+}
+
+// submitNotificationQuickReply 发一次快捷回复。未登录时先走授权弹窗，登录
+// 成功后用同一份草稿与父评论重跑；缺 write:comment 时同样授权后重放。
+// 网络结果经 publish 回到 UI 线程，失败保留草稿与输入框。
+func (a *app) submitNotificationQuickReply(st *tabState, n *notification, v notificationView) {
+	if st == nil || n == nil || st.quickReplyPosting {
+		return
+	}
+	content := strings.TrimSpace(st.quickReplyDraft)
+	if content == "" {
+		a.toast(toastNotifications, "回复内容不能为空")
+		return
+	}
+	if !v.CanReply || v.ReplyShortID == "" {
+		a.toast(toastNotifications, "这条消息暂时无法直接回复，请点开帖子回复")
+		return
+	}
+	if a.auth == nil || !a.auth.loggedIn() {
+		a.requestLoginFor(toastNotifications, "登录后才能回复消息。", func() {
+			a.submitNotificationQuickReply(st, n, v)
+		})
+		return
+	}
+	if a.client == nil {
+		return
+	}
+	shortID, target, id := v.ReplyShortID, v.ReplyTarget, n.ID
+	st.quickReplyPosting = true
+	// 与详情页的评论提交同一个超时；App 的 client 走配置的代理，不另建客户端。
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	go func() {
+		defer cancel()
+		_, err := a.client.createReply(ctx, shortID, content, target)
+		a.publish(func() {
+			st.quickReplyPosting = false
+			if err != nil {
+				a.handleAuthErrorFor(toastNotifications, err, func() {
+					a.submitNotificationQuickReply(st, n, v)
+				})
+				a.toast(toastNotifications, "回复失败："+friendlyError(err))
+				return
+			}
+			if st.quickReplyOpen == id {
+				st.quickReplyOpen = ""
+				st.quickReplyDraft = ""
+				st.quickReplyFocus = false
+			}
+			if v.ActorName != "" {
+				a.toast(toastNotifications, "已回复 @"+v.ActorName)
+			} else {
+				a.toast(toastNotifications, "回复已发送")
+			}
+			// 回复本身就是对这条消息的处理：顺手标为已读，未读点与角标随之
+			// 落账（markNotificationRead 自带在途去重与授权重放）。
+			if !n.IsRead {
+				a.markNotificationRead(toastNotifications, id)
+			}
+		})
+	}()
 }
 
 // notificationReactionLine 画表态消息的「用了什么表情、都有谁」：表情合并成

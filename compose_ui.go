@@ -66,7 +66,13 @@ const (
 func (a *app) showCompose() {
 	a.publish(func() {
 		if a.compose == nil {
-			a.compose = newComposeState()
+			// 表单是空的：续写最近编辑的一条帖子草稿；一条都没有才开空白表单。
+			if e, ok := a.draftsForCurrent().latestCompose(composeModePost); ok {
+				a.compose = newComposeState()
+				a.applyComposeDraft(a.compose, e)
+			} else {
+				a.compose = newComposeState()
+			}
 		}
 		a.compose.mode = composeModePost
 		a.showComposeWindow()
@@ -80,7 +86,12 @@ func (a *app) showMomentCompose() {
 
 func (a *app) showMomentComposeWindow() {
 	if a.compose == nil {
-		a.compose = newComposeState()
+		if e, ok := a.draftsForCurrent().latestCompose(composeModeMoment); ok {
+			a.compose = newComposeState()
+			a.applyComposeDraft(a.compose, e)
+		} else {
+			a.compose = newComposeState()
+		}
 	}
 	a.compose.mode = composeModeMoment
 	a.showComposeWindow()
@@ -152,6 +163,8 @@ func (a *app) openComposeWindow() {
 	win.OnClosed(func() {
 		a.composeWin = nil
 		a.authGateWindowClosed(toastCompose)
+		// 用户关窗就是「存好了」：同步落盘，别只等定时器。
+		a.flushDrafts()
 		a.accountWindowClosed(win)
 	})
 }
@@ -165,6 +178,7 @@ func (a *app) closeComposeWindow() {
 		return
 	}
 	a.composeWin = nil
+	a.flushDrafts()
 	win.Close()
 }
 
@@ -293,6 +307,7 @@ func (a *app) composeWindowView(c *ui.Context) {
 	c.Root().Background(tk.BgLayout)
 	// 本窗口里发起的操作结果以 toast 显示在这里，不退回主窗口。
 	defer a.drainToasts(c, a.claimsToasts(toastCompose))
+	defer a.draftTick()
 	// Ctrl+Enter 发布：写长文的常用手势。动态模式下发的是短动态。
 	c.OnShortcut(ui.Ctrl, ui.KeyEnter, func() {
 		if a.compose != nil && a.compose.mode == composeModeMoment {
@@ -1511,11 +1526,16 @@ func (a *app) composeFooter(c *ui.Context, st *composeState) {
 			Variant: action.Text,
 		}).Tooltip("清空当前草稿，保留节点选择").Disabled(busy)
 		if clear.Clicked() {
+			id := st.draftID
 			if moment {
 				st.resetMomentForm()
 			} else {
 				// 清空草稿与各组件，但保留节点选择与已经拉到的节点列表。
 				st.resetComposeForm()
+			}
+			// 表单清空了，草稿箱里那条也得删；不然下一次自动保存又写回来。
+			if id != "" {
+				a.deleteDraft(id)
 			}
 		}
 		// 「当前账号」与「发布」贴在一起：多账号时点下去之前就能看清是哪个
@@ -1607,7 +1627,12 @@ func (a *app) submitCompose() {
 			}
 			title := strings.TrimSpace(st.title)
 			st.key = ""
+			draftID := st.draftID
 			st.resetComposeForm()
+			// 发布成功：这条草稿已经变成帖子，从箱子里删掉。
+			if draftID != "" {
+				a.deleteDraft(draftID)
+			}
 			st.okTitle = title
 			st.okShortID = created.ShortID
 			st.okURL = created.URL
@@ -1678,7 +1703,11 @@ func (a *app) submitMoment() {
 			}
 			st.momentKey = ""
 			st.momentSig = ""
+			draftID := st.draftID
 			st.resetMomentForm()
+			if draftID != "" {
+				a.deleteDraft(draftID)
+			}
 			a.toast(toastCompose, "动态已发布")
 			if a.onPostPublished != nil {
 				a.onPostPublished(created, nil)

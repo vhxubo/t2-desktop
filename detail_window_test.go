@@ -226,10 +226,12 @@ func TestDetailWindowLoneToolActionInTitleBar(t *testing.T) {
 	a.openDetailWindow(itemForWindow("POST001"))
 	h := a.detailWindows[0]
 	d := h.states[0]
-	// 没有帖子地址就没有复制链接；非作者、未滚动，独立窗口的标题栏也已经有
-	// 「关闭」，于是工具条只剩「刷新」这一枚。
+	// 没有帖子地址就没有复制链接；没有 short_id 时也没有「稍后再看」；
+	// 非作者、未滚动，独立窗口的标题栏也已经有「关闭」，于是工具条只剩
+	// 「刷新」这一枚。
 	d.topic = nil
 	d.fallbackURL = ""
+	d.shortID = ""
 
 	tt := ui.NewTester(func(c *ui.Context) { a.detailWindowView(h, c) }, detailWindowWidth, detailWindowHeight)
 	tt.Frame()

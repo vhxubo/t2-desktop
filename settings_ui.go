@@ -38,9 +38,10 @@ const (
 	settingsTabAppearance
 	settingsTabComment
 	settingsTabNotify
+	settingsTabReading
 )
 
-var settingsTabLabels = []string{"网络代理", "图库", "图片缓存", "更新", "窗口", "外观", "评论", "通知"}
+var settingsTabLabels = []string{"网络代理", "图库", "图片缓存", "更新", "窗口", "外观", "评论", "通知", "阅读"}
 
 /* ------------------------------------------------------------------
    设置窗口：全局入口、显示与关闭
@@ -219,6 +220,8 @@ func (a *app) settingsWindowView(c *ui.Context) {
 					a.commentSettingsSection(c)
 				case settingsTabNotify:
 					a.notificationSettingsSection(c)
+				case settingsTabReading:
+					a.readingSettingsSection(c)
 				default:
 					a.proxySettingsSection(c)
 				}
@@ -395,6 +398,53 @@ func (a *app) commentSettingsSection(c *ui.Context) {
 			a.setCommentCostOnSend(v)
 		}
 	})
+}
+
+/* ------------------------------------------------------------------
+   阅读一块：浏览历史与稍后再看
+  --------------------------------------------------------------- */
+
+// readingSettingsSection 是「阅读」一块：浏览历史与稍后再看都存在本机、按
+// 账号隔离，这里只提供「打开后保留」这一个行为开关。清空入口在稍后再看
+// 窗口的两页顶部，按当前账号清，不和服务端收藏混在一起。
+func (a *app) readingSettingsSection(c *ui.Context) {
+	p := a.watchLaterPrefs
+	settingsSection(c, "阅读记录", func() {
+		settingsDescription(c, "浏览历史与稍后再看只存在本机，并按账号隔离。", 1)
+
+		if v := settingsCheckbox(c, "打开后保留在稍后再看", p.keepAfterOpen()); v != p.keepAfterOpen() {
+			a.setKeepWatchLater(v)
+		}
+		settingsDescription(c, "默认打开即移除；打开后保留并区分已读 / 未读。", 1)
+
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			if action.Button(c, "打开稍后再看", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+				a.showWatchLater()
+			}
+			ui.Spacer(c).Grow(1)
+		})
+	})
+}
+
+// setKeepWatchLater 保存「打开后保留」开关。关掉时顺手清掉已读标记：默认
+// 模式没有已读概念，留着会让下次打开开关时冒出上一次的旧状态。
+func (a *app) setKeepWatchLater(on bool) {
+	if a.watchLaterPrefs == nil || a.watchLaterPrefs.keepAfterOpen() == on {
+		return
+	}
+	if err := a.watchLaterPrefs.setKeepAfterOpen(on); err != nil {
+		a.toast(toastSettings, err.Error())
+		return
+	}
+	if !on {
+		a.clearWatchLaterReadMarks()
+	}
+	a.redrawWatchLaterWindow()
+	if on {
+		a.toast(toastSettings, "打开后保留在稍后再看，已读与未读分开显示")
+	} else {
+		a.toast(toastSettings, "打开后从稍后再看移除")
+	}
 }
 
 /* ------------------------------------------------------------------

@@ -254,8 +254,9 @@ func (a *app) prefetchReadingAvatars() {
 }
 
 // clearReadingHistory 清空当前账号的阅读记录，以及随之失效的正文缓存。
-// 只清本机数据，不影响服务端的收藏 / 书签。
-func (a *app) clearReadingHistory() {
+// 只清本机数据，不影响服务端的收藏 / 书签。target 决定结果提示出现在哪扇
+// 窗口（稍后再看窗口的浏览历史页、设置窗口的缓存页各用各的）。
+func (a *app) clearReadingHistory(target toastTarget) {
 	a.reading = nil
 	a.readingLoaded = true
 	if key := a.readingCacheKey(); key != "" && a.kv != nil {
@@ -269,5 +270,6 @@ func (a *app) clearReadingHistory() {
 		}
 	}
 	a.readingList.ScrollTo(0, ui.Start)
-	a.toast(toastSettings, "已清空阅读记录与缓存的正文")
+	a.redrawWatchLaterWindow()
+	a.toast(target, "已清空阅读记录与缓存的正文")
 }

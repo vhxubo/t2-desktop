@@ -239,7 +239,7 @@ func (a *app) followsRow(c *ui.Context, fs *followsState, kind int, u followUser
 	ui.Row(c).FillWidth().Padding(8, 10).Radius(10).Gap(10).
 		AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).
 		Children(func() {
-			avatarView(c, u.Username, a.avatarBitmap(u.Avatar), 32)
+			a.avatarWithPro(c, u.Username, a.avatarBitmap(u.Avatar), 32, u.IsPro)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 					name := ui.Button(c, u.Username).
@@ -253,9 +253,6 @@ func (a *app) followsRow(c *ui.Context, fs *followsState, kind int, u followUser
 					name.Label("用户 " + u.Username).Tooltip("打开用户资料")
 					if name.Clicked() {
 						a.showUserCard(u.Username)
-					}
-					if u.IsPro {
-						ui.Text(c, "PRO").FontSize(10).TextColor(t.Accent).Shrink(0)
 					}
 				})
 				if when := followRowSummary(u); when != "" {

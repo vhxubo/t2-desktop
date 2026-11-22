@@ -292,9 +292,10 @@ func TestScoresSidebarEntryAndOpen(t *testing.T) {
 			scoresAt = i
 		}
 	}
-	if scoresAt < 2 || !items[scoresAt-1].Divider ||
-		!strings.HasPrefix(items[scoresAt-2].Label, "动态") {
-		t.Errorf("评分榜应紧挨在「动态」下方的分割线之后：%+v", items)
+	if scoresAt < 3 || !items[scoresAt-1].Divider ||
+		items[scoresAt-2].Key != "drafts" ||
+		!strings.HasPrefix(items[scoresAt-3].Label, "动态") {
+		t.Errorf("评分榜应在草稿箱下方的分割线之后：%+v", items)
 	}
 
 	if err := tt.Click("评分榜"); err != nil {

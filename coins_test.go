@@ -590,8 +590,9 @@ func TestCoinWindowRendersBalanceTodayHistoryStatsRanking(t *testing.T) {
 	cs.todayLoaded = true
 	cs.todayItems = []coinTransaction{
 		{ID: "t1", Reason: "checkin", Amount: 5, CreatedAt: "2026-11-12T02:00:00Z"},
+		{ID: "t2", Reason: "post", Amount: -2, CreatedAt: "2026-11-12T03:00:00Z"},
 	}
-	cs.todayIncome, cs.todayExpense, cs.todayNet = 5, 0, 5
+	cs.todayIncome, cs.todayExpense, cs.todayNet = 5, 2, 3
 	cs.historyLoaded = true
 	cs.historyTotal, cs.historyTotalPages, cs.historyPage = 1, 1, 1
 	cs.historyItems = []coinTransaction{
@@ -609,10 +610,18 @@ func TestCoinWindowRendersBalanceTodayHistoryStatsRanking(t *testing.T) {
 	}
 
 	tt := ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
-	for _, want := range []string{"金币", "1,234 金币", "今日获得", "+5 金币", "今日已签到 · 连续 5 天", "签到", "今日明细"} {
+	for _, want := range []string{"金币", "1,234 金币", "今日净收入", "+3 金币", "收入 +5 · 支出 -2", "今日明细"} {
 		if !tt.HasText(want) {
 			t.Fatalf("金币首页缺少 %q：%q", want, tt.Texts())
 		}
+	}
+	for _, forbidden := range []string{"今日签到", "今日已签到", "今日未签到", "签到状态未知", "签到状态加载中…", "签到状态暂不可用"} {
+		if tt.HasText(forbidden) {
+			t.Fatalf("金币首页不该展示签到状态 %q：%q", forbidden, tt.Texts())
+		}
+	}
+	if tt.HasText("今日获得") {
+		t.Fatalf("金币首页还在展示今日收入：%q", tt.Texts())
 	}
 
 	if err := tt.Click("历史"); err != nil {
@@ -777,8 +786,8 @@ func TestCoinBreakdownRangeChipsInUI(t *testing.T) {
 	}
 }
 
-// 金币窗口只展示状态，不再放写操作入口：签到与潘多拉都收在标题栏「我的」的
-// 账号菜单里。今日签到状态仍要看得见。
+// 金币窗口不展示签到状态，也不放写操作入口：签到与潘多拉都收在标题栏「我的」
+// 账号菜单里，命令面板仍可签到。
 func TestCoinPageHasNoWriteEntries(t *testing.T) {
 	a := testApp(t)
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
@@ -787,8 +796,10 @@ func TestCoinPageHasNoWriteEntries(t *testing.T) {
 	a.coins.baseLoaded, a.coins.todayLoaded, a.coins.sign = true, true, coinSignStatus{Known: true, Signed: false}
 	tt := ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
 	tt.Frame()
-	if !tt.HasText("今日未签到") {
-		t.Errorf("金币窗口不显示签到状态：%q", tt.Texts())
+	for _, forbidden := range []string{"今日签到", "今日已签到", "今日未签到", "签到状态未知", "签到状态加载中…", "签到状态暂不可用"} {
+		if tt.HasText(forbidden) {
+			t.Errorf("金币窗口不该展示签到状态 %q：%q", forbidden, tt.Texts())
+		}
 	}
 	for _, forbidden := range []string{"立即签到", "签到领金币", "开盲盒", "打赏", "打开潘多拉", "潘多拉盲盒"} {
 		if _, ok := tt.Find(forbidden); ok {
@@ -1134,7 +1145,7 @@ func TestCoinBalanceFetchedOnAccountMenuOpen(t *testing.T) {
 	})
 }
 
-// 金币窗口缩到最小尺寸时，视图切换、签到状态与刷新都还在窗口里。
+// 金币窗口缩到最小尺寸时，视图切换与刷新都还在窗口里，且不露出签到内容。
 func TestCoinWindowMinimumSize(t *testing.T) {
 	a := testApp(t)
 	if err := a.auth.storeToken(tokenData{
@@ -1158,13 +1169,10 @@ func TestCoinWindowMinimumSize(t *testing.T) {
 				label, coinWinMinWidth, r.X, r.W)
 		}
 	}
-
-	// 未签到时仍只显示状态，不再有签到按钮；最小尺寸下状态也不能被挤出窗口。
-	a.coins.sign = coinSignStatus{Known: true, Signed: false}
-	tt = ui.NewTester(a.coinWindowView, coinWinMinWidth, coinWinMinHeight)
-	tt.Frame()
-	if !tt.HasText("今日未签到") {
-		t.Fatalf("最小窗口下缺少签到状态：%q", tt.Texts())
+	for _, forbidden := range []string{"今日签到", "今日已签到", "今日未签到", "签到状态未知"} {
+		if tt.HasText(forbidden) {
+			t.Errorf("最小窗口下不该展示签到状态 %q：%q", forbidden, tt.Texts())
+		}
 	}
 	if _, ok := tt.Find("立即签到"); ok {
 		t.Error("金币窗口不该有签到按钮")

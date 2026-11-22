@@ -104,7 +104,9 @@ func (a *app) openReplyWindow() {
 	win.OnClosed(func() {
 		a.replyWin = nil
 		a.authGateWindowClosed(toastReply)
-		// 关窗口不丢草稿：清掉标记，页面里的评论框原样展开，文字还在。
+		// 关窗口不丢草稿：文字还在 detailState 里，先落盘再清标记。
+		a.flushDrafts()
+		// 清掉标记，页面里的评论框原样展开，文字还在。
 		if d.composerDetached {
 			d.composerDetached = false
 		}
@@ -125,6 +127,8 @@ func (a *app) openReplyWindow() {
 // 只清状态（headless 测试走的就是这条），所以窗口里的关闭按钮和页面里的
 // 「收回评论区」在任何情况下都能把输入框放回页面。
 func (a *app) closeReplyWindow() {
+	// 关窗前先落盘：这一帧之后独立窗口不再重建，草稿靠 detailState 继续活着。
+	a.flushDrafts()
 	if d := a.replyWinFor; d != nil {
 		d.composerDetached = false
 		if d.identityHost == replySurfaceWindow {
@@ -174,6 +178,7 @@ func (a *app) replyWindowView(c *ui.Context) {
 	}
 	// 本窗口里发送失败 / 成功的提示弹在这里；窗口不在了就退回主窗口。
 	defer a.drainToasts(c, a.claimsToasts(toastReply))
+	defer a.draftTick()
 	c.OnShortcut(0, ui.KeyEscape, a.closeReplyWindow)
 	c.OnShortcut(ui.Ctrl, ui.KeyEnter, a.submitReply)
 
@@ -283,6 +288,8 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 				Background(tk.BgContainer).Children(func() {
 				c.Key("reply-window-field")
 				a.replyTextArea(c, d, replySurfaceWindow, replyFieldWindow, true)
+				// 独立窗口的输入框自带 AutoFocus，这里只消费一次性恢复标记。
+				d.focusComposer = false
 				// 面板要贴着 @ / :：输入框自己有 8 / 4 的内边距，字符的矩形
 				// 要按同一份内边距算，否则面板会偏到输入框边框上。
 				a.mentionPopover(c, d, replySurfaceWindow, 8, 4)

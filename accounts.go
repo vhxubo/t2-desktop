@@ -156,6 +156,8 @@ type accountBook struct {
 	commentCostPrefs *commentCostPrefsStore
 	// notificationPrefs 是通知偏好，进程级一份（见 notification_prefs.go）。
 	notificationPrefs *notificationPrefsStore
+	// watchLaterPrefs 是稍后再看的打开行为，进程级一份（见 watch_later_prefs.go）。
+	watchLaterPrefs *watchLaterPrefsStore
 
 	mu       sync.Mutex
 	accounts []*account
@@ -233,6 +235,7 @@ func newAccountBook(dir string) *accountBook {
 		disclaimer:        newDisclaimerStore(dir),
 		commentCostPrefs:  newCommentCostPrefsStore(dir),
 		notificationPrefs: newNotificationPrefsStore(dir),
+		watchLaterPrefs:   newWatchLaterPrefsStore(dir),
 		openURL:           func(u string) error { return mygo.Shell.OpenExternal(u) },
 	}
 	b.imgHTTP = b.proxy.Client(20 * time.Second)
@@ -1122,6 +1125,8 @@ func (b *accountBook) logoutAccount(id string) {
 	if err := acc.auth.clearToken(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("退出账号 %s：删除凭据失败：%v", id, err)
 	}
+	// 草稿文件按账号 id 留在配置目录里，退出只删凭据：账号 id 由昵称哈希得
+	// 出，重新登录同一昵称就能取回，刻意不删。
 	b.mu.Lock()
 	out := b.accounts[:0]
 	for _, it := range b.accounts {
@@ -1622,10 +1627,15 @@ func (b *accountBook) markQuitting() {
 	for _, acc := range b.snapshotAccounts() {
 		if acc.app != nil {
 			acc.app.quitting = true
+			// 退出时定时器可能来不及跑，把还没落盘的草稿同步写出来。
+			acc.app.flushDrafts()
+			acc.app.stopDraftTimer()
 		}
 	}
 	if b.guest != nil {
 		b.guest.quitting = true
+		b.guest.flushDrafts()
+		b.guest.stopDraftTimer()
 	}
 }
 

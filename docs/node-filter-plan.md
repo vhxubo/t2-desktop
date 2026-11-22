@@ -18,17 +18,18 @@
 
 | 编号 | 决策 | 结论 |
 | --- | --- | --- |
-| 1 | 首页筛选是否跨重启 | 默认不记忆，启动回「全部」；可在配置弹窗里打开「启动时恢复上次筛选」 |
+| 1 | 首页筛选是否跨重启 | 不记忆，启动回「全部」；没有「恢复上次筛选」配置 |
 | 2 | 点侧边栏「首页」是否清除筛选 | 不清除，只刷新当前筛选；清除走筛选 chip 的 X |
 | 3 | 快捷入口数量 | 最多 8 个 |
-| 4 | 排序 | 默认仍为 `sort=value`；配置弹窗可改为「最新」；筛选浮层内也提供快捷切换 |
+| 4 | 排序 | 默认 `sort=value`；排序归每个节点快捷入口自己配置，没有全局排序开关 |
 | 5 | 节点选择器搜索 | 级联浮层顶部加搜索框；输入后切换为扁平结果列表；发帖窗口只返回可发布的子节点 |
 
 补充解释：
 
 - 「节点对应的主页分类页面」= 首页 + 该节点筛选，不新开独立分类页。
-- 「4 也支持配置筛选」落地为：配置弹窗新增「筛选设置」，包含排序方式与启动时是否恢复上次筛选。
-- 排序与「恢复上次筛选」都是本机偏好，按账号区分「上次筛选」，避免多账号互相影响。
+- 「4 也支持配置筛选」落地为：排序写进每个快捷入口的节点引用，随快捷入口一起落盘；
+  从帖子 Tag 等接口引用进入的筛选没有排序偏好，按价值优先。
+- 首页筛选不再按账号落盘，也没有启动恢复逻辑。
 
 ## 3. 现状与代码位置
 
@@ -71,14 +72,14 @@
 | AI              >    |  生活 · 萌宠           132     |
 | ...                  |  ...                          |
 | ------------------------------                       |
-| 排序 [价值 | 最新]          管理快捷入口             |
+|                                   管理快捷入口       |
 +------------------------------------------------------+
 ```
 
 - 左列：`全部节点` 置顶；父分类行显示 `FolderTree` 图标与右箭头，点击只展开右列，不直接应用。
 - 右列：第一行「整个「X」」应用父分类筛选（`parent_slug`）；子节点行应用 `node_id`；选中项显示 `Check`。
 - 没有子节点的父分类是叶子，点左列直接应用父分类筛选。
-- 底部左侧 `action.Segmented` 两项「价值 / 最新」，切换后立即重载；右侧文字按钮「管理快捷入口」打开配置弹窗。
+- 底部只有文字按钮「管理快捷入口」，打开配置弹窗；排序不在这里切换，归节点快捷入口自己配置。
 - 浮层内的文案只保留必要标签，不写说明段落。
 
 #### 4.1.1 搜索
@@ -95,7 +96,7 @@
 - 没有命中时显示一行弱化文字「没有匹配的节点」，不画空列表。
 - 键盘：输入框里按 Enter 选中第一条结果；Esc 先清空查询，再按一次关闭浮层；Tab 在结果行之间移动。
 - 输入法组合期间不处理 Enter，交给输入框自己确认候选词。
-- 选中后清空查询并关闭浮层（配置弹窗里例外，见 4.4）。
+- 选中后清空查询并关闭浮层；二级添加面板也是选中即关（见 4.4）。
 
 搜索态线框：
 
@@ -108,7 +109,7 @@
 | #     生活 · 萌宠                          132       |
 | #     职场 · 生活观察                       27       |
 | ------------------------------                       |
-| 排序 [价值 | 最新]          管理快捷入口             |
+|                                   管理快捷入口       |
 +------------------------------------------------------+
 ```
 
@@ -174,43 +175,40 @@
 - 首页筛选浮层底部的「管理快捷入口」。
 - 侧边栏空态的「添加节点快捷入口」。
 
-结构（`feedback.Modal`，Title「节点快捷入口」，Width 560）：
+结构（`feedback.Modal`，Title「节点快捷入口」，Width 560）：弹窗里只放列表与
+入口，不直接画搜索框 / 开关这类表单；表单一律放到二级面板。
 
 ```
 +--------------------------------------------------+
 | 节点快捷入口                                  [x] |
-| 侧边栏显示这些节点，点击会把首页筛到该节点。      |
-| 最多 8 个。                                      |
+| 侧边栏显示这些节点，最多 8 个。行尾可单独切换排序。|
 |                                                  |
-| [::] # 生活 · 个人生活                      [x]  |
-| [::] # AI · 中转站                          [x]  |
+| [::] # 生活                          [价值]  [x]  |
+| [::] # AI · 中转站                   [最新]  [x]  |
 |                                                  |
-| 添加节点                                         |
-| [ 搜索节点… ]                                    |
-| [ 请选择节点  v ]                                |
-|                                                  |
-| 筛选设置                                         |
-| 排序方式      [ 价值 | 最新 ]                    |
-| 启动时        [ 显示全部 | 恢复上次筛选 ]        |
+| [ +  添加节点                              > ]   |
 |                                                  |
 |                            [取消]  [保存]        |
 +--------------------------------------------------+
 ```
 
+- 「添加节点」打开二级 `feedback.Drawer`（右侧滑入，Title「添加节点」，
+  Width 460）：搜索框 + 两列级联都在 drawer 里，不与弹窗内容挤在一起。
+  列表最大高度按窗口高度算（`nodeCascadeProps.ListHeight`），不再用 Popover
+  的 260 上限，避免抽屉下半截空着、节点被截成几行。
+
 - 快捷入口列表用 `layout.SortableList`：
-  - 行内：`GripVertical` 拖拽手柄、节点图标、节点名、父路径、`X` 移除。
+  - 行内：`GripVertical` 拖拽手柄、节点图标、节点名、该节点的排序小按钮、`X` 移除。
   - 键盘可用 Space 拿起、方向键移动、Esc 放回。
-- 添加节点复用同一套级联选择，但不显示「全部节点」：
-  - 同样带搜索框；搜索结果只出子节点，父分类只作分组标题。
-  - 选中即加入草稿，重复则 toast「这个节点已经在快捷入口里了」。
+  - 排序小按钮在「价值 / 最新」之间切换，只改这一行，写进该节点的 `sort` 字段。
+- 添加节点复用 `nodeCascadePicker` 这一套级联选择，但不显示「全部节点」：
+  - 搜索框与两列级联都在 Drawer 内；搜索结果只出子节点，父分类只作分组标题。
+  - 选中即加入草稿、清空搜索并关闭 Drawer，回到配置弹窗；重复则 toast「这个节点已经在快捷入口里了」。
   - 达到 8 个后 toast「最多添加 8 个快捷入口」，不再加入。
-  - 这里用 `KeepOpenOnPick: true`：选完清空搜索、留在级联里，方便连续添加；点浮层外或再点触发框收起。
-- 筛选设置：
-  - 排序方式：`action.Segmented`，价值优先 / 最新，默认价值优先。
-  - 启动时：显示全部 / 恢复上次筛选，默认显示全部。
-- 保存才写盘并刷新侧边栏；取消丢弃草稿。
-- 空态用 `display.Empty`：标题「还没有快捷入口」，描述「从下面的级联选择里添加一个节点。」
-- 节点表加载失败时，添加区显示原因与「重试」，不影响已有快捷入口的保存。
+  - 关闭按钮 / Esc / 点遮罩收起 Drawer，回到配置弹窗。
+- 保存才写盘并刷新侧边栏；取消丢弃草稿，二级面板一并关闭。
+- 空态用 `display.Empty`：标题「还没有快捷入口」，描述「点「添加节点」从节点目录里挑选。」
+- 节点表加载失败时，Drawer 内显示原因与「重试」，不影响已有快捷入口的保存。
 
 ### 4.5 交互汇总
 
@@ -227,10 +225,10 @@
 | 级联搜索框 | 输入 | 两列换成扁平结果列表 |
 | 搜索结果 | 点击 | 父分类按 `parent_slug`、子节点按 `node_id` 筛选，关闭浮层 |
 | 搜索框 Enter | 按下 | 选中第一条结果 |
-| 配置弹窗搜索选中 | 点击 | 加入草稿，清空搜索，保持浮层打开 |
-| 浮层排序 | 切换 | 立即重载，持久化为偏好 |
+| 配置弹窗搜索选中 | 点击 | 加入草稿，清空搜索，关闭 Drawer |
+| 节点行排序按钮 | 点击 | 只切这个节点的价值 / 最新，随快捷入口保存 |
 | 筛选 chip X | 点击 | 回到全部 |
-| 配置弹窗保存 | 点击 | 写入快捷入口与筛选偏好 |
+| 配置弹窗保存 | 点击 | 写入快捷入口（含各自的排序） |
 
 ## 5. 数据模型
 
@@ -245,6 +243,7 @@ type nodeRef struct {
     ParentSlug string `json:"parent_slug,omitempty"`
     Name       string `json:"name,omitempty"`
     ParentName string `json:"parent_name,omitempty"`
+    Sort       string `json:"sort,omitempty"` // 该节点自己的排序：value | latest
 }
 
 type nodeFilterKind uint8
@@ -288,7 +287,7 @@ type tabState struct {
 保持参数顺序与现有默认请求逐字节一致：
 
 ```go
-func homeQuery(f nodeFilter, sort string) string {
+func homeQuery(f nodeFilter) string {
     q := "page=1&limit=50&"
     switch f.Kind {
     case nodeFilterParent:
@@ -298,10 +297,7 @@ func homeQuery(f nodeFilter, sort string) string {
     default:
         q += "parent_slug=All"
     }
-    if sort == "" {
-        sort = "value"
-    }
-    return q + "&sort=" + url.QueryEscape(sort)
+    return q + "&sort=" + url.QueryEscape(validNodeSort(f.Ref.Sort))
 }
 ```
 
@@ -311,6 +307,7 @@ func homeQuery(f nodeFilter, sort string) string {
 page=1&limit=50&parent_slug=All&sort=value
 page=1&limit=50&parent_slug=life&sort=value
 page=1&limit=50&node_id=uuid-work&sort=value
+page=1&limit=50&node_id=uuid-work&sort=latest   // 该快捷入口自己配成「最新」
 ```
 
 第 2 页继续用现有 `endpoint` 只替换 `page`，筛选条件留在 `spec.Query` 里，不会丢。
@@ -331,7 +328,7 @@ func (a *app) specFor(idx int) tabSpec {
     spec := tabSpecs[idx]
     if spec.FilterByNode {
         st := a.tabs[idx]
-        spec.Query = homeQuery(st.filter, a.nodePrefs.Sort)
+        spec.Query = homeQuery(st.homeFilterNode)
     }
     if spec.Kind == kindNotification {
         st := a.tabs[idx]
@@ -391,32 +388,24 @@ type nodeCatalog struct {
 
 存储键：
 
-- `node.shortcuts:v1`：快捷入口 + 全局筛选偏好（本机共享）。
-- `node.lastfilter:v1:<accountID|anonymous>`：上次筛选（按账号隔离）。
+- `node.shortcuts:v1`：快捷入口（本机共享），每项自带排序。
 
 结构：
 
 ```go
-type nodeFeedPrefs struct {
-    Sort           string `json:"sort"`            // value | latest
-    RememberFilter bool   `json:"remember_filter"` // 默认 false
-}
-
 type nodeShortcutFile struct {
-    Version int         `json:"version"`
-    Items   []nodeRef   `json:"items"`
-    Prefs   nodeFeedPrefs `json:"prefs"`
-}
-
-type nodeLastFilterFile struct {
-    Filter nodeFilter `json:"filter"`
+    Version int       `json:"version"`
+    Items   []nodeRef `json:"items"` // nodeRef.Sort 为 value / latest
 }
 ```
 
-- 快捷入口只存引用信息，不存令牌、不存帖子内容。
+旧文件里的 `prefs` 与按账号存的 `node.lastfilter:v1:*` 不再读取；它们在磁盘上
+留着无妨，启动一律回默认筛选。
+
+- 快捷入口只存引用与排序，不存令牌、不存帖子内容。
 - 读取失败或版本不认识时按空列表处理，并记日志，不阻塞界面。
 - 保存时去重（按 `ID`，没有 ID 时按 `Slug`）并截断到 8 个。
-- 「恢复上次筛选」开启时，启动后第一次进入首页读取该账号的上次筛选；节点表加载后校验引用，失效则回到全部。
+- 启动时首页总是默认筛选，不读也不写上次筛选；排序随每个快捷入口的 `sort` 字段一起存。
 
 ## 6. 组件设计
 
@@ -432,8 +421,8 @@ type nodeCascadeProps struct {
     Search            *string // 搜索框绑定；空串显示两列级联
     AllowAll          bool    // 首页：显示「全部节点」
     SelectableParents bool    // 首页：父分类本身可筛；发帖窗口为 false
-    KeepOpenOnPick    bool    // 配置弹窗：选完不收起，方便连续添加
-    ShowSort          bool
+    KeepOpenOnPick    bool    // 保留：部分调用方选完不收起；配置弹窗已改用 Drawer
+    ListHeight        float32 // 二级面板按窗口高度传，Popover 用默认 260
     OnManage          func()
 }
 
@@ -445,9 +434,9 @@ func nodeCascader(c *ui.Context, nodes []composeNode, p nodeCascadeProps)
   - 空查询：两列 `display.List`，左列「全部节点」+ 父分类，右列「整个 X」+ 子节点。
   - 非空查询：单列扁平结果列表，行内带「分类 / 节点」小字与帖子数。
 - `display.List` 自带 hover、active、键盘与无障碍行为，不再手写 `ButtonBase` 行。
-- 两列与结果列表都放进 `ui.Scroll`，限高 320，窗口缩小时不撑破窗口。
-- `ShowSort` 为真时底部画排序 `action.Segmented`；`OnManage` 非空时画「管理快捷入口」。
-- 发帖窗口使用 `AllowAll: false`、`SelectableParents: false`、`ShowSort: false`，选中值仍是节点 uuid；首页使用 `AllowAll: true`、`SelectableParents: true`。
+- 两列与结果列表都放进 `ui.Scroll`，限高由 `ListHeight` 决定（Popover 默认 260，抽屉按窗口高度算），窗口缩小时不撑破窗口。
+- `OnManage` 非空时底部画「管理快捷入口」；排序不放这里，归节点快捷入口自己配。
+- 发帖窗口使用 `AllowAll: false`、`SelectableParents: false`，选中值仍是节点 uuid；首页使用 `AllowAll: true`、`SelectableParents: true`。
 - 搜索匹配由 `nodeSearch(nodes, query)` 负责，返回有序命中；组件只负责画。
 
 ```go
@@ -522,7 +511,7 @@ func (a *app) nodeEditorDialog(c *ui.Context)
 修改：
 
 - `api.go`：`tabSpec.FilterByNode`；`Item.Node`；`itemFrom` 解码节点引用。
-- `main.go`：`app` 增加 `nodeCat`、`nodePrefs`、`nodeEditor`；`specFor` 接入；页头筛选条；侧边栏分组；`dialogs` 挂弹窗。
+- `main.go`：`app` 增加 `nodeCat`、`nodeShortcuts`、`nodeEditor`；`specFor` 接入；页头筛选条；侧边栏分组；`dialogs` 挂弹窗。
 - `node_tag.go`：可点击变体。
 - `rows.go`、`detail_ui.go`、`user_card_ui.go`：Tag 传引用与回调。
 - `comments.go`：评论节点引用补字段。
@@ -533,7 +522,7 @@ func (a *app) nodeEditorDialog(c *ui.Context)
 
 ### 阶段 1：数据层
 
-- 定义 `nodeRef` / `nodeFilter` / `nodeFeedPrefs`。
+- 定义 `nodeRef`（含自己的 `sort`）/ `nodeFilter`。
 - 实现 `homeQuery` 与 `specFor`，接入 `loadFor` / `ensureLoaded` / `refreshTab`。
 - `Item` 与评论行补节点引用。
 - 验收：默认首页请求与现在完全一致；父/子筛选请求参数正确；第 2 页不丢筛选。
@@ -547,7 +536,7 @@ func (a *app) nodeEditorDialog(c *ui.Context)
 
 ### 阶段 3：首页筛选
 
-- 页头筛选 chip、级联浮层、清除按钮、排序切换。
+- 页头筛选 chip、级联浮层、清除按钮；排序不在这里。
 - `showNodeFeed` 统一处理切页、清列表、回顶、加载。
 - 验收：三种筛选都能落到正确请求；列表回顶；chip 文案正确。
 
@@ -564,9 +553,9 @@ func (a *app) nodeEditorDialog(c *ui.Context)
 
 ### 阶段 6：配置弹窗
 
-- 草稿增删、拖拽排序、去重、上限、筛选设置、保存/取消。
-- 添加区的搜索与连续添加：选完清空查询、保持浮层打开。
-- 验收：取消不写盘；保存后侧边栏立即更新；排序与记忆开关生效；搜索添加多个节点不用反复开浮层。
+- 草稿增删、拖拽排序、去重、上限、每行自己的排序切换、保存/取消。
+- 添加区的搜索：选中即清空查询并关闭 Drawer，回到配置弹窗。
+- 验收：取消不写盘；保存后侧边栏立即更新；排序只改对应节点；搜索添加后直接回到弹窗。
 
 ### 阶段 7：回归与打磨
 
@@ -602,13 +591,16 @@ func (a *app) nodeEditorDialog(c *ui.Context)
 - `TestFilterSearchSwitchesToResults`：输入后两列消失、结果列表出现，清空后恢复。
 - `TestFilterSearchEnterSelectsFirst`：搜索框回车选中第一条，请求参数正确。
 - `TestFilterSearchSelectParentAndChild`：结果里点父分类与子节点分别走 `parent_slug` / `node_id`。
-- `TestSidebarShortcutClick`：快捷行点击后首页筛选正确，高亮正确。
+- `TestSidebarShortcutClick`：快捷行点击后首页筛选正确，请求带上该节点自己的排序。
 - `TestSidebarShortcutRailMenu`：折叠态菜单列出快捷入口。
 - `TestNodeEditorAddRemoveReorder`：添加、移除、拖拽排序都写进草稿。
 - `TestNodeEditorCancelDiscards`：取消后侧边栏不变。
 - `TestNodeEditorLimitAndDuplicate`：第 9 个与重复项被拒绝并提示。
-- `TestNodeEditorSearchAddsMultiple`：搜索选中后加入草稿、清空查询、浮层保持打开。
-- `TestNodePrefsSortAndRemember`：切「最新」后请求变 `sort=latest`；打开记忆后重启恢复。
+- `TestNodeEditorSearchAddsAndCloses`：搜索选中后加入草稿、清空查询并关闭 Drawer。
+- `TestNodeEditorPerNodeSort`：节点行的小按钮只切自己，不出现全局排序开关。
+- `TestShortcutStorePersistAndCap`：排序随快捷入口落盘，重启后还在。
+- `TestStartupHomeFilterIsDefault`：启动不恢复上次筛选。
+- `TestFilterPopoverHasNoGlobalSort`：首页筛选浮层没有排序开关，默认价值优先。
 
 ### 回归
 
@@ -623,7 +615,7 @@ func (a *app) nodeEditorDialog(c *ui.Context)
 3. 侧边栏快捷入口：点击即筛选；当前项高亮；重启后仍在；最多 8 个。
 4. 级联选择：全部 / 父分类 / 子节点三种都可用；父分类叶子可直接选；第 2 页不丢筛选。
 5. 搜索：节点名、父名、slug 都能命中；父分类与子节点结果分别走 `parent_slug` / `node_id`；Enter 选第一条；发帖窗口只出子节点；无结果有提示；清空后回到级联。
-6. 配置弹窗：增删、排序、去重、上限、取消、保存都符合预期；排序与「恢复上次筛选」生效；搜索添加多个节点不用反复开浮层。
+6. 配置弹窗：增删、每行排序切换、去重、上限、取消、保存都符合预期；启动时首页回默认，不恢复上次筛选；搜索添加后直接回到弹窗。
 7. 视觉：全部使用 Lobe 组件与 token；不出现手写行样式；窄窗口与折叠侧边栏不溢出。
 8. 质量：`go test ./...`、`go tool mygo vet .`、`gofmt -l .` 全部通过。
 
@@ -640,13 +632,12 @@ func (a *app) nodeEditorDialog(c *ui.Context)
 | 中文输入法回车误选 | 组合期间不处理 Enter；只在输入框 `Submitted()` 且非组合态时选第一条 |
 | 搜索结果随节点表刷新失效 | 每帧从当前 query 重算，不缓存命中列表；关闭浮层时清空 query |
 | 筛选与分页错位 | 筛选只改 `spec.Query`，第 2 页由现有 `endpoint` 替换 `page` |
-| 多账号偏好串味 | 快捷入口本机共享；上次筛选按账号键隔离 |
 | 持久化文件损坏 | 读取失败按空处理并记日志；保存前做结构校验 |
 
 ## 12. 本次不做
 
 - 不做独立节点主页 / 节点详情页，只做首页筛选。
 - 不做服务端节点搜索，也不做拼音首字母；只在本机已缓存的节点表内匹配。
-- 不做每个快捷入口独立的排序或筛选规则，排序是全局偏好。
+- 不做每个快捷入口独立的筛选规则；排序可以独立配置，跟随节点一起存。
 - 不改首页默认排序语义；默认仍是价值优先。
 - 不新增 API 端点，不新增网络出口。

@@ -16,19 +16,24 @@ import (
 /* ---------------- 数据层 ---------------- */
 
 func TestHomeQueryDefaultUnchanged(t *testing.T) {
-	if got, want := homeQuery(allNodes(), ""), "page=1&limit=50&parent_slug=All&sort=value"; got != want {
+	if got, want := homeQuery(allNodes()), "page=1&limit=50&parent_slug=All&sort=value"; got != want {
 		t.Fatalf("默认 query = %q，期望 %q", got, want)
 	}
 }
 
 func TestHomeQueryParentAndNode(t *testing.T) {
-	if got, want := homeQuery(parentFilter(nodeRef{Slug: "life"}), ""),
+	if got, want := homeQuery(parentFilter(nodeRef{Slug: "life"})),
 		"page=1&limit=50&parent_slug=life&sort=value"; got != want {
 		t.Errorf("父分类 query = %q，期望 %q", got, want)
 	}
-	if got, want := homeQuery(nodeFilterOf(nodeRef{ID: "uuid-work"}), "latest"),
+	if got, want := homeQuery(nodeFilterOf(nodeRef{ID: "uuid-work", Sort: nodeSortLatest})),
 		"page=1&limit=50&node_id=uuid-work&sort=latest"; got != want {
 		t.Errorf("子节点 query = %q，期望 %q", got, want)
+	}
+	// 脏数据兜回价值优先，不会把 sort= 拼成空串。
+	if got, want := homeQuery(nodeFilterOf(nodeRef{ID: "uuid-work", Sort: "bad"})),
+		"page=1&limit=50&node_id=uuid-work&sort=value"; got != want {
+		t.Errorf("非法排序 query = %q，期望 %q", got, want)
 	}
 }
 
@@ -73,9 +78,12 @@ func TestResolveNodeRefBySlug(t *testing.T) {
 		{ID: "n1", Slug: "life", Name: "生活"},
 		{ID: "n2", Slug: "work", Name: "职场", ParentSlug: "life", ParentName: "生活"},
 	}
-	got := a.resolveNodeRef(nodeRef{Slug: "work", ParentSlug: "life"})
+	got := a.resolveNodeRef(nodeRef{Slug: "work", ParentSlug: "life", Sort: nodeSortLatest})
 	if got.ID != "n2" || got.ParentName != "生活" {
 		t.Fatalf("按 slug 补 id / 父名失败：%+v", got)
+	}
+	if got.Sort != nodeSortLatest {
+		t.Errorf("补 id 时把节点自己的排序丢了：%+v", got)
 	}
 }
 
@@ -162,8 +170,8 @@ func TestShortcutStorePersistAndCap(t *testing.T) {
 		items = append(items, nodeRef{ID: "n" + string(rune('a'+i)), Slug: "s", Name: "节点"})
 	}
 	items = append(items, items[0]) // 重复项
+	items[0].Sort = nodeSortLatest  // 排序跟着自己的节点落盘
 	a.nodeShortcuts = items
-	a.nodePrefs = &nodeFeedPrefs{Sort: nodeSortLatest, RememberFilter: true}
 	a.saveNodeShortcuts()
 
 	second := newApp(dir)
@@ -171,8 +179,8 @@ func TestShortcutStorePersistAndCap(t *testing.T) {
 	if len(second.nodeShortcuts) != nodeShortcutMax {
 		t.Fatalf("快捷入口数 = %d，期望 %d", len(second.nodeShortcuts), nodeShortcutMax)
 	}
-	if second.nodePrefs.Sort != nodeSortLatest || !second.nodePrefs.RememberFilter {
-		t.Errorf("偏好没有持久化：%+v", second.nodePrefs)
+	if second.nodeShortcuts[0].Sort != nodeSortLatest {
+		t.Errorf("节点的排序没持久化：%+v", second.nodeShortcuts[0])
 	}
 	seen := map[string]bool{}
 	for _, r := range second.nodeShortcuts {
@@ -183,25 +191,19 @@ func TestShortcutStorePersistAndCap(t *testing.T) {
 	}
 }
 
-func TestLastFilterPerAccount(t *testing.T) {
+// 启动时首页总是默认筛选：不再按账号恢复上次筛选。
+func TestStartupHomeFilterIsDefault(t *testing.T) {
 	dir := t.TempDir()
 	first := newApp(dir)
 	first.accountID = "alice"
-	first.nodePrefs = &nodeFeedPrefs{RememberFilter: true, Sort: nodeSortValue}
-	first.saveLastFilter(nodeFilterOf(nodeRef{ID: "a1", Name: "甲"}))
+	first.tabs[0].homeFilterNode = nodeFilterOf(nodeRef{ID: "a1", Name: "甲"})
 	first.saveNodeShortcuts()
 
 	second := newApp(dir)
-	second.accountID = "bob"
-	second.nodePrefs = &nodeFeedPrefs{RememberFilter: true, Sort: nodeSortValue}
-	second.loadNodePrefs()
-	if !second.homeFilter().isAll() {
-		t.Errorf("别的账号不该看到甲的筛选：%+v", second.homeFilter())
-	}
 	second.accountID = "alice"
 	second.loadNodePrefs()
-	if got := second.homeFilter(); got.Ref.ID != "a1" {
-		t.Errorf("自己的上次筛选没恢复：%+v", got)
+	if !second.homeFilter().isAll() {
+		t.Errorf("启动时不该恢复上次筛选：%+v", second.homeFilter())
 	}
 }
 
@@ -358,7 +360,7 @@ func TestFilterSearchSwitchesToResults(t *testing.T) {
 func TestSidebarShortcutClick(t *testing.T) {
 	e := newNodeFeedEnv(t)
 	a := nodeFeedApp(t, e)
-	a.nodeShortcuts = []nodeRef{{ID: "n-work", Slug: "work", Name: "职场", ParentSlug: "life", ParentName: "生活"}}
+	a.nodeShortcuts = []nodeRef{{ID: "n-work", Slug: "work", Name: "职场", ParentSlug: "life", ParentName: "生活", Sort: nodeSortLatest}}
 	a.navExpanded = true
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
@@ -366,6 +368,7 @@ func TestSidebarShortcutClick(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitQuery(t, e, "node_id=n-work")
+	waitQuery(t, e, "sort=latest")
 	if a.tabs[0].homeFilterNode.Ref.ID != "n-work" {
 		t.Errorf("快捷入口没有筛到节点：%+v", a.tabs[0].homeFilterNode)
 	}

@@ -1224,3 +1224,283 @@ func TestNativeNoticeNamesAccountOnlyWhenMultiAccount(t *testing.T) {
 		t.Errorf("通知标题 = %q", notice.Title)
 	}
 }
+
+/* ------------------------------------------------------------------
+   通知快捷回复
+----------------------------------------------------------------- */
+
+// 快捷回复要按消息类型与 commentLevel 组装父评论与写层级：reply 的
+// commentLevel 是被回复对象的层级，mention 的是被提及评论本身的层级。
+func TestNotificationQuickReplyTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		raw     string
+		ok      bool
+		shortID string
+		target  replyTarget
+	}{
+		{
+			name:    "回复帖子下的一级回复",
+			raw:     `{"id":"n1","type":"reply","payload":{"postShortId":"abc12345","commentId":"c1","commentLevel":0}}`,
+			ok:      true,
+			shortID: "abc12345",
+			target:  replyTarget{ID: "c1", Level: 1},
+		},
+		{
+			name:    "回复你的评论",
+			raw:     `{"id":"n1","type":"reply","payload":{"postShortId":"abc12345","commentId":"c1","commentLevel":1}}`,
+			ok:      true,
+			shortID: "abc12345",
+			target:  replyTarget{ID: "c1", Level: 2},
+		},
+		{
+			name: "三级评论缺父评论时不给快捷回复",
+			raw:  `{"id":"n1","type":"reply","payload":{"postShortId":"abc12345","commentId":"c1","commentLevel":2}}`,
+		},
+		{
+			name:    "三级评论带父评论",
+			raw:     `{"id":"n1","type":"reply_mention","payload":{"postShortId":"abc12345","commentId":"c1","commentLevel":2,"parentCommentId":"p1"}}`,
+			ok:      true,
+			shortID: "abc12345",
+			target:  replyTarget{ID: "c1", Level: 3, ParentID: "p1"},
+		},
+		{
+			name:    "回复附言时发顶层评论",
+			raw:     `{"id":"n1","type":"reply","payload":{"postShortId":"abc12345","target":"postscript"}}`,
+			ok:      true,
+			shortID: "abc12345",
+		},
+		{
+			name:    "帖子里提及",
+			raw:     `{"id":"n1","type":"mention","payload":{"postShortId":"abc12345","commentLevel":0}}`,
+			ok:      true,
+			shortID: "abc12345",
+		},
+		{
+			name:    "评论里提及",
+			raw:     `{"id":"n1","type":"mention","payload":{"postShortId":"abc12345","commentId":"c2","commentLevel":2}}`,
+			ok:      true,
+			shortID: "abc12345",
+			target:  replyTarget{ID: "c2", Level: 2},
+		},
+		{
+			name:    "path 里带帖子定位",
+			raw:     `{"id":"n1","type":"mention","payload":{"path":"/post/social/ABC12345?commentId=c3","commentId":"c3","commentLevel":1}}`,
+			ok:      true,
+			shortID: "ABC12345",
+			target:  replyTarget{ID: "c3", Level: 1},
+		},
+		{
+			name: "表态不可回复",
+			raw:  `{"id":"n1","type":"reaction","payload":{"postShortId":"abc12345"}}`,
+		},
+		{
+			name: "缺帖子定位",
+			raw:  `{"id":"n1","type":"reply","payload":{"commentId":"c1","commentLevel":1}}`,
+		},
+		{
+			name: "说是评论回复但缺评论 id",
+			raw:  `{"id":"n1","type":"reply","payload":{"postShortId":"abc12345","commentLevel":1}}`,
+		},
+		{
+			name: "说是评论提及但缺评论 id",
+			raw:  `{"id":"n1","type":"mention","payload":{"postShortId":"abc12345","commentLevel":2}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := decodeNotificationObject(mustObject(t, tc.raw))
+			if n == nil {
+				t.Fatal("消息解码失败")
+			}
+			v := notificationViewOf(n)
+			if v.CanReply != tc.ok {
+				t.Fatalf("CanReply = %v，期望 %v", v.CanReply, tc.ok)
+			}
+			if !tc.ok {
+				return
+			}
+			if v.ReplyShortID != tc.shortID || v.ReplyTarget != tc.target {
+				t.Errorf("快捷回复目标 = %q / %+v，期望 %q / %+v",
+					v.ReplyShortID, v.ReplyTarget, tc.shortID, tc.target)
+			}
+		})
+	}
+}
+
+// 快捷回复的完整链路：在消息卡片里展开输入框、打字、发送，请求必须带
+// replyCommentId 与显式 level；成功后收起输入框、清空草稿并提示结果。
+func TestNotificationQuickReplyPostsComment(t *testing.T) {
+	var mu sync.Mutex
+	var path, body, key string
+	posted := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/replies"):
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			path, body, key = r.URL.Path, string(b), r.Header.Get("Idempotency-Key")
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprint(w, envelopeJSON(`{"id":"r1","content":"收到","author":{"username":"jimmy"}}`))
+			posted <- struct{}{}
+		case strings.HasSuffix(r.URL.Path, "/notifications/read"):
+			_, _ = fmt.Fprint(w, envelopeJSON(`{"ok":true}`))
+		default:
+			t.Errorf("快捷回复发出了意外请求：%s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	a := newApp(t.TempDir())
+	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	a.autoLoad = true
+	a.client = &Client{HTTP: srv.Client(), Base: srv.URL + "/api", Auth: a.auth}
+	a.unreadLoading = true
+	st := a.tabs[notificationTabIndex()]
+	st.loaded = true
+	st.total, st.totalPages, st.page = 1, 1, 1
+	st.items = []Item{{Key: "n1", Notif: &notification{
+		ID: "n1", Type: "reply", IsRead: false,
+		FromUser: mustObject(t, `{"username":"alice"}`),
+		Payload: mustObject(t, `{"postShortId":"abc12345","commentId":"c1",
+			"commentLevel":1,"commentText":"说得对","postTitle":"一条帖子"}`),
+	}}}
+
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	a.pageName = "list"
+	if err := tt.Click("快捷回复"); err != nil {
+		t.Fatalf("找不到快捷回复入口：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if a.pageName != "list" {
+		t.Errorf("点快捷回复不该打开帖子：%q", a.pageName)
+	}
+	if !tt.HasText("快捷回复内容") {
+		t.Fatalf("快捷回复输入框没有展开：%q", tt.Texts())
+	}
+	if err := tt.Click("快捷回复内容"); err != nil {
+		t.Fatalf("点输入框失败：%v", err)
+	}
+	tt.Type("收到")
+	tt.Frame()
+	if err := tt.Click("发送"); err != nil {
+		t.Fatalf("点发送失败：%v（%q）", err, tt.Texts())
+	}
+
+	select {
+	case <-posted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("快捷回复请求超时")
+	}
+	waitFor(t, func() bool { return !st.quickReplyPosting }, "快捷回复没有收尾")
+
+	mu.Lock()
+	gotPath, gotBody, gotKey := path, body, key
+	mu.Unlock()
+	if gotPath != "/api/v1/topics/abc12345/replies" {
+		t.Errorf("发评论路径 = %q", gotPath)
+	}
+	if gotKey == "" {
+		t.Error("快捷回复缺少 Idempotency-Key")
+	}
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(gotBody), &sent); err != nil {
+		t.Fatalf("请求体不是 JSON：%s", gotBody)
+	}
+	if sent["content"] != "收到" || sent["replyCommentId"] != "c1" ||
+		sent["parentId"] != "c1" || sent["level"] != float64(2) {
+		t.Errorf("快捷回复请求体不对：%s", gotBody)
+	}
+	if st.quickReplyOpen != "" || st.quickReplyDraft != "" {
+		t.Errorf("发送成功后没有收起输入框：open=%q draft=%q", st.quickReplyOpen, st.quickReplyDraft)
+	}
+	waitFor(t, func() bool { return st.items[0].Notif.IsRead }, "回复成功后没有把消息标为已读")
+	tt.Frame()
+	if !tt.HasText("已回复 @alice") {
+		t.Errorf("没有提示回复结果：%q", tt.Texts())
+	}
+}
+
+// 发送失败时保留草稿与输入框：用户不必重新打一遍。
+func TestNotificationQuickReplyKeepsDraftOnFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprint(w, `{"c":500,"code":"server_error","m":"服务端错误","d":null}`)
+	}))
+	defer srv.Close()
+
+	a := newApp(t.TempDir())
+	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	a.autoLoad = true
+	a.client = &Client{HTTP: srv.Client(), Base: srv.URL + "/api", Auth: a.auth}
+	a.unreadLoading = true
+	st := a.tabs[notificationTabIndex()]
+	st.loaded = true
+	st.total, st.totalPages, st.page = 1, 1, 1
+	st.items = []Item{{Key: "n1", Notif: &notification{
+		ID: "n1", Type: "reply", IsRead: false,
+		FromUser: mustObject(t, `{"username":"alice"}`),
+		Payload:  mustObject(t, `{"postShortId":"abc12345","commentId":"c1","commentLevel":1}`),
+	}}}
+
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	if err := tt.Click("快捷回复"); err != nil {
+		t.Fatalf("找不到快捷回复入口：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if err := tt.Click("快捷回复内容"); err != nil {
+		t.Fatalf("点输入框失败：%v", err)
+	}
+	tt.Type("没发出去的回复")
+	tt.Frame()
+	if err := tt.Click("发送"); err != nil {
+		t.Fatalf("点发送失败：%v（%q）", err, tt.Texts())
+	}
+	waitFor(t, func() bool { return !st.quickReplyPosting }, "快捷回复没有收尾")
+
+	if st.quickReplyOpen != "n1" || st.quickReplyDraft != "没发出去的回复" {
+		t.Errorf("失败后草稿/输入框没有保留：open=%q draft=%q",
+			st.quickReplyOpen, st.quickReplyDraft)
+	}
+	tt.Frame()
+	if !tt.HasText("回复失败") {
+		t.Errorf("没有报告失败原因：%q", tt.Texts())
+	}
+}
+
+// 只有未读消息才提供快捷回复：已读消息已经看过，卡片头不再出现入口。
+func TestNotificationQuickReplyOnlyForUnread(t *testing.T) {
+	a := newApp(t.TempDir())
+	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	a.unreadLoading = true
+	st := a.tabs[notificationTabIndex()]
+	st.loaded = true
+	st.total, st.totalPages, st.page = 1, 1, 1
+	st.items = []Item{{Key: "n1", Notif: &notification{
+		ID: "n1", Type: "reply", IsRead: true,
+		FromUser: mustObject(t, `{"username":"alice"}`),
+		Payload:  mustObject(t, `{"postShortId":"abc12345","commentId":"c1","commentLevel":1}`),
+	}}}
+
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	if tt.HasText("快捷回复") {
+		t.Fatalf("已读消息不该提供快捷回复：%q", tt.Texts())
+	}
+
+	st.items[0].Notif.IsRead = false
+	tt.Frame()
+	if !tt.HasText("快捷回复") {
+		t.Errorf("未读消息应提供快捷回复：%q", tt.Texts())
+	}
+}

@@ -14,37 +14,25 @@ import (
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 首页节点筛选的本机偏好与侧边栏快捷入口。
+// 首页节点筛选的侧边栏快捷入口。
 //
-// 快捷入口与筛选偏好是本机共享的；「上次筛选」按账号键落盘，多账号不会
-// 互相覆盖。全部落在 localKV 的离线缓存文件里，不新增独立文件，也不发请求。
+// 每个快捷入口自带排序偏好（价值优先 / 最新），随快捷入口一起落盘在 localKV
+// 的离线缓存文件里；不新增独立文件，也不发请求。启动时首页总是默认筛选，
+// 不恢复上次的节点。
 
 const (
 	nodeShortcutKey    = "node.shortcuts:v1"
-	nodeLastFilterKey  = "node.lastfilter:v1:"
 	nodeShortcutMax    = 8
 	nodeSortValue      = "value"
 	nodeSortLatest     = "latest"
-	nodeRememberOff    = 0
-	nodeRememberOn     = 1
 	nodeShortcutKeyTag = "shortcut:"
 )
 
-// nodeFeedPrefs 是首页筛选的两个偏好：排序方式与是否在启动时恢复上次筛选。
-type nodeFeedPrefs struct {
-	Sort           string `json:"sort"`
-	RememberFilter bool   `json:"remember_filter"`
-}
-
 // nodeShortcutFile 是落盘结构。Version 不认识时按空处理，不阻塞界面。
+// 老版本写入的 prefs 会被忽略：排序已归到每个快捷入口自己身上。
 type nodeShortcutFile struct {
-	Version int           `json:"version"`
-	Items   []nodeRef     `json:"items"`
-	Prefs   nodeFeedPrefs `json:"prefs"`
-}
-
-type nodeLastFilterFile struct {
-	Filter nodeFilter `json:"filter"`
+	Version int       `json:"version"`
+	Items   []nodeRef `json:"items"`
 }
 
 // validNodeSort 把旧数据 / 损坏数据兜回默认的价值优先。
@@ -53,6 +41,22 @@ func validNodeSort(s string) string {
 		return nodeSortLatest
 	}
 	return nodeSortValue
+}
+
+// nodeSortLabel 是快捷入口上显示的当前排序。
+func nodeSortLabel(s string) string {
+	if validNodeSort(s) == nodeSortLatest {
+		return "最新"
+	}
+	return "价值"
+}
+
+// toggleNodeSort 在价值优先与最新之间切换。
+func toggleNodeSort(s string) string {
+	if validNodeSort(s) == nodeSortLatest {
+		return nodeSortValue
+	}
+	return nodeSortLatest
 }
 
 // normalizeNodeRefs 去重、丢掉空引用并截断到 8 个，保存与读取都走这里。
@@ -65,6 +69,7 @@ func normalizeNodeRefs(items []nodeRef) []nodeRef {
 			continue
 		}
 		seen[key] = true
+		r.Sort = validNodeSort(r.Sort)
 		out = append(out, r)
 		if len(out) >= nodeShortcutMax {
 			break
@@ -73,60 +78,26 @@ func normalizeNodeRefs(items []nodeRef) []nodeRef {
 	return out
 }
 
-func (a *app) lastFilterKey() string {
-	id := a.accountID
-	if id == "" {
-		id = "anonymous"
-	}
-	return nodeLastFilterKey + id
-}
-
-// loadNodePrefs 在启动时读一次偏好与快捷入口；文件不存在或损坏都按空处理。
+// loadNodePrefs 在启动时读一次快捷入口；文件不存在或损坏都按空处理。
 func (a *app) loadNodePrefs() {
-	a.nodePrefs = &nodeFeedPrefs{Sort: nodeSortValue}
 	if a.kv == nil {
 		return
 	}
 	var f nodeShortcutFile
 	if _, ok := a.kv.get(nodeShortcutKey, &f); ok && f.Version == 1 {
 		a.nodeShortcuts = normalizeNodeRefs(f.Items)
-		a.nodePrefs.Sort = validNodeSort(f.Prefs.Sort)
-		a.nodePrefs.RememberFilter = f.Prefs.RememberFilter
-	}
-	if !a.nodePrefs.RememberFilter || len(a.tabs) == 0 || a.tabs[0] == nil {
-		return
-	}
-	var last nodeLastFilterFile
-	if _, ok := a.kv.get(a.lastFilterKey(), &last); ok {
-		a.nodeLastFilter = last.Filter
-		a.tabs[0].homeFilterNode = last.Filter
 	}
 }
 
-// saveNodeShortcuts 写快捷入口与首选项；写不进去只记日志，不影响界面。
+// saveNodeShortcuts 写快捷入口；写不进去只记日志，不影响界面。
 func (a *app) saveNodeShortcuts() {
 	if a.kv == nil {
 		return
 	}
 	a.nodeShortcuts = normalizeNodeRefs(a.nodeShortcuts)
-	if a.nodePrefs == nil {
-		a.nodePrefs = &nodeFeedPrefs{Sort: nodeSortValue}
-	}
-	f := nodeShortcutFile{Version: 1, Items: a.nodeShortcuts, Prefs: *a.nodePrefs}
+	f := nodeShortcutFile{Version: 1, Items: a.nodeShortcuts}
 	if err := a.kv.put(nodeShortcutKey, f, time.Time{}); err != nil {
 		log.Printf("节点快捷入口写入失败：%v", err)
-	}
-}
-
-// saveLastFilter 只在「启动时恢复上次筛选」打开时记录；关掉后不再写盘，
-// 但旧记录留着也无妨——下次打开开关时它仍可用。
-func (a *app) saveLastFilter(f nodeFilter) {
-	if a.nodePrefs == nil || !a.nodePrefs.RememberFilter || a.kv == nil {
-		return
-	}
-	a.nodeLastFilter = f
-	if err := a.kv.put(a.lastFilterKey(), nodeLastFilterFile{Filter: f}, time.Time{}); err != nil {
-		log.Printf("节点上次筛选写入失败：%v", err)
 	}
 }
 
@@ -256,10 +227,8 @@ type nodeEditor struct {
 	draft      []nodeRef
 	search     string
 	pick       nodeFilter
-	pickOpen   bool
+	pickerOpen bool // 二级添加面板（Drawer）
 	activeRoot string
-	sort       int
-	remember   int
 }
 
 // openNodeEditor 从任何入口打开节点配置弹窗：先把持久值复制到草稿，再拉起
@@ -270,16 +239,9 @@ func (a *app) openNodeEditor() {
 
 func (a *app) openNodeEditorOnMain() {
 	a.nodeEditor = nodeEditor{
-		open:     true,
-		draft:    append([]nodeRef(nil), a.nodeShortcuts...),
-		pick:     allNodes(),
-		sort:     sortIndex(a.nodePrefs.Sort),
-		remember: nodeRememberOff,
-	}
-	if a.nodePrefs == nil || !a.nodePrefs.RememberFilter {
-		a.nodeEditor.remember = nodeRememberOff
-	} else {
-		a.nodeEditor.remember = nodeRememberOn
+		open:  true,
+		draft: append([]nodeRef(nil), a.nodeShortcuts...),
+		pick:  allNodes(),
 	}
 	a.ensureNodeCatalog()
 	if a.win != nil {
@@ -288,39 +250,11 @@ func (a *app) openNodeEditorOnMain() {
 	}
 }
 
-func sortIndex(sort string) int {
-	if validNodeSort(sort) == nodeSortLatest {
-		return 1
-	}
-	return 0
-}
-
-func sortName(i int) string {
-	if i == 1 {
-		return nodeSortLatest
-	}
-	return nodeSortValue
-}
-
 // saveNodeEditor 把草稿写盘并刷新侧边栏。取消 / 关闭弹窗不会走到这里。
 func (a *app) saveNodeEditor() {
 	st := &a.nodeEditor
 	a.nodeShortcuts = normalizeNodeRefs(st.draft)
-	if a.nodePrefs == nil {
-		a.nodePrefs = &nodeFeedPrefs{}
-	}
-	a.nodePrefs.Sort = validNodeSort(sortName(st.sort))
-	a.nodePrefs.RememberFilter = st.remember == nodeRememberOn
-	if !a.nodePrefs.RememberFilter {
-		// 关掉「恢复上次筛选」时把首页放回全部，避免界面还留着上次的条件。
-		if len(a.tabs) > 0 && a.tabs[0] != nil {
-			a.tabs[0].homeFilterNode = allNodes()
-		}
-	}
 	a.saveNodeShortcuts()
-	if a.nodePrefs.RememberFilter && len(a.tabs) > 0 && a.tabs[0] != nil {
-		a.saveLastFilter(a.tabs[0].homeFilterNode)
-	}
 	st.open = false
 }
 
@@ -340,15 +274,22 @@ func (a *app) nodeEditorDialog(c *ui.Context) {
 	if ok {
 		a.saveNodeEditor()
 	}
+	// 二级面板画在弹窗之后：添加节点的 Drawer 覆盖在配置弹窗之上，关掉它
+	// 仍回到弹窗。弹窗被取消 / 保存时一并把二级状态清掉。
+	if !st.open {
+		st.pickerOpen = false
+		return
+	}
+	a.nodeEditorPicker(c, st)
 }
 
 func (a *app) nodeEditorContent(c *ui.Context, st *nodeEditor) {
-	display.Text(c, "侧边栏显示这些节点，点击会把首页筛到该节点。最多 8 个。",
+	display.Text(c, "侧边栏显示这些节点，点击会把首页筛到该节点。最多 8 个。行尾可单独切换该节点的排序。",
 		display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 2})
 	ui.Column(c).FillWidth().Gap(10).Children(func() {
 		if len(st.draft) == 0 {
 			display.Empty(c, display.EmptyProps{
-				Title: "还没有快捷入口", Description: "从下面的节点选择里添加一个节点。",
+				Title: "还没有快捷入口", Description: "点「添加节点」从节点目录里挑选。",
 			})
 		} else {
 			layout.SortableList(c, &st.draft, func(r nodeRef) string { return r.key() },
@@ -357,6 +298,17 @@ func (a *app) nodeEditorContent(c *ui.Context, st *nodeEditor) {
 						handle()
 						ui.Icon(c, nodeRefIcon(r)).FontSize(14)
 						ui.Text(c, r.label()).FontSize(12).Grow(1).SingleLine()
+						// 排序跟着节点走：点一下在当前节点的价值 / 最新之间切换。
+						sortBtn := action.StyleButton(c, ui.ButtonBase(c), "", action.ButtonProps{
+							Variant: action.Text, Size: lobetheme.Small,
+						})
+						sortBtn.Label("切换排序：" + r.label())
+						sortBtn.Children(func() {
+							ui.Text(c, nodeSortLabel(r.Sort)).FontSize(11)
+						})
+						if sortBtn.Clicked() {
+							a.toggleShortcutSort(st, r)
+						}
 						x := action.StyleActionIcon(c, ui.ButtonBase(c), lucide.X(), action.ActionIconProps{
 							GlyphSize: 13,
 						})
@@ -368,8 +320,39 @@ func (a *app) nodeEditorContent(c *ui.Context, st *nodeEditor) {
 				})
 		}
 
+		// 弹窗里只放添加入口：节点表放在二级 Drawer，排序在每个节点行上。
 		ui.Box(c).Height(1).FillWidth().Background(c.Theme().Border)
-		display.Text(c, "添加节点", display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 1})
+		add := action.StyleButton(c, ui.ButtonBase(c), "", action.ButtonProps{Variant: action.Filled})
+		add.FillWidth()
+		add.Children(func() {
+			ui.Icon(c, lucide.Plus()).FontSize(14)
+			ui.Text(c, "添加节点").FontSize(13).Grow(1)
+			ui.Icon(c, lucide.ChevronRight()).FontSize(13).TextColor(c.Theme().TextMuted)
+		})
+		if add.Clicked() {
+			st.search = ""
+			st.pickerOpen = true
+			a.ensureNodeCatalog()
+		}
+	})
+}
+
+// toggleShortcutSort 切换某一项快捷入口自己的排序，不动其它节点。
+func (a *app) toggleShortcutSort(st *nodeEditor, r nodeRef) {
+	for i := range st.draft {
+		if st.draft[i].key() == r.key() {
+			st.draft[i].Sort = toggleNodeSort(st.draft[i].Sort)
+			return
+		}
+	}
+}
+
+// nodeEditorPicker 是「添加节点」的二级面板：右侧 Drawer 从窗口边缘滑入，
+// 选中节点即写入草稿并关闭面板，回到配置弹窗。弹窗里的表单只留入口。
+func (a *app) nodeEditorPicker(c *ui.Context, st *nodeEditor) {
+	feedback.Drawer(c, &st.pickerOpen, feedback.DrawerProps{
+		Placement: feedback.Right, Title: "添加节点", Size: 460,
+	}, func() {
 		a.ensureNodeCatalog()
 		if a.nodeCat.err != "" {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -379,34 +362,26 @@ func (a *app) nodeEditorContent(c *ui.Context, st *nodeEditor) {
 					a.retryNodeCatalog()
 				}
 			})
-		} else if len(a.nodeCatalogNodes()) == 0 {
-			ui.Text(c, "正在读取节点…").FontSize(12).TextColor(c.Theme().TextMuted)
-		} else {
-			nodeCascader(c, a.nodeCatalogNodes(), nodeCascadeProps{
-				Label: "选择节点", Value: &st.pick, Open: &st.pickOpen,
-				ActiveRoot: &st.activeRoot, Search: &st.search,
-				KeepOpenOnPick: true,
-				OnPick: func(f nodeFilter) {
-					a.addNodeShortcut(st, f.Ref)
-					st.pick = allNodes()
-				},
-			})
+			return
 		}
-
-		ui.Box(c).Height(1).FillWidth().Background(c.Theme().Border)
-		display.Text(c, "筛选设置", display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 1})
-		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(12).Children(func() {
-			ui.Text(c, "排序方式").FontSize(12).Grow(1)
-			sortSel := st.sort
-			action.Segmented(c, &sortSel, []string{"价值优先", "最新"}, action.SegmentedProps{Size: lobetheme.Small})
-			st.sort = sortSel
-		})
-		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(12).Children(func() {
-			ui.Text(c, "启动时").FontSize(12).Grow(1)
-			remember := st.remember
-			action.Segmented(c, &remember, []string{"显示全部", "恢复上次筛选"}, action.SegmentedProps{Size: lobetheme.Small})
-			st.remember = remember
-		})
+		if len(a.nodeCatalogNodes()) == 0 {
+			ui.Text(c, "正在读取节点…").FontSize(12).TextColor(c.Theme().TextMuted)
+			return
+		}
+		// Drawer 里按窗口高度铺满列表：抽屉头部、内边距与搜索框约留 120。
+		listH := c.Root().LayoutBounds().H - 120
+		if listH < 260 {
+			listH = 260
+		}
+		nodeCascadePicker(c, a.nodeCatalogNodes(), nodeCascadeProps{
+			Value: &st.pick, Search: &st.search, ActiveRoot: &st.activeRoot,
+			SelectableParents: true, ListHeight: listH,
+		}, func(f nodeFilter) {
+			a.addNodeShortcut(st, f.Ref)
+			st.search = ""
+			st.pick = allNodes()
+			st.pickerOpen = false
+		}, func() {}, 0, func() { st.pickerOpen = false })
 	})
 }
 

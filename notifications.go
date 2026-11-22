@@ -295,6 +295,12 @@ type notificationView struct {
 	Detail       string
 	DetailTone   string
 	Meta         []string
+	// ReplyShortID / ReplyTarget 是「在消息中心直接回复」需要的帖子与父评论。
+	// CanReply 为假时（不可回复的类型、缺帖子定位、或三级评论缺挂载点）不展示
+	// 快捷回复。
+	CanReply     bool
+	ReplyShortID string
+	ReplyTarget  replyTarget
 	// Reaction 是表态消息合并后的视图：表情合到一行、点名的人去重后只写一次。
 	// 非表态消息是零值（Groups 为空）。
 	Reaction notificationReactionOverview
@@ -402,6 +408,7 @@ func notificationViewOf(n *notification) notificationView {
 	v.Excerpt = notificationExcerpt(kind, payload)
 	v.Detail, v.DetailTone = notificationDetail(kind, payload)
 	v.Meta = notificationMeta(kind, payload)
+	v.ReplyShortID, v.ReplyTarget, v.CanReply = notificationQuickReplyTarget(n, payload, kind)
 	if kind == "reaction" {
 		v.Reaction = notificationReactionOverviewOf(payload)
 	}
@@ -627,6 +634,85 @@ func notificationTargetURL(n *notification, p object, actor string) string {
 	}
 
 	return siteBaseURL + "/notifications"
+}
+
+// notificationQuickReplyTarget 判断一条消息能不能在消息中心里直接回复，并
+// 给出提交所需的帖子 short_id 与父评论。只有回复 / 回复提及 / 提及这三类
+// 消息带可回复的评论；表态、打赏、关注等没有可以挂载的评论。
+//
+// 层级按「读接口 1 起、写接口 0 起」的约定换算（见 replyTarget）：
+//   - reply / reply_mention 的 commentLevel 是「被回复对象」的层级：0 = 帖子，
+//     >0 = 评论；commentId 是对方新写的那条，所以提交的 level 比它多一层。
+//   - mention 的 commentLevel 是「被提及的评论」本身的层级；在帖子正文里
+//     提及（level 0）时没有评论可挂，直接发一条顶层评论。
+//
+// 三级评论必须知道它的挂载点（父评论），否则服务端会把它当成第四层拒绝。
+// 消息里没有父评论 id 时宁可返回 false，让用户点开详情再回复，也不发一条
+// 注定失败的请求。
+func notificationQuickReplyTarget(n *notification, p object, kind string) (string, replyTarget, bool) {
+	switch kind {
+	case "reply", "reply_mention", "mention":
+	default:
+		return "", replyTarget{}, false
+	}
+	shortID := p.str("postShortId")
+	if shortID == "" {
+		// 有的消息只给 path（与通知点击目标同一份地址），从里面取 short_id。
+		if it, ok := parseInAppTopicLink(normalizeSiteHref(p.str("path", "articleLink"))); ok {
+			shortID = it.ShortID
+		}
+	}
+	if shortID == "" {
+		return "", replyTarget{}, false
+	}
+
+	commentID := p.str("commentId")
+	level, known := 0, p.has("commentLevel")
+	if known {
+		level = p.num("commentLevel")
+	}
+	if kind == "mention" {
+		if commentID == "" {
+			if known && level > 0 {
+				// 消息说是评论里的提及，但没有评论 id：不能在帖子下发一条顶层
+				// 评论冒充分回复。
+				return "", replyTarget{}, false
+			}
+			// 帖子里提到了你：回一条顶层评论即可。
+			return shortID, replyTarget{}, true
+		}
+		if known && level <= 0 {
+			return shortID, replyTarget{}, true
+		}
+		return quickReplyToComment(shortID, commentID, level, p)
+	}
+	// reply / reply_mention：没有评论可挂（回复了你的附言）时同样发顶层评论。
+	if commentID == "" {
+		if known && level > 0 {
+			return "", replyTarget{}, false
+		}
+		return shortID, replyTarget{}, true
+	}
+	replyLevel := 0
+	if known {
+		replyLevel = min(level+1, replyMaxLevel)
+	}
+	return quickReplyToComment(shortID, commentID, replyLevel, p)
+}
+
+// quickReplyToComment 组装「回复某条评论」的 target。level 是提交时的写层级
+// （从 0 起），0 表示未知、交给服务端推断。三级评论必须有挂载点，缺父评论
+// 时返回 false。
+func quickReplyToComment(shortID, commentID string, level int, p object) (string, replyTarget, bool) {
+	target := replyTarget{ID: commentID, Level: level}
+	if level >= replyMaxLevel {
+		parent := p.str("parentCommentId", "parent_comment_id", "parentId")
+		if parent == "" || parent == commentID {
+			return "", replyTarget{}, false
+		}
+		target.ParentID = parent
+	}
+	return shortID, target, true
 }
 
 // notificationReactionUser 是给这条内容表态的一个人；头像地址可能为空，界面

@@ -53,6 +53,8 @@ type userTagSpec struct {
 	Color    ui.Color
 	MaxLines int
 	Badges   []badgeInfo
+	// Pro 为 true 时在头像右下角叠加官网同款 Pro 图标，替代过去的「PRO」文字。
+	Pro bool
 	// Click 覆盖点击行为。默认点开这个用户的资料卡（见 user_card.go）；
 	// 标题栏的账号区传自己的动作，点它打开「我的」而不是资料卡。
 	Click func()
@@ -85,7 +87,7 @@ func (a *app) userTag(c *ui.Context, u userTagSpec) ui.Element {
 	row := ui.Row(c).Gap(2).AlignItems(ui.Center).Cursor(ui.CursorPointer)
 	row.Children(func() {
 		ui.Row(c).Gap(gap).AlignItems(ui.Center).Children(func() {
-			avatarView(c, u.Name, a.avatarBitmap(u.Avatar), avatar)
+			a.avatarWithPro(c, u.Name, a.avatarBitmap(u.Avatar), avatar, u.Pro)
 			label := u.Label
 			if label == "" {
 				label = u.Name

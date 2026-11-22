@@ -39,13 +39,11 @@ type nodeCascadeProps struct {
 	EmptyLabel string
 	// Chip 用首页筛选条上的小胶囊外观；否则是发帖窗口里的普通按钮。
 	Chip bool
-	// ShowSort / Sort / OnSortChanged 只在首页筛选浮层里出现。
-	ShowSort      bool
-	Sort          *int
-	OnSortChanged func(int)
-	OnManage      func()
-	OnPick        func(nodeFilter)
-	OnClear       func()
+	// ListHeight 覆盖列表的最大高度；二级面板按窗口高度传入，Popover 用默认 260。
+	ListHeight float32
+	OnManage   func()
+	OnPick     func(nodeFilter)
+	OnClear    func()
 }
 
 // nodeCascader 画一个节点选择器。nodes 是当前可见的节点表；组件只负责画，
@@ -108,65 +106,65 @@ func nodeCascader(c *ui.Context, nodes []composeNode, p nodeCascadeProps) {
 	lobeoverlay.Popover(c, trigger, p.Open, lobeoverlay.PopoverProps{
 		Placement: lobeoverlay.Bottom,
 	}, func() {
-		ui.Column(c).Width(420).Gap(8).Children(func() {
-			var input ui.Element
-			input = field.SearchBar(c, searchPtr(p.Search), field.SearchBarProps{
-				Placeholder: "搜索节点",
-				Size:        lobetheme.Small,
-				Variant:     field.InputFilled,
-				OnSearch: func(string) {
-					if input.Composing() {
-						return // 输入法组合中的回车是确认候选词，不是选中节点
-					}
-					hits := searchHitsForPicker(nodes, searchValue(p.Search), p.SelectableParents)
-					if len(hits) > 0 {
-						apply(hitFilter(hits[0]))
-					}
-				},
-			})
-			input.Label("搜索节点")
-			input.OnShortcut(0, ui.KeyEscape, func() {
-				if strings.TrimSpace(searchValue(p.Search)) != "" {
-					setSearch(p.Search, "")
-					return
+		nodeCascadePicker(c, nodes, p, apply, clear, 420, func() { *p.Open = false })
+	})
+}
+
+// nodeCascadePicker 画选择器的内容：搜索框、两列级联或搜索结果，以及可选的
+// 排序 / 管理底栏。Popover 与二级面板共用这一份，避免界面分叉。
+// width 为 0 时铺满父容器；onEscape 让宿主决定 Esc 是收起浮层还是关面板。
+func nodeCascadePicker(c *ui.Context, nodes []composeNode, p nodeCascadeProps,
+	apply func(nodeFilter), clear func(), width float32, onEscape func()) {
+	body := func() {
+		var input ui.Element
+		input = field.SearchBar(c, searchPtr(p.Search), field.SearchBarProps{
+			Placeholder: "搜索节点",
+			Size:        lobetheme.Small,
+			Variant:     field.InputFilled,
+			OnSearch: func(string) {
+				if input.Composing() {
+					return // 输入法组合中的回车是确认候选词，不是选中节点
 				}
-				*p.Open = false
-			})
-
-			q := searchValue(p.Search)
-			if strings.TrimSpace(q) != "" {
-				nodeCascadeResults(c, nodes, q, p, apply)
-			} else {
-				nodeCascadeColumns(c, nodes, p, apply, clear)
+				hits := searchHitsForPicker(nodes, searchValue(p.Search), p.SelectableParents)
+				if len(hits) > 0 {
+					apply(hitFilter(hits[0]))
+				}
+			},
+		})
+		input.Label("搜索节点")
+		input.OnShortcut(0, ui.KeyEscape, func() {
+			if strings.TrimSpace(searchValue(p.Search)) != "" {
+				setSearch(p.Search, "")
+				return
 			}
-
-			if p.ShowSort || p.OnManage != nil {
-				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-					if p.ShowSort && p.Sort != nil {
-						ui.Text(c, "排序").FontSize(11).TextColor(c.Theme().TextMuted)
-						sel := *p.Sort
-						action.Segmented(c, &sel, []string{"价值", "最新"}, action.SegmentedProps{
-							Size: lobetheme.Small,
-						})
-						if sel != *p.Sort {
-							*p.Sort = sel
-							if p.OnSortChanged != nil {
-								p.OnSortChanged(sel)
-							}
-						}
-					}
-					ui.Spacer(c).Grow(1)
-					if p.OnManage != nil {
-						if action.Button(c, "管理快捷入口", action.ButtonProps{
-							Variant: action.Text, Size: lobetheme.Small,
-						}).Clicked() {
-							p.OnManage()
-						}
-					}
-				})
+			if onEscape != nil {
+				onEscape()
 			}
 		})
-	})
+
+		q := searchValue(p.Search)
+		if strings.TrimSpace(q) != "" {
+			nodeCascadeResults(c, nodes, q, p, apply)
+		} else {
+			nodeCascadeColumns(c, nodes, p, apply, clear)
+		}
+
+		if p.OnManage != nil {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Spacer(c).Grow(1)
+				if action.Button(c, "管理快捷入口", action.ButtonProps{
+					Variant: action.Text, Size: lobetheme.Small,
+				}).Clicked() {
+					p.OnManage()
+				}
+			})
+		}
+	}
+	if width > 0 {
+		ui.Column(c).Width(width).Gap(8).Children(body)
+		return
+	}
+	ui.Column(c).FillWidth().Gap(8).Children(body)
 }
 
 // nodeCascadeColumns 画空查询时的两列级联。左列只展开右列；叶子分类直接
@@ -257,8 +255,11 @@ func nodeCascadeColumns(c *ui.Context, nodes []composeNode, p nodeCascadeProps, 
 			Actions: checkAction(c, selected), ShowAction: selected,
 		})
 	}
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Start).Children(func() {
-		ui.Scroll(c).Width(168).MaxHeight(260).Children(func() {
+	cols := ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Start)
+	listH := cascadeListHeight(p.ListHeight)
+	cols.Children(func() {
+		leftScroll := ui.Scroll(c).Width(168).MaxHeight(listH)
+		leftScroll.Children(func() {
 			if key := display.List(c, display.ListProps{Items: left, Compact: true}); key != "" {
 				if key == "clear" {
 					clear()
@@ -279,7 +280,8 @@ func nodeCascadeColumns(c *ui.Context, nodes []composeNode, p nodeCascadeProps, 
 			}
 		})
 		ui.Box(c).Width(1).AlignSelf(ui.Stretch).Background(c.Theme().Border)
-		ui.Scroll(c).Grow(1).MinWidth(220).MaxHeight(260).Children(func() {
+		rightScroll := ui.Scroll(c).Grow(1).MinWidth(220).MaxHeight(listH)
+		rightScroll.Children(func() {
 			if key := display.List(c, display.ListProps{Items: right, Compact: true}); key != "" {
 				apply(filters[key])
 			}
@@ -312,7 +314,7 @@ func nodeCascadeResults(c *ui.Context, nodes []composeNode, q string, p nodeCasc
 		}
 		items = append(items, item)
 	}
-	ui.Scroll(c).FillWidth().MaxHeight(260).Children(func() {
+	ui.Scroll(c).FillWidth().MaxHeight(cascadeListHeight(p.ListHeight)).Children(func() {
 		if key := display.List(c, display.ListProps{Items: items, Compact: true}); key != "" {
 			apply(filters[key])
 		}
@@ -321,6 +323,14 @@ func nodeCascadeResults(c *ui.Context, nodes []composeNode, q string, p nodeCasc
 				TextColor(c.Theme().TextMuted).Padding(6, 4)
 		}
 	})
+}
+
+// cascadeListHeight 给 Popover 用默认的 260，二级面板传入按窗口算出的高度。
+func cascadeListHeight(h float32) float32 {
+	if h > 0 {
+		return h
+	}
+	return 260
 }
 
 func hitFilter(h nodeHit) nodeFilter {

@@ -591,11 +591,7 @@ func (a *app) scoreRow(c *ui.Context, e scoreEntry) {
 					if e.Author != "" {
 						a.userTag(c, userTagSpec{
 							Name: e.Author, Avatar: e.Avatar, Badges: e.Badges, Size: 11,
-						})
-					}
-					if e.IsPro {
-						display.Tag(c, "PRO", display.TagProps{
-							Size: lobetheme.Small, Color: display.TagBlue, Round: true,
+							Pro: e.IsPro,
 						})
 					}
 					if when := relativeTime(e.CreatedAt); when != "" {

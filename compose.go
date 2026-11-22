@@ -241,6 +241,12 @@ type composeState struct {
 	bodyField  ui.Handle
 	focusTitle bool
 	anonymous  bool
+	// 本地草稿（见 draft.go）：draftID 是这份表单对应哪条草稿，空表示还没落过盘；
+	// draftFP 是本帧指纹，draftSavedFP 是上次落盘时的指纹。帧尾算一次指纹，
+	// 变了才走防抖落盘。
+	draftID      string
+	draftFP      uint64
+	draftSavedFP uint64
 
 	// 正文编辑器与评论编辑器共用一套选区、工具面板与预览状态（见
 	// editor_core.go）。匿名嵌入，所以外层仍可直接读写 st.selStart /

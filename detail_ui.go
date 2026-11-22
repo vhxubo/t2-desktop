@@ -87,8 +87,10 @@ type detailState struct {
 	// 表示右栏评论区已向右收起，正文占满整行。两者互斥：收起一边后另一边
 	// 已经铺满整行，再收就没有意义了。它们只是界面状态，不落盘：每次进入
 	// 详情都重置成双栏展开（见 newDetailState 与 closeDetail 的弹栈分支），
-	// 下次打开不会继承上一次的收起。唯一例外是从通知跳到具体评论时默认
-	// 收起正文（见 openNotificationTarget），便于直接看到那层楼。
+	// 下次打开不会继承上一次的收起。两个例外：从通知跳到具体评论时默认
+	// 收起正文（见 openNotificationTarget），便于直接看到那层楼；评论加载
+	// 完成且确实一条都没有时默认收起评论区（见 loadRepliesFor），把整行让
+	// 给正文，想看空状态仍可从右边缘「展开评论」拉回来。
 	bodyCollapsed  bool
 	replyCollapsed bool
 	// bodyWidth 是正文栏在展开时的宽度（DIP），由 Lobe 的 DraggablePanel
@@ -144,6 +146,12 @@ type detailState struct {
 	// （见 editor_core.go）；正文字符串仍是下面的 draft。
 	mdEditor
 	draft string
+	// 本地草稿（见 draft.go）：帧尾算 draftFingerprint，与 draftSavedFP 不同
+	// 才落盘。focusComposer 是从草稿箱恢复后的一次性聚焦标记，由 replyInput
+	// 消费一次：点完「打开」就能接着打字。
+	draftFP       uint64
+	draftSavedFP  uint64
+	focusComposer bool
 	// replyTo 是当前在回哪条评论；零值表示发一条新的顶层评论。带上层级
 	// 与父评论，是因为回复三级评论时提交用的 parentId 不是被点的那条
 	// （见 detail.go 的 replyTarget）。
@@ -485,6 +493,8 @@ func (a *app) loadDetail(d *detailState, it Item) {
 	// 本地已读：点开即算读过，回到列表时这一行标题置灰。
 	a.markPostRead(it.ShortID)
 	a.recordReading(it, d.topic)
+	// 稍后再看：默认打开即从列表移除；开了「保留」则标成已读，留作待读清单。
+	a.handleWatchLaterOpen(it.ShortID)
 	a.status = ""
 	// load* are no-ops when autoLoad is off, so headless UI tests never
 	// touch the network.
@@ -621,6 +631,7 @@ func (a *app) loadTopicFor(d *detailState) {
 			a.autoLoadRestricted(d)
 			// 正文拿到后写一份本机缓存，并补全阅读记录里打开时还缺的字段。
 			a.updateReadingTopic(d.shortID, &topic)
+			a.updateWatchLaterTopic(d.shortID, &topic)
 			a.saveCachedDetail(d)
 		})
 	}()
@@ -675,6 +686,13 @@ func (a *app) loadRepliesFor(d *detailState, page int) {
 				d.replyList = rows
 				d.rebuildDisplay()
 				d.replyNoMore = len(rows) == 0
+				// 一条评论都没有时评论区只是一行「暂无评论」，白占掉右栏：
+				// 默认收起它，把整行让给正文。加载失败不走这里，错误与重试
+				// 入口要留在屏幕上；从通知 / 评论链接定位进来也不收，避免
+				// 和默认的「收起正文」叠在一起，两边都没内容可看。
+				if d.replyNoMore && !d.bodyCollapsed && d.focusID == "" {
+					d.replyCollapsed = true
+				}
 				// 恢复本地记忆的停留位置：没有定位目标时滚回上次读到的行；
 				// 有定位目标（从评论列表点进来）时交给下面的 focus 逻辑，
 				// 此时不恢复折叠、按扁平序展开全部，便于定位。
@@ -802,6 +820,7 @@ func (a *app) ensureEmojis() {
 // detailView 是详情页的顶层画法。inline=true 时还画主窗口标题栏与 Esc 返回
 // 列表；详情窗口传 false，标题栏、Esc 与标签栏由窗口自己管。
 func (a *app) detailView(c *ui.Context, inline bool) {
+	defer a.draftTick()
 	if inline {
 		// Esc 与右上角关闭同义：内联浏览时先退一层，再回到列表。
 		c.OnShortcut(0, ui.KeyEscape, func() { a.closeDetail() })
@@ -1099,6 +1118,11 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 			key: "copy", kind: detailToolCopy, icon: lucide.Copy(),
 			label: "复制帖子链接", tip: "把这篇帖子的链接复制到剪贴板", href: href,
 		})
+	}
+	// 稍后再看：本地待读清单，和正文一起常驻。图标与文案按当前是否已在
+	// 列表里切换，点一下就有结果（见 watch_later.go）。
+	if d.shortID != "" {
+		acts = append(acts, a.detailWatchLaterAction(d))
 	}
 	// 只在正文滚离顶部时出现，且只管正文：评论区有自己的一键回顶。正文
 	// 展开时操作组常驻右下角可达，不会像旧版页头那样为了放它固定占掉一行；
@@ -2665,7 +2689,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	// 编码是 Lobe Modal，但弹窗盖在页面上时仍保留输入框的展开态，关窗后接着写。
 	// base64Open 必须算进来：Modal 会把焦点从输入框挪走，少这一条会让输入框
 	// 当场缩回、editorPanels 不再构建 Modal，Modal 又随之关闭，来回闪动。
-	expanded := d.replyTo.ID != "" || strings.TrimSpace(d.draft) != "" ||
+	expanded := d.replyTo.ID != "" || strings.TrimSpace(d.draft) != "" || d.focusComposer ||
 		(focused && !d.composerIdle) ||
 		d.emojiOpen || d.imageOpen || d.mdEditor.topicOpen || d.mdEditor.base64Open ||
 		d.preview == 1
@@ -2767,6 +2791,11 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 		// （下面用 Absolute 摆位），输入栏整行都归输入。
 		ui.Row(c).FillWidth().Children(func() {
 			area := a.replyTextArea(c, d, replySurfaceDetail, replyFieldInline, expanded)
+			// 从草稿箱恢复后一次性聚焦：只恢复「回谁」，不恢复面板与预览态。
+			if d.focusComposer {
+				d.composerField.Focus(c)
+				d.focusComposer = false
+			}
 			// Ctrl+Enter 发送评论：绑在输入框自己的 handle 上，只有焦点在
 			// 评论框里才生效，免得在正文或评论列表里按组合键也误发一条。
 			// 草稿搬到独立窗口时这里不构建输入框，快捷键也随之消失，
@@ -3196,6 +3225,8 @@ func (a *app) submitReply() {
 			}
 			d.draft = ""
 			d.replyTo = replyTarget{}
+			// 回复草稿随发送成功删除：箱子里不该再留一条已经发出去的内容。
+			a.deleteDraft(replyDraftID(d.shortID))
 			d.composerIdle = true // 发送后折回一行，把空间还给评论列表
 			// 工具面板与预览会让输入框保持展开（见 replyInput），发送后一并
 			// 收起，否则空输入框还占着面板的高度，折不回一行。

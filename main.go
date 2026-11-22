@@ -57,6 +57,14 @@ type tabState struct {
 	reading      map[string]bool
 	selected     map[string]bool
 	markingAll   bool
+	// 快捷回复：同一时刻只展开一条消息的输入框，草稿只属于那一条（换一条
+	// 就清空）。posting 表示有一次回复在途，期间不再接受新的提交。都只在
+	// UI 线程读写，网络结果经 publish 回来。
+	quickReplyOpen    string
+	quickReplyDraft   string
+	quickReplyPosting bool
+	quickReplyFocus   bool
+	quickReplyField   ui.Handle
 
 	// 首页节点筛选：只在 UI 线程读写。filterOpen 是筛选 chip 的浮层，
 	// filterSearch 是浮层顶部的搜索词，filterRoot 是左列展开的父 slug。
@@ -200,6 +208,17 @@ type app struct {
 	readingFor    string
 	readingLoaded bool
 	readingList   ui.ListState
+	// later 是当前账号的稍后再看（见 watch_later.go），laterFor 是它所属的
+	// 作用域；watchLaterPrefs 决定打开后移除还是保留。laterTab 是窗口里的
+	// 分段（0 稍后再看 / 1 浏览历史），laterList 是列表状态。窗口见
+	// watch_later_window.go，都只在主线程读写。
+	later           []watchLaterRecord
+	laterFor        string
+	laterLoaded     bool
+	laterList       ui.ListState
+	laterTab        int
+	watchLaterWin   *mygo.Window
+	watchLaterPrefs *watchLaterPrefsStore
 	// readAt 是当前账号在本机读过的帖子（short_id → 首次打开时间），列表
 	// 据此把读过的帖子置灰（见 post_read.go）。它和阅读记录一样按账号
 	// 作用域懒加载，只记本机，不向服务端同步。只在 UI 线程读写。
@@ -304,6 +323,19 @@ type app struct {
 	// 都只在主线程读写；关窗口后草稿保留，退出登录时丢弃。
 	composeWin *mygo.Window
 	compose    *composeState
+	// 本地草稿箱（见 draft.go / draft_ui.go）：drafts 是当前账号的草稿文件，
+	// draftDir 是配置目录（与 appDeps.dir 一致，按账号隔离存到 drafts/<scope>.json）。
+	// draftsList / draftsClearOpen 是草稿页的列表状态与清空确认弹窗；
+	// draftPending / draftDirtySince / draftTimer 是 800ms 防抖 + 5s 上限的落盘节奏。
+	// 都只在主线程读写；定时器回调经 publish 回来。
+	drafts          *draftStore
+	draftDir        string
+	draftsList      ui.ListState // 发帖与动态那组
+	draftsReplyList ui.ListState // 回复那组，与上一组分开，免得滚动状态串台
+	draftsClearOpen bool
+	draftPending    bool
+	draftDirtySince time.Time
+	draftTimer      *time.Timer
 	// replyWin 是独立写评论窗口（见 reply_window.go）：入口是详情页评论框
 	// 工具条上的展开图标。replyWinFor 是它正在编辑的那份 detailState——草稿
 	// 一直存在那个状态里，所以关掉窗口或「收回评论区」都不会丢字。都只在
@@ -357,14 +389,12 @@ type app struct {
 	// nodeCat 是首页筛选、配置弹窗与发帖窗口共用的节点目录（见
 	// node_catalog.go）：单飞加载、共享缓存，避免多处并发拉同一份节点表。
 	nodeCat nodeCatalog
-	// nodePrefs / nodeShortcuts / nodeEditor 是节点筛选的本机偏好与侧边栏
-	// 快捷入口（见 node_shortcuts.go）。prefs 与快捷入口进程内共享，上次筛选
-	// 按账号键落盘；editor 是配置弹窗的草稿，只在主线程读写。
-	nodePrefs      *nodeFeedPrefs
-	nodeShortcuts  []nodeRef
-	nodeEditor     nodeEditor
-	nodeRailOpen   bool
-	nodeLastFilter nodeFilter
+	// nodeShortcuts / nodeEditor 是首页节点筛选的侧边栏快捷入口（见
+	// node_shortcuts.go）：每个入口自带排序偏好，随快捷入口一起落盘；
+	// editor 是配置弹窗的草稿，只在主线程读写。
+	nodeShortcuts []nodeRef
+	nodeEditor    nodeEditor
+	nodeRailOpen  bool
 	// userCardWin 是「用户资料」窗口：点任何一处统一用户标识（头像 + 昵称）
 	// 打开，见 user_ui.go 的 userTag；userCard 是它读的状态，userCardShown
 	// 表示窗口此刻是否在屏幕上。界面与请求在 user_card.go / user_card_ui.go。
@@ -494,6 +524,9 @@ type appDeps struct {
 	disclaimer *disclaimerStore
 	// commentCostPrefs 是评论费用的两个开关，进程级一份（见 comment_cost_prefs.go）。
 	commentCostPrefs *commentCostPrefsStore
+	// watchLaterPrefs 是稍后再看的打开行为（默认移除 / 保留并区分已读），
+	// 进程级一份（见 watch_later_prefs.go）。
+	watchLaterPrefs *watchLaterPrefsStore
 	// notificationPrefs 是通知偏好，进程级一份（见 notification_prefs.go）。
 	notificationPrefs *notificationPrefsStore
 	book              *accountBook
@@ -515,6 +548,7 @@ func newAppDeps(dir string) appDeps {
 		disclaimer:        newDisclaimerStore(dir),
 		commentCostPrefs:  newCommentCostPrefsStore(dir),
 		notificationPrefs: newNotificationPrefsStore(dir),
+		watchLaterPrefs:   newWatchLaterPrefsStore(dir),
 	}
 }
 
@@ -530,6 +564,7 @@ func (b *accountBook) deps() appDeps {
 		disclaimer:        b.disclaimer,
 		commentCostPrefs:  b.commentCostPrefs,
 		notificationPrefs: b.notificationPrefs,
+		watchLaterPrefs:   b.watchLaterPrefs,
 		book:              b,
 	}
 }
@@ -576,6 +611,8 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 		disclaimer:        d.disclaimer,
 		commentCostPrefs:  d.commentCostPrefs,
 		notificationPrefs: d.notificationPrefs,
+		watchLaterPrefs:   d.watchLaterPrefs,
+		draftDir:          d.dir,
 		tabs:              make([]*tabState, len(tabSpecs)),
 		lastTab:           -1,
 		navSel:            tabID(0),
@@ -592,6 +629,9 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 	if acc != nil {
 		a.accountID = acc.ID
 	}
+	// 草稿箱按账号隔离：启动时就把这一账号的草稿读进内存，侧边栏角标与
+	// 草稿页首帧就是对的（文件不存在或损坏都按空草稿处理）。
+	a.drafts = newDraftStore(d.dir, draftScope(a))
 	if d.book != nil {
 		// 这几项是进程级的：回调协议是否注册成功、更新插件装没装、托盘建没
 		// 建出来、以及怎么真正退出应用。窗口只是照着用。
@@ -616,6 +656,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 	a.loadCoinCache()
 	a.loadReadingHistory()
 	a.loadPostReads()
+	a.loadWatchLater()
 	// 图库配置也要在首帧前就位：编辑器工具面板打开时不能还是空列表。
 	a.loadImageHosts()
 	for i := range a.tabs {
@@ -1028,6 +1069,13 @@ func (a *app) onAuthChanged(err error) {
 		a.authGate.open = false
 		a.pageName = "login"
 	case a.auth.loggedIn():
+		// 未登录窗口首次登录：guest 草稿先落盘并清掉 live 状态，之后按账号
+		// 作用域重新载入，避免把 guest 的内容写进新账号的文件。
+		if a.drafts != nil && a.drafts.scope != draftScope(a) {
+			a.flushDraftsInto(a.drafts)
+			a.clearLiveDrafts()
+			a.drafts = nil
+		}
 		a.loginMsg = "已登录"
 		if name := a.auth.username(); name != "" {
 			a.loginMsg += " · " + name
@@ -1110,6 +1158,12 @@ func (a *app) onAuthChanged(err error) {
 		a.closeCoinWindow()
 		// 潘多拉弹窗展示的是当前账号的盲盒与抽奖结果，退出后一并关掉。
 		a.closePandora()
+		// 草稿属于上一个账号，退出前先同步落盘到旧作用域那份 store：此时
+		// auth 已清空，用 flushDrafts 会按新作用域写进 guest 文件。
+		a.flushDraftsInto(a.drafts)
+		a.clearLiveDrafts()
+		a.stopDraftTimer()
+		a.drafts = nil // 下一次访问按 guest 作用域重新载入
 		// 发帖窗口里的草稿属于上一个账号，退出后一并关掉并丢弃。
 		a.closeComposeWindow()
 		a.compose = nil
@@ -1153,6 +1207,8 @@ func (a *app) view(c *ui.Context) {
 	c.Root().Background(t.Background)
 	// 操作结果以 toast 显示：主窗口、登录页与详情页都走这里。
 	defer a.drainToasts(c, a.mainClaimsToasts)
+	// 帧尾算草稿指纹：输入必然触发重建，非键入改动（表情、图片、选节点）也能捕捉到。
+	defer a.draftTick()
 
 	switch a.pageName {
 	case "login":
@@ -1173,15 +1229,22 @@ func (a *app) view(c *ui.Context) {
 		ui.Row(c).Grow(1).MinHeight(0).Children(func() {
 			a.sidebar(c)
 			ui.Divider(c)
-			// 右侧内容区：正文列表（无限滚动，无底部状态栏）。右下角浮着
-			// 一列 FAB（返回顶部 / 刷新 / 发帖），绝对定位，不占列表的高度。
+			// 右侧内容区：草稿箱与主窗口共用标题栏和侧边栏，只换这一块。
+			// 草稿页不是信息流，不画右下角的 FAB 列（那里没有可刷新、可发帖的列表）。
 			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
-				a.body(c)
-				a.listFabs(c)
+				if a.pageName == "drafts" {
+					a.draftsBody(c)
+				} else {
+					a.body(c)
+					a.listFabs(c)
+				}
 			})
 		})
 	})
-	a.ensureLoaded()
+	// 草稿页没有列表要拉，跳过 ensureLoaded，别白白发请求、占限流额度。
+	if a.pageName != "drafts" {
+		a.ensureLoaded()
+	}
 	a.dialogs(c)
 }
 
@@ -1193,6 +1256,7 @@ func (a *app) dialogs(c *ui.Context) {
 	// 抽卡弹窗先画：抽卡缺权限时授权框后画、叠在它上面，关掉授权还能回来。
 	a.pandoraDialog(c)
 	a.nodeEditorDialog(c)
+	a.draftsClearDialog(c)
 	a.authDialogFor(c, toastMain)
 	a.closePromptDialog(c)
 	// 首次启动声明放最后，盖在其它弹窗之上；确认后本进程不再画。
@@ -1276,6 +1340,10 @@ func (a *app) sidebarNavItems() []display.ListItem {
 			Icon:  icon,
 		})
 	}
+	// 草稿箱是主窗口里的一个页面，和浏览页同组，放在分割线之前。
+	items = append(items, display.ListItem{
+		Key: "drafts", Label: a.draftsNavLabel(), Icon: lucide.NotebookPen(),
+	})
 	items = append(items, display.ListItem{Divider: true})
 	items = append(items, display.ListItem{
 		Key: "scores", Label: "评分榜", Icon: lucide.SquareArrowOutUpRight(),
@@ -1359,6 +1427,9 @@ func (a *app) selectTab(idx int) {
 	if idx < 0 || idx >= len(a.tabs) {
 		return
 	}
+	// 草稿页的侧边栏仍然可见：点任意浏览页（包括当前已选中的那一项）都要能回来。
+	a.pageName = "list"
+	a.navSel = tabID(idx)
 	if idx == 0 && !a.homeFilter().isAll() {
 		a.tab = 0
 		a.navSel = tabID(0)
@@ -1452,6 +1523,8 @@ func (a *app) handleSidebarAction(key string) {
 		a.showAbout()
 	case "scores":
 		a.showScores()
+	case "drafts":
+		a.showDrafts()
 	case "wait":
 		a.pageName = "login"
 	case "cancel":
@@ -1803,6 +1876,11 @@ func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
 				ui.Text(c, count).FontSize(tk.FontSizeSM).Font(sidebarFont).
 					TextColor(tk.TextDescription).SingleLine().Shrink(0)
 			}
+			// 首页页头的「稍后再看」入口：带待读数量，打开同一扇窗口里的
+			// 稍后再看 / 浏览历史两页（见 watch_later_window.go）。
+			if spec.FilterByNode {
+				a.watchLaterEntry(c)
+			}
 		})
 		if spec.FilterByNode {
 			a.feedNodeFilter(c, st)
@@ -1825,7 +1903,6 @@ func feedCountLabel(st *tabState) string {
 
 func (a *app) body(c *ui.Context) {
 	st := a.tabs[a.tab]
-	a.validateRestoredHomeFilter()
 	spec := a.specFor(a.tab)
 
 	if spec.NeedsAuth && !a.auth.loggedIn() {
@@ -1878,6 +1955,17 @@ func (a *app) body(c *ui.Context) {
 		return
 	}
 	if len(st.items) == 0 {
+		// 首页即使没有内容也要留住页头：稍后再看入口不能随列表空掉而消失，
+		// 没有新帖时正好可以从那里接着读。
+		if spec.FilterByNode {
+			ui.Column(c).Grow(1).Children(func() {
+				a.feedHeader(c, spec, st)
+				ui.Column(c).Grow(1).Center().Children(func() {
+					display.Empty(c, display.EmptyProps{Title: "暂无内容"})
+				})
+			})
+			return
+		}
 		ui.Column(c).Grow(1).Center().Children(func() {
 			display.Empty(c, display.EmptyProps{Title: "暂无内容"})
 		})
@@ -1960,9 +2048,9 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 	row.Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 			// 标题是这一行里唯一的重心：字号明显大于副标题和时效信息，
-			// 并保持 700 粗体，扫一眼就能把标题与下方文案分开。字号用 Lobe
+			// 用常规字重，靠字号与颜色分层，而不是加粗。字号用 Lobe
 			// 的 LG（16），比原先的 19 收一档，贴近 Lobe 列表的密度。
-			ui.Text(c, it.Title).FontSize(tk.FontSizeLG).Bold().MaxLines(2).TextColor(titleColor)
+			ui.Text(c, it.Title).FontSize(tk.FontSizeLG).MaxLines(2).TextColor(titleColor)
 			// 副标题里的作者用统一用户标识渲染：头像跟着 11px 的昵称走，
 			// 同时保留「节点 · 昵称 · 发帖时间」的原有顺序；节点名或时间太长时
 			// 允许折行，不把右侧的元信息挤出去。Author 为空说明接口没给发帖人

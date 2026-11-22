@@ -18,17 +18,18 @@ import (
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 金币窗口的界面：标题栏下面是余额 / 今日获得 / 签到状态，再按「今日、历史、
-// 统计、排行、兑换」切换。窗口本身在 coins_window.go；这里只画窗口里的内容。
-// 窗口里没有写操作：签到与潘多拉的入口都收在标题栏「我的」的账号菜单里（见
-// profile_ui.go），这里只展示签到状态。发帖、回复、表态与打赏在各自的页面里，
-// 金币余额只在展开账号菜单时请求；本页各块在打开窗口时各自加载。
+// 金币窗口的界面：标题栏下面是余额 / 今日净收入，再按「今日、历史、统计、
+// 排行、兑换」切换。窗口本身在 coins_window.go；这里只画窗口里的内容。
+// 窗口里不展示签到状态，也没有签到入口：签到仍在标题栏「我的」账号菜单与
+// 命令面板里（见 profile_ui.go、command_palette.go），潘多拉也在账号菜单里。
+// 发帖、回复、表态与打赏在各自的页面里；金币余额只在展开账号菜单时请求，
+// 本页各块在打开窗口时各自加载。
 //
 // 整套界面走 Lobe UI：分段、按钮、卡片、标签、提示与空状态都用 lobe-mygo 的
 // 组件，颜色取 TokensOf(c)，与通知 / 设置 / 我的等窗口同一套设计语言。转圈沿用
-// mygo 原生 Spinner：Lobe 的 Spin 会一直请求动画帧，在签到后那次刷新仍在进行、
-// 无头 tester 复建窗口时会把 toast 的淡入帧挤掉。文案与动作保持不变，只换观感；
-// 无障碍名与工具提示照旧供读屏和点击测试命中。
+// mygo 原生 Spinner：Lobe 的 Spin 会一直请求动画帧，在刷新仍在进行、无头 tester
+// 复建窗口时会把 toast 的淡入帧挤掉。文案尽量精简；无障碍名与工具提示照旧供
+// 读屏和点击测试命中。
 
 const (
 	coinViewToday = iota
@@ -48,17 +49,16 @@ func (a *app) coinsBody(c *ui.Context) {
 		return
 	}
 	// 窗口标题栏已经写着「金币」与余额，这里不再重复一个大标题：第一行
-	// 只放视图切换、签到状态与刷新。
+	// 只放视图切换与刷新。
 	ui.Column(c).Fill().MinHeight(0).Children(func() {
 		ui.Row(c).FillWidth().Padding(10, 14, 8, 14).Gap(10).AlignItems(ui.Center).Children(func() {
 			action.Segmented(c, &cs.view, coinViewLabels, action.SegmentedProps{
 				Size: lobetheme.Small,
 			}).Label("金币视图")
 			ui.Spacer(c).Grow(1)
-			a.coinSignLine(c, cs)
 			busy := cs.baseLoading || cs.todayLoading || cs.historyLoading ||
 				cs.dailyLoading || cs.breakdownLoading || cs.rankingLoading ||
-				cs.redeemLoading || cs.signBusy
+				cs.redeemLoading
 			a.smallRefreshButton(c, busy, func() { a.reloadCoins() })
 		})
 		layout.Divider(c, layout.DividerProps{})
@@ -79,38 +79,8 @@ func (a *app) coinsBody(c *ui.Context) {
 	})
 }
 
-// coinSignLine 是分段栏右侧的一行签到状态：只说明今天签没签，按钮放在下面
-// 的余额卡片里，避免一行里塞两个入口。
-func (a *app) coinSignLine(c *ui.Context, cs *coinState) {
-	switch {
-	case cs.signErr != "":
-		display.Text(c, "签到状态暂不可用", display.TextProps{
-			Type: display.TextSecondary, FontSize: 11, Rows: 1,
-		})
-	case cs.sign.Known && cs.sign.Signed:
-		text := "今日已签到"
-		if cs.sign.Streak > 0 {
-			text = fmt.Sprintf("今日已签到 · 连续 %d 天", cs.sign.Streak)
-		}
-		display.Text(c, text, display.TextProps{
-			Type: display.TextSuccess, FontSize: 11, Rows: 1,
-		})
-	case cs.sign.Known:
-		display.Text(c, "今日未签到", display.TextProps{
-			Type: display.TextSecondary, FontSize: 11, Rows: 1,
-		})
-	case cs.baseLoaded:
-		display.Text(c, "签到状态未知", display.TextProps{
-			Type: display.TextSecondary, FontSize: 11, Rows: 1,
-		})
-	default:
-		display.Text(c, "签到状态加载中…", display.TextProps{
-			Type: display.TextSecondary, FontSize: 11, Rows: 1,
-		})
-	}
-}
-
 func (a *app) coinBalanceCard(c *ui.Context, cs *coinState) {
+	tk := lobetheme.TokensOf(c)
 	card := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
 		FillWidth().Padding(12, 14)
 	card.Children(func() {
@@ -136,7 +106,7 @@ func (a *app) coinBalanceCard(c *ui.Context, cs *coinState) {
 			})
 
 			ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-				display.Text(c, "今日获得", display.TextProps{
+				display.Text(c, "今日净收入", display.TextProps{
 					Type: display.TextSecondary, FontSize: 11, Rows: 1,
 				})
 				switch {
@@ -147,39 +117,12 @@ func (a *app) coinBalanceCard(c *ui.Context, cs *coinState) {
 						Type: display.TextSecondary, Strong: true, FontSize: 20, Rows: 1,
 					})
 				default:
-					display.Text(c, "+"+coinAmountText(cs.todayIncome)+" 金币", display.TextProps{
-						Type: display.TextSuccess, Strong: true, FontSize: 20, Rows: 1,
-					})
-					display.Text(c, fmt.Sprintf("支出 %s · 净变化 %s",
-						coinExpenseText(cs.todayExpense), coinSignedText(cs.todayNet)), display.TextProps{
+					display.Text(c, coinSignedText(cs.todayNet)+" 金币", display.TextProps{
+						Strong: true, FontSize: 20, Rows: 1,
+					}).TextColor(coinAmountColor(tk, cs.todayNet))
+					display.Text(c, fmt.Sprintf("收入 %s · 支出 %s",
+						coinSignedText(cs.todayIncome), coinExpenseText(cs.todayExpense)), display.TextProps{
 						Type: display.TextSecondary, FontSize: 11, Rows: 1,
-					})
-				}
-			})
-
-			ui.Column(c).Shrink(0).Gap(4).Children(func() {
-				display.Text(c, "今日签到", display.TextProps{
-					Type: display.TextSecondary, FontSize: 11, Rows: 1,
-				})
-				switch {
-				case cs.sign.Known && cs.sign.Signed:
-					text := "已签到"
-					if cs.sign.Streak > 0 {
-						text = fmt.Sprintf("已签到 · %d 天", cs.sign.Streak)
-					}
-					display.Text(c, text, display.TextProps{
-						Type: display.TextSuccess, Strong: true, FontSize: 12, Rows: 1,
-					})
-				case cs.signBusy:
-					lobeSpin(c, feedback.SpinProps{CustomSize: 16})
-				case !cs.sign.Known && !cs.baseLoaded:
-					display.Text(c, "加载中…", display.TextProps{
-						Type: display.TextSecondary, FontSize: 12, Rows: 1,
-					})
-				default:
-					// 签到入口统一收在标题栏「我的」的账号菜单里，这里只报状态。
-					display.Text(c, "今日未签到", display.TextProps{
-						Type: display.TextSecondary, FontSize: 12, Rows: 1,
 					})
 				}
 			})
@@ -652,12 +595,8 @@ func (a *app) coinRankRow(c *ui.Context, e coinRankEntry) {
 			Size:   13,
 			Bold:   true,
 			Badges: e.Badges,
+			Pro:    e.IsPro,
 		})
-		if e.IsPro {
-			display.Tag(c, "PRO", display.TagProps{
-				Size: lobetheme.Small, Color: display.TagGold, Variant: display.TagFilled,
-			})
-		}
 		if name := a.auth.username(); name != "" && strings.EqualFold(name, e.Username) {
 			display.Text(c, "（我）", display.TextProps{
 				Type: display.TextSecondary, FontSize: 10, Rows: 1,

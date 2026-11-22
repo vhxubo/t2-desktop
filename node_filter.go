@@ -25,6 +25,9 @@ type nodeRef struct {
 	ParentSlug string `json:"parent_slug,omitempty"`
 	Name       string `json:"name,omitempty"`
 	ParentName string `json:"parent_name,omitempty"`
+	// Sort 是这个节点自己的排序偏好（value / latest），空串等同价值优先。
+	// 只有侧边栏快捷入口会写它；从接口里读到的节点引用不带排序。
+	Sort string `json:"sort,omitempty"`
 }
 
 // key 是快捷入口去重用的稳定标识：优先 uuid，没有时退回 slug。
@@ -113,8 +116,9 @@ func nodeFilterLabel(f nodeFilter) string {
 }
 
 // homeQuery 生成首页第 1 页的 query。参数顺序与原来的默认请求一致：
-// page、limit、节点条件、sort；父分类与子节点条件互斥。
-func homeQuery(f nodeFilter, sort string) string {
+// page、limit、节点条件、sort；父分类与子节点条件互斥。排序取自筛选里的
+// 节点引用：每个快捷入口各自决定价值优先还是最新，默认仍是价值优先。
+func homeQuery(f nodeFilter) string {
 	q := "page=1&limit=50&"
 	switch f.Kind {
 	case nodeFilterParent:
@@ -124,10 +128,7 @@ func homeQuery(f nodeFilter, sort string) string {
 	default:
 		q += "parent_slug=All"
 	}
-	if sort == "" {
-		sort = "value"
-	}
-	return q + "&sort=" + url.QueryEscape(sort)
+	return q + "&sort=" + url.QueryEscape(validNodeSort(f.Ref.Sort))
 }
 
 // specFor 是列表 spec 的唯一入口：带节点筛选的首页与带搜索条件的通知都
@@ -139,11 +140,7 @@ func (a *app) specFor(idx int) tabSpec {
 	}
 	spec := tabSpecs[idx]
 	if spec.FilterByNode && idx < len(a.tabs) && a.tabs[idx] != nil {
-		sort := ""
-		if a.nodePrefs != nil {
-			sort = a.nodePrefs.Sort
-		}
-		spec.Query = homeQuery(a.tabs[idx].homeFilterNode, sort)
+		spec.Query = homeQuery(a.tabs[idx].homeFilterNode)
 	}
 	if spec.Kind == kindNotification && idx < len(a.tabs) && a.tabs[idx] != nil {
 		st := a.tabs[idx]
@@ -232,25 +229,10 @@ func (a *app) resolveNodeRef(ref nodeRef) nodeRef {
 	if ref.ParentName != "" {
 		n.ParentName = ref.ParentName
 	}
-	return nodeRefFromNode(n)
-}
-
-// validateRestoredHomeFilter 在「恢复上次筛选」读到一个已经不存在的节点时
-// 回到全部。节点表加载完成才校验，避免把还没加载到的正常节点误判成失效。
-func (a *app) validateRestoredHomeFilter() {
-	if !a.nodeCat.loaded || len(a.tabs) == 0 || a.tabs[0] == nil {
-		return
-	}
-	f := a.tabs[0].homeFilterNode
-	if f.Kind != nodeFilterNode || f.Ref.ID == "" {
-		return
-	}
-	for _, n := range a.nodeCatalogNodes() {
-		if n.ID == f.Ref.ID {
-			return
-		}
-	}
-	a.setHomeFilter(allNodes())
+	// 排序是节点引用自己的配置，补 id / 父名时不能丢。
+	resolved := nodeRefFromNode(n)
+	resolved.Sort = ref.Sort
+	return resolved
 }
 
 // setHomeFilter 把筛选应用到首页：清掉旧列表与分页状态、回顶部、立刻拉第 1 页。
@@ -274,7 +256,6 @@ func (a *app) setHomeFilter(f nodeFilter) {
 	st.moreErr = ""
 	st.fold.reset()
 	st.list.ScrollTo(0, ui.Start)
-	a.saveLastFilter(f)
 	a.load(a.tab, 1)
 }
 

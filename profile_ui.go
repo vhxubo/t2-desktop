@@ -428,19 +428,15 @@ func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 		if bmp := a.avatarBitmap(avatar); bmp != nil {
 			image = bmp
 		}
-		display.Avatar(c, name, display.AvatarProps{
-			Size: 48, Shape: display.AvatarCircle, Image: image,
-			Fallback: display.AvatarText, Background: tk.FillTertiary,
+		a.avatarHost(c, 48, u.IsPro, func() ui.Element {
+			return display.Avatar(c, name, display.AvatarProps{
+				Size: 48, Shape: display.AvatarCircle, Image: image,
+				Fallback: display.AvatarText, Background: tk.FillTertiary,
+			})
 		})
 		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				display.Text(c, title, display.TextProps{Strong: true, FontSize: 16, Rows: 1})
-				if u.IsPro {
-					display.Tag(c, "PRO", display.TagProps{
-						Size: lobetheme.Small, Color: display.TagGold,
-						Variant: display.TagFilled, Round: true,
-					})
-				}
 				// 本人资料头也展示佩戴中的徽章；数据来自已经拉到的
 				// GET /v1/users/:name，切换徽章后由 syncProfileEquippedBadges
 				// 就地更新，不在这里额外请求。
