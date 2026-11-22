@@ -29,15 +29,11 @@ import (
 // 三个端点都不返回约定的响应体（文档只写了请求），所以成功后一律用本地提交
 // 的值更新页面与缓存，不拿响应去猜字段。
 //
-// 编辑时限：文档里没有。api-write.md 的「编辑帖子」「评论」两节只写了作者本人
-// 与 last-write-wins（并发以后提交的为准），index.md 的配额一节也只有通用调用
-// 频次；terms.md 与 changelog.md 同样没有任何「发布后 X 分钟内可改」「最多改
-// 几次」的规则。读端点也没有 can_edit / editable_until / edited_at 这类字段
-// （帖子的 updated_at 语义未定义，评论根本没有这个字段），所以客户端**不做**
-// 本地时限判断——编一个窗口出来只会在允许编辑时把入口藏掉。真正的裁决在服务端：
-// 超时或超次数时它回 403 permission_denied，m 是可读的中文原因，friendlyError
-// 会原样展示（permission_denied 不走授权链路，见 auth_gate.go），按钮留着让
-// 用户重试是安全的。
+// 编辑时限（11-20 契约）：发帖后 10 分钟，标题 / 正文与节点各一个独立窗口，
+// 各自成功后关闭。详情的 can_edit 是窗口状态，客户端据此显示入口；账户被限制
+// 编辑时它仍可能为 true，真正调用会拿到 403 permission_denied。窗口已过或机会
+// 用掉时服务端回 400 edit_window_expired，此时隐藏入口、不再重试（见 submitEdit）。
+// 评论编辑没有这个窗口，仍按作者本人判断。
 
 // editKind 是编辑窗口这次在改什么。
 type editKind int
@@ -478,9 +474,9 @@ func (st *editState) postscriptKey() string {
 	return st.key
 }
 
-// isMine 报告某个昵称是不是当前登录账号。编辑接口只允许作者本人，界面上也
-// 只在作者本人时给出入口：匿名帖的 author 为 null（解码成「匿名」），无法
-// 确认是不是自己发的，所以不给入口，避免点开只换来一句 403。
+// isMine 报告某个昵称是不是当前登录账号。匿名帖的 author 为 null（解码成
+// 「匿名」），光靠昵称确认不了，所以它只是老响应缺 can_edit / can_edit_node
+// 时的兜底；新契约以服务端下发的窗口状态为准（匿名帖真实发布者也能拿到）。
 func (a *app) isMine(author string) bool {
 	if a.auth == nil || author == "" || author == "匿名" {
 		return false
@@ -489,9 +485,23 @@ func (a *app) isMine(author string) bool {
 	return name != "" && name == author
 }
 
-// canEditTopic 报告这篇帖子此刻是否给出「编辑 / 追更」入口。
-func (a *app) canEditTopic(d *detailState) bool {
+// isPostAuthor 只判断帖子作者身份，用于那些与 10 分钟编辑窗口无关的作者动作
+// （追加附言、关闭评论、发起抽奖）。它们不该因为标题 / 正文窗口关掉就消失。
+func (a *app) isPostAuthor(d *detailState) bool {
 	return d != nil && d.topic != nil && a.isMine(d.topic.Author)
+}
+
+// canEditTopic 报告这篇帖子此刻是否给出「编辑标题 / 正文」入口。优先用详情
+// 下发的 can_edit（窗口状态，匿名帖真实发布者也能拿到 true）；老响应没有这个
+// 字段时才退回本地作者判断。
+func (a *app) canEditTopic(d *detailState) bool {
+	if d == nil || d.topic == nil {
+		return false
+	}
+	if d.topic.CanEditKnown {
+		return d.topic.CanEdit
+	}
+	return a.isMine(d.topic.Author)
 }
 
 // canEditReply 报告这条评论此刻是否给出「编辑」入口。已删除的评论不能改。
@@ -518,6 +528,10 @@ func (a *app) applyEdit(st *editState) {
 		d.topic.Title = strings.TrimSpace(st.title)
 		d.topic.Content = st.body
 		d.topic.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		// 正文窗口成功后就关闭：can_edit 是窗口状态，不该再显示编辑入口。
+		// 节点窗口独立，这里不碰 can_edit_node。
+		d.topic.CanEdit = false
+		d.topic.CanEditKnown = true
 		if st.guardChanged() {
 			sel := st.selectedGuard()
 			d.topic.GuardKnown = true
@@ -547,6 +561,7 @@ func (a *app) applyEdit(st *editState) {
 		})
 	}
 	a.saveCachedDetail(d)
+	a.redrawDetailFor(d)
 }
 
 // renameTopicRows 把各 tab 里这篇帖子的标题换成新标题。只改内存里的列表行，

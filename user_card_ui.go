@@ -283,7 +283,10 @@ func (a *app) userCardHeader(c *ui.Context, cs *userCardState) {
 				}
 			})
 		})
-		a.userCardFollowButton(c, cs)
+		ui.Row(c).Gap(8).Shrink(0).Children(func() {
+			a.userCardFollowButton(c, cs)
+			a.userCardBlockButton(c, cs)
+		})
 	})
 }
 

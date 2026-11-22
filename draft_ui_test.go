@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,22 +32,65 @@ func TestSidebarShowsDraftsWithCount(t *testing.T) {
 			label = it.Label
 		}
 	}
-	if label != "草稿箱 (2)" {
+	// 数字不再写进文案，改由 Lobe 红点角标展示，折叠/展开读同一份计数。
+	if label != "草稿箱" {
 		t.Fatalf("侧边栏草稿箱文案不对：%q（%+v）", label, items)
 	}
+	if got := a.navBadgeCount("drafts"); got != 2 {
+		t.Fatalf("草稿箱角标计数 = %d，期望 2", got)
+	}
+
+	for _, expanded := range []bool{true, false} {
+		a.navExpanded = expanded
+		tt := ui.NewTester(a.view, 1200, 900)
+		tt.Frame()
+		row, ok := tt.Find("草稿箱")
+		if !ok {
+			t.Fatalf("展开=%v 时侧边栏没有草稿箱：%q", expanded, tt.Texts())
+		}
+		dot, ok := tt.Find("2")
+		if !ok {
+			t.Fatalf("展开=%v 时草稿箱没画出红点计数：%q", expanded, tt.Texts())
+		}
+		if dot.Y < row.Y-20 || dot.Y > row.Y+row.H+20 {
+			t.Errorf("展开=%v 时红点计数 y=%.0f 不在草稿箱行 y=%.0f 附近", expanded, dot.Y, row.Y)
+		}
+	}
+}
+
+// 折叠态角标要贴着图标的右上角，不能落在带内边距的按钮角上。按钮方块 32、
+// 图标 16，差的一半就是角标该往里收的距离（见 main.go 的 navBadgeInset）。
+func TestSidebarCollapsedBadgeFollowsIcon(t *testing.T) {
+	a := testDraftsApp(t)
+	for _, title := range []string{"草稿一", "草稿二"} {
+		a.compose = newComposeState()
+		a.compose.title = title
+		a.flushDrafts()
+	}
+	a.navExpanded = false
 
 	tt := ui.NewTester(a.view, 1200, 900)
 	tt.Frame()
-	if _, ok := tt.Find("草稿箱 (2)"); !ok {
-		t.Errorf("展开态侧边栏没画出草稿箱角标：%q", tt.Texts())
+
+	button, ok := tt.Find("草稿箱")
+	if !ok {
+		t.Fatalf("折叠态侧边栏没有草稿箱：%q", tt.Texts())
+	}
+	dot, ok := tt.Find("2")
+	if !ok {
+		t.Fatalf("折叠态草稿箱没画出角标：%q", tt.Texts())
 	}
 
-	// 折叠成图标轨后仍是同一份 Label（tooltip 里带数字）。
-	a.navExpanded = false
-	tt2 := ui.NewTester(a.view, 1200, 900)
-	tt2.Frame()
-	if _, ok := tt2.Find("草稿箱 (2)"); !ok {
-		t.Errorf("折叠态图标轨丢了草稿箱：%q", tt2.Texts())
+	// 图标在 32x32 按钮里居中、占 16x16，右上角相对按钮左上角是 (24, 8)。
+	// 角标 pill 中心相对图标顶边再下移 navBadgeDrop，故落在 (24, 8+5)。
+	wantX := button.X + (sidebarRailButtonSize+sidebarRailGlyphSize)/2
+	wantY := button.Y + navBadgeInset + navBadgeDrop
+	gotX, gotY := dot.X+dot.W/2, dot.Y+dot.H/2
+	if d := gotX - wantX; d < -4 || d > 4 {
+		t.Errorf("角标中心 x=%.1f，期望贴近图标右上角 %.1f（按钮 x=%.1f）", gotX, wantX, button.X)
+	}
+	if d := gotY - wantY; d < -4 || d > 4 {
+		t.Errorf("角标中心 y=%.1f，期望贴近图标右上角 %.1f（按钮 y=%.1f）", gotY, wantY, button.Y)
 	}
 }
 
@@ -200,6 +244,23 @@ func TestDraftsClearAllRemovesEverything(t *testing.T) {
 	}
 	if _, err := os.Stat(a.drafts.path); err == nil {
 		t.Error("确认后草稿文件该删掉")
+	}
+}
+
+// 页头只留标题与条数：账号范围、保存位置这类文案说明不该占一行。
+func TestDraftsHeaderHasNoScopeDescription(t *testing.T) {
+	a := testDraftsApp(t)
+	a.compose = newComposeState()
+	a.compose.title = "一条草稿"
+	a.flushDrafts()
+	a.showDrafts()
+
+	tt := ui.NewTester(a.view, 1200, 900)
+	tt.Frame()
+	for _, text := range tt.Texts() {
+		if strings.Contains(text, "保存在这台电脑上") {
+			t.Fatalf("草稿箱页头不该有账号范围说明：%q", tt.Texts())
+		}
 	}
 }
 

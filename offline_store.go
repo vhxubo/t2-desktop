@@ -119,17 +119,6 @@ func (s *localKV) get(key string, dst any) (time.Time, bool) {
 	return e.UpdatedAt, true
 }
 
-// has 只判断键是否存在，不关心值能否解成调用方的类型。
-func (s *localKV) has(key string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.loadLocked(); err != nil {
-		return false
-	}
-	_, ok := s.entries[key]
-	return ok
-}
-
 // put 写一个键并立即落盘。写盘失败会返回错误，但内存里的值仍可用。
 func (s *localKV) put(key string, v any, at time.Time) error {
 	if key == "" {

@@ -11,7 +11,7 @@ import (
 // 稍后再看（Watch Later）与浏览历史是同一扇窗口里的两页，数据都只存在本机：
 //
 //   - 浏览历史就是 reading_history.go 里的阅读记录（每打开一篇记一条）。
-//   - 稍后再看是本文件：用户主动标记「等会儿再读」的帖子，排在首页入口里，
+//   - 稍后再看是本文件：用户主动标记「等会儿再读」的帖子，挂在侧边栏入口上，
 //     不依赖服务端的收藏 / 书签。
 //
 // 两页都按当前账号隔离（见 accountScope）：换账号后看不到上一个账号读过、
@@ -120,7 +120,7 @@ func (a *app) inWatchLater(shortID string) bool {
 	return false
 }
 
-// watchLaterCount 是首页入口上的数字：保留模式下只数未读，默认模式下整份
+// watchLaterCount 是侧边栏角标上的数字：保留模式下只数未读，默认模式下整份
 // 列表都是待读，直接数条目。
 func (a *app) watchLaterCount() int {
 	a.loadWatchLater()

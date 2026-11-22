@@ -25,8 +25,17 @@ import (
 )
 
 type tabState struct {
-	list       ui.ListState
-	items      []Item
+	list ui.ListState
+	// raw 是接口返回并已按 Key 去重的全部条目，屏蔽与否都留着：在资料卡上
+	// 屏蔽 / 取消屏蔽后要立刻重算 items，不能重新发请求。
+	raw []Item
+	// items 是 raw 按当前名单过滤后的可见列表；foldRows、渲染与头像预取
+	// 只读它。未开过滤的 tab 里 items 就是 raw。
+	items []Item
+	// hidden 是 raw 里被剔除的条数，只用于页头说明。
+	hidden int
+	// filterSkip 是连续「整页被过滤」的页数，用来限制自动续拉。
+	filterSkip int
 	page       int
 	total      int
 	totalPages int
@@ -236,6 +245,9 @@ type app struct {
 	// authGate 是全局授权弹窗：任何缺少权限的调用都收敛到这里，授权成功后
 	// 重跑被中断的调用。
 	authGate authGate
+	// contentFilter 是当前账号的内容屏蔽名单与运行状态（见 content_filter.go）。
+	// 一个账号窗口一份，不放进 appDeps：名单是账号数据，不能进程级共享。
+	contentFilter *contentFilterState
 
 	// coins 是金币页的聚合状态：余额、今日明细、流水、统计与排行各自独立
 	// 加载，某个高级接口未开通时只降级那一块。账号菜单里的金币数也读这里的
@@ -300,6 +312,10 @@ type app struct {
 	unread        int
 	unreadLoading bool
 	unreadGen     uint64
+	// sectionUnread 是未读数接口带回来的分区计数（首页 / 社区 / 关注 / 徽章 /
+	// 追更内容），给侧边栏对应浏览页挂红点。与 unread 同一次请求拿到，
+	// 只在主线程读写，见 section_unread.go。
+	sectionUnread notificationUnreadCounts
 	// notifWin 是通知窗口：通知独立成一个 mygo 窗口，不再是主窗口里的页面
 	// 或弹窗。入口见 showNotifications；只在主线程读写。
 	notifWin *mygo.Window
@@ -348,6 +364,11 @@ type app struct {
 	// 主线程读写。
 	editWin *mygo.Window
 	edit    *editState
+	// nodeEditWin 是「修改节点」窗口（见 node_edit_window.go），与编辑正文
+	// 窗口完全独立：两个窗口各自计时、各自成功后关闭。nodeEdit 是这一次
+	// 选择的节点与幂等键，窗口关掉就丢弃；只在 UI 线程读写。
+	nodeEditWin *mygo.Window
+	nodeEdit    *nodeEditState
 	// hosts 是图库（图床）配置：几个内置预设加用户手工添加的项，落盘在
 	// localKV 的 imagehosts:v1。hostActiveLabel 是当前激活项的名字，编辑器
 	// 的工具面板直接把它绑到下拉框上。都只在 UI 线程读写，见 image_hosts.go。
@@ -577,6 +598,8 @@ func newApp(dir string) *app { return newAppWithDeps(newAppDeps(dir), nil) }
 func newAccountApp(b *accountBook, acc *account) *app {
 	a := newAppWithDeps(b.deps(), acc)
 	a.autoLoad = true
+	// 冷启动时已有会话也要读一次名单：缓存已撑住首帧，这里拉最新一份。
+	a.ensureContentFilter(false)
 	return a
 }
 
@@ -653,6 +676,9 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 	if err := a.kv.load(); err != nil {
 		log.Printf("离线缓存不可用：%v", err)
 	}
+	// 内容屏蔽名单也先摆缓存：有缓存时首帧就能按名单过滤，后台再拉最新一份。
+	a.contentFilter = newContentFilterState()
+	a.loadContentFilterCache()
 	a.loadCoinCache()
 	a.loadReadingHistory()
 	a.loadPostReads()
@@ -752,6 +778,7 @@ func (a *app) publish(fn func()) {
 		a.redrawComposeWindow()
 		a.redrawReplyWindow()
 		a.redrawEditWindow()
+		a.redrawNodeEditWindow()
 		a.redrawUserCardWindow()
 		a.redrawSearchWindow()
 		a.redrawFollowsWindow()
@@ -782,15 +809,23 @@ func (a *app) loadFor(owner toastTarget, idx, page int) {
 	}
 	st := a.tabs[idx]
 	spec := a.specFor(idx)
-	a.loadSpec(owner, st, spec, page, func() { a.loadFor(owner, idx, page) })
+	a.loadSpec(owner, st, spec, page,
+		func() { a.loadFor(owner, idx, page) },
+		func() { a.loadFor(owner, idx, page+1) })
 }
 
 // loadSpec 是通用的列表加载：把 spec 的第 page 页拉回来填进 st。「我的」
 // 窗口里的四类内容也走这条路，所以它按 spec 而不是按侧边栏下标工作。owner
-// 是发起这次加载的窗口；replay 是授权补上权限后重跑这次请求用的回调。
-func (a *app) loadSpec(owner toastTarget, st *tabState, spec tabSpec, page int, replay func()) {
+// 是发起这次加载的窗口；replay 是授权补上权限后重跑这次请求用的回调；next
+// 是整页都被屏蔽时自动续拉下一页的回调（没有则为 nil）。
+func (a *app) loadSpec(owner toastTarget, st *tabState, spec tabSpec, page int, replay, next func()) {
 	if st == nil || page < 1 {
 		return
+	}
+	// 兼容直接给 items 塞数据的旧状态（无头测试、本地恢复）：续拉时把它当
+	// 成原始行，去重与过滤都从它派生，不会把已有行丢掉。
+	if page > 1 && len(st.raw) == 0 && len(st.items) > 0 {
+		st.raw = append([]Item(nil), st.items...)
 	}
 	if st.loading {
 		return
@@ -824,7 +859,10 @@ func (a *app) loadSpec(owner toastTarget, st *tabState, spec tabSpec, page int, 
 				}
 				if page == 1 {
 					st.err = friendlyError(err)
+					st.raw = nil
 					st.items = nil
+					st.hidden = 0
+					st.filterSkip = 0
 					st.fold.reset()
 				} else {
 					// 已有内容时续拉失败：保留当前列表，在列表底部提示。
@@ -833,38 +871,63 @@ func (a *app) loadSpec(owner toastTarget, st *tabState, spec tabSpec, page int, 
 				return
 			}
 			st.moreErr = ""
+			// raw 留着全部原始行：屏蔽 / 取消后按它重算 items，不重新请求。
+			// 去重也以 raw 为准，重复页不会因为「过滤后没新增」被误判到底。
+			rawAdded := 0
 			if page == 1 {
-				st.items = res.Items
+				st.raw = append([]Item(nil), res.Items...)
 				st.fold.reset()
 				st.list.ScrollTo(0, ui.Start)
 				st.noMore = len(res.Items) == 0
+				st.filterSkip = 0
+				rawAdded = len(st.raw)
 			} else {
-				// 页码分页可能重复：按资源 ID 去重
-				seen := make(map[string]bool, len(st.items))
-				for _, it := range st.items {
+				seen := make(map[string]bool, len(st.raw))
+				for _, it := range st.raw {
 					seen[it.Key] = true
 				}
-				added := 0
 				for _, it := range res.Items {
 					if !seen[it.Key] {
-						st.items = append(st.items, it)
+						st.raw = append(st.raw, it)
 						seen[it.Key] = true
-						added++
+						rawAdded++
 					}
 				}
-				// 服务端返回空页或没有新增条目：标记到底，避免无限加载
-				st.noMore = added == 0
+				// 服务端返回空页或没有新增条目：标记到底，避免无限加载。
+				// 必须用原始响应判断：整页都被屏蔽时过滤后的新增是 0，
+				// 按它判断会把后面的页永远挡在「到底」之外。
+				st.noMore = rawAdded == 0
 			}
 			st.total = res.Total
 			st.totalPages = res.TotalPages
 			st.page = page
 			st.loaded = true
-			// 分组按整份 items 重算：第 2 页正好接上第 1 页末尾的同一个人时，
+			st.items, st.hidden = a.filterItems(spec, st.raw)
+			// 分组按整份可见 items 重算：第 2 页正好接上第 1 页末尾的同一个人时，
 			// 尾部那一组要跟着变长，不能因为分两次到达就断成两组。
 			st.refold(spec)
-			// 列表行里的作者、被回复人与通知操作者都要带头像：数据到了就
-			// 先预取，渲染时只读缓存，不在每帧里发请求。
-			a.prefetchItemAvatars(res.Items)
+			// 只预取本次新增且可见的条目：被屏蔽作者的头像不该被下载。
+			if rawAdded > 0 {
+				visible := make(map[string]bool, len(st.items))
+				for _, it := range st.items {
+					visible[it.Key] = true
+				}
+				fresh := make([]Item, 0, rawAdded)
+				for _, it := range res.Items {
+					if visible[it.Key] {
+						fresh = append(fresh, it)
+					}
+				}
+				a.prefetchItemAvatars(fresh)
+			}
+			// 整页都被过滤掉时自动续拉下一页，最多连续跳过 3 页，免得为了
+			// 找一条内容把配额打光。续拉失败照旧走 moreErr，不影响已有列表。
+			if spec.FilterBlocked && len(st.items) == 0 && rawAdded > 0 &&
+				st.filterSkip < contentFilterSkipPages && next != nil &&
+				(st.totalPages == 0 || page < st.totalPages) {
+				st.filterSkip++
+				next()
+			}
 		})
 	}()
 }
@@ -974,6 +1037,12 @@ func (a *app) ensureLoaded() {
 	}
 	spec := a.specFor(a.tab)
 	st := a.tabs[a.tab]
+	// 名单未落定前先别露出会被屏蔽的帖子；最多等 5 秒，超时按无名单放行。
+	// 等待期间也确保那次 GET 已经发出（后台登录流程可能还没走到）。
+	if spec.FilterBlocked && !a.contentFilter.ready(a.auth.loggedIn()) {
+		a.ensureContentFilter(false)
+		return
+	}
 	if st.loading || st.loaded || st.authWait {
 		return
 	}
@@ -1000,7 +1069,10 @@ func (a *app) reloadCurrent() {
 	}
 	st.authWait = false
 	st.loaded = false
+	st.raw = nil
 	st.items = nil
+	st.hidden = 0
+	st.filterSkip = 0
 	st.fold.reset()
 	st.err = ""
 	st.moreErr = ""
@@ -1024,11 +1096,9 @@ func (a *app) refreshTab(idx int) {
 		// 需要登录的页交给选中处理去弹授权，这里不发注定失败的请求。
 		return
 	}
-	// 打开「动态」就把关注流标成已读：角标说明的是上次离开之后新增了多少
-	// 条，看完这一页它就该消失（见 follows.go 的 markFollowsRead）。
-	if tabSpecs[idx].Path == "/v1/me/follows/timeline" {
-		a.markFollowsRead()
-	}
+	// 打开分区页就把对应角标标成已读：角标说明的是上次离开之后新增了多少，
+	// 看完这一页它就该消失（动态见 follows.go，首页 / 社区见 section_unread.go）。
+	a.markTabRead(idx)
 	st.err = ""
 	st.moreErr = ""
 	a.load(idx, 1)
@@ -1046,6 +1116,12 @@ func (a *app) reclickTab(idx int) {
 
 func (a *app) onAuthChanged(err error) {
 	a.loginPending = false
+	// 内容屏蔽名单是账号数据：换账号 / 退出后整体重建，缓存按新作用域重读；
+	// 登录成功则后台拉一次最新名单。
+	a.resetContentFilter()
+	if a.autoLoad && a.auth != nil && a.auth.loggedIn() {
+		a.ensureContentFilter(false)
+	}
 	// 账号菜单属于当前会话：登录、退出、重新授权都先把它收起，别把上一个
 	// 账号的入口留在新会话里。
 	a.profileMenuOpen = false
@@ -1178,6 +1254,7 @@ func (a *app) onAuthChanged(err error) {
 		a.resetFollowsUnread()
 		a.unread = 0
 		a.unreadLoading = false
+		a.sectionUnread = notificationUnreadCounts{}
 		a.notifSeen = nil
 		a.notifBaseline = false
 		// 退出后系统里可能还留着通知，但目标属于上一个账号，一律不再解析。
@@ -1322,10 +1399,11 @@ func (a *app) sidebar(c *ui.Context) {
 // sidebarNavItems 是浏览页导航的列表数据，展开态交给 display.List，折叠态
 // 交给 sidebarRail 的 ActionIcon。
 //
-// 评分榜是「动态」之后的一项，上面单独加一条分割线：它不是浏览页，而是打开
-// 一扇独立窗口，所以图标用方框 + 向右上角外指的箭头，展开态再补一行说明。
+// 草稿箱与稍后再看是一组：两者都是「存到本地、稍后回来处理」的入口，上下各
+// 一条分割线把它们和浏览页、独立窗口分开。评分榜仍是最下面的独立窗口入口，
+// 图标用方框 + 向右上角外指的箭头，展开态再补一行说明。
 func (a *app) sidebarNavItems() []display.ListItem {
-	items := make([]display.ListItem, 0, len(tabSpecs)+2)
+	items := make([]display.ListItem, 0, len(tabSpecs)+5)
 	for i, s := range tabSpecs {
 		if s.Kind == kindNotification {
 			continue
@@ -1336,13 +1414,18 @@ func (a *app) sidebarNavItems() []display.ListItem {
 		}
 		items = append(items, display.ListItem{
 			Key:   tabID(i),
-			Label: a.followsTabLabel(i, s.Label),
+			Label: s.Label,
 			Icon:  icon,
 		})
 	}
-	// 草稿箱是主窗口里的一个页面，和浏览页同组，放在分割线之前。
+	// 草稿箱与稍后再看自成一组：上面一条线和浏览页分开，下面一条线再接
+	// 评分榜那种独立窗口入口。两项的小红点计数由 navBadgeCount 提供。
+	items = append(items, display.ListItem{Divider: true})
 	items = append(items, display.ListItem{
-		Key: "drafts", Label: a.draftsNavLabel(), Icon: lucide.NotebookPen(),
+		Key: "drafts", Label: "草稿箱", Icon: lucide.NotebookPen(),
+	})
+	items = append(items, display.ListItem{
+		Key: "watchlater", Label: "稍后再看", Icon: lucide.Bookmark(),
 	})
 	items = append(items, display.ListItem{Divider: true})
 	items = append(items, display.ListItem{
@@ -1352,14 +1435,70 @@ func (a *app) sidebarNavItems() []display.ListItem {
 	return items
 }
 
+// navBadgeCount 是侧边栏导航项的 Lobe 红点计数。草稿箱读内存 store，稍后再看
+// 读当前账号的待读清单，浏览页读接口带回来的分区未读数（见 section_unread.go）；
+// 其余导航项不挂角标。返回 0 时 Badge 自动隐藏。
+func (a *app) navBadgeCount(key string) int {
+	switch key {
+	case "drafts":
+		if a.drafts != nil {
+			return a.drafts.count()
+		}
+		return 0
+	case "watchlater":
+		return a.watchLaterCount()
+	}
+	if idx, ok := tabIndexFromID(key); ok {
+		return a.tabUnreadCount(idx)
+	}
+	return 0
+}
+
+// 折叠图标轨里 ActionIcon 的方块与图标尺寸。角标要贴着图标画，不能落在带内边距
+// 的按钮角上：方块比图标大一圈，两者差的一半就是角标从按钮角往图标角的内缩量。
+const (
+	sidebarRailButtonSize float32 = 32
+	sidebarRailGlyphSize  float32 = 16
+	navBadgeInset                 = (sidebarRailButtonSize - sidebarRailGlyphSize) / 2
+)
+
+// navBadgeDrop 是角标 pill 相对图标顶边的下移量。Lobe 默认把 pill 中心钉在
+// 内容顶边，16 的小图标上就像悬在图标上方、贴着上一行。
+const navBadgeDrop float32 = 5
+
+// navBadge 在折叠图标轨上画计数角标，用的是 Lobe 的 feedback.Badge。Badge 固定
+// 把 pill 钉在内容的右上角，而这里的内容是带内边距的 32x32 按钮，直接包按钮会
+// 让 pill 落在按钮角上。所以给 Badge 一个与图标同大的透明内容块，再整层绝对
+// 定位到图标位置，pill 就贴着图标的右上角。底色取 Lobe 的 Idle 灰（Badge 的
+// 默认状态色 TextQuaternary），不用错误红，也不引入品牌色。
+func navBadge(c *ui.Context, count int, build func()) ui.Element {
+	tk := lobetheme.TokensOf(c)
+	bg := tk.TextQuaternary
+	root := ui.Box(c).AlignSelf(ui.Start).Shrink(0)
+	root.Children(func() {
+		build()
+		feedback.Badge(c, feedback.BadgeProps{Count: count, Small: true, Color: bg}, func() {
+			ui.Box(c).Size(sidebarRailGlyphSize, sidebarRailGlyphSize)
+		}).Absolute().Right(navBadgeInset).Top(navBadgeDrop + navBadgeInset).IgnoreInput(true)
+	})
+	return root
+}
+
 // sidebarNavList 展开时用 Lobe display.List 画带文字的导航行，左侧留出
 // navListInset；折叠时换成 sidebarRail 的图标轨，指针停留有 tooltip。
 func (a *app) sidebarNavList(c *ui.Context, nav layout.SideNavState) {
 	items := a.sidebarNavItems()
+	// 展开态数值走 Lobe List 的 Extra 槽位，落在行的右端；角标只在折叠的
+	// 图标轨上出现，避免展开行里图标再挂一枚 pill 显得拥挤。
+	for i := range items {
+		if count := a.navBadgeCount(items[i].Key); count > 0 {
+			items[i].Extra = strconv.Itoa(count)
+		}
+	}
 	if !nav.Expanded {
 		// 折叠态图标轨居中靠左右零内边距，这里只补顶部留白，别把图标推离轨中线。
 		ui.Column(c).Padding(sidebarNavInsetTop, 0, 0, 0).Children(func() {
-			sidebarRail(c, items, a.navSel, a.handleSidebarNavItem)
+			sidebarRail(c, items, a.navSel, a.handleSidebarNavItem, a.navBadgeCount)
 			a.sidebarNodeRail(c)
 		})
 		return
@@ -1379,8 +1518,8 @@ func (a *app) sidebarNavList(c *ui.Context, nav layout.SideNavState) {
 	})
 }
 
-// handleSidebarNavItem 分发导航列表的点击：t<n> 是浏览页切换，其余（评分榜）
-// 走底部入口共用的动作分发。折叠图标轨与展开列表都走这里，不会漏掉窗口入口。
+// handleSidebarNavItem 分发导航列表的点击：t<n> 是浏览页切换，其余（草稿箱、
+// 稍后再看、评分榜）走底部入口共用的动作分发。折叠图标轨与展开列表都走这里。
 func (a *app) handleSidebarNavItem(key string) {
 	if idx, ok := tabIndexFromID(key); ok {
 		a.selectTab(idx)
@@ -1391,27 +1530,41 @@ func (a *app) handleSidebarNavItem(key string) {
 
 // sidebarRail 把折叠态的导航画成 Lobe ActionIcon 图标轨：保留 ActionIcon 的
 // 外观与状态，再用 Lobe 的 overlay.Tooltip 把名字浮在图标右侧，指针停留或
-// 键盘聚焦都能看到，无障碍描述也是同一个名字。
-func sidebarRail(c *ui.Context, items []display.ListItem, active string, onSelect func(string)) {
+// 键盘聚焦都能看到，无障碍描述也是同一个名字。badgeCount 给出某项的小红点
+// 计数，传 nil 表示这一轨没有角标（例如底部入口）。
+func sidebarRail(c *ui.Context, items []display.ListItem, active string, onSelect func(string), badgeCount func(string) int) {
 	tk := lobetheme.TokensOf(c)
 	ui.Column(c).Gap(2).AlignItems(ui.Center).AlignSelf(ui.Stretch).Children(func() {
 		for _, it := range items {
 			if it.Divider {
-				// 折叠态也把分组的分割线画出来，别让「动态」下面的窗口入口
-				// 看着和浏览页连成一串。
+				// 折叠态也把分组的分割线画出来：草稿箱/稍后再看一组的两头
+				// 各一条，和浏览页、独立窗口入口分开。
 				ui.Box(c).Height(1).Margin(4, 8).AlignSelf(ui.Stretch).
 					Background(tk.BorderSecondary)
 				continue
 			}
-			b := action.StyleActionIcon(c, ui.ButtonBase(c), it.Icon, action.ActionIconProps{
-				Active:    it.Key == active,
-				BlockSize: 32,
-				GlyphSize: 16,
-			})
-			b.Label(it.Label)
-			lobeoverlay.Tooltip(c, b, it.Label, lobeoverlay.TooltipProps{Placement: lobeoverlay.Right})
-			if b.Clicked() {
-				onSelect(it.Key)
+			count := 0
+			if badgeCount != nil {
+				count = badgeCount(it.Key)
+			}
+			build := func() {
+				b := action.StyleActionIcon(c, ui.ButtonBase(c), it.Icon, action.ActionIconProps{
+					Active:    it.Key == active,
+					BlockSize: sidebarRailButtonSize,
+					GlyphSize: sidebarRailGlyphSize,
+				})
+				b.Label(it.Label)
+				lobeoverlay.Tooltip(c, b, it.Label, lobeoverlay.TooltipProps{Placement: lobeoverlay.Right})
+				if b.Clicked() {
+					onSelect(it.Key)
+				}
+			}
+			if count > 0 {
+				// Badge 自己把根元素设成 AlignSelf(Start)，这里改回居中，
+				// 免得带角标的两项在图标轨里向左跑偏。
+				navBadge(c, count, build).AlignSelf(ui.Center)
+			} else {
+				build()
 			}
 		}
 	})
@@ -1495,7 +1648,7 @@ func (a *app) sidebarFooterList(c *ui.Context, nav layout.SideNavState) {
 	if !nav.Expanded {
 		// 折叠态图标轨居中靠左右零内边距，这里只补底部留白，别把图标推离轨中线。
 		ui.Column(c).Padding(0, 0, sidebarFooterInsetBottom, 0).Children(func() {
-			sidebarRail(c, items, "", a.handleSidebarAction)
+			sidebarRail(c, items, "", a.handleSidebarAction, nil)
 		})
 		return
 	}
@@ -1525,6 +1678,8 @@ func (a *app) handleSidebarAction(key string) {
 		a.showScores()
 	case "drafts":
 		a.showDrafts()
+	case "watchlater":
+		a.showWatchLater()
 	case "wait":
 		a.pageName = "login"
 	case "cancel":
@@ -1872,14 +2027,9 @@ func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
 				ui.Text(c, spec.Label).FontSize(tk.FontSizeHeading4).FontWeight(600).
 					LetterSpacing(-0.4).TextColor(tk.TextHeading).SingleLine()
 			})
-			if count := feedCountLabel(st); count != "" {
+			if count := feedCountLabel(spec, st); count != "" {
 				ui.Text(c, count).FontSize(tk.FontSizeSM).Font(sidebarFont).
 					TextColor(tk.TextDescription).SingleLine().Shrink(0)
-			}
-			// 首页页头的「稍后再看」入口：带待读数量，打开同一扇窗口里的
-			// 稍后再看 / 浏览历史两页（见 watch_later_window.go）。
-			if spec.FilterByNode {
-				a.watchLaterEntry(c)
 			}
 		})
 		if spec.FilterByNode {
@@ -1890,15 +2040,21 @@ func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
 
 // feedCountLabel 是页头右端的小字：有总数时写「共 N 条」，服务端没给
 // 总数的页（最新评论）只写已拿到的条数。滚动加载不显示当前页码。
-func feedCountLabel(st *tabState) string {
+// 开了内容屏蔽时再补「· 已屏蔽 M」：总数仍是服务端口径（诚实），M 是已
+// 加载页里被剔除的条数，也是「为什么列表变少了」的唯一解释。
+func feedCountLabel(spec tabSpec, st *tabState) string {
 	n := st.total
 	if n <= 0 {
-		n = len(st.items)
+		n = len(st.raw)
 	}
 	if n <= 0 {
 		return ""
 	}
-	return "共 " + strconv.Itoa(n) + " 条"
+	label := "共 " + strconv.Itoa(n) + " 条"
+	if spec.FilterBlocked && st.hidden > 0 {
+		label += " · 已屏蔽 " + strconv.Itoa(st.hidden)
+	}
+	return label
 }
 
 func (a *app) body(c *ui.Context) {
@@ -1955,8 +2111,26 @@ func (a *app) body(c *ui.Context) {
 		return
 	}
 	if len(st.items) == 0 {
-		// 首页即使没有内容也要留住页头：稍后再看入口不能随列表空掉而消失，
-		// 没有新帖时正好可以从那里接着读。
+		// 整页都被名单剔除时不能说「暂无内容」：那会让人以为站点真的没帖子。
+		if spec.FilterBlocked && st.hidden > 0 {
+			ui.Column(c).Grow(1).Children(func() {
+				a.feedHeader(c, spec, st)
+				ui.Column(c).Grow(1).Center().Padding(24).Children(func() {
+					display.Empty(c, display.EmptyProps{
+						Icon:        lucide.EyeOff(),
+						Title:       "内容已按屏蔽规则隐藏",
+						Description: "当前列表的条目都在你的屏蔽名单里。",
+						Action: func() {
+							if action.Button(c, "管理屏蔽名单", action.ButtonProps{}).Clicked() {
+								a.showProfileTab(profileTabFilter)
+							}
+						},
+					})
+				})
+			})
+			return
+		}
+		// 首页即使没有内容也留住页头：页头标题与节点筛选不能随列表空掉消失。
 		if spec.FilterByNode {
 			ui.Column(c).Grow(1).Children(func() {
 				a.feedHeader(c, spec, st)
@@ -1995,7 +2169,7 @@ func (a *app) body(c *ui.Context) {
 	// 续拉失败后停在提示上，等用户点「重试」，否则每次重建都会再发一次注定
 	// 失败的请求。
 	if spec.Paging == pagingPages && st.loaded && !st.loading && st.moreErr == "" &&
-		!st.noMore && len(st.items) > 0 && st.list.AtEnd() {
+		!st.noMore && (len(st.raw) > 0 || len(st.items) > 0) && st.list.AtEnd() {
 		hasMore := st.totalPages == 0 || st.page < st.totalPages
 		if hasMore {
 			a.load(a.tab, st.page+1)
@@ -2028,13 +2202,24 @@ func (a *app) loadMoreFooter(c *ui.Context, errText string, loading bool, retry 
 
 // rowWith 画一行列表项，但由调用方决定点开它的动作。「我的」窗口渲染同一
 // 批行时传 openProfileItem：正文在主窗口打开，本窗口留着不动。
+// 文章行默认带悬浮的「加入稍后再看」按钮。
 func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
+	a.rowWithOptions(c, it, open, true)
+}
+
+// rowWithNoWatchLater 给已经在稍后再看窗口里的行用：那扇窗口本身就是待读
+// 清单与历史，行尾再挂「加入稍后再看」没有意义，浏览历史尤其要干净。
+func (a *app) rowWithNoWatchLater(c *ui.Context, it Item, open func(Item)) {
+	a.rowWithOptions(c, it, open, false)
+}
+
+func (a *app) rowWithOptions(c *ui.Context, it Item, open func(Item), watchLater bool) {
 	if it.Notif != nil {
 		a.notificationRow(c, it)
 		return
 	}
 	if it.Extra != nil {
-		a.richRow(c, it, open)
+		a.richRow(c, it, open, watchLater)
 		return
 	}
 	tk := lobetheme.TokensOf(c)
@@ -2045,6 +2230,9 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 	// 统一的 Lobe 行表面：静止透明、悬停 FillTertiary、圆角与过渡取主题。
 	// 纵向 padding 收紧到 Lobe 节奏（内容行略高于导航行的 6），横向 12 对齐 token。
 	row := feedRowSurface(c).PaddingY(10).PaddingX(12)
+	// 稍后再看按钮是悬浮动作：指针停在行上或键盘焦点落进行内时才出现，
+	// 平时让行尾只留回复数；浏览历史这类窗口整行不挂该按钮。
+	reveal := watchLater && (row.Hovered() || row.FocusWithin())
 	row.Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 			// 标题是这一行里唯一的重心：字号明显大于副标题和时效信息，
@@ -2079,6 +2267,9 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 							ui.Text(c, " · "+suffix).FontSize(tk.FontSizeSM).
 								TextColor(tk.TextDescription).SingleLine()
 						}
+						// 稍后再看紧跟发帖时间，留在元信息这一行里，不单独占
+						// 行尾那一列（行尾只放回复数）。
+						a.feedWatchLaterButton(c, it, watchLater, reveal)
 					})
 			case it.Subtitle != "":
 				// 没有作者时 Subtitle 是「节点 · 时间」整段：节点仍拆成 Tag，
@@ -2093,10 +2284,14 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 								ui.Text(c, rest).FontSize(tk.FontSizeSM).
 									TextColor(tk.TextDescription).SingleLine()
 							}
+							a.feedWatchLaterButton(c, it, watchLater, reveal)
 						})
 				} else {
-					ui.Text(c, it.Subtitle).FontSize(tk.FontSizeSM).Font(sidebarFont).
-						TextColor(tk.TextDescription).SingleLine()
+					ui.Row(c).MinWidth(0).AlignItems(ui.Center).Font(sidebarFont).Children(func() {
+						ui.Text(c, it.Subtitle).FontSize(tk.FontSizeSM).
+							TextColor(tk.TextDescription).SingleLine()
+						a.feedWatchLaterButton(c, it, watchLater, reveal)
+					})
 				}
 			}
 			// 帖子行多一行时效信息：最后回复人、更新时间与最高楼层。没人
@@ -2105,6 +2300,7 @@ func (a *app) rowWith(c *ui.Context, it Item, open func(Item)) {
 				a.latestReplyRow(c, it, open)
 			}
 		})
+		// 行尾只留回复数；稍后再看按钮已经挪到副标题里，紧跟发帖时间。
 		if it.Stats != nil {
 			a.postStatsBadge(c, it)
 		} else if it.Meta != "" {
@@ -2164,8 +2360,9 @@ func (a *app) latestReplyRow(c *ui.Context, it Item, open func(Item)) {
 // 回复数。数字只写值、不写「N 回复」，悬停提示负责说明它是什么；没有气泡
 // 图标，右端只剩一个安静的计数。
 func (a *app) postStatsBadge(c *ui.Context, it Item) {
-	badge := ui.Row(c).Gap(8).Shrink(0).AlignSelf(ui.Start).AlignItems(ui.Center).
-		Padding(4, 0, 0, 0)
+	// 对齐交给 rowWith 里包住本块与稍后再看按钮的那一行，这里不再自己贴顶或
+	// 加顶部留白，否则两块会用不同的中线。
+	badge := ui.Row(c).Gap(8).Shrink(0).AlignItems(ui.Center)
 	badge.Children(func() {
 		if it.Pinned {
 			// 置顶用 Lobe 的金色 Tag，和列表里其他角标同一套视觉。

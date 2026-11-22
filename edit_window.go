@@ -417,6 +417,18 @@ func (a *app) submitEdit() {
 			}
 			st.busy = false
 			if err != nil {
+				// 窗口已过 / 机会已用掉：隐藏入口并收起窗口，不重试。这是
+				// 400 edit_window_expired，不是参数错误也不是缺权限。
+				if isEditWindowExpired(err) {
+					if st.detail != nil && st.detail.topic != nil {
+						st.detail.topic.CanEdit = false
+						st.detail.topic.CanEditKnown = true
+						a.redrawDetailFor(st.detail)
+					}
+					a.closeEditWindow()
+					a.editToast("可修改时间已过，入口已关闭")
+					return
+				}
 				// 缺权限时先补授权，回调成功后按同样的内容重发一次，用户不用
 				// 重新输入。
 				a.handleAuthErrorFor(toastEdit, err, func() {

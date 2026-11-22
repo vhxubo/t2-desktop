@@ -32,6 +32,7 @@ const (
 	toastPandora                          // 潘多拉弹窗：错误与授权提示（抽卡结果只画在卡片里）
 	toastReply                            // 独立写评论窗口：发送结果
 	toastEdit                             // 编辑窗口：保存 / 追加附言的结果
+	toastNodeEdit                         // 修改节点窗口：提交结果
 	toastFollows                          // 关注与粉丝窗口：回关 / 取关
 	toastViewer                           // 图片预览窗口：另存为结果
 	toastNetLog                           // 网络调试窗口：复制请求数据的结果
@@ -70,6 +71,8 @@ func (a *app) toastWindow(target toastTarget) *mygo.Window {
 		return a.replyWin
 	case toastEdit:
 		return a.editWin
+	case toastNodeEdit:
+		return a.nodeEditWin
 	case toastFollows:
 		return a.followsWin
 	case toastViewer:

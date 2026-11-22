@@ -1311,13 +1311,13 @@ func (b *accountBook) pollUnread() {
 func (b *accountBook) pollAccountUnread(acc *account) {
 	ctx, cancel := context.WithTimeout(context.Background(), accountUnreadPollTimeout)
 	defer cancel()
-	n, err := b.bgClient(acc).fetchUnreadNotificationCount(ctx)
+	counts, err := b.bgClient(acc).fetchUnreadNotificationCount(ctx, "", "")
 	if err != nil {
 		return // 令牌问题由 withAuthRetry 清到位；网络错误下一轮再试
 	}
 	b.mu.Lock()
 	if b.accountLocked(acc.ID) != nil {
-		acc.unread = n
+		acc.unread = counts.Total
 	}
 	b.mu.Unlock()
 	b.redrawPanel()

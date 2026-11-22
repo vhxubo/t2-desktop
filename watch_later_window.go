@@ -14,8 +14,8 @@ import (
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 稍后再看 / 浏览历史窗口：首页页头右上角的「稍后再看」入口打开（见
-// watchLaterEntry），一扇窗口里分「稍后再看」「浏览历史」两页。
+// 稍后再看 / 浏览历史窗口：侧边栏「稍后再看」入口打开（见 sidebarNavItems），
+// 一扇窗口里分「稍后再看」「浏览历史」两页。
 //
 // 两页的数据都只在本机、按账号隔离（见 watch_later.go 与 reading_history.go）：
 // 换账号窗口时各自重新载入，清空只清当前账号。稍后再看的打开行为由设置窗口
@@ -202,7 +202,7 @@ func (a *app) watchLaterBody(c *ui.Context) {
 			display.Empty(c, display.EmptyProps{
 				Icon:        lucide.Bookmark(),
 				Title:       "还没有稍后再看",
-				Description: "在帖子详情页点「稍后再看」，或从首页入口回来继续读。",
+				Description: "在文章列表或详情页点「加入稍后再看」，再从侧边栏回来继续读。",
 			})
 		})
 		return
@@ -307,7 +307,7 @@ func (a *app) readingHistoryBody(c *ui.Context) {
 			display.Empty(c, display.EmptyProps{
 				Icon:        lucide.Clock(),
 				Title:       "还没有浏览记录",
-				Description: "打开过的帖子会记在这里，离线也能回看缓存过的正文。",
+				Description: "打开过的帖子会记在这里，随时可以回来接着看。",
 			})
 		})
 		return
@@ -320,41 +320,73 @@ func (a *app) readingHistoryBody(c *ui.Context) {
 		return i
 	}
 	ui.List(c, &a.readingList, len(rows), func(i int) {
-		a.rowWith(c, a.readingItem(rows[i]), a.openDetail)
+		// 浏览历史就是「读过的东西」，行尾不再挂加入稍后再看的按钮。
+		a.rowWithNoWatchLater(c, a.readingItem(rows[i]), a.openDetail)
 	}).Grow(1).Gap(0)
 }
 
 /* ------------------------------------------------------------------
-   首页入口与详情页动作
+   侧边栏入口、列表行动作与详情页动作
 --------------------------------------------------------------- */
 
-// watchLaterEntry 是首页页头右上角的入口：书签图标 + 「稍后再看」，有待读
-// 条目时带上数量。放在首页而不是侧边栏：它属于「读什么」的动线，和列表在
-// 一起；浏览历史在打开的窗口里切页即可。
-func (a *app) watchLaterEntry(c *ui.Context) {
+// feedWatchLaterGap 是文章行里稍后再看动作与前面发帖时间之间的间距。
+// feedWatchLaterTextWidth 固定文案占位，加入 / 移除两种文案长短不同也不让整行重排。
+const (
+	feedWatchLaterGap       float32 = 8
+	feedWatchLaterTextWidth float32 = 72
+)
+
+// feedWatchLaterButton 是文章行副标题里紧跟发布时间的稍后再看动作。它和同一行
+// 的「最后回复」用同一套展示与点击：等宽小字、平时 TextDescription，悬停变 Primary
+// 并加下划线、手型光标、Tooltip，点整段文字生效。未加入时是「稍后再看」，点一下
+// 加入；已加入时换成「移出稍后再看」，再点一下移除。只改本地清单，不开正文。
+//
+// 它是悬浮动作：enabled 决定这一类行是否支持（浏览历史就不支持），revealed
+// 决定此刻是否可见。整块始终构建并占住同一格位置，不可见时用 Invisible 隐藏——
+// 它保留布局空间、不绘制也不吃输入。若按悬浮与否来增删元素，副标题会突然多出
+// 一段文字，整行重排，指针下的元素随之变化，视觉上就是来回抖动。固定宽度则保证
+// 加入 / 移除切换时同样不重排。
+func (a *app) feedWatchLaterButton(c *ui.Context, it Item, enabled, revealed bool) {
+	if it.ShortID == "" || !enabled {
+		return
+	}
 	tk := lobetheme.TokensOf(c)
-	n := a.watchLaterCount()
-	label := "稍后再看"
-	if n > 0 {
-		label = fmt.Sprintf("稍后再看 %d", n)
+	in := a.inWatchLater(it.ShortID)
+	face, label, tip := "稍后再看", "加入稍后再看", "把这篇文章放进稍后再看"
+	if in {
+		face, label, tip = "移出稍后再看", "移出稍后再看", "把这篇文章从稍后再看移除"
 	}
-	b := action.Button(c, "", action.ButtonProps{Size: lobetheme.Small})
-	b.Label(label).Tooltip("打开稍后再看与浏览历史")
-	b.Children(func() {
-		ui.Icon(c, lucide.Bookmark()).FontSize(14).TextColor(tk.TextSecondary)
-		ui.Text(c, label).SingleLine()
+	link := ui.Row(c).Shrink(0).AlignItems(ui.Center).Font(sidebarFont).
+		Width(feedWatchLaterTextWidth).MarginStart(feedWatchLaterGap)
+	ink := tk.TextDescription
+	if link.Hovered() {
+		ink = tk.Primary
+	}
+	link.Children(func() {
+		t := ui.Text(c, face).FontSize(tk.FontSizeSM).TextColor(ink).SingleLine().Shrink(0)
+		if link.Hovered() {
+			t.Underline()
+		}
 	})
-	if b.Clicked() {
-		a.showWatchLater()
+	link.Label(label).Cursor(ui.CursorPointer)
+	link.OnClick(func() {
+		if a.toggleWatchLater(it, nil) {
+			a.toast(a.watchLaterToast(), "已加入稍后再看")
+		} else {
+			a.toast(a.watchLaterToast(), "已移出稍后再看")
+		}
+	})
+	link.Tooltip(tip)
+	if !revealed {
+		link.Invisible()
 	}
-	b.AlignSelf(ui.Center).Shrink(0)
 }
 
 // detailWatchLaterAction 是详情页操作组里那枚「稍后再看」图标：不在列表里
 // 时加入，已在列表里时移出。文案跟着状态走，点一下就有明确结果。
 func (a *app) detailWatchLaterAction(d *detailState) detailToolAction {
 	in := a.inWatchLater(d.shortID)
-	icon, label, tip := lucide.BookmarkPlus(), "加入稍后再看", "把这篇文章放进稍后再看，稍后从首页入口继续读"
+	icon, label, tip := lucide.BookmarkPlus(), "加入稍后再看", "把这篇文章放进稍后再看，稍后从侧边栏入口继续读"
 	if in {
 		icon, label, tip = lucide.BookmarkMinus(), "移出稍后再看", "这篇文章已在稍后再看里，点一下移出"
 	}

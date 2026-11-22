@@ -232,9 +232,6 @@ func (a *app) readingItem(r readingRecord) Item {
 		parts = append(parts, when)
 	}
 	it.Subtitle = strings.Join(parts, " · ")
-	if a.hasCachedDetail(r.ShortID) {
-		it.Meta = "已缓存正文"
-	}
 	return it
 }
 

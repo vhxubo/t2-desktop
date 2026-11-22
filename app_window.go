@@ -165,7 +165,7 @@ func (a *app) anyLiveWindow() *mygo.Window {
 	for _, win := range []*mygo.Window{
 		a.notifWin, a.settingsWin, a.aboutWin, a.netLogWin,
 		a.profileWin, a.coinWin, a.composeWin,
-		a.replyWin, a.editWin, a.searchWin, a.followsWin,
+		a.replyWin, a.editWin, a.nodeEditWin, a.searchWin, a.followsWin,
 		a.userCardWin, a.viewerWin, a.scoresWin, a.watchLaterWin,
 	} {
 		if win != nil {
@@ -190,7 +190,7 @@ func (a *app) hasLiveWindow() bool {
 	for _, win := range []*mygo.Window{
 		a.notifWin, a.settingsWin, a.aboutWin, a.netLogWin,
 		a.profileWin, a.coinWin, a.composeWin,
-		a.replyWin, a.editWin, a.searchWin, a.followsWin,
+		a.replyWin, a.editWin, a.nodeEditWin, a.searchWin, a.followsWin,
 		a.userCardWin, a.viewerWin, a.scoresWin, a.watchLaterWin,
 	} {
 		if win != nil {
@@ -245,6 +245,7 @@ func (a *app) closeAllWindows() {
 	a.closeComposeWindow()
 	a.closeReplyWindow()
 	a.closeEditWindow()
+	a.closeNodeEditWindow()
 	a.closeSearchWindow()
 	a.closeAboutWindow()
 	a.closeNetLogWindow()

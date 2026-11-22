@@ -41,13 +41,6 @@ func (a *app) readCachedDetail(shortID string) (cachedDetail, bool) {
 	return c, true
 }
 
-func (a *app) hasCachedDetail(shortID string) bool {
-	if a.kv == nil || shortID == "" {
-		return false
-	}
-	return a.kv.has(detailCachePrefix + shortID)
-}
-
 // preloadDetailCache 在新建 detailState 后调用：有缓存就先把正文和第一页
 // 评论摆上去。它不改变 loading 标记，后续网络请求照常进行。
 //

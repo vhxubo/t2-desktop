@@ -82,7 +82,7 @@ func TestWatchLaterOpenRemovesByDefault(t *testing.T) {
 		t.Error("默认偏好下打开后仍留在稍后再看")
 	}
 	if got := a.watchLaterCount(); got != 0 {
-		t.Errorf("首页入口数量 = %d，期望 0", got)
+		t.Errorf("侧边栏角标数量 = %d，期望 0", got)
 	}
 }
 
@@ -202,9 +202,13 @@ func TestWatchLaterWindowMarksRead(t *testing.T) {
 }
 
 // 浏览历史页复用阅读记录：打开过的帖子列在这里，清空入口按当前账号清。
+// 它本身不是待读清单，行尾不显示「已缓存正文」，悬浮也不挂加入稍后再看按钮。
 func TestReadingHistoryTabRenders(t *testing.T) {
 	a := testApp(t)
 	a.recordReading(Item{ShortID: "R1", Title: "浏览过的帖子", Author: "amy"}, nil)
+	a.saveCachedDetail(&detailState{shortID: "R1", topic: &topicDetail{
+		ShortID: "R1", Title: "浏览过的帖子",
+	}})
 	a.laterTab = 1
 
 	tt := ui.NewTester(a.watchLaterWindowView, watchLaterWindowWidth, watchLaterWindowHeight)
@@ -214,36 +218,72 @@ func TestReadingHistoryTabRenders(t *testing.T) {
 			t.Errorf("浏览历史页缺少 %q：%q", want, tt.Texts())
 		}
 	}
+	if tt.HasText("已缓存正文") {
+		t.Errorf("浏览历史行不该写「已缓存正文」：%q", tt.Texts())
+	}
 	if _, ok := tt.Access("清空浏览历史"); !ok {
 		t.Errorf("浏览历史页没有清空入口：%q", tt.Texts())
 	}
+
+	// 悬浮整行也不能露出加入稍后再看的按钮。
+	title, ok := tt.Find("浏览过的帖子")
+	if !ok {
+		t.Fatalf("找不到历史行标题：%q", tt.Texts())
+	}
+	tt.Move(title.X+title.W/2, title.Y+title.H/2)
+	tt.Frame()
+	if _, ok := tt.Find("加入稍后再看"); ok {
+		t.Errorf("浏览历史行不该有加入稍后再看按钮：%q", tt.Texts())
+	}
 }
 
-// 首页页头有「稍后再看」入口，有待读条目时带数量；没有内容时页头也留着。
-func TestHomeWatchLaterEntry(t *testing.T) {
+// 稍后再看入口收进侧边栏，和草稿箱一上一下成组：待读数走 Lobe 红点角标，
+// 折叠成图标轨与展开态都展示同一个数字；点它打开那扇双页窗口。
+func TestSidebarWatchLaterEntry(t *testing.T) {
 	a := testApp(t)
-	a.tabs[0].loaded = true
-	a.tabs[0].noMore = true // 只有一页：别让无限滚动在测试里发起续拉
-	a.tabs[0].items = []Item{{Key: "P1", ShortID: "P1", Title: "首页帖子"}}
 
-	tt := ui.NewTester(a.view, 1100, 760)
-	tt.Frame()
-	if !tt.HasText("稍后再看") {
-		t.Fatalf("首页没有稍后再看入口：%q", tt.Texts())
+	items := a.sidebarNavItems()
+	idx := -1
+	for i, it := range items {
+		if it.Key == "watchlater" {
+			idx = i
+		}
+	}
+	if idx < 2 || items[idx].Label != "稍后再看" || items[idx-1].Key != "drafts" ||
+		!items[idx-2].Divider || !items[idx+1].Divider {
+		t.Fatalf("稍后再看没和草稿箱成组：%+v", items)
+	}
+	if got := a.navBadgeCount("watchlater"); got != 0 {
+		t.Fatalf("空清单不该有红点计数：%d", got)
+	}
+
+	checkDot := func(expanded bool, want string) {
+		t.Helper()
+		a.navExpanded = expanded
+		tt := ui.NewTester(a.view, 1100, 760)
+		tt.Frame()
+		row, ok := tt.Find("稍后再看")
+		if !ok {
+			t.Fatalf("展开=%v 时侧边栏没有稍后再看：%q", expanded, tt.Texts())
+		}
+		dot, ok := tt.Find(want)
+		if !ok {
+			t.Fatalf("展开=%v 时没有红点计数 %q：%q", expanded, want, tt.Texts())
+		}
+		if dot.Y < row.Y-20 || dot.Y > row.Y+row.H+20 {
+			t.Errorf("展开=%v 时红点 y=%.0f 不在稍后再看行 y=%.0f 附近", expanded, dot.Y, row.Y)
+		}
+		if err := tt.Click("稍后再看"); err != nil {
+			t.Fatalf("展开=%v 时点侧边栏入口失败：%v", expanded, err)
+		}
 	}
 
 	a.addWatchLater(Item{ShortID: "P9", Title: "待读"}, nil)
-	tt.Frame()
-	if !tt.HasText("稍后再看 1") {
-		t.Errorf("入口没有带待读数量：%q", tt.Texts())
+	if got := a.navBadgeCount("watchlater"); got != 1 {
+		t.Fatalf("待读计数 = %d，期望 1", got)
 	}
-
-	// 列表空掉时入口仍在，否则没有新帖时反而进不去待读清单。
-	a.tabs[0].items = nil
-	tt.Frame()
-	if !tt.HasText("稍后再看") {
-		t.Errorf("首页空状态下入口消失了：%q", tt.Texts())
-	}
+	checkDot(true, "1")
+	checkDot(false, "1")
 }
 
 // 详情页操作组里那枚图标跟着状态切换：加入后变成移出。
@@ -278,6 +318,127 @@ func TestDetailWatchLaterActionToggles(t *testing.T) {
 	find().onClick()
 	if a.inWatchLater("P1") {
 		t.Error("再点一次没有移出")
+	}
+}
+
+// 悬浮露出的稍后再看按钮紧跟发帖时间放在副标题这一行，不独占最右侧那一列；
+// 回复数仍在行尾。
+func TestFeedRowWatchLaterButtonAfterTime(t *testing.T) {
+	a := testApp(t)
+	a.tabs[0].loaded = true
+	a.tabs[0].noMore = true
+	a.tabs[0].items = []Item{{
+		Key: "P1", ShortID: "P1", Title: "列表第一篇", Author: "jimmy",
+		SubtitleSuffix: " · 3 小时前", Stats: &replyStats{Replies: 12},
+	}}
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	// 悬浮动作：平时不可见，指针落到行上才露出。
+	if _, ok := tt.Find("加入稍后再看"); ok {
+		t.Fatal("未悬浮时不该有稍后再看按钮")
+	}
+	title, ok := tt.Find("列表第一篇")
+	if !ok {
+		t.Fatalf("找不到文章标题：%q", tt.Texts())
+	}
+	whenBefore, ok := tt.Find(" · 3 小时前")
+	if !ok {
+		t.Fatalf("找不到发布时间：%q", tt.Texts())
+	}
+	tt.Move(title.X+title.W/2, title.Y+title.H/2)
+	tt.Frame()
+
+	when, ok := tt.Find(" · 3 小时前")
+	if !ok {
+		t.Fatalf("悬浮后找不到发布时间：%q", tt.Texts())
+	}
+	// 按钮固定占住同一格位置，只切换可见性；时间不能因为悬浮而位移，
+	// 否则整行重排会让指针下的元素来回变化，视觉上就是抖动。
+	if when.X != whenBefore.X || when.Y != whenBefore.Y {
+		t.Errorf("悬浮前后发布时间从 (%.1f,%.1f) 跑到 (%.1f,%.1f)",
+			whenBefore.X, whenBefore.Y, when.X, when.Y)
+	}
+	btn, ok := tt.Find("加入稍后再看")
+	if !ok {
+		t.Fatalf("悬浮后没有加入按钮：%q", tt.Texts())
+	}
+	count, ok := tt.Find("12")
+	if !ok {
+		t.Fatalf("行尾没有回复数：%q", tt.Texts())
+	}
+
+	centers := func(r ui.Rect) float32 { return r.Y + r.H/2 }
+	if d := centers(btn) - centers(when); d > 1.5 || d < -1.5 {
+		t.Errorf("按钮中线 %.1f 没和时间中线 %.1f 对齐（差 %.1f）",
+			centers(btn), centers(when), d)
+	}
+	if gap := btn.X - (when.X + when.W); gap < feedWatchLaterGap-1 || gap > feedWatchLaterGap+1 {
+		t.Errorf("按钮与时间的间距 %.1f，期望 %.1f：时间右缘 %.1f，按钮左缘 %.1f",
+			gap, feedWatchLaterGap, when.X+when.W, btn.X)
+	}
+	if btn.X >= count.X {
+		t.Errorf("按钮 x=%.1f 不该跑到行尾回复数 x=%.1f 的位置", btn.X, count.X)
+	}
+}
+
+// 主列表文章行悬浮时露出带文案的稍后再看动作：未加入时是「稍后再看」，点一下
+// 加入；已加入时换成「移出稍后再看」，再点一下移除。两种状态都不打开正文。
+func TestFeedRowWatchLaterButton(t *testing.T) {
+	a := testApp(t)
+	a.tabs[0].loaded = true
+	a.tabs[0].noMore = true
+	a.tabs[0].items = []Item{
+		{Key: "P1", ShortID: "P1", Title: "列表第一篇", Author: "jimmy", SubtitleSuffix: " · 3 小时前"},
+		{Key: "P2", ShortID: "P2", Title: "列表第二篇", Author: "jimmy", SubtitleSuffix: " · 5 小时前"},
+	}
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	title, ok := tt.Find("列表第一篇")
+	if !ok {
+		t.Fatalf("找不到文章标题：%q", tt.Texts())
+	}
+	tt.Move(title.X+title.W/2, title.Y+title.H/2)
+	tt.Frame()
+	btn, ok := tt.Find("加入稍后再看")
+	if !ok {
+		t.Fatalf("悬浮后文章行没有加入稍后再看按钮：%q", tt.Texts())
+	}
+	// 侧边栏已有一项「稍后再看」，行内文案是第二处。
+	withText := 0
+	for _, s := range tt.Texts() {
+		if s == "稍后再看" {
+			withText++
+		}
+	}
+	if withText < 2 {
+		t.Errorf("图标旁没有「稍后再看」文案：%q", tt.Texts())
+	}
+	tt.ClickAt(btn.X+btn.W/2, btn.Y+btn.H/2)
+	tt.Frame()
+	if !a.inWatchLater("P1") {
+		t.Error("点文章行的按钮没有把这篇加入稍后再看")
+	}
+	if a.detail != nil {
+		t.Error("点加入按钮不该打开正文")
+	}
+	if len(a.later) != 1 {
+		t.Fatalf("稍后再看应有 1 条，实际 %d", len(a.later))
+	}
+
+	// 已入清单后图标与文案切成移出动作，再点一次会移除。
+	again, ok := tt.Find("移出稍后再看")
+	if !ok {
+		t.Fatalf("加入后按钮没换成移出状态：%q", tt.Texts())
+	}
+	tt.ClickAt(again.X+again.W/2, again.Y+again.H/2)
+	tt.Frame()
+	if a.inWatchLater("P1") {
+		t.Error("再点一次没有移出稍后再看")
+	}
+	if len(a.later) != 0 {
+		t.Errorf("移出后清单应为空，实际 %+v", a.later)
 	}
 }
 

@@ -217,7 +217,8 @@ func (a *app) refreshUnread() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	go func() {
 		defer cancel()
-		count, err := a.client.fetchUnreadNotificationCount(ctx)
+		counts, err := a.client.fetchUnreadNotificationCount(ctx,
+			a.sectionReadAtParam(sectionHome), a.sectionReadAtParam(sectionCommunity))
 		a.publish(func() {
 			if a.unreadGen != gen {
 				return
@@ -228,10 +229,12 @@ func (a *app) refreshUnread() {
 				var ae *apiError
 				if errors.As(err, &ae) && (ae.Status == 401 || ae.Status == 403) {
 					a.unread = 0
+					a.sectionUnread = notificationUnreadCounts{}
 				}
 				return
 			}
-			a.unread = max(0, count)
+			a.unread = max(0, counts.Total)
+			a.sectionUnread = counts
 		})
 	}()
 }

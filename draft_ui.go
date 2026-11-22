@@ -18,19 +18,6 @@ import (
 // mygo 窗口：标题栏与侧边栏照常保留，任务栏里的窗口数不变。切走时和列表页一样
 // 整块换掉，右下角的 FAB 列随之收起。
 
-// draftsNavLabel 是侧边栏「草稿箱」一项的文案，数字来自内存 store。折叠态图标
-// 轨也读同一份 Label，tooltip 里自然带上条数。
-func (a *app) draftsNavLabel() string {
-	n := 0
-	if a.drafts != nil {
-		n = a.drafts.count()
-	}
-	if n == 0 {
-		return "草稿箱"
-	}
-	return fmt.Sprintf("草稿箱 (%d)", n)
-}
-
 // showDrafts 进入草稿箱：先把正在写的那份并进 store，再换页面。
 func (a *app) showDrafts() {
 	a.flushDrafts()
@@ -61,21 +48,11 @@ func (a *app) draftsBody(c *ui.Context) {
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).FillWidth().Padding(24, feedInset(c)+16, 24, feedInset(c)+16).
 			Gap(8).Children(func() {
-			// 页头：标题、条数与当前账号标识；右边是「写新帖」和「清空全部」。
+			// 页头：标题与条数；右边是「写新帖」和「清空全部」。
 			ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(12).Children(func() {
 				ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 					ui.Text(c, "草稿箱").FontSize(tk.FontSizeHeading4).FontWeight(600).
 						LetterSpacing(-0.4).TextColor(tk.TextHeading).SingleLine()
-					scope := draftScope(a)
-					name := a.auth.username()
-					if name == "" {
-						name = scope
-					}
-					desc := "只显示「" + name + "」的草稿，保存在这台电脑上。"
-					if scope == "guest" {
-						desc = "未登录时的草稿，保存在这台电脑上，不与任何账号合并。"
-					}
-					ui.Text(c, desc).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription).MaxLines(1)
 				})
 				if n := len(rows); n > 0 {
 					ui.Text(c, fmt.Sprintf("共 %d 条", n)).FontSize(tk.FontSizeSM).

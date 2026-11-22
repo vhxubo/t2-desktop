@@ -65,9 +65,10 @@ const (
 	profileTabReplies
 	profileTabBadges
 	profileTabAccount
+	profileTabFilter
 )
 
-var profileTabLabels = []string{"概览", "个人简介", "我的内容", "我的回复", "徽章", "权限与账号"}
+var profileTabLabels = []string{"概览", "个人简介", "我的内容", "我的回复", "徽章", "权限与账号", "内容屏蔽"}
 
 // 「我的内容」里的四个分段。
 const (
@@ -181,6 +182,8 @@ func (p accountProfile) canUseOfficialHost() bool {
 // 完成后通过 publish 回填，并用每类数据的 seq 丢弃过期结果。
 type profileState struct {
 	tab int
+	// tabSeen 记上一次真正展示过的标签：切进「内容屏蔽」时据此强制刷新名单。
+	tabSeen int
 
 	// 账号资料（用户名 / 昵称 / 用户 ID / 注册时间）
 	infoSeq     uint64
@@ -422,7 +425,7 @@ func (a *app) loadProfileTopicColl(page int) {
 		return
 	}
 	spec := profileTopicCollSpec(name, ps.topicColl, page)
-	a.loadSpec(toastProfile, &ps.topicCollSt, spec, page, func() { a.loadProfileTopicColl(page) })
+	a.loadSpec(toastProfile, &ps.topicCollSt, spec, page, func() { a.loadProfileTopicColl(page) }, nil)
 }
 
 // applyProfileTopicColl 应用或清除合集筛选。合集名变了就把旧列表整份丢掉，
@@ -773,7 +776,7 @@ func (a *app) loadProfileContent(kind, page int) {
 		return
 	}
 	a.loadSpec(toastProfile, &ps.content[kind], a.profileSpecFor(ps, kind, page), page,
-		func() { a.loadProfileContent(kind, page) })
+		func() { a.loadProfileContent(kind, page) }, nil)
 }
 
 // reloadProfileContent 丢掉某一分段已拉到的内容，再从第一页重拉（分段上的

@@ -229,14 +229,19 @@ func TestFollowsWindowUnfollowRemovesRow(t *testing.T) {
 	}
 }
 
-// 未读数作为侧边栏「动态」的角标；打开这一页时清掉并记下读取时间。
+// 未读数作为侧边栏「动态」的 Lobe 红点角标；打开这一页时清掉并记下读取时间。
 func TestFollowsUnreadBadgeAndMarkRead(t *testing.T) {
 	a := testApp(t)
 	a.followUnread = 3
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	if !tt.HasText("动态 (3)") {
-		t.Fatalf("侧边栏没有未读角标：%q", tt.Texts())
+	row, ok := tt.Find("动态")
+	if !ok {
+		t.Fatalf("侧边栏没有「动态」：%q", tt.Texts())
+	}
+	dot, ok := tt.Find("3")
+	if !ok || dot.Y < row.Y-20 || dot.Y > row.Y+row.H+20 {
+		t.Fatalf("侧边栏「动态」没有未读红点：%q", tt.Texts())
 	}
 
 	a.markFollowsRead()
@@ -247,7 +252,7 @@ func TestFollowsUnreadBadgeAndMarkRead(t *testing.T) {
 		t.Error("标记已读没有记下时间")
 	}
 	tt.Frame()
-	if tt.HasText("动态 (3)") {
+	if _, ok := tt.Find("3"); ok {
 		t.Errorf("角标没有消失：%q", tt.Texts())
 	}
 }

@@ -57,7 +57,7 @@ func (a *app) loadCollectionTopics(b *collectionBrowse, page int) {
 	}
 	a.loadSpec(b.target, &b.list, collectionTopicsSpec(b.id), page, func() {
 		a.loadCollectionTopics(b, page)
-	})
+	}, nil)
 }
 
 // reloadCollectionTopics 丢掉已拉到的内容，从第一页重拉（浏览视图上的「刷新」）。

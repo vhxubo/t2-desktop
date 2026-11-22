@@ -476,14 +476,6 @@ func followsTimelineTab() int {
 	return -1
 }
 
-// followsTabLabel 是侧边栏「动态」的显示文案：有未读时在名字后面带上数字。
-func (a *app) followsTabLabel(idx int, label string) string {
-	if idx != followsTimelineTab() || a.followUnread <= 0 {
-		return label
-	}
-	return fmt.Sprintf("%s (%d)", label, a.followUnread)
-}
-
 // resetFollowsUnread 清掉未读角标并丢弃在途结果：它只属于当时那个会话。
 func (a *app) resetFollowsUnread() {
 	a.followUnread = 0

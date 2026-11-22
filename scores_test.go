@@ -258,7 +258,7 @@ func TestLoadScores(t *testing.T) {
 	}
 }
 
-// 评分榜入口从主页 FAB 移到了侧边栏「动态」下面（分割线之后）：带外链窗口
+// 评分榜入口在侧边栏「草稿箱 / 稍后再看」那一组的下方分割线之后：带外链窗口
 // 图标与「在新窗口打开」说明；点它走 showScores，headless 下至少准备好状态。
 // 主页不再画评分榜 FAB。
 func TestScoresSidebarEntryAndOpen(t *testing.T) {
@@ -277,7 +277,8 @@ func TestScoresSidebarEntryAndOpen(t *testing.T) {
 		t.Errorf("评分榜入口超出 %d 宽的导航轨：%+v", sidebarWidth, entry)
 	}
 
-	// 排在「动态」下面，上面紧挨着一条分割线，和浏览页分开。
+	// 排在「动态」下面，上面是「草稿箱 / 稍后再看」那一组，组的两头各有
+	// 一条分割线，和浏览页、独立窗口入口分开。
 	timeline, ok := tt.Find("动态")
 	if !ok {
 		t.Fatalf("侧边栏没有「动态」：%q", tt.Texts())
@@ -292,10 +293,12 @@ func TestScoresSidebarEntryAndOpen(t *testing.T) {
 			scoresAt = i
 		}
 	}
-	if scoresAt < 3 || !items[scoresAt-1].Divider ||
-		items[scoresAt-2].Key != "drafts" ||
-		!strings.HasPrefix(items[scoresAt-3].Label, "动态") {
-		t.Errorf("评分榜应在草稿箱下方的分割线之后：%+v", items)
+	if scoresAt < 5 || !items[scoresAt-1].Divider ||
+		items[scoresAt-2].Key != "watchlater" ||
+		items[scoresAt-3].Key != "drafts" ||
+		!items[scoresAt-4].Divider ||
+		!strings.HasPrefix(items[scoresAt-5].Label, "动态") {
+		t.Errorf("评分榜应在草稿箱/稍后再看一组的分割线之后：%+v", items)
 	}
 
 	if err := tt.Click("评分榜"); err != nil {

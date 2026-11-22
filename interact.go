@@ -779,9 +779,10 @@ func (a *app) topicInteractionVisible(d *detailState) bool {
 		return false
 	}
 	p := d.topic
-	// 无权帖的内容块被置空，表态 / 收藏 / 打赏写端点会 403。虽然外壳的
-	// reactions_summary 仍在，这里不画可点的互动入口，只留正文的访问墙。
-	if p.guardBlocks() {
+	// 无权帖的内容块被置空（passed == false 或评论响应 d:null），表态 / 收藏
+	// / 打赏写端点会 403 且不扣费。外壳的 reactions_summary 仍在，这里不画
+	// 可点的互动入口，只留正文的访问墙。
+	if d.contentBlocked() {
 		return false
 	}
 	return len(visibleReactions(p.Reactions)) > 0 || p.Rewards.Total > 0 ||

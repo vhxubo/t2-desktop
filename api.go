@@ -59,19 +59,22 @@ type tabSpec struct {
 	// FilterByNode 只给首页：列表 query 由首页的节点筛选与排序偏好生成。
 	// 「社区讨论」同样打 /v1/topics，但它固定筛到社区节点，不吃首页筛选。
 	FilterByNode bool
+	// FilterBlocked 表示这个列表吃内容屏蔽名单（见 content_filter.go）。
+	// 帖子列表、最新评论与动态都过滤；通知与搜索不属于这个能力的范围。
+	FilterBlocked bool
 }
 
 var tabSpecs = []tabSpec{
-	{Label: "首页", Path: "/v1/topics", Query: "page=1&limit=50&parent_slug=All&sort=value", ListKey: "posts", Paging: pagingPages, Kind: kindTopic, FilterByNode: true},
-	{Label: "今日热议", Path: "/v1/topics/hot", ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
-	{Label: "近期热议", Path: "/v1/topics/hot", Query: "period=7d", ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
-	{Label: "新发表", Path: "/v1/topics/latest", ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
+	{Label: "首页", Path: "/v1/topics", Query: "page=1&limit=50&parent_slug=All&sort=value", ListKey: "posts", Paging: pagingPages, Kind: kindTopic, FilterByNode: true, FilterBlocked: true},
+	{Label: "今日热议", Path: "/v1/topics/hot", ListKey: "posts", Paging: pagingPages, Kind: kindTopic, FilterBlocked: true},
+	{Label: "近期热议", Path: "/v1/topics/hot", Query: "period=7d", ListKey: "posts", Paging: pagingPages, Kind: kindTopic, FilterBlocked: true},
+	{Label: "新发表", Path: "/v1/topics/latest", ListKey: "posts", Paging: pagingPages, Kind: kindTopic, FilterBlocked: true},
 	// 最新评论端点仍只接受 ≤50（服务端返回「每页最多显示 50 条」），
 	// 不要跟着帖子评论的 100 一起改。它也只有这一页：排在同一帖子下连着
 	// 刷的评论会把别人挤出去，所以打开 FoldByAuthor，相邻同名评论收成一组。
-	{Label: "最新评论", Path: "/v1/comments/latest", Query: "limit=50", ListKey: "items", Paging: pagingIgnored, Kind: kindComment, FoldByAuthor: true},
-	{Label: "社区讨论", Path: "/v1/topics", Query: "page=1&limit=50&node_id=" + communityNodeID, ListKey: "posts", Paging: pagingPages, Kind: kindTopic},
-	{Label: "动态", Path: "/v1/me/follows/timeline", Query: "page=1&limit=50", ListKey: "items", NeedsAuth: true, Paging: pagingPages, Kind: kindTimeline},
+	{Label: "最新评论", Path: "/v1/comments/latest", Query: "limit=50", ListKey: "items", Paging: pagingIgnored, Kind: kindComment, FoldByAuthor: true, FilterBlocked: true},
+	{Label: "社区讨论", Path: "/v1/topics", Query: "page=1&limit=50&node_id=" + communityNodeID, ListKey: "posts", Paging: pagingPages, Kind: kindTopic, FilterBlocked: true},
+	{Label: "动态", Path: "/v1/me/follows/timeline", Query: "page=1&limit=50", ListKey: "items", NeedsAuth: true, Paging: pagingPages, Kind: kindTimeline, FilterBlocked: true},
 	// 收藏 / 书签 / 我的帖子 / 我的合集不在侧边栏：它们是「我的」窗口里的
 	// 四类内容，端点见 profile.go 的 profileContentSpecs 与 profileTopicsSpec。
 	// 通知走开放 API 的消息列表；字段名是 list（不是 items），筛选另带
@@ -195,6 +198,9 @@ type apiError struct {
 	Message       string
 	RequiredScope []string
 	RetryAfter    int
+	// Field 是 400 invalid_request 指出的出错字段（如 blocked_users），
+	// 让表单可以把服务端文案放到对应的那一块下面。
+	Field string
 }
 
 func (e *apiError) Error() string {
@@ -225,6 +231,9 @@ func (e *apiError) friendly() string {
 		return "内容不存在或不可见（404 not_found）"
 	case "invalid_request":
 		return "参数错误（400 invalid_request）：" + e.Message
+	case "edit_window_expired":
+		// 窗口已过或机会已用掉：入口应当已经隐藏，不该再让用户重试。
+		return "可修改时间已过，入口已关闭"
 	case "internal_error":
 		return "服务端错误（500），请稍后重试"
 	}
@@ -240,6 +249,13 @@ func friendlyError(err error) string {
 		return ae.friendly()
 	}
 	return err.Error()
+}
+
+// isEditWindowExpired 报告这次失败是不是窗口已过 / 机会已用掉（400
+// edit_window_expired）。这类失败不该重试：调用方据此把对应入口隐藏。
+func isEditWindowExpired(err error) bool {
+	var ae *apiError
+	return errors.As(err, &ae) && ae.Status == http.StatusBadRequest && ae.Code == "edit_window_expired"
 }
 
 // Client performs the read requests. Auth may be nil for anonymous-only use.
@@ -399,6 +415,13 @@ func (c *Client) postJSON(ctx context.Context, u, token, idempotencyKey string, 
 	return c.writeJSON(ctx, http.MethodPost, u, token, idempotencyKey, payload)
 }
 
+// putJSON sends one PUT with a JSON body through the same write path.
+// 内容屏蔽名单（PUT /v1/me/content-filter）是整份替换的写端点，重复提交同一
+// 份 body 结果相同，因此不需要 Idempotency-Key（writeJSON 传空串）。
+func (c *Client) putJSON(ctx context.Context, u, token string, payload any) (json.RawMessage, error) {
+	return c.writeJSON(ctx, http.MethodPut, u, token, "", payload)
+}
+
 // patchJSON sends one PATCH with a JSON body through the same write path.
 // 合集改名（PATCH /v1/me/collections/:collectionId）是唯一的 PATCH 写端点：
 // 它只改名字，id 不变，所以不能当成「删了再建」。
@@ -491,6 +514,7 @@ func (c *Client) sendJSON(req *http.Request) (json.RawMessage, error) {
 			Message:       env.M,
 			RequiredScope: env.RequiredScope,
 			RetryAfter:    env.RetryAfter,
+			Field:         env.Field,
 		}
 		if resp.StatusCode == http.StatusTooManyRequests || env.Code == "rate_limited" {
 			// 按闸门实际退避时间回写，界面上显示的秒数才和真正拦截的时长一致。

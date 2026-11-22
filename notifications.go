@@ -193,16 +193,57 @@ func (c *Client) fetchNotifications(ctx context.Context, page, filter int, keywo
 	})
 }
 
-func (c *Client) fetchUnreadNotificationCount(ctx context.Context) (int, error) {
-	return withAuthRetry(c, ctx, func(token string) (int, error) {
-		d, err := c.getJSON(ctx, c.apiURL(notificationUnreadPath), token)
+// notificationUnreadCounts 是 GET /me/notifications/unread-count 的全部计数。
+// Total 是通知总数（标题栏铃铛），其余是各内容分区自上次读取以来的新内容数：
+// 文档 2026-11-12 新增这些分项，字段名是 xxx_unread_count，watch 一项叫
+// watch_content_count。api-read.md 的正文用了简写，两种都认，未知字段忽略。
+type notificationUnreadCounts struct {
+	Total        int
+	Badge        int
+	Follow       int
+	Home         int
+	Community    int
+	WatchContent int
+}
+
+func decodeNotificationUnreadCounts(d json.RawMessage) notificationUnreadCounts {
+	o := asObject(d)
+	if o == nil {
+		return notificationUnreadCounts{Total: rawInt(d)}
+	}
+	return notificationUnreadCounts{
+		Total:        o.num("unread_count", "count", "unread"),
+		Badge:        o.num("badge_unread_count", "badge"),
+		Follow:       o.num("follow_unread_count", "follow"),
+		Home:         o.num("home_unread_count", "home"),
+		Community:    o.num("community_unread_count", "community"),
+		WatchContent: o.num("watch_content_count", "watch"),
+	}
+}
+
+// notificationUnreadCountPath 把本机的分区读取基线传给未读数接口。没有基线时
+// 不带参数，交给服务端自己的口径，不伪造「现在」把计数清零。
+func notificationUnreadCountPath(homeReadAt, communityReadAt string) string {
+	q := url.Values{}
+	if homeReadAt != "" {
+		q.Set("home_last_read_at", homeReadAt)
+	}
+	if communityReadAt != "" {
+		q.Set("community_last_read_at", communityReadAt)
+	}
+	if len(q) == 0 {
+		return notificationUnreadPath
+	}
+	return notificationUnreadPath + "?" + q.Encode()
+}
+
+func (c *Client) fetchUnreadNotificationCount(ctx context.Context, homeReadAt, communityReadAt string) (notificationUnreadCounts, error) {
+	return withAuthRetry(c, ctx, func(token string) (notificationUnreadCounts, error) {
+		d, err := c.getJSON(ctx, c.apiURL(notificationUnreadCountPath(homeReadAt, communityReadAt)), token)
 		if err != nil {
-			return 0, err
+			return notificationUnreadCounts{}, err
 		}
-		if o := asObject(d); o != nil {
-			return o.num("unread_count", "count"), nil
-		}
-		return rawInt(d), nil
+		return decodeNotificationUnreadCounts(d), nil
 	})
 }
 

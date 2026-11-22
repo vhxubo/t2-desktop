@@ -38,7 +38,7 @@ import (
 // 是读屏与点击测试命中的无障碍名。
 var profileTabIcons = []*ui.SVG{
 	lucide.ChartNoAxesColumn(), lucide.FileText(), lucide.FolderClosed(),
-	lucide.MessageCircle(), lucide.Award(), lucide.ShieldCheck(),
+	lucide.MessageCircle(), lucide.Award(), lucide.ShieldCheck(), lucide.EyeOff(),
 }
 
 // showProfile 是「我的」窗口的全局入口：任何窗口、任何 goroutine 都能调用。
@@ -48,6 +48,16 @@ func (a *app) showProfile() {
 		a.onProfileOpen()
 	}
 	a.publish(a.showProfileWindow)
+}
+
+// showProfileTab 打开「我的」窗口并直接落在指定标签。空状态里的「管理屏蔽
+// 名单」和账号菜单里的「内容屏蔽」都走这里。
+func (a *app) showProfileTab(tab int) {
+	if a.profile == nil {
+		a.profile = newProfileState()
+	}
+	a.profile.tab = tab
+	a.showProfile()
 }
 
 // showProfileWindow 在主线程上真正打开窗口。打开时先按需拉一次资料与余额，
@@ -191,6 +201,7 @@ func (a *app) profileMenuPanel(c *ui.Context) {
 		a.profileMenuSignRow(c)
 		a.profileMenuCoinsRow(c)
 		a.profileMenuPandoraRow(c)
+		a.profileMenuFilterRow(c)
 		a.profileMenuMineRow(c)
 		layout.Divider(c, layout.DividerProps{})
 		a.profileMenuLogoutRow(c)
@@ -346,24 +357,46 @@ func (a *app) profileWindowView(c *ui.Context) {
 		a.profileHeader(c, ps)
 		layout.Divider(c, layout.DividerProps{})
 
-		// 标签页用 Lobe 的 nav.Tabs：选中态与滑动指示块由组件负责。切换时只
-		// 换正文，窗口还是这一扇；各页的滚动与分页状态都留在 profileState。
-		ui.Row(c).FillWidth().Padding(6, 12).Children(func() {
+		// 七个标签在最窄窗口里一行放不下，用可换行的 TabsBase 自己画：点击
+		// 与键盘选择由基础组件负责，选中态是主色文字 + 底边线。切换时只换
+		// 正文，窗口还是这一扇；各页的滚动与分页状态都留在 profileState。
+		ui.Row(c).FillWidth().Padding(4, 12).Children(func() {
 			c.Key("profile-tabs")
-			items := make([]nav.TabItem, 0, len(profileTabLabels))
-			for i, label := range profileTabLabels {
-				items = append(items, nav.TabItem{Label: label, Icon: profileTabIcons[i]})
-			}
 			sel := ps.tab
-			nav.Tabs(c, &sel, nav.TabsProps{
-				Items:   items,
-				Variant: nav.TabsSquare,
-				Size:    lobetheme.Small,
-			}, nil)
+			tabs := ui.TabsBase(c, &sel, len(profileTabLabels))
+			tabs.List.Row().Wrap().FillWidth().Gap(2).AlignItems(ui.Center).Children(func() {
+				for i, label := range profileTabLabels {
+					tab := tabs.Tab(i).Gap(4).AlignItems(ui.Center).
+						Padding(6, 8).Shrink(0).BorderWidth(0, 0, 2, 0)
+					fg := tk.TextSecondary
+					if i == sel {
+						fg = tk.Primary
+						tab.BorderColor(tk.Primary)
+					} else {
+						tab.BorderColor(ui.Transparent)
+					}
+					if tab.Hovered() {
+						fg = tk.Text
+					}
+					tab.TextColor(fg).FontSize(11)
+					tab.Children(func() {
+						ui.Icon(c, profileTabIcons[i]).FontSize(12)
+						ui.Text(c, label).SingleLine()
+					})
+				}
+			})
 			if sel != ps.tab && sel >= 0 && sel < len(profileTabLabels) {
 				ps.tab = sel
 			}
 		})
+		// 切进「内容屏蔽」就强制 GET 一次：网页端可能改过名单，进入时看到的
+		// 必须是最新一份，保存时才是整份替换而不是拿旧基线覆盖别人的改动。
+		if ps.tabSeen != ps.tab {
+			ps.tabSeen = ps.tab
+			if ps.tab == profileTabFilter {
+				a.ensureContentFilter(true)
+			}
+		}
 		layout.Divider(c, layout.DividerProps{})
 
 		// 每页给一个独立的 key，避免不同页复用彼此的输入框 / 分段控件状态。
@@ -380,6 +413,8 @@ func (a *app) profileWindowView(c *ui.Context) {
 				a.profileBadgesBody(c, ps)
 			case profileTabAccount:
 				a.profileAccountBody(c, ps)
+			case profileTabFilter:
+				a.profileFilterBody(c, ps)
 			default:
 				a.profileOverviewBody(c, ps)
 			}

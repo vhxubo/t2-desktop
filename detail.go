@@ -108,6 +108,13 @@ type topicDetail struct {
 	// 离线缓存没有这个键」：后者按可见处理，避免把正常帖子误判成无权。
 	GuardPassed      bool
 	GuardPassedKnown bool
+	// CanEdit / CanEditNode 是 11-20 契约里的两个窗口状态：作者本人（含匿名
+	// 帖真实发布者）+ 发帖后 10 分钟内、各自成功后关闭，两者互相独立。
+	// 它们只回答「窗口还开着吗」，不是权限判断：账户被限制编辑时字段仍可能
+	// 为 true，真正调用才会拿到 403 permission_denied。Known 区分「服务端
+	// 明确给了值」与「老响应 / 离线缓存没有这个键」，后者退回本地作者判断。
+	CanEdit, CanEditNode           bool
+	CanEditKnown, CanEditNodeKnown bool
 	// Reactions 是帖子收到的表情表态汇总；Rewards 是打赏合计与打赏者。
 	Reactions []reactionStat
 	Rewards   rewardStat
@@ -235,6 +242,10 @@ type replyItem struct {
 type replyPage struct {
 	Items, Pinned                  []replyItem
 	Total, Page, Limit, TotalPages int
+	// Blocked 表示响应 d 为 null：帖子不存在，或当前令牌无权访问（api-read.md
+	// 的评论端点）。这两种情况外形相同，客户端只需要知道「不是真的没评论」，
+	// 不能拿空数组画成「暂无评论」。
+	Blocked bool
 }
 
 type emojiInfo struct {
@@ -390,6 +401,13 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 		t.GuardAttrValue = o.num("access_guard_attr_value")
 		t.GuardPassed, t.GuardPassedKnown = boolFieldOf(o, "access_guard_passed")
 	}
+	// 编辑 / 改节点两个窗口状态：字段可能是布尔，缺失时按老响应处理。
+	if v, known := boolFieldOf(o, "can_edit"); known {
+		t.CanEdit, t.CanEditKnown = v, true
+	}
+	if v, known := boolFieldOf(o, "can_edit_node"); known {
+		t.CanEditNode, t.CanEditNodeKnown = v, true
+	}
 	t.Emojis = decodeEmojiURLs(o["emojis"])
 	t.Reactions = decodeReactionStats(o["reactions_summary"], o["reactions"], o["my_reactions"])
 	t.Rewards = decodeRewards(o["rewards"])
@@ -442,6 +460,16 @@ func boolFieldOf(o object, keys ...string) (value, known bool) {
 // 为空（正文可能本来就空，见 11-19 的访问限制口径）。
 func (t *topicDetail) guardBlocks() bool {
 	return t != nil && t.GuardPassedKnown && !t.GuardPassed
+}
+
+// contentBlocked 统一两路可见性信号：详情的 access_guard.passed == false，
+// 以及评论接口的 d:null。二者都不从正文 / 列表是否为空推断（空正文的帖子
+// 完全合法，见 11-19 的访问限制口径）。
+func (d *detailState) contentBlocked() bool {
+	if d == nil {
+		return false
+	}
+	return d.topic.guardBlocks() || d.replyBlocked
 }
 
 // categoryPath 是节点的两级分类：有父节点时拼成「父 · 子」，只有一级时退回
@@ -522,7 +550,9 @@ func decodeReplies(d json.RawMessage) replyPage {
 	var out replyPage
 	o := asObject(d)
 	if o == nil {
-		return out // 帖子不可见时 d 为 null
+		// 无权访问与帖子不存在都回 200 + d:null，形状相同，统一按不可见处理。
+		out.Blocked = true
+		return out
 	}
 	out.Total = rawInt(o["total"])
 	out.Page = rawInt(o["page"])

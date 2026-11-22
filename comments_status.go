@@ -78,9 +78,9 @@ type commentsStatusState struct {
 }
 
 // canToggleComments 报告这篇帖子此刻是否给出「关闭 / 开启评论」入口。接口只允许
-// 作者本人，判断与编辑入口完全一致：昵称等于当前账号、且不是匿名帖。
+// 作者本人；它与 10 分钟的正文编辑窗口无关，不能因为 can_edit 关闭就跟着消失。
 func (a *app) canToggleComments(d *detailState) bool {
-	return a.canEditTopic(d)
+	return a.isPostAuthor(d)
 }
 
 // askToggleComments 展开确认框。关闭评论会影响其他读者的回复，重新开启又有冷却

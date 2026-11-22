@@ -975,7 +975,7 @@ func TestImageHostAndImageURLUseConfiguredProxy(t *testing.T) {
 	}
 }
 
-// 编辑帖子 / 编辑评论 / 追加附言 / 评论开关这几个写端点也必须走配置的代理。它们
+// 编辑帖子 / 编辑评论 / 追加附言 / 评论开关 / 改节点这几个写端点也必须走配置的代理。它们
 // 和读端点共用同一个 Client，但「共用」这件事要用假代理证明一次，不能只靠约定：
 // 新加的出口一旦自建 http.Client，代理规则就会在这里漏掉。
 func TestEditEndpointsUseConfiguredProxy(t *testing.T) {
@@ -1012,6 +1012,9 @@ func TestEditEndpointsUseConfiguredProxy(t *testing.T) {
 	if _, err := c.setTopicCommentsClosed(ctx, "a1b2", true); err != nil {
 		t.Fatalf("经代理关闭评论失败：%v", err)
 	}
+	if _, err := c.setTopicNode(ctx, "a1b2", "n2", "k1"); err != nil {
+		t.Fatalf("经代理改节点失败：%v", err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -1020,6 +1023,7 @@ func TestEditEndpointsUseConfiguredProxy(t *testing.T) {
 		"/api/v1/replies/c1/edit",
 		"/api/v1/topics/a1b2/postscript",
 		"/api/v1/topics/a1b2/comments-status",
+		"/api/v1/topics/a1b2/node",
 	}
 	if len(paths) != len(want) {
 		t.Fatalf("代理收到 %d 次请求，期望 %d 次：%v", len(paths), len(want), paths)
@@ -1734,5 +1738,49 @@ func TestNewTopicPickersUseConfiguredProxy(t *testing.T) {
 		url.QueryEscape("读过的书")
 	if urls[1] != wantColl {
 		t.Errorf("资料卡筛选请求 = %s，期望 %s", urls[1], wantColl)
+	}
+}
+
+// 内容屏蔽名单的 GET / PUT 也是新增出口：读写都必须走配置的代理。
+func TestContentFilterUsesConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var mu sync.Mutex
+	var calls []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		_, _ = fmt.Fprint(w, envelopeJSON(`{"blocked_users":["alice"],"blocked_nodes":[],"keywords":[]}`))
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{Proxy: p, Base: "http://upstream.invalid/api", bearer: func() string { return "tok" }}
+	dto, err := c.fetchContentFilter(context.Background())
+	if err != nil {
+		t.Fatalf("经代理读名单失败：%v", err)
+	}
+	if len(dto.BlockedUsers) != 1 || dto.BlockedUsers[0] != "alice" {
+		t.Errorf("代理返回的名单没解出来：%+v", dto)
+	}
+	if _, err := c.saveContentFilter(context.Background(), dto); err != nil {
+		t.Fatalf("经代理保存名单失败：%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{
+		"GET /api/v1/me/content-filter", "PUT /api/v1/me/content-filter",
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("代理收到 %v，期望 %v", calls, want)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Errorf("第 %d 个请求 = %s，期望 %s", i+1, calls[i], want[i])
+		}
 	}
 }

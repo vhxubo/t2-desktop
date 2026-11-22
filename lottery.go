@@ -181,10 +181,10 @@ type lotteryState struct {
 	gen      uint64
 }
 
-// canLottery 报告这篇帖子是否给出抽奖入口。抽奖只允许帖主本人发起，判断与
-// 编辑 / 关闭评论入口一致：昵称等于当前账号，且不是匿名帖。
+// canLottery 报告这篇帖子是否给出抽奖入口。抽奖只允许帖主本人发起，与正文
+// 编辑窗口无关，只按作者身份判断。
 func (a *app) canLottery(d *detailState) bool {
-	return a.canEditTopic(d)
+	return a.isPostAuthor(d)
 }
 
 // askLottery 展开「发起抽奖」确认框。已经开过奖时直接展示结果，不再弹框。

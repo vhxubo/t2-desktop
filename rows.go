@@ -84,7 +84,7 @@ func (a *app) commentGroupToggle(c *ui.Context, g commentGroup, total int, open 
 // 被回复人、父评论引用、正文摘要与表情表态 / 打赏汇总。字段都来自 comments.go
 // 的归一结果，普通榜单行不会走到这里。open 决定点击后怎么打开这一行
 // （「我的」窗口会先收起自己）。
-func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
+func (a *app) richRow(c *ui.Context, it Item, open func(Item), watchLater bool) {
 	tk := lobetheme.TokensOf(c)
 	x := it.Extra
 	if x == nil {
@@ -101,6 +101,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 	// 统一的 Lobe 行表面：悬停 FillTertiary、圆角与过渡取主题；纵向 padding
 	// 收紧到 Lobe 节奏，和主页帖子行保持一致。
 	row := feedRowSurface(c).PaddingY(10).PaddingX(12)
+	reveal := watchLater && (row.Hovered() || row.FocusWithin())
 	row.Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 			// 第一行：谁做了什么 · 时间 · 楼层。整行等宽，和标题分层。
@@ -143,6 +144,10 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item)) {
 				}
 				if comment && x.Floor > 0 {
 					ui.Textf(c, "#%d", x.Floor).FontSize(richMetaFontSize).TextColor(tk.TextDescription)
+				}
+				// 和主页帖子行一样，按钮紧跟时间，不独占行尾那一列。
+				if !comment {
+					a.feedWatchLaterButton(c, it, watchLater, reveal)
 				}
 			})
 

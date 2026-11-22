@@ -50,6 +50,9 @@ type detailState struct {
 	replyList    []replyItem
 	replyLoading bool
 	replyErr     string
+	// replyBlocked 来自评论接口的 d:null：无权访问或帖子不存在。与正文的
+	// access_guard.passed 一起决定可见性，不靠「列表空不空」反推。
+	replyBlocked bool
 	// replyMoreErr 是「续拉下一页评论」失败的原因：已经显示出来的评论
 	// 不能被整页错误替换，只在列表底部提示并可重试。
 	replyMoreErr          string
@@ -68,8 +71,12 @@ type detailState struct {
 	// stayID 是评论区实时停留的行号与评论 ID；display 是剔除折叠隐藏行后的
 	// 显示列表，所有滚动定位与列表行数都基于它，避免隐藏行打乱索引；
 	// hiddenCount 记录每个折叠父被收起的后代条数，供「展开 N 条回复」使用。
-	viewMem     *replyViewMemory
-	collapsed   map[string]bool
+	viewMem   *replyViewMemory
+	collapsed map[string]bool
+	// revealed 记着本次浏览里被手动展开的被屏蔽评论 id。只在内存，不落盘：
+	// 关掉详情、换一篇帖子就丢弃（「不需要记忆」）。键是评论 uuid，同一页
+	// 多条被屏蔽的评论互不影响；名单重新加载后由 clearRevealed 清空。
+	revealed    map[string]bool
 	readBase    time.Time
 	stayIdx     int
 	stayID      string
@@ -460,6 +467,7 @@ func (a *app) newDetailState(it Item) *detailState {
 		fallbackURL:  it.URL,
 		replyPage:    1,
 		flat:         it.CommentID != "",
+		revealed:     make(map[string]bool),
 		// 收起状态与 bodyWidth 都不继承：每次进来都是双栏展开。
 		// 默认正文宽度在 view 里按窗口宽度取 40%，这样不同窗口下初始比例一致。
 	}
@@ -647,6 +655,7 @@ func (a *app) loadRepliesFor(d *detailState, page int) {
 	d.replyErr = ""
 	d.replyMoreErr = ""
 	d.replyPage = page
+	d.replyBlocked = false
 	a.reqSeq++
 	gen := a.reqSeq
 	d.replyGen = gen
@@ -681,6 +690,7 @@ func (a *app) loadRepliesFor(d *detailState, page int) {
 				return
 			}
 			d.replyMoreErr = ""
+			d.replyBlocked = res.Blocked
 			rows := flattenReplies(res)
 			if page == 1 {
 				d.replyList = rows
@@ -690,7 +700,7 @@ func (a *app) loadRepliesFor(d *detailState, page int) {
 				// 默认收起它，把整行让给正文。加载失败不走这里，错误与重试
 				// 入口要留在屏幕上；从通知 / 评论链接定位进来也不收，避免
 				// 和默认的「收起正文」叠在一起，两边都没内容可看。
-				if d.replyNoMore && !d.bodyCollapsed && d.focusID == "" {
+				if d.replyNoMore && !d.replyBlocked && !d.bodyCollapsed && d.focusID == "" {
 					d.replyCollapsed = true
 				}
 				// 恢复本地记忆的停留位置：没有定位目标时滚回上次读到的行；
@@ -1136,19 +1146,25 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 			},
 		})
 	}
-	// 作者本人的三个入口：改标题 / 正文、追加附言、关闭 / 开启评论。
-	// 接口只认作者，入口也只在昵称对得上时出现。
+	// 作者的入口：改标题 / 正文看 can_edit，改节点看 can_edit_node，两个窗口
+	// 各自计时、各自关闭；追加附言与关闭评论不受窗口影响，只看作者身份。
 	if a.canEditTopic(d) {
-		acts = append(acts,
-			detailToolAction{
-				key: "edit", icon: lucide.PenLine(), label: "编辑帖子", tip: "修改标题与正文",
-				onClick: func() { a.showTopicEdit(d) }, more: true,
-			},
-			detailToolAction{
-				key: "postscript", icon: lucide.FilePlus2(), label: "追加附言", tip: "在帖子末尾追加一段附言",
-				onClick: func() { a.showPostscript(d) }, more: true,
-			},
-		)
+		acts = append(acts, detailToolAction{
+			key: "edit", icon: lucide.PenLine(), label: "编辑帖子", tip: "修改标题与正文",
+			onClick: func() { a.showTopicEdit(d) }, more: true,
+		})
+	}
+	if a.isPostAuthor(d) {
+		acts = append(acts, detailToolAction{
+			key: "postscript", icon: lucide.FilePlus2(), label: "追加附言", tip: "在帖子末尾追加一段附言",
+			onClick: func() { a.showPostscript(d) }, more: true,
+		})
+	}
+	if a.canEditNode(d) {
+		acts = append(acts, detailToolAction{
+			key: "node", icon: lucide.FolderTree(), label: "修改节点", tip: "更换帖子所属节点",
+			onClick: func() { a.showTopicNodeEdit(d) }, more: true,
+		})
 	}
 	if d.topic != nil && a.canToggleComments(d) {
 		icon, label, tip := lucide.MessageSquareOff(), "关闭评论", "关闭评论：关闭后其他读者不能再回复"
@@ -1161,6 +1177,20 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 		}
 		acts = append(acts, detailToolAction{
 			key: "comments", kind: detailToolComments, icon: icon, label: label, tip: tip, busy: busy, more: true,
+		})
+	}
+	// 屏蔽作者：不是自己、且作者名已知时才给入口。已屏蔽时同一项变成
+	// 「取消屏蔽」，与资料卡的按钮共用 setUserBlocked 写路径。
+	if d.topic != nil && d.topic.Author != "" && !a.isMine(d.topic.Author) {
+		blocked := a.filterBlocksUser(d.topic.Author)
+		icon, label, tip := lucide.EyeOff(), "屏蔽作者", "不再显示这个人的帖子和评论"
+		if blocked {
+			icon, label, tip = lucide.Eye(), "取消屏蔽", "取消对这个作者的屏蔽"
+		}
+		author := d.topic.Author
+		acts = append(acts, detailToolAction{
+			key: "block-author", icon: icon, label: label, tip: tip, more: true,
+			onClick: func() { a.setUserBlocked(author, !blocked) },
 		})
 	}
 	loading := d.topicLoading
@@ -1407,7 +1437,7 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 	// 无权帖：引擎按 11-19 口径把内容块全部置空，只留外壳。这里据此渲染
 	// 访问墙，绝不从「正文为空」反推受限；标题 / 标签为空时上面的文首已经
 	// 自然不画，不会露出一个空标题。
-	if p.guardBlocks() {
+	if d.contentBlocked() {
 		a.accessWall(c, d, p)
 		return
 	}
@@ -1909,8 +1939,8 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 			})
 		case len(d.replyList) == 0:
 			ui.Column(c).Grow(1).Center().Children(func() {
-				if d.topic.guardBlocks() && d.replyLoaded {
-					// 无权时评论接口返回 d:null，已经确认过不是「真的没人评论」。
+				if d.contentBlocked() {
+					// passed == false 或评论接口 d:null 都表示无权，不是「真的没人评论」。
 					ui.Text(c, "评论不可见").FontSize(tk.FontSize).TextColor(tk.TextDescription)
 					return
 				}
@@ -2115,28 +2145,10 @@ func (a *app) pkTeamTagView(c *ui.Context, tag pkTeamTag) {
 		Tooltip("该评论投给了" + tag.Text)
 }
 
-func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID string, isNew bool) {
-	t := c.Theme()
+// paintReplyRails 给一条评论行画状态竖条、树形导轨与顶层分隔线。正常行和
+// 被屏蔽的折叠行共用这一份，评论树的形状不会因为折叠而断开。
+func paintReplyRails(c *ui.Context, row ui.Element, r replyItem, tree replyTreeGuide, focused, mine bool) {
 	tk := lobetheme.TokensOf(c)
-	focused := focusID != "" && r.ID != "" && r.ID == focusID
-	mine := a.isMine(r.Author)
-
-	// 平铺的一行：静止时透明，悬浮只铺一层极淡的表面；没有卡片底色、圆角与
-	// 描边。自己的回复与定位到的回复各留一档淡底，取代原来的虚线 / 实线框。
-	row := ui.Column(c).FillWidth().Padding(replyRowPadY, 12, replyRowPadY,
-		12+float32(r.Depth)*replyTreeIndent).Gap(6)
-	row.Background(ui.Transparent)
-	switch {
-	case focused:
-		row.Background(tk.PrimaryFillSecondary)
-	case mine:
-		row.Background(tk.PrimaryFillQuaternary)
-	case row.Hovered():
-		row.Background(tk.FillQuaternary)
-	}
-
-	// 状态标记是贴着行首的一小段强调竖条，不再用整圈描边。层级不同用浓淡
-	// 区分：定位到的最亮、置顶次之、自己的回复居中。
 	marker, markerW := ui.Transparent, float32(0)
 	switch {
 	case focused:
@@ -2174,6 +2186,37 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 			p.Line(box.X+12, box.Y+box.H-1, box.X+box.W-12, box.Y+box.H-1, 1, tk.BorderSecondary)
 		}
 	})
+}
+
+func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID string, isNew bool) {
+	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
+	focused := focusID != "" && r.ID != "" && r.ID == focusID
+	mine := a.isMine(r.Author)
+	// 被屏蔽的评论数据不动（楼层号、树形导轨、定位与阅读位置都依赖它），
+	// 只把这一行画成提示。展开态按评论 id 记在 detailState 里，只在内存。
+	if reason, blocked := a.commentBlocked(r.Author, r.Content, r.Deleted); blocked &&
+		!(a.detail != nil && a.detail.revealed[r.ID]) {
+		a.blockedReplyRow(c, r, tree, reason)
+		return
+	}
+
+	// 平铺的一行：静止时透明，悬浮只铺一层极淡的表面；没有卡片底色、圆角与
+	// 描边。自己的回复与定位到的回复各留一档淡底，取代原来的虚线 / 实线框。
+	row := ui.Column(c).FillWidth().Padding(replyRowPadY, 12, replyRowPadY,
+		12+float32(r.Depth)*replyTreeIndent).Gap(6)
+	row.Background(ui.Transparent)
+	switch {
+	case focused:
+		row.Background(tk.PrimaryFillSecondary)
+	case mine:
+		row.Background(tk.PrimaryFillQuaternary)
+	case row.Hovered():
+		row.Background(tk.FillQuaternary)
+	}
+
+	// 状态竖条、树形导轨与分隔线：和被屏蔽的折叠行共用同一份画法。
+	paintReplyRails(c, row, r, tree, focused, mine)
 	hovered := row.Hovered()
 	// 评论已关闭时整条都不能回复；已删除的评论同样不提供回复入口。
 	closed := a.detail != nil && a.detail.topic != nil && a.detail.topic.CommentsClosed
@@ -2235,6 +2278,16 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 			if r.CreatedAt != "" {
 				ui.Text(c, relativeTime(r.CreatedAt)).FontSize(tk.FontSizeSM).
 					Font(sidebarFont).TextColor(tk.TextDescription)
+			}
+			// 手动展开过的被屏蔽评论在时间后面留一个很轻的「收起」入口：
+			// 没有它，用户只能靠离开页面复原。只作用于这一条。
+			if a.detail != nil && a.detail.revealed[r.ID] {
+				collapse := ui.Button(c, "收起").Background(ui.Transparent).
+					Border(0, tk.BorderSecondary).TextColor(tk.TextDescription).
+					FontSize(tk.FontSizeSM).Padding(0, 0).Radius(tk.BorderRadiusXS)
+				if collapse.Clicked() {
+					delete(a.detail.revealed, r.ID)
+				}
 			}
 			// 从帖子金币池里领到过金币的评论，在时间后面标出合计：这是这条
 			// 评论拿到的额外收入，只有它自己有，不必再去翻金币流水。
@@ -2360,6 +2413,39 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 				})
 			}
 		}
+	})
+}
+
+// blockedReplyRow 把被屏蔽的评论压成一行提示：只显示命中的原因与「展开」，
+// 绝不把评论正文画出来。左缩进与树形导轨和正常行一致，评论树因此不会断开；
+// 楼中楼折叠、定位、阅读位置都不受影响，子回复照常显示。
+func (a *app) blockedReplyRow(c *ui.Context, r replyItem, tree replyTreeGuide, reason blockReason) {
+	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
+	row := ui.Column(c).FillWidth().Height(32).Padding(0, 12, 0,
+		12+float32(r.Depth)*replyTreeIndent)
+	row.Background(ui.Transparent)
+	if row.Hovered() {
+		row.Background(tk.FillQuaternary)
+	}
+	paintReplyRails(c, row, r, tree, false, false)
+	row.Children(func() {
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
+			ui.Text(c, reason.text()).FontSize(metaFontSize).
+				TextColor(tk.TextDescription).MaxLines(1)
+			ui.Spacer(c).Grow(1)
+			expand := ui.Button(c, "展开").Background(ui.Transparent).
+				Border(0, tk.BorderSecondary).TextColor(t.Accent).
+				FontSize(metaFontSize).Padding(2, 6).Radius(5)
+			if expand.Clicked() {
+				if a.detail != nil {
+					if a.detail.revealed == nil {
+						a.detail.revealed = make(map[string]bool)
+					}
+					a.detail.revealed[r.ID] = true
+				}
+			}
+		})
 	})
 }
 
@@ -2653,8 +2739,8 @@ func (a *app) replyComposer(c *ui.Context, d *detailState) {
 			ui.Text(c, "评论已关闭").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 			return
 		}
-		if d.topic.guardBlocks() {
-			// 无权帖发帖同样 403，别给一个点了必然失败的入口。
+		if d.contentBlocked() {
+			// 无权帖发帖同样 403 且不扣费，别给一个点了必然失败的入口。
 			ui.Text(c, "正文受限，暂不能评论").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 			return
 		}
