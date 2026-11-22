@@ -354,6 +354,94 @@ func TestEmptyDraftDeletesEntry(t *testing.T) {
 	}
 }
 
+func TestComposeDraftNeedsTitleOrBody(t *testing.T) {
+	st := newComposeState()
+	st.nodeID = "node-uuid"
+	st.anonymous = true
+	st.voteOpen = true
+	st.voteTitle = "存哪"
+	st.voteOptions = []string{"甲", "乙"}
+	if !draftEntryEmpty(st.draftEntry()) {
+		t.Fatal("只选了节点、匿名和投票，不该算草稿")
+	}
+	st.title = "   "
+	if !draftEntryEmpty(st.draftEntry()) {
+		t.Fatal("只有空白标题，不该算草稿")
+	}
+	st.title = "有标题"
+	if draftEntryEmpty(st.draftEntry()) {
+		t.Fatal("有标题就算草稿")
+	}
+	st.title = ""
+	st.body = "有正文"
+	if draftEntryEmpty(st.draftEntry()) {
+		t.Fatal("有正文就算草稿")
+	}
+	st.body = "![图](upload:1)"
+	if !draftEntryEmpty(st.draftEntry()) {
+		t.Fatal("只有未完成的上传占位符，不该算草稿")
+	}
+	st.mode = composeModeMoment
+	st.momentDraft = "动态正文"
+	if draftEntryEmpty(st.draftEntry()) {
+		t.Fatal("动态有正文就算草稿")
+	}
+}
+
+func TestFlushSkipsComposeDraftWithoutText(t *testing.T) {
+	a := testApp(t)
+	a.compose = newComposeState()
+	a.compose.nodeID = "node-uuid"
+	a.compose.guardOpen = true
+	a.flushDrafts()
+	if a.drafts.count() != 0 || a.compose.draftID != "" {
+		t.Fatalf("没有标题和正文时不该落盘：count=%d id=%q", a.drafts.count(), a.compose.draftID)
+	}
+	a.compose.title = "终于写了标题"
+	a.flushDrafts()
+	if a.drafts.count() != 1 || a.compose.draftID == "" {
+		t.Fatalf("写了标题后该落盘：count=%d id=%q", a.drafts.count(), a.compose.draftID)
+	}
+}
+
+func TestLegacyEmptyComposeDroppedOnLoad(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	empty := testDraftEntry(draftKindCompose, now)
+	empty.Title, empty.Body = "", ""
+	empty.Modules = &composeDraftModules{Vote: &composeDraftVote{Title: "投票"}}
+	real := testDraftEntry(draftKindCompose, now.Add(-time.Hour))
+	reply := testDraftEntry(draftKindReply, now.Add(-2*time.Hour))
+	path := filepath.Join(dir, "drafts", "guest.json")
+	if err := writeJSONFile(path, &draftFile{
+		Version: draftVersion, Account: "guest",
+		Entries: []draftEntry{empty, real, reply},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newDraftStore(dir, "guest")
+	if s.count() != 2 {
+		t.Fatalf("旧版空草稿不该再出现在箱子里：%+v", s.rows())
+	}
+	if _, ok := s.find(empty.ID); ok {
+		t.Error("旧版空草稿没被过滤")
+	}
+	if _, ok := s.find(reply.ID); !ok {
+		t.Error("回复草稿不该被一起过滤")
+	}
+	if err := s.save(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := newDraftStore(dir, "guest")
+	if _, ok := reopened.find(empty.ID); ok {
+		t.Error("旧版空草稿又被写回磁盘")
+	}
+	if reopened.count() != 2 {
+		t.Fatalf("正常草稿不该被误删：%+v", reopened.rows())
+	}
+}
+
 func TestDraftCounts(t *testing.T) {
 	rows := []draftEntry{
 		{Kind: draftKindCompose, Mode: composeModePost},

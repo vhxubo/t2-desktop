@@ -203,7 +203,15 @@ func (s *draftStore) load() {
 		log.Printf("草稿文件 %s 的版本 %d 不认识，按空草稿处理", s.path, f.Version)
 		return
 	}
-	s.entries = f.Entries
+	// 旧版只选了节点 / 开了组件也会落盘，这类没有标题和正文的条目不再算草稿。
+	entries := make([]draftEntry, 0, len(f.Entries))
+	for _, e := range f.Entries {
+		if e.Kind == draftKindCompose && !composeDraftHasText(e) {
+			continue
+		}
+		entries = append(entries, e)
+	}
+	s.entries = entries
 }
 
 func (s *draftStore) save() error {
@@ -329,6 +337,9 @@ func (s *draftStore) pruneLocked() {
 		case draftKindReply:
 			reply = append(reply, e)
 		default:
+			if !composeDraftHasText(e) {
+				continue
+			}
 			compose = append(compose, e)
 		}
 	}
@@ -700,16 +711,21 @@ func (d *detailState) applyReplyDraft(e draftEntry) {
 	d.draftFP, d.draftSavedFP = d.draftFingerprint(), d.draftFingerprint()
 }
 
+// composeDraftHasText 判断一条发帖草稿有没有值得保存的内容：帖子看标题或正文，
+// 动态看正文。只选了节点、切了匿名、开了投票等组件都不算草稿，免得草稿箱里
+// 堆满没有半句话的条目；动态正文同样属于「正文」。
+func composeDraftHasText(e draftEntry) bool {
+	return strings.TrimSpace(e.Title) != "" ||
+		strings.TrimSpace(e.Body) != "" ||
+		strings.TrimSpace(e.Moment) != ""
+}
+
 func draftEntryEmpty(e draftEntry) bool {
 	switch e.Kind {
 	case draftKindReply:
 		return strings.TrimSpace(e.Text) == "" && e.ReplyTo.ID == ""
 	default:
-		if strings.TrimSpace(e.Title) != "" || strings.TrimSpace(e.Body) != "" ||
-			strings.TrimSpace(e.Moment) != "" || e.NodeID != "" || e.Anonymous {
-			return false
-		}
-		return e.Modules == nil
+		return !composeDraftHasText(e)
 	}
 }
 
