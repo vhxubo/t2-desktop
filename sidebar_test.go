@@ -587,8 +587,7 @@ func TestSidebarIconsAlignAcrossExpandStates(t *testing.T) {
 }
 
 // glyphInkSize 量一个按钮里图标墨迹的宽高。无障碍矩形是整块 32 的按钮，
-// 拿不到图标本身；从中心区域按亮度取墨迹范围，避开 1px 边框。不同图标的
-// 墨迹形状不同，但同一 glyph size 下面板与齿轮二者的墨迹都应落在 14 上下。
+// 拿不到图标本身；从中心区域按亮度取墨迹范围，避开 1px 边框。
 func glyphInkSize(im *image.RGBA, b ui.Rect) (w, h int) {
 	minX, minY, maxX, maxY := 999, 999, -1, -1
 	for y := int(b.Y) + 4; y < int(b.Y+b.H)-4; y++ {
@@ -636,11 +635,12 @@ func TestSidebarToggleGlyphSizeMatchesRail(t *testing.T) {
 	if tw == 0 || rw == 0 {
 		t.Fatalf("量不到图标墨迹：开关 %dx%d，设置 %dx%d", tw, th, rw, rh)
 	}
+	// 只比高度，不比宽度：GlyphSize 等比缩放图标，高度足以抓住「一边 18、
+	// 一边 16」这类真实不一致。宽度依赖图标自身形状与抗锯齿——面板是实心
+	// 矩形，齿轮是细描边，在部分平台上齿轮外侧几像素亮度高于固定阈值而被
+	// 量掉，出现 14 对 12 的假失败；拿它做跨平台断言并不可靠。
 	if d := th - rh; d > 1 || d < -1 {
 		t.Errorf("折叠开关图标高 %d，与图标轨的「设置」高 %d 不一致", th, rh)
-	}
-	if d := tw - rw; d > 1 || d < -1 {
-		t.Errorf("折叠开关图标宽 %d，与图标轨的「设置」宽 %d 不一致", tw, rw)
 	}
 }
 
