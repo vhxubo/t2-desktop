@@ -562,30 +562,16 @@ func (a *app) markNotificationsReadConfirmed(owner toastTarget, ids []string) {
 		return
 	}
 	st := a.tabs[idx]
-	if st.reading == nil {
-		st.reading = map[string]bool{}
-	}
-	pending := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if st.reading[id] {
-			continue
-		}
-		pending = append(pending, id)
-	}
+	pending := st.beginNotificationRead(ids)
 	if len(pending) == 0 {
 		return
-	}
-	for _, id := range pending {
-		st.reading[id] = true
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		err := a.client.markNotificationsRead(ctx, pending)
 		a.publish(func() {
-			for _, id := range pending {
-				delete(st.reading, id)
-			}
+			st.endNotificationRead(pending)
 			if err != nil {
 				// 缺 read:me 或登录失效：走全局授权弹窗，由用户自己重新操作。
 				a.handleAuthErrorFor(owner, err)
@@ -619,8 +605,8 @@ func (a *app) applyNotificationRead(st *tabState, ids []string) {
 			n.IsRead = true
 			fresh = append(fresh, n.ID)
 		}
-		delete(st.selected, n.ID)
 	}
+	st.dropNotificationSelected(ids)
 	if st.filter == notificationFilterUnread {
 		out := st.items[:0]
 		for _, it := range st.items {
@@ -662,7 +648,7 @@ func (a *app) markAllNotificationsRead(owner toastTarget) {
 				a.toast(toastNotifications, "全部已读失败："+friendlyError(err))
 				return
 			}
-			st.selected = nil
+			st.clearNotificationSelected()
 			for i := range st.items {
 				if n := st.items[i].Notif; n != nil {
 					n.IsRead = true
@@ -693,7 +679,8 @@ func unreadNotificationIDs(items []Item) []string {
 // selectedNotificationIDs is the ticked set, sorted for a stable request
 // order. Ticks that no longer match a loaded unread row are dropped.
 func selectedNotificationIDs(st *tabState) []string {
-	if len(st.selected) == 0 {
+	sel := st.notificationSelection()
+	if len(sel) == 0 {
 		return nil
 	}
 	loaded := make(map[string]bool, len(st.items))
@@ -702,8 +689,8 @@ func selectedNotificationIDs(st *tabState) []string {
 			loaded[it.Notif.ID] = true
 		}
 	}
-	ids := make([]string, 0, len(st.selected))
-	for id, on := range st.selected {
+	ids := make([]string, 0, len(sel))
+	for id, on := range sel {
 		if on && loaded[id] {
 			ids = append(ids, id)
 		}
@@ -721,6 +708,8 @@ func setNotificationSelected(st *tabState, id string, on bool) {
 	if st == nil || id == "" {
 		return
 	}
+	st.notifMu.Lock()
+	defer st.notifMu.Unlock()
 	if on {
 		if st.selected == nil {
 			st.selected = map[string]bool{}
@@ -729,4 +718,78 @@ func setNotificationSelected(st *tabState, id string, on bool) {
 		return
 	}
 	delete(st.selected, id)
+}
+
+// beginNotificationRead 把还不在途的 id 标为在途，返回这次真正要发的一批。
+// 与 endNotificationRead 一起保证同一张表在后台结果落地时也能安全访问。
+func (st *tabState) beginNotificationRead(ids []string) []string {
+	st.notifMu.Lock()
+	defer st.notifMu.Unlock()
+	if st.reading == nil {
+		st.reading = map[string]bool{}
+	}
+	pending := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if st.reading[id] {
+			continue
+		}
+		pending = append(pending, id)
+	}
+	for _, id := range pending {
+		st.reading[id] = true
+	}
+	return pending
+}
+
+// endNotificationRead 清掉在途标记：请求成功与失败都要收尾。
+func (st *tabState) endNotificationRead(ids []string) {
+	st.notifMu.Lock()
+	defer st.notifMu.Unlock()
+	for _, id := range ids {
+		delete(st.reading, id)
+	}
+}
+
+// notificationReading 报告这条消息是否正在提交已读。
+func (st *tabState) notificationReading(id string) bool {
+	st.notifMu.Lock()
+	defer st.notifMu.Unlock()
+	return st.reading[id]
+}
+
+// notificationChecked 返回这条消息此刻是否被勾选。
+func (st *tabState) notificationChecked(id string) bool {
+	st.notifMu.Lock()
+	defer st.notifMu.Unlock()
+	return st.selected[id]
+}
+
+// notificationSelection 给出一份勾选表的快照，调用方遍历它时不必持锁。
+func (st *tabState) notificationSelection() map[string]bool {
+	st.notifMu.Lock()
+	defer st.notifMu.Unlock()
+	if len(st.selected) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(st.selected))
+	for id, on := range st.selected {
+		out[id] = on
+	}
+	return out
+}
+
+// dropNotificationSelected 去掉已经落账的消息的勾选。
+func (st *tabState) dropNotificationSelected(ids []string) {
+	st.notifMu.Lock()
+	defer st.notifMu.Unlock()
+	for _, id := range ids {
+		delete(st.selected, id)
+	}
+}
+
+// clearNotificationSelected 清空全部勾选。
+func (st *tabState) clearNotificationSelected() {
+	st.notifMu.Lock()
+	defer st.notifMu.Unlock()
+	st.selected = nil
 }

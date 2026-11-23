@@ -369,7 +369,7 @@ func (a *app) applyNotificationKeyword(st *tabState, keyword string) {
 	st.keywordDraft = keyword
 	resetNotificationQuickReply(st)
 	st.items = nil
-	st.selected = nil
+	st.clearNotificationSelected()
 	st.loaded = false
 	st.loading = false
 	st.noMore = false
@@ -576,7 +576,7 @@ func (a *app) setNotificationFilter(filter int) {
 	st.filter = filter
 	resetNotificationQuickReply(st)
 	st.items = nil
-	st.selected = nil
+	st.clearNotificationSelected()
 	st.loaded = false
 	st.loading = false
 	st.noMore = false
@@ -599,7 +599,7 @@ func (a *app) reloadNotifications() {
 	resetNotificationQuickReply(st)
 	st.loaded = false
 	st.items = nil
-	st.selected = nil
+	st.clearNotificationSelected()
 	st.err = ""
 	st.moreErr = ""
 	st.noMore = false
@@ -630,7 +630,7 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 	v := notificationViewOf(n)
 	unread := !n.IsRead
 	st := a.tabs[notificationTabIndex()]
-	reading := st != nil && st.reading[n.ID]
+	reading := st != nil && st.notificationReading(n.ID)
 
 	// 通知行走 Lobe 的扁平列表语言：无圆角、无整圈描边，只在行与行之间留
 	// 一条细分隔线；悬停铺 FillTertiary，整行仍是一张可点的 Block。正文不再
@@ -645,10 +645,11 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 			// 写法把勾选框和「已读」摆在行外面，正文被挤成窄窄一条。
 			ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 				if unread && st != nil {
-					checked := st.selected[n.ID]
+					was := st.notificationChecked(n.ID)
+					checked := was
 					choice.Checkbox(c, &checked, "", choice.CheckboxProps{Size: 14}).
 						Shrink(0).Label("勾选这条消息").Tooltip("勾选后可批量标记已读")
-					if checked != st.selected[n.ID] {
+					if checked != was {
 						setNotificationSelected(st, n.ID, checked)
 					}
 				}

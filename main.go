@@ -70,7 +70,11 @@ type tabState struct {
 	keywordDraft string
 	reading      map[string]bool
 	selected     map[string]bool
-	markingAll   bool
+	// notifMu 保护上面两张表：真实窗口里它们只在 UI 线程读写，但无头测试
+	// 没有窗口，publish 的落地回调就在后台 goroutine 里执行（标已读的收尾
+	// 会在那里删这两张表）。不加锁会撞上并发 map 读写，直接把进程打崩。
+	notifMu    sync.Mutex
+	markingAll bool
 	// 快捷回复：同一时刻只展开一条消息的输入框，草稿只属于那一条（换一条
 	// 就清空）。posting 表示有一次回复在途，期间不再接受新的提交。都只在
 	// UI 线程读写，网络结果经 publish 回来。
@@ -823,7 +827,8 @@ func (a *app) replaceAuth(auth *AuthManager) {
 
 // publish marshals a state change onto the UI thread, then rebuilds every
 // window that shows the same state. In headless tests there is no window, so
-// the change applies directly.
+// the change applies directly on the calling goroutine: anything it writes
+// that a frame may read concurrently (maps especially) needs its own lock.
 func (a *app) publish(fn func()) {
 	if a.win == nil {
 		fn()
