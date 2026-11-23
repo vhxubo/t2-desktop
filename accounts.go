@@ -183,10 +183,13 @@ type accountBook struct {
 	// loginURL 是内置浏览器最近一次提交的地址。站点登录完成后往往停在自己的
 	// 页面上，授权流程不会自己继续：界面据此露出「重新授权」（见
 	// loginLeftAuthorizePage）。
-	loginURL   string
-	guest      *app
-	tray       *mygo.Tray
-	trayReady  bool
+	loginURL  string
+	guest     *app
+	tray      *mygo.Tray
+	trayReady bool
+	// icons 管应用与托盘图标的深浅切换（见 app_icon.go）。进程级一份，
+	// 只在主线程读写。
+	icons      *iconTheme
 	quitting   bool
 	schemeWarn string
 	updates    bool
@@ -246,6 +249,7 @@ func newAccountBook(dir string) *accountBook {
 		commands:          newCommandPrefs(dir),
 		openURL:           func(u string) error { return mygo.Shell.OpenExternal(u) },
 	}
+	b.icons = newIconTheme(b)
 	b.imgHTTP = b.proxy.Client(20 * time.Second)
 	b.quitApp = b.quitProgram
 	b.closeAllWindows = b.closeAllWindowsToTray

@@ -340,18 +340,16 @@ func TestSidebarAboutOpensWindow(t *testing.T) {
 	}
 }
 
-// 关于窗口列出开发者、邮箱、项目地址与 2Libra 主页；邮箱与两个网址都可点击
-// 打开（邮件客户端 / 浏览器）。
+// 关于窗口品牌区是应用图标加应用名，下面列着开发者入口、致谢名单、技术栈与
+// 条款：开发者入口只显示短文字，具体链接不在界面上铺开。
 func TestAboutWindowShowsCredits(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.aboutWindowView, aboutWindowWidth, aboutWindowHeight)
 	tt.Frame()
 	for _, s := range []string{
-		"关于", "T2 Desktop", "Third Party 2Libra",
-		"开发者", "vhxubo",
-		"邮箱", "vhxubo@gmail.com",
-		"项目地址", "github.com/vhxubo/t2-desktop",
-		"2Libra 主页", "https://2libra.com/user/vhxubo/about",
+		"关于", "T2 应用图标", "T2 Desktop", "Third Party 2Libra",
+		"联系与来源", "开发者 vhxubo", "邮箱", "项目地址", "2Libra 主页",
+		"致谢", "Jimmy",
 		"技术栈", "Go 语言", "mygo",
 		"协议", "MIT",
 		"条款", "第三方开发者 vhxubo",
@@ -363,15 +361,15 @@ func TestAboutWindowShowsCredits(t *testing.T) {
 	}
 }
 
-// 关于窗口每行的标签列左边缘对齐：四行的标签都在同一列，开发者行（不可点击）
-// 和其余可点击行的内边距相同，不能因为少了 padding 而错位。
+// 关于窗口沿用 aboutRow 的两行，标签列左边缘必须对齐；开发者信息改成
+// 横排的蓝色文字后，不再参与这组行的对齐。
 func TestAboutWindowRowsAligned(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.aboutWindowView, aboutWindowWidth, aboutWindowHeight)
 	tt.Frame()
 
 	var lastX float32
-	for i, lab := range []string{"开发者", "邮箱", "项目地址", "2Libra 主页", "协议"} {
+	for i, lab := range []string{"协议", "服务条款"} {
 		r, ok := tt.Find(lab)
 		if !ok {
 			t.Fatalf("关于窗口缺少标签 %q：%q", lab, tt.Texts())

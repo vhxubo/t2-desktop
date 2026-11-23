@@ -12,16 +12,19 @@ import (
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 关于窗口的尺寸：比设置窗口矮一些，内容分几张 Lobe 卡片放，装不下时滚动。
+// 关于窗口的尺寸：比旧版宽裕，品牌区展示应用图标与应用名，装不下时滚动。
 const (
-	aboutWindowWidth  = 470
-	aboutWindowHeight = 640
-	aboutWindowMinW   = 400
-	aboutWindowMinH   = 460
+	aboutWindowWidth  = 720
+	aboutWindowHeight = 780
+	aboutWindowMinW   = 600
+	aboutWindowMinH   = 560
 
-	// aboutLabelWidth 是信息行标签列的固定宽度：开发者、邮箱、项目地址等各行
-	// 都用它，标签左边缘因此落在同一列（见 sidebar_test.go 的对齐断言）。
+	// aboutLabelWidth 是信息行标签列的固定宽度：协议、服务条款各行都用它，
+	// 标签左边缘因此落在同一列（见 sidebar_test.go 的对齐断言）。
 	aboutLabelWidth = 84
+
+	// jimmyAboutURL 是致谢名单里 Jimmy 的 2Libra 主页。
+	jimmyAboutURL = "https://2libra.com/user/Jimmy/about"
 )
 
 /* ------------------------------------------------------------------
@@ -86,15 +89,19 @@ func (a *app) closeAboutWindow() {
    关于窗口的界面
 
    其余窗口都已经走 Lobe UI；这里把「关于」也换成同一套语言：颜色取
-   TokensOf(c)，卡片 / 文本 / 标签 / 按钮 / 提示分别由 layout.Block、
-   display.Text、display.Tag、action.Button 与 feedback.Alert 提供。文案与
-   动作保持不变，只换观感。
+   TokensOf(c)，平面区块 / 文本 / 标签 / 按钮 / 提示分别由 popupSurface、
+   display.Text、display.Tag、action.Button 与 feedback.Alert 提供。品牌区用
+   随外观切换的应用图标替代原来的 Lucide 会话图标；区块不画圆角与整圈描边，
+   只用细分隔线分层。
 ---------------------------------------------------------------- */
 
 // aboutWindowView 是「关于」窗口的 view。窗口自己带标题栏与窗口按钮，所以
 // 这里不需要遮罩，也不占主窗口的位置。
 func (a *app) aboutWindowView(c *ui.Context) {
 	a.applyTheme(c)
+	// 外链（开发者入口、协议、服务条款、致谢）走 a.openExternal，这里必须
+	// 把当前窗口的 Services 交给它，否则点了没反应。
+	a.srv = c.Services()
 	tk := lobetheme.TokensOf(c)
 	c.Root().Background(tk.BgLayout)
 	// Esc 直接关掉「关于」窗口，和系统关于面板的直觉一致。
@@ -125,8 +132,17 @@ func (a *app) aboutWindowView(c *ui.Context) {
 			ui.Column(c).FillWidth().Padding(16, 16).Gap(12).Children(func() {
 				a.aboutHero(c)
 				a.aboutContactSection(c)
+				a.aboutThanksSection(c)
 				a.aboutTechSection(c)
 				a.aboutTermsSection(c)
+				// 字体授权声明挪到整页最后，作为脚注；macOS 用系统苹方时不显示。
+				if usesHarmonySans() {
+					ui.Column(c).FillWidth().Padding(0, 12, 8, 12).Children(func() {
+						display.Text(c, "界面字体：鸿蒙字体 HarmonyOS Sans · © 2021 Huawei", display.TextProps{
+							Type: display.TextSecondary, FontSize: 12, Rows: 2,
+						})
+					})
+				}
 			})
 		})
 		list.Grow(1).MinHeight(0)
@@ -135,22 +151,27 @@ func (a *app) aboutWindowView(c *ui.Context) {
 	a.aboutDisclaimerDialog(c)
 }
 
-// aboutHero 是品牌卡片：应用头像、名称与定位，以及版本和检查更新入口。
+// aboutHero 是品牌区：随外观切换的应用图标、应用名与定位，以及版本、检查
+// 更新入口和声明。图标就是任务栏 / 托盘上那枚 T2 图标，不再是横幅大图。
 func (a *app) aboutHero(c *ui.Context) {
 	tk := lobetheme.TokensOf(c)
-	card := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
-		FillWidth().Padding(18, 16)
+	card := popupSurface(c, false).FillWidth().Padding(16, 16)
 	card.Children(func() {
 		ui.Column(c).FillWidth().Gap(12).Children(func() {
-			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-				// 主色圆角方块 + Lucide 会话图标，像 Lobe 里的应用头像。
-				logo := ui.Row(c).Size(48, 48).Shrink(0).Radius(12).
-					Background(tk.Primary).AlignItems(ui.Center).Justify(ui.Center)
-				logo.Children(func() {
-					ui.Icon(c, lucide.MessagesSquare()).Size(26, 26).TextColor(tk.PrimaryForeground)
-				})
-				ui.Column(c).Gap(3).MinWidth(0).Children(func() {
-					display.Text(c, "T2 Desktop", display.TextProps{Strong: true, FontSize: 18, Rows: 1})
+			ui.Row(c).Gap(14).AlignItems(ui.Center).Children(func() {
+				if src := aboutIconSource(currentIconDark()); src != nil {
+					ui.Image(c, src).Size(96, 96).Fit(ui.Contain).
+						Role(ui.RoleImage).Label("T2 应用图标")
+				} else {
+					// 图标解码失败时退回原来的画法，位置与尺寸仍保持一致。
+					logo := ui.Row(c).Size(72, 72).Shrink(0).Radius(16).
+						Background(tk.Primary).AlignItems(ui.Center).Justify(ui.Center)
+					logo.Children(func() {
+						ui.Icon(c, lucide.MessagesSquare()).Size(36, 36).TextColor(tk.PrimaryForeground)
+					})
+				}
+				ui.Column(c).Gap(5).MinWidth(0).Children(func() {
+					display.Text(c, "T2 Desktop", display.TextProps{Strong: true, FontSize: 20, Rows: 1})
 					display.Text(c, "Third Party 2Libra · 第三方 2Libra", display.TextProps{
 						Type: display.TextSecondary, FontSize: 12, Rows: 1,
 					})
@@ -170,6 +191,7 @@ func (a *app) aboutHero(c *ui.Context) {
 					a.checkForUpdates()
 				}
 			})
+			layout.Divider(c, layout.DividerProps{})
 			// 第三方声明放在卡片顶部、不用滚动就能看到；弹窗只在这个窗口里画，
 			// 不动 seen（见 disclaimer_ui.go 的 aboutDisclaimerDialog）。
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -182,13 +204,6 @@ func (a *app) aboutHero(c *ui.Context) {
 					a.aboutDisclaimerOpen = true
 				}
 			})
-			// 鸿蒙字体的授权条款要求在用到它的软件里显著声明（fonts/LICENSE）。
-			// 这段放在不滚动就能看到的顶部卡片；macOS 用系统苹方，不显示。
-			if usesHarmonySans() {
-				display.Text(c, "界面字体：鸿蒙字体 HarmonyOS Sans · © 2021 Huawei", display.TextProps{
-					Type: display.TextSecondary, FontSize: 12, Rows: 2,
-				})
-			}
 			// 上一次检查若发现有新版本，这里提示一下，点「检查更新」看详情。
 			if a.updates {
 				if v := updater.AvailableVersion(); v != "" {
@@ -201,12 +216,11 @@ func (a *app) aboutHero(c *ui.Context) {
 	})
 }
 
-// aboutSection 画一块带标题的 Lobe 卡片，各分类共用同一套版式。描边、圆角
-// 与底色来自 layout.Block，标题走 display.Text。
+// aboutSection 画一块带标题的平面区块，各分类共用同一套版式。区块与标题
+// 之间只留一条细分隔线，不再用圆角描边卡片把内容框起来。
 func aboutSection(c *ui.Context, glyph *ui.SVG, title string, body func()) {
 	tk := lobetheme.TokensOf(c)
-	card := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
-		FillWidth().Padding(14, 14)
+	card := popupRow(c, false).FillWidth().Padding(14, 14)
 	card.Children(func() {
 		ui.Column(c).FillWidth().Gap(10).Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -218,15 +232,40 @@ func aboutSection(c *ui.Context, glyph *ui.SVG, title string, body func()) {
 	})
 }
 
-// aboutContactSection 是联系与来源：开发者、邮箱、项目地址与 2Libra 主页。
+// aboutContactSection 是联系与来源。开发者信息只留短名字，不把邮箱、仓库地址
+// 等具体链接铺在界面上：四项都是蓝色可点击文字，横向并排；点一下才用系统
+// 默认程序打开对应链接。
 func (a *app) aboutContactSection(c *ui.Context) {
 	aboutSection(c, lucide.Users(), "联系与来源", func() {
-		a.aboutRow(c, lucide.User(), "开发者", "vhxubo", "https://github.com/vhxubo")
-		a.aboutRow(c, lucide.Mail(), "邮箱", "vhxubo@gmail.com", "mailto:vhxubo@gmail.com")
-		a.aboutRow(c, lucide.Code(), "项目地址", "github.com/vhxubo/t2-desktop",
-			"https://github.com/vhxubo/t2-desktop")
-		a.aboutRow(c, lucide.Globe(), "2Libra 主页", "https://2libra.com/user/vhxubo/about",
-			"https://2libra.com/user/vhxubo/about")
+		links := []struct{ label, url string }{
+			{"开发者 vhxubo", "https://github.com/vhxubo"},
+			{"邮箱", "mailto:vhxubo@gmail.com"},
+			{"项目地址", "https://github.com/vhxubo/t2-desktop"},
+			{"2Libra 主页", "https://2libra.com/user/vhxubo/about"},
+		}
+		ui.Row(c).FillWidth().Gap(16).AlignItems(ui.Center).Children(func() {
+			for _, link := range links {
+				if action.Button(c, link.label, action.ButtonProps{
+					Variant: action.Link, Size: lobetheme.Small,
+				}).Clicked() {
+					a.openExternal(link.url)
+				}
+			}
+		})
+	})
+}
+
+// aboutThanksSection 是致谢名单。名字与「联系与来源」那排入口用同一种 Lobe
+// 链接文字：小号、蓝色、无底色，点一下打开对方主页，不再做成显眼的胶囊。
+func (a *app) aboutThanksSection(c *ui.Context) {
+	aboutSection(c, lucide.Heart(), "致谢", func() {
+		ui.Row(c).Gap(8).Children(func() {
+			if action.Button(c, "Jimmy", action.ButtonProps{
+				Variant: action.Link, Size: lobetheme.Small,
+			}).Clicked() {
+				a.openExternal(jimmyAboutURL)
+			}
+		})
 	})
 }
 
@@ -286,8 +325,8 @@ func (a *app) aboutTermsSection(c *ui.Context) {
 }
 
 // aboutRow 是「关于」窗口里的一行信息：左侧是图标与固定宽度的标签，右侧是值。
-// 各行内边距与标签列宽一致，保证标签左边缘对齐。link 非空时整行可点击，悬停
-// 浅底，点一下用系统默认程序打开（邮件或浏览器）；link 为空时是只读文本。
+// 协议、服务条款两行共用同一套内边距与标签列宽，保证标签左边缘对齐。link 非空
+// 时整行可点击，悬停浅底，点一下用系统默认程序打开；link 为空时是只读文本。
 func (a *app) aboutRow(c *ui.Context, glyph *ui.SVG, label, value, link string) {
 	tk := lobetheme.TokensOf(c)
 	clickable := link != ""
@@ -297,7 +336,7 @@ func (a *app) aboutRow(c *ui.Context, glyph *ui.SVG, label, value, link string) 
 	} else {
 		row = ui.Row(c)
 	}
-	row.FillWidth().AlignItems(ui.Center).Padding(7, 8).Gap(10).Radius(tk.BorderRadius)
+	row.FillWidth().AlignItems(ui.Center).Padding(7, 8).Gap(10)
 	if clickable && row.Hovered() {
 		row.Background(tk.FillTertiary)
 	}

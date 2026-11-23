@@ -72,7 +72,7 @@ func (b *accountBook) startTray() {
 	}
 	tray, err := mygo.NewTray(mygo.TrayOptions{
 		ID:      trayID,
-		Icon:    trayIconPNG,
+		Icon:    trayIcons.forDark(currentIconDark()),
 		ToolTip: trayToolTip,
 	})
 	if err != nil {
