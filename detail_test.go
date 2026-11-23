@@ -3469,6 +3469,7 @@ func TestAccessGuardReason(t *testing.T) {
 		{topicDetail{GuardType: guardLogin}, "登录后可见"},
 		{topicDetail{GuardType: guardLevel, GuardLevel: 5}, "达到 5 级可见"},
 		{topicDetail{GuardType: guardAttribute, GuardAttr: "力量", GuardAttrValue: 3}, "力量 属性达到 3 可见"},
+		{topicDetail{GuardType: guardAttribute, GuardAttr: "karma", GuardAttrValue: 3}, "财富 属性达到 3 可见"},
 		{topicDetail{GuardType: accessGuardGuardian}, "仅守护者可见"},
 		{topicDetail{GuardType: "unknown"}, "内容不可见"},
 	}

@@ -520,11 +520,11 @@ func (a *app) finishUpload(id uint64, url string, err error) {
 		} else {
 			j.State = uploadFailed
 			j.Err = friendlyError(err)
-			// 官方图床缺 upload scope 时交给全局授权链路：补上权限后自动
-			// 重传这一张，草稿与占位符都留在原地，不用重新拖一次。这种
-			// 情况下只提示「等待授权」，不要再弹一条吓人的上传失败。
-			if a.handleAuthErrorFor(target, err, func() { a.retryUpload(id) }) {
-				a.toast(target, "上传图片需要额外授权，授权完成后会自动重传："+j.Name)
+			// 官方图床缺 upload scope 时交给全局授权链路：草稿与占位符都留在
+			// 原地，授权完成后由用户自己重新上传这一张。这种情况下只提示
+			// 「等待授权」，不要再弹一条吓人的上传失败。
+			if a.handleAuthErrorFor(target, err) {
+				a.toast(target, "上传图片需要额外授权，请授权后重新上传："+j.Name)
 			} else {
 				a.toast(target, "图片上传失败："+j.Err)
 			}
@@ -578,7 +578,7 @@ func (a *app) replaceUploadPlaceholder(j *uploadJob, replacement string) {
 	e.pendingSel = composeSelection{}
 }
 
-// retryUpload 让失败的任务回到队尾。授权补权限后的重跑也走这里。
+// retryUpload 让失败的任务回到队尾。
 func (a *app) retryUpload(id uint64) {
 	j := a.uploadByID(id)
 	if j == nil || j.State != uploadFailed {

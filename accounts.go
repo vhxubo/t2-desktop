@@ -782,8 +782,8 @@ func (b *accountBook) finishAccountLogin(auth *AuthManager, err error) {
 	})
 }
 
-// abortAccountWindowAuth 告诉发起这次授权的账号窗口：这次授权没成，窗口里等
-// 重跑的调用要一起丢掉，免得以后某次授权成功时突然执行一个早就过期的操作。
+// abortAccountWindowAuth 告诉发起这次授权的账号窗口：这次授权没成，清掉
+// 窗口里的授权状态，免得以后再弹一个早就过期的授权提示。
 // 只在主线程调用；窗口没开时什么都不做。
 func (b *accountBook) abortAccountWindowAuth(p *accountLogin, reason string) {
 	if p == nil || p.accountID == "" {
@@ -798,7 +798,7 @@ func (b *accountBook) abortAccountWindowAuth(p *accountLogin, reason string) {
 }
 
 // failAccountWindowAuth 告诉发起这次授权的账号窗口授权失败：把登录回退页摆
-// 出来（那里可以重新发起），待重跑的调用保留到下一次成功授权。
+// 出来（那里可以重新发起授权）。
 func (b *accountBook) failAccountWindowAuth(p *accountLogin, err error) {
 	if p == nil || p.accountID == "" {
 		return
@@ -860,7 +860,7 @@ func (b *accountBook) persistLogin(p *accountLogin) (*account, error) {
 			msg := "授权回来的是「" + name + "」，不是「" + target.name() +
 				"」。已把它添成另一个账号；原来那个仍需要重新登录。"
 			b.setLoginMsg(msg)
-			// 这个窗口等的那次授权落到别人头上了：待重跑调用一并丢掉。
+			// 这个窗口等的那次授权落到别人头上了：清掉它的授权状态。
 			b.abortAccountWindowAuth(p, msg)
 			return b.adoptLogin(p.auth)
 		}
@@ -1482,7 +1482,7 @@ func (b *accountBook) claimLogin(m *AuthManager) {
 		// 被取代的那次授权可能正开在内置浏览器窗口里：窗口一并收起，别留一个
 		// 已经作废的授权页在屏幕上。
 		b.closeLoginWindow()
-		// 它的账号窗口也要知道：待重跑的调用不能再留着。
+		// 它的账号窗口也要知道：这次授权已经作废。
 		b.abortAccountWindowAuth(dropped, "这次授权已被另一次授权取代，请重新发起。")
 	}
 	for _, acc := range b.snapshotAccounts() {

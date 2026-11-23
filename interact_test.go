@@ -147,7 +147,7 @@ func TestFavoriteToggleRequests(t *testing.T) {
 	}
 }
 
-// 未登录点收藏不直接发请求：走全局授权弹窗，登录成功后重跑同一动作。
+// 未登录点收藏不直接发请求：走全局授权弹窗，由用户自己再点一次收藏。
 func TestFavoriteRequiresLogin(t *testing.T) {
 	a := testApp(t)
 	topic, err := decodeTopic([]byte(interactJSON), "AB12")
@@ -159,9 +159,6 @@ func TestFavoriteRequiresLogin(t *testing.T) {
 	a.toggleFavorite(a.detail)
 	if !a.authGate.open {
 		t.Fatal("未登录点收藏应打开授权弹窗")
-	}
-	if len(a.authGate.replays) != 1 {
-		t.Fatalf("待重跑的调用 = %d，期望 1", len(a.authGate.replays))
 	}
 	if a.detail.fav.busy || a.detail.fav.favorited {
 		t.Errorf("未登录不应改动收藏状态：%+v", a.detail.fav)
@@ -897,9 +894,6 @@ func TestReactionEntryRequiresLogin(t *testing.T) {
 	}
 	if a.detail.react.reactOpen {
 		t.Error("未登录不该打开表态气泡")
-	}
-	if len(a.authGate.replays) != 1 {
-		t.Errorf("授权后应重跑这次表态入口，待重跑 %d 个", len(a.authGate.replays))
 	}
 }
 

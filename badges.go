@@ -23,7 +23,7 @@ import (
 // 佩戴 / 取消佩戴是这里唯一的写操作。按 2026-11-12 的变更，佩戴不消耗金币、
 // 也不占金币变动额度：默认 scope 里的 interact 已足够，历史令牌只持
 // write:economy 也照常放行。缺权限时交给 auth_gate 补授权，授权成功后同一次
-// 操作自动重跑。两个方向都标 🔑：一次点击（含超时重试与授权后重放）带同一
+// 操作需要用户自己再点一次。两个方向都标 🔑：一次点击（含超时重试）带同一
 // 个 Idempotency-Key，避免重复提交。
 //
 // 徽章图有两个尺寸：icon_url 是 22×15 的小图，只用于用户名旁 ≤32px 的槽位；
@@ -242,7 +242,7 @@ func (c *Client) fetchEquippedBadgeIDs(ctx context.Context) (map[string]bool, er
 }
 
 // setBadgeEquipped 佩戴或取消佩戴一枚徽章，返回服务端给的 message（可直接
-// 展示）。key 是一次点击的幂等键：超时重试与授权后重放都用同一个，不能每次
+// 展示）。key 是一次点击的幂等键：超时重试用同一个，不能每次
 // 调用重新生成。重复佩戴 / 重复取消的 409 conflict 视为目标状态已成立。
 func (c *Client) setBadgeEquipped(ctx context.Context, badgeID, key string, equip bool) (string, error) {
 	var message string
@@ -300,8 +300,8 @@ func (a *app) loadProfileBadges() {
 			if err != nil {
 				ps.badgeErr = friendlyError(err)
 				// 缺 profile 权限（旧令牌）或登录失效时走全局授权链路，
-				// 授权成功后重跑这次加载；普通网络错误只留在页面里重试。
-				a.handleAuthErrorFor(toastProfile, err, a.loadProfileBadges)
+				// 缺权限时交给授权弹窗；普通网络错误只留在页面里重试。
+				a.handleAuthErrorFor(toastProfile, err)
 				return
 			}
 			for i := range badges {
@@ -345,7 +345,7 @@ func (a *app) prefetchBadgeIcons(badges []badgeWallEntry) {
 }
 
 // toggleProfileBadge 佩戴或取消佩戴一枚徽章。name 是这次操作对应的徽章名，
-// 用来组装结果的 toast；授权重放时界面状态可能已经被重置，但名字仍然对得上。
+// 用来组装结果的 toast；名字在一次点击里保持不变。
 // key 为空表示一次新的点击；重放会带着同一个 key 回来。不先乐观更新：佩戴
 // 状态以服务端的确认为准。
 func (a *app) toggleProfileBadge(badgeID, name string, equip bool, key string) {
@@ -378,7 +378,7 @@ func (a *app) toggleProfileBadge(badgeID, name string, equip bool, key string) {
 				return
 			}
 			if err != nil {
-				if a.handleAuthErrorFor(toastProfile, err, func() { a.toggleProfileBadge(badgeID, name, equip, key) }) {
+				if a.handleAuthErrorFor(toastProfile, err) {
 					return
 				}
 				a.toast(toastProfile, friendlyError(err))

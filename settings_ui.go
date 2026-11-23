@@ -93,7 +93,7 @@ func (a *app) showSettingsWindow() {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、通知窗口一样自绘标题栏
 		HideWindowButtons: true,
-		Content:           ui.View(a.settingsWindowView),
+		Content:           ui.View(a.windowView(a.settingsWindowView)),
 	})
 	a.settingsWin = win
 	win.OnClosed(func() {

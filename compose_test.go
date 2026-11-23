@@ -352,6 +352,9 @@ func TestComposeGuardPayload(t *testing.T) {
 	st.nodes = []composeNode{{ID: "uuid-node", Name: "社区讨论"}}
 	st.nodeID = "uuid-node"
 	st.title = "标题"
+	if st.guardAttr != d20Attrs[0].Value {
+		t.Errorf("属性可见的默认取值应为 %q，实际 %q", d20Attrs[0].Value, st.guardAttr)
+	}
 
 	p, err := st.payload()
 	if err != nil {
@@ -375,14 +378,19 @@ func TestComposeGuardPayload(t *testing.T) {
 	}
 
 	st.guardChoice = guardTypeLabels[3]
+	st.guardAttr = ""
 	if _, err = st.payload(); err == nil {
-		t.Errorf("按属性可见但没填属性名时应报错")
+		t.Errorf("按属性可见但没选属性时应报错")
 	}
-	st.guardAttr = "力量"
+	st.guardAttr = "力量" // 老的自由输入取值，不在官网字典里
+	if _, err = st.payload(); err == nil {
+		t.Errorf("按属性可见但取值不在 D20 字典里时应报错")
+	}
+	st.guardAttr = d20Attrs[1].Value
 	st.guardAttrValue = 3
 	p, err = st.payload()
 	if err != nil || p["access_guard_type"] != "attribute" ||
-		p["access_guard_attr"] != "力量" || p["access_guard_attr_value"] != 3 {
+		p["access_guard_attr"] != "experience" || p["access_guard_attr_value"] != 3 {
 		t.Errorf("属性可见：%v %v", p, err)
 	}
 }
@@ -486,7 +494,11 @@ func TestComposeRestrictedValidation(t *testing.T) {
 
 	st = base()
 	st.restrictedD20Attr = ""
-	check(st, "属性检定需要选择 D20 属性")
+	check(st, "属性检定需要选择有效的 D20 属性")
+
+	st = base()
+	st.restrictedD20Attr = "力量"
+	check(st, "属性检定需要选择有效的 D20 属性")
 
 	st = base()
 	st.restrictedDurationMonths = 13
@@ -1223,8 +1235,8 @@ func TestComposeFailureKeepsDraftAndKey(t *testing.T) {
 	}
 }
 
-// 缺 write:topic 时先走全局授权弹窗，而不是当成普通错误；授权成功后按同一
-// 份内容自动重发。
+// 缺 write:topic 时先走全局授权弹窗，而不是当成普通错误；草稿留在窗口里，
+// 授权成功后由用户自己再点发送。
 func TestComposeMissingScopeGoesToAuthGate(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
@@ -1247,9 +1259,6 @@ func TestComposeMissingScopeGoesToAuthGate(t *testing.T) {
 	}
 	if got := a.authGate.need.Scopes; len(got) != 1 || got[0] != "write:topic" {
 		t.Errorf("授权弹窗的 scope = %v", got)
-	}
-	if len(a.authGate.replays) != 1 {
-		t.Errorf("应当登记一次重发：%d", len(a.authGate.replays))
 	}
 	if st.title != "需要授权" {
 		t.Errorf("等授权期间草稿不该丢：%q", st.title)

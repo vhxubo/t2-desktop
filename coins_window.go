@@ -46,7 +46,7 @@ func (a *app) showCoins() {
 // 就有余额与今日明细，而不是先看一会儿空壳。
 func (a *app) showCoinWindow() {
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录 2Libra 后才能查看金币。", a.showCoins)
+		a.requestLogin("登录 2Libra 后才能查看金币。")
 		return
 	}
 	a.ensureCoinsLoaded()
@@ -75,7 +75,7 @@ func (a *app) showCoinWindow() {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、通知窗口一样自绘标题栏
 		HideWindowButtons: true,
-		Content:           ui.View(a.coinWindowView),
+		Content:           ui.View(a.windowView(a.coinWindowView)),
 	})
 	a.coinWin = win
 	// 显示状态跟着窗口事件走：标题栏金币数据此高亮，不能只按窗口对象还

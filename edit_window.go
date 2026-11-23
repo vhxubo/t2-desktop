@@ -116,7 +116,7 @@ func (a *app) openEditWindow(st *editState) {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、发帖窗口一样自绘标题栏
 		HideWindowButtons: true,
-		Content:           ui.View(a.editWindowView),
+		Content:           ui.View(a.windowView(a.editWindowView)),
 	})
 	a.editWin = win
 	win.OnClosed(func() {
@@ -259,8 +259,11 @@ func (a *app) editGuardField(c *ui.Context, st *editState) {
 					composeGuardLevelLo, composeGuardLevelHi, 1).Label("最低可见等级").Width(120)
 				ui.Text(c, "级及以上").FontSize(11).TextColor(t.TextMuted)
 			case guardAttribute:
-				ui.TextInput(c, &st.guardAttr).Label("D20 属性名").
-					Placeholder("如 力量 / 智力").Width(160)
+				labels := make([]string, 0, len(d20Attrs))
+				for _, at := range d20Attrs {
+					labels = append(labels, at.Label)
+				}
+				ui.Select(c, &st.guardAttr, labels).Label("D20 属性").Width(160)
 				ui.NumberInput(c, &st.guardAttrValue, 0, composeGuardAttrHi, 1).
 					Label("属性下限").Width(120)
 			}
@@ -287,7 +290,11 @@ func editGuardSummary(g guardSelection) string {
 		if g.Attr == "" {
 			return "按 D20 属性可见"
 		}
-		return fmt.Sprintf("%s ≥ %d 可见", g.Attr, g.AttrValue)
+		name := d20AttrLabel(g.Attr)
+		if name == "" {
+			name = g.Attr
+		}
+		return fmt.Sprintf("%s ≥ %d 可见", name, g.AttrValue)
 	}
 	return "未知"
 }
@@ -431,11 +438,7 @@ func (a *app) submitEdit() {
 				}
 				// 缺权限时先补授权，回调成功后按同样的内容重发一次，用户不用
 				// 重新输入。
-				a.handleAuthErrorFor(toastEdit, err, func() {
-					if a.edit == st {
-						a.submitEdit()
-					}
-				})
+				a.handleAuthErrorFor(toastEdit, err)
 				a.editToast(friendlyError(err))
 				return
 			}

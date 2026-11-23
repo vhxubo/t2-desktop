@@ -355,7 +355,7 @@ func TestVoteFinishedIsReadOnly(t *testing.T) {
 	}
 }
 
-// 未登录点投票先走全局授权弹窗，不发请求；登录成功后会重放这一票。
+// 未登录点投票先走全局授权弹窗，不发请求；登录成功后需要用户自己再投一次。
 func TestVoteNeedsLogin(t *testing.T) {
 	got := make(chan voteCall, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

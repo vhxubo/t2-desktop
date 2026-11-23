@@ -114,7 +114,7 @@ func (a *app) submitUserCardAbout() {
 				return
 			}
 			if err != nil {
-				if a.handleAuthErrorFor(toastUserCard, err, func() { a.submitUserCardAbout() }) {
+				if a.handleAuthErrorFor(toastUserCard, err) {
 					return
 				}
 				cs.aboutErrEdit = friendlyError(err)
@@ -361,7 +361,7 @@ func (a *app) submitProfileAbout() {
 				return
 			}
 			if err != nil {
-				if a.handleAuthErrorFor(toastProfile, err, func() { a.submitProfileAbout() }) {
+				if a.handleAuthErrorFor(toastProfile, err) {
 					return
 				}
 				ps.aboutErrEdit = friendlyError(err)

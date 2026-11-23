@@ -284,7 +284,7 @@ func (a *app) runMentionUserSearch(d *detailState) {
 			}
 			s.busy = false
 			if err != nil {
-				if a.handleAuthErrorFor(a.replyAuthTarget(), err, func() { a.retryMentionSearch(d) }) {
+				if a.handleAuthErrorFor(a.replyAuthTarget(), err) {
 					return
 				}
 				s.err = friendlyError(err)
@@ -308,7 +308,7 @@ func (a *app) runMentionUserSearch(d *detailState) {
 	}()
 }
 
-// retryMentionSearch 清掉失败标记重来一次（气泡里的「重试」与授权成功后的重放）。
+// retryMentionSearch 清掉失败标记重来一次（气泡里的「重试」按钮）。
 func (a *app) retryMentionSearch(d *detailState) {
 	s := &d.mentions.search
 	s.query = ""
@@ -813,7 +813,7 @@ func (a *app) ensureMentionGuardians(d *detailState) {
 			st.guardiansBusy = false
 			if err != nil {
 				st.failGuardians++
-				if a.handleAuthErrorFor(a.replyAuthTarget(), err, func() { a.reloadMentionGuardians(d) }) {
+				if a.handleAuthErrorFor(a.replyAuthTarget(), err) {
 					return
 				}
 				st.guardiansErr = friendlyError(err)
@@ -869,7 +869,7 @@ func (a *app) ensureMentionParticipants(d *detailState) {
 					return
 				}
 				st.failParticipants++
-				if a.handleAuthErrorFor(a.replyAuthTarget(), err, func() { a.reloadMentionParticipants(d) }) {
+				if a.handleAuthErrorFor(a.replyAuthTarget(), err) {
 					return
 				}
 				st.participantsErr = friendlyError(err)
@@ -891,7 +891,7 @@ func isPermissionDenied(err error) bool {
 	return errors.As(err, &ae) && ae.Code == "permission_denied"
 }
 
-// reload* 丢掉失败状态重来一次（气泡里的「重试」与授权成功后的重放）。
+// reload* 丢掉失败状态重来一次（气泡里的「重试」按钮）。
 func (a *app) reloadMentionGuardians(d *detailState) {
 	st := &d.mentions
 	if st.guardiansBusy {

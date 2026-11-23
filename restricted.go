@@ -17,8 +17,8 @@ import (
 //	POST /v1/topics/:short_id/restricted/unlock  🔑   scope write:economy，需开通
 //
 // 四个端点都默认不授予：未开通时 403 insufficient_scope（带 required_scope），
-// 交给 auth_gate.go 的授权链路引导补 scope，成功后重放被中断的调用。
-// 解锁是花币操作，必须带 Idempotency-Key：同一笔重试（超时、授权后重放）
+// 交给 auth_gate.go 的授权链路引导补 scope，授权成功后由用户自己再点一次。
+// 解锁是花币操作，必须带 Idempotency-Key：同一笔的超时重试
 // 复用同一个键，成功后清空，下一次是新的解锁就换新键。
 //
 // 文档只写了「未解锁时返回门槛信息（金币 / 等级 / 属性），已解锁时返回
@@ -75,7 +75,9 @@ func (r restrictedInfo) gateLines() []string {
 	}
 	if r.AttrKnown {
 		name := r.AttrName
-		if name == "" {
+		if label := d20AttrLabel(name); label != "" {
+			name = label
+		} else if name == "" {
 			name = "属性值"
 		}
 		out = append(out, fmt.Sprintf("需要%s达到 %d", name, r.AttrValue))
@@ -497,11 +499,7 @@ func (a *app) loadRestricted(d *detailState, kind string, auto bool) {
 		if auto {
 			return
 		}
-		a.requestLogin("登录后才能查看受限内容。", func() {
-			if a.detailLive(d) {
-				a.loadRestricted(d, kind, false)
-			}
-		})
+		a.requestLogin("登录后才能查看受限内容。")
 		return
 	}
 	st.loading = true
@@ -537,11 +535,7 @@ func (a *app) loadRestricted(d *detailState, kind string, auto bool) {
 			if err != nil {
 				// 自动拉取遇到缺 scope 只是「未开通」，不弹授权打断阅读；
 				// 手动点按钮时才交给授权链路补权限并重试。
-				if !auto && a.handleAuthError(err, func() {
-					if a.detailLive(d) {
-						a.loadRestricted(d, kind, false)
-					}
-				}) {
+				if !auto && a.handleAuthError(err) {
 					return
 				}
 				st.err = friendlyError(err)
@@ -581,11 +575,7 @@ func (a *app) submitRestrictedUnlock(d *detailState) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能解锁受限内容。", func() {
-			if a.detailLive(d) {
-				a.submitRestrictedUnlock(d)
-			}
-		})
+		a.requestLogin("登录后才能解锁受限内容。")
 		return
 	}
 	// 同一笔解锁（同一帖子、同一价格）重试复用幂等键；成功了就清空，
@@ -614,12 +604,8 @@ func (a *app) submitRestrictedUnlock(d *detailState) {
 				return
 			}
 			if err != nil {
-				// 授权后重放还是这一笔，confirm 与 key 都留着。
-				if a.handleAuthError(err, func() {
-					if a.detailLive(d) {
-						a.submitRestrictedUnlock(d)
-					}
-				}) {
+				// 这是同一笔重试，confirm 与 key 都留着，便于用户手动重试。
+				if a.handleAuthError(err) {
 					return
 				}
 				a.toast(a.detailToastFor(d), friendlyError(err))

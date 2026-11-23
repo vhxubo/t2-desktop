@@ -63,7 +63,7 @@ func (a *app) showAboutWindow() {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、设置窗口一样自绘标题栏
 		HideWindowButtons: true,
-		Content:           ui.View(a.aboutWindowView),
+		Content:           ui.View(a.windowView(a.aboutWindowView)),
 	})
 	a.aboutWin = win
 	win.OnClosed(func() {
@@ -257,9 +257,12 @@ func (a *app) aboutTermsSection(c *ui.Context) {
 	aboutSection(c, lucide.FileText(), "条款", func() {
 		props := display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 0}
 		display.Text(c, "T2 是 Third Party 2Libra（第三方 2Libra）的简称。"+
-			"本应用由第三方开发者 vhxubo 独立开发运营，与 2Libra 无隶属或合作关系。"+
-			"2Libra 仅提供账号授权与接口，不对本应用的可用性、内容与数据处理负责。"+
+			"本应用由第三方开发者 vhxubo 采用 Vibe Coding（AI 辅助编程）方式独立开发运营，"+
+			"与 2Libra 无隶属或合作关系。2Libra 仅提供账号授权与接口，"+
+			"不对本应用的可用性、内容与数据处理负责。"+
 			"应用内展示的内容版权归原作者所有，详情页保留作者昵称与原文链接。", props)
+		display.Text(c, "开发方式：本应用采用 Vibe Coding（AI 辅助编程）方式，由开发者与 AI 协作完成；"+
+			"开发者对应用本身的维护负责，但不对 AI 生成结果作任何明示或暗示担保。", props)
 		// 接入条款附录要求逐项列出申请的权限与用途；追加权限由 auth_gate 触发，
 		// 授权弹窗里会展示本次重新申请的范围，这里只说明各自用来做什么。
 		display.Text(c, "授权与权限：可随时在 2Libra 的「授权应用」页撤销授权或逐项关闭权限，"+
@@ -271,6 +274,9 @@ func (a *app) aboutTermsSection(c *ui.Context) {
 		display.Text(c, "责任与风险：您因授权或正常使用本应用而对账号产生的任何影响均由您自行评估并承担；"+
 			"以您名义发布的内容视为您发布，须自行确保合规。打赏、签到、盲盒、竞猜等金币变动不可撤销，"+
 			"本应用仅在您逐次确认后执行。令牌仅存于本机系统凭据库，不上传、不共享；请妥善保管设备与账号。", props)
+		display.Text(c, "社区内容：应用内帖子、评论、用户信息等均由 2Libra 用户提供，"+
+			"本应用仅按开放接口原样呈现，不参与内容生产，仅作为浏览与交互工具；"+
+			"相关内容不代表开发者的思想、观点或意识形态，本应用对社区内容及其后果不承担责任。", props)
 		display.Text(c, "第三方服务与可用性：图片可选用第三方图床，上传后按该服务条款处理。"+
 			"接口按现状提供，2Libra 可调整配额、端点或响应；因限流、维护、接口变更或不可抗力导致的功能受限，"+
 			"本应用不承担责任。未成年人应在监护人同意下使用与授权；条款更新后继续使用视为接受。", props)

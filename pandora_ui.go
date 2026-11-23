@@ -119,7 +119,7 @@ func (a *app) pandoraDrawnCard(c *ui.Context, st *pandoraState) {
 
 func pandoraCardError(st *pandoraState) string {
 	if st.wait {
-		return "等待授权后继续读取盲盒"
+		return "盲盒加载失败，请授权后重新打开"
 	}
 	return "盲盒暂时读不到：" + st.err
 }

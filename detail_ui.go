@@ -498,8 +498,12 @@ func (a *app) loadDetail(d *detailState, it Item) {
 			d.flat = flat
 		}
 	}
-	// 本地已读：点开即算读过，回到列表时这一行标题置灰。
+	// 本地已读：点开即算读过，回到列表时这一行置灰。从最新评论等列表带
+	// 着评论 id 进来时，那条评论也单独记一笔，只置灰它自己。
 	a.markPostRead(it.ShortID)
+	if it.CommentID != "" {
+		a.markCommentRead(it.CommentID)
+	}
 	a.recordReading(it, d.topic)
 	// 稍后再看：默认打开即从列表移除；开了「保留」则标成已读，留作待读清单。
 	a.handleWatchLaterOpen(it.ShortID)
@@ -592,11 +596,7 @@ func (a *app) loadTopicFor(d *detailState) {
 			}
 			d.topicLoading = false
 			if err != nil {
-				a.handleAuthError(err, func() {
-					if a.detailLive(d) {
-						a.loadTopicFor(d)
-					}
-				})
+				a.handleAuthError(err)
 				// 已有缓存正文时不要把整页换成错误：继续显示缓存，只在顶部
 				// 说明这一份是本地内容。
 				if d.topic != nil {
@@ -672,11 +672,7 @@ func (a *app) loadRepliesFor(d *detailState, page int) {
 			if err != nil {
 				// 缺权限时不只把错误画在页面上：全局授权弹窗会带用户去补权限，
 				// 回调成功后重发这一页。
-				a.handleAuthError(err, func() {
-					if a.detailLive(d) {
-						a.loadRepliesFor(d, page)
-					}
-				})
+				a.handleAuthError(err)
 				if page > 1 && len(d.replyList) > 0 {
 					// 已经有评论时续拉失败：保留列表，在底部提示并可重试。
 					d.replyMoreErr = friendlyError(err)
@@ -815,9 +811,7 @@ func (a *app) ensureEmojis() {
 				// 会再试一次，正文不必在整个运行期都显示 :code: 短码。
 				a.emojiTried = false
 				// 表情表也可能因权限被拒；授权成功后重试一次。
-				a.handleAuthError(err, func() {
-					a.ensureEmojis()
-				})
+				a.handleAuthError(err)
 				a.status = "表情表加载失败，正文短码原样显示"
 				return
 			}
@@ -1512,7 +1506,9 @@ func accessGuardReason(p *topicDetail) (title, detail string) {
 			"这篇帖子设置了最低等级门槛，达到要求等级后即可查看。"
 	case guardAttribute:
 		attr := strings.TrimSpace(p.GuardAttr)
-		if attr == "" {
+		if label := d20AttrLabel(attr); label != "" {
+			attr = label
+		} else if attr == "" {
 			attr = "指定"
 		}
 		return fmt.Sprintf("%s 属性达到 %d 可见", attr, p.GuardAttrValue),
@@ -1525,8 +1521,8 @@ func accessGuardReason(p *topicDetail) (title, detail string) {
 }
 
 // accessWall 画无权帖的访问墙。它是正文的主体：说明门槛是什么，未登录时
-// 给「去登录」入口，登录后由 replay 重拉详情与评论，墙随即被真正内容替换。
-// 页面级状态留在页面里（不像一次性操作那样发 toast），所以这里用内联卡片。
+// 给「去登录」入口；授权完成后由用户自己重新打开这篇帖子，墙随即被真正内容
+// 替换。页面级状态留在页面里（不像一次性操作那样发 toast），所以用内联卡片。
 func (a *app) accessWall(c *ui.Context, d *detailState, p *topicDetail) {
 	tk := lobetheme.TokensOf(c)
 	title, detail := accessGuardReason(p)
@@ -1539,13 +1535,7 @@ func (a *app) accessWall(c *ui.Context, d *detailState, p *topicDetail) {
 		ui.Text(c, detail).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription).MaxLines(3)
 		if !a.auth.loggedIn() {
 			if ui.PrimaryButton(c, "去登录").Clicked() {
-				a.requestLoginFor(a.detailToastFor(d), "登录后才能查看这篇帖子。", func() {
-					if a.detailLive(d) {
-						// 无权时评论接口返回 d:null，登录后要重新拉一次才看得到。
-						a.loadTopicFor(d)
-						a.loadRepliesFor(d, 1)
-					}
-				})
+				a.requestLoginFor(a.detailToastFor(d), "登录后才能查看这篇帖子。")
 			}
 		}
 	})
@@ -2514,7 +2504,7 @@ func (a *app) replyCopyEntry(c *ui.Context, d *detailState, r replyItem) {
 }
 
 // bookmarkEntry 是评论底行的书签图标：已加书签时填实并换成强调色。未登录
-// 也可以点，授权成功后同一次操作自动重跑（见 bookmarks.go）。
+// 也可以点，授权成功后由用户自己再点一次（见 bookmarks.go）。
 func (a *app) bookmarkEntry(c *ui.Context, d *detailState, r replyItem) {
 	if r.ID == "" || r.Deleted {
 		return
@@ -3102,15 +3092,7 @@ func (a *app) replyFieldActions(c *ui.Context, d *detailState) ui.Element {
 			})
 			login.Label("登录后评论").Tooltip("登录后才能发表评论")
 			if login.Clicked() {
-				var replay func()
-				if strings.TrimSpace(d.draft) != "" {
-					replay = func() {
-						if a.detailLive(d) {
-							a.submitReply()
-						}
-					}
-				}
-				a.requestLoginFor(a.replyAuthTarget(), "登录后才能发表评论。", replay)
+				a.requestLoginFor(a.replyAuthTarget(), "登录后才能发表评论。")
 			}
 			return
 		}
@@ -3278,11 +3260,7 @@ func (a *app) submitReply() {
 				} else {
 					// 缺 write:comment 时先补授权，回调成功后按同样的内容与父
 					// 评论重发一次，用户不用重新输入。
-					a.handleAuthErrorFor(a.replyAuthTarget(), err, func() {
-						if a.detailLive(d) {
-							a.submitReply()
-						}
-					})
+					a.handleAuthErrorFor(a.replyAuthTarget(), err)
 					a.replyToast(friendlyError(err))
 				}
 				if a.onReplyPosted != nil {

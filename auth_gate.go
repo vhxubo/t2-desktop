@@ -4,25 +4,24 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/egoist/mygo"
 )
 
 // 全局授权链路
 //
 // 所有前台数据操作（列表、详情、评论发布、消息已读）拿到 API 错误后都先交给
 // handleAuthErrorFor：401 与 403 缺权限不当作普通错误展示，而是登记进当前
-// 账号唯一的 authGate。弹窗只画在发起这次操作的那个窗口里（见 owners），
-// 不会跑到主窗口去；两个窗口同时缺权限时各弹一个入口，共用一次授权。
+// 账号唯一的 authGate；更底层的 HTTP 出口还会对 insufficient_scope 做一次
+// 全局拦截（见 Client.onAuthError），不依赖每个调用点记得自己接。
+// 弹窗画在当前聚焦的窗口里（见 focusedAuthTarget），后台请求从哪扇窗口发出
+// 不重要——用户正在看的那一扇才会显示，「前往授权」第一眼就能看到。
 // 用户点「前往授权」后走已有的浏览器 + 回调流程：账号窗口用内置浏览器的独立
 // 会话（系统浏览器里可能登着另一个账号），没有账号册时用系统浏览器 + 深链。
-// 回调被接受时 onAuthChanged 会把登记下来的调用原样重跑，用户不用回到原来的
-// 位置再点一次。
+// 授权成功后应用不会替用户重跑被中断的操作：由用户自己再点一次刚才的操作。
 //
 // 后台任务（未读数轮询、通知长连接重连）不打开弹窗：它们不是用户主动发起的
 // 操作，失败时保持静默；等用户真正打开对应页面时，前台请求会发起授权。
-
-// authReplayLimit 是同时登记的被中断调用上限。正常一次只会有一两个；上限
-// 只是防止异常情况下无限增长，超出时丢弃最旧的一个。
-const authReplayLimit = 16
 
 // authNeed 是「当前会话为什么不能继续」：可能是根本没有登录，也可能是令牌
 // 缺少服务端要求的权限范围。弹窗只认这一种描述。
@@ -101,25 +100,106 @@ func mergeScopeList(a, b []string) []string {
 	return cleanScopeList(append(append([]string(nil), a...), b...))
 }
 
-// authReplay 是一条等授权成功后重跑的调用，以及它属于哪个窗口。窗口关掉
-// 时只丢掉它自己的调用，别的窗口还在等的那条照样保留。
-type authReplay struct {
-	owner toastTarget
-	fn    func()
+// authFocusedWindow 由测试替换：无头渲染不创建真实 mygo 窗口，拿不到聚焦窗口。
+var authFocusedWindow = func() *mygo.Window { return mygo.FocusedWindow() }
+
+// focusedAuthTarget 返回当前聚焦窗口对应的 toastTarget。授权弹窗必须画在
+// 用户眼前那一扇窗口——后台请求在 A 窗口失败、用户正在看 B 窗口时，弹在 A
+// 里等于没弹。找不到（无头测试，或聚焦的是不画弹窗的窗口）时返回 ok=false，
+// 调用方沿用传进来的 owner。
+func (a *app) focusedAuthTarget() (toastTarget, bool) {
+	w := authFocusedWindow()
+	if w == nil {
+		// 应用不在前台时没有聚焦窗口；弹在主窗口，用户切回来第一眼就能看到。
+		if a.win != nil {
+			return toastMain, true
+		}
+		return 0, false // 无头测试：没有真实窗口
+	}
+	switch w {
+	case a.win:
+		return toastMain, true
+	case a.notifWin:
+		return toastNotifications, true
+	case a.settingsWin:
+		return toastSettings, true
+	case a.profileWin:
+		return toastProfile, true
+	case a.coinWin:
+		return toastCoins, true
+	case a.composeWin:
+		return toastCompose, true
+	case a.userCardWin:
+		return toastUserCard, true
+	case a.searchWin:
+		return toastSearch, true
+	case a.replyWin:
+		return toastReply, true
+	case a.editWin:
+		return toastEdit, true
+	case a.nodeEditWin:
+		return toastNodeEdit, true
+	case a.followsWin:
+		return toastFollows, true
+	case a.viewerWin:
+		return toastViewer, true
+	case a.netLogWin:
+		return toastNetLog, true
+	case a.watchLaterWin:
+		return toastWatchLater, true
+	}
+	for _, h := range a.detailWindows {
+		if h.win == w && !h.removed {
+			return h.toast, true
+		}
+	}
+	return 0, false
 }
 
-// authGate 是当前唯一的授权弹窗状态。open 只表示弹窗是否可见；replays 在
-// 弹窗关闭后仍会保留到回调完成，因此「打开浏览器 → 切回应用 → 回调送达」
-// 期间用户不需要再点任何按钮。
+// handleGlobalAuthError 是 Client.onAuthError 的实现：HTTP 出口拿到
+// insufficient_scope 就调用它。它运行在发请求的 goroutine 上，状态改动经
+// publish 回到 UI 线程后再登记弹窗。
+//
+// 平台级「需开通」的端点也会回 insufficient_scope，而 required_scope 当前的
+// 令牌其实已经全有——这时再授权也拿不到权限，不该让用户白跑一趟浏览器（与
+// comments_status.go 的 commentsStatusUngranted 同一条判断）。只有确实缺 scope
+// 才弹窗。授权成功后应用不替用户重跑操作，用户需要自己再点一次。
+func (a *app) handleGlobalAuthError(ae *apiError) {
+	if ae == nil || ae.Code != "insufficient_scope" {
+		return
+	}
+	allGranted := true
+	for _, s := range ae.RequiredScope {
+		if !a.hasAuthScope(s) {
+			allGranted = false
+			break
+		}
+	}
+	if allGranted {
+		return
+	}
+	need := scopeNeed(ae.RequiredScope)
+	a.publish(func() {
+		target, ok := a.focusedAuthTarget()
+		if !ok {
+			return // 无头测试：没有真实聚焦窗口，交给显式调用点登记
+		}
+		a.demandAuthorizationFor(target, need)
+	})
+}
+
+// authGate 是当前唯一的授权弹窗状态。open 只表示弹窗是否可见；owners 在弹窗
+// 关闭后仍会保留到回调完成，因此「打开浏览器 → 切回应用 → 回调送达」期间用户
+// 不需要再点任何按钮去发起授权。授权成功后只清空这个状态，被中断的操作由用户
+// 自己重新触发，应用不代劳。
 //
 // owners 是发起被中断调用的窗口：弹窗只画在这些窗口里，别的窗口（尤其是
 // 主窗口）不跟着弹。同一个账号的多个窗口可以同时缺权限，它们各自显示同一份
-// 说明、共用一次授权与同一组待重跑调用。
+// 说明、共用一次授权。
 type authGate struct {
-	open    bool
-	owners  map[toastTarget]struct{}
-	need    authNeed
-	replays []authReplay
+	open   bool
+	owners map[toastTarget]struct{}
+	need   authNeed
 }
 
 // wants 报告这次弹窗该不该画在 target 窗口里。
@@ -133,11 +213,15 @@ func (g *authGate) wants(target toastTarget) bool {
 
 // demandAuthorizationFor 登记一次需要授权的操作。owner 是发起这次操作（也就
 // 是缺少权限）的窗口。已有弹窗时合并缺失的 scope、把新窗口加进要显示弹窗的
-// 集合，并把新调用追加到待重跑列表：一次授权可以解决同时失败的多条请求。
-func (a *app) demandAuthorizationFor(owner toastTarget, need authNeed, replay func()) {
-	// 发起这次操作的窗口已经关掉：操作随窗口一起作废，不弹到别的窗口去，
-	// 也不在以后某次登录成功后替一个没人再关心的窗口重跑。无头测试没有真实
-	// 窗口（a.win == nil），由各自的 view 直接渲染，不受这条限制。
+// 集合：一次授权可以解决同时失败的多条请求。授权本身不自动重跑操作。
+func (a *app) demandAuthorizationFor(owner toastTarget, need authNeed) {
+	// 全局弹窗只画在用户此刻看得见的窗口：后台请求从哪扇窗口发出不重要，
+	// 重要的是弹窗出现在当前聚焦窗口，第一眼就能看到「前往授权」。
+	if focused, ok := a.focusedAuthTarget(); ok {
+		owner = focused
+	}
+	// 发起这次操作的窗口已经关掉：操作随窗口一起作废，不弹到别的窗口去。
+	// 无头测试没有真实窗口（a.win == nil），由各自的 view 直接渲染，不受此限。
 	if owner != toastMain && a.win != nil && a.toastWindow(owner) == nil {
 		return
 	}
@@ -162,76 +246,69 @@ func (a *app) demandAuthorizationFor(owner toastTarget, need authNeed, replay fu
 	} else if len(a.authGate.need.Scopes) > 0 {
 		a.authGate.need.Message = scopeNeed(a.authGate.need.Scopes).Message
 	}
-	if replay != nil {
-		if len(a.authGate.replays) >= authReplayLimit {
-			a.authGate.replays = a.authGate.replays[1:]
-		}
-		a.authGate.replays = append(a.authGate.replays, authReplay{owner: owner, fn: replay})
-	}
 	if a.onAuthPrompt != nil {
 		a.onAuthPrompt()
 	}
 }
 
 // demandAuthorization 是主窗口入口的简写：发起的窗口就是主窗口。
-func (a *app) demandAuthorization(need authNeed, replay func()) {
-	a.demandAuthorizationFor(toastMain, need, replay)
+func (a *app) demandAuthorization(need authNeed) {
+	a.demandAuthorizationFor(toastMain, need)
 }
 
 // handleAuthErrorFor 是窗口内前台调用的统一错误入口，owner 是发起调用的窗口。
 // 返回 true 表示这次失败已经由授权流程接管，调用方只负责收起加载状态，不再
-// 展示普通错误。
-func (a *app) handleAuthErrorFor(owner toastTarget, err error, replay func()) bool {
-	return a.handleAuthErrorWithScopesFor(owner, err, nil, replay)
+// 展示普通错误；授权完成后用户需要自己重新触发操作。
+func (a *app) handleAuthErrorFor(owner toastTarget, err error) bool {
+	return a.handleAuthErrorWithScopesFor(owner, err, nil)
 }
 
 // handleAuthErrorWithScopesFor 同上，但会补上这次操作已知需要的 scope：服务端
 // 有时只回 insufficient_scope 而不带 required_scope，不能让授权页漏掉它。
-func (a *app) handleAuthErrorWithScopesFor(owner toastTarget, err error, scopes []string, replay func()) bool {
+func (a *app) handleAuthErrorWithScopesFor(owner toastTarget, err error, scopes []string) bool {
 	need, ok := authNeedFromError(err)
 	if !ok {
 		return false
 	}
 	need.Scopes = mergeScopeList(need.Scopes, scopes)
-	a.demandAuthorizationFor(owner, need, replay)
+	a.demandAuthorizationFor(owner, need)
 	return true
 }
 
 // handleAuthError 是主窗口调用的简写。
-func (a *app) handleAuthError(err error, replay func()) bool {
-	return a.handleAuthErrorFor(toastMain, err, replay)
+func (a *app) handleAuthError(err error) bool {
+	return a.handleAuthErrorFor(toastMain, err)
 }
 
 // requestLoginFor 是「需要登录」的显式窗口入口（私有 tab、错误页、评论框）：
-// 和被 API 拒绝一样走同一个弹窗，授权成功后重跑 replay。
-func (a *app) requestLoginFor(owner toastTarget, message string, replay func()) {
-	a.demandAuthorizationFor(owner, loginNeed(message), replay)
+// 和被 API 拒绝一样走同一个弹窗。授权成功后由用户自己重新触发操作。
+func (a *app) requestLoginFor(owner toastTarget, message string) {
+	a.demandAuthorizationFor(owner, loginNeed(message))
 }
 
 // requestLoginWithScopesFor 是「登录 + 这次操作已知需要的 scope」：登录授权
 // 一次申请到位，回来不用再补第二次授权。发帖 / 发动态一打开窗口就知道要
 // write:topic，登录时一并带上。
-func (a *app) requestLoginWithScopesFor(owner toastTarget, message string, scopes []string, replay func()) {
+func (a *app) requestLoginWithScopesFor(owner toastTarget, message string, scopes []string) {
 	need := loginNeed(message)
 	need.Scopes = cleanScopeList(scopes)
-	a.demandAuthorizationFor(owner, need, replay)
+	a.demandAuthorizationFor(owner, need)
 }
 
 // requestLogin 是主窗口调用的简写。
-func (a *app) requestLogin(message string, replay func()) {
-	a.requestLoginFor(toastMain, message, replay)
+func (a *app) requestLogin(message string) {
+	a.requestLoginFor(toastMain, message)
 }
 
-// authorizeGate 是弹窗里的「前往授权」：先关掉弹窗，保留待重跑调用，再按
-// 缺失的 scope（叠加默认范围）打开授权页。账号窗口走账号册的内置浏览器，
-// 未登录窗口走系统浏览器（见 startLoginWithScopes）。
+// authorizeGate 是弹窗里的「前往授权」：先关掉弹窗，再按缺失的 scope（叠加
+// 默认范围）打开授权页。账号窗口走账号册的内置浏览器，未登录窗口走系统浏览器
+// （见 startLoginWithScopes）。授权成功后应用不重跑操作，用户需要自己再点一次。
 func (a *app) authorizeGate() {
 	scopes := append([]string(nil), a.authGate.need.Scopes...)
 	a.authGate.open = false
 	// 未登录窗口里的「前往授权」其实就是添加一个账号：授权回来之后会给那个
-	// 账号开一个自己的窗口，这个匿名窗口随之关掉。它登记的待重跑调用属于
-	// 匿名窗口，一并丢弃；但这次操作已知需要的 scope 要带过去，否则新账号
-	// 登录回来仍缺权限，还得再授权一次。
+	// 账号开一个自己的窗口，这个匿名窗口随之关掉。这次操作已知需要的 scope
+	// 要带过去，否则新账号登录回来仍缺权限，还得再授权一次。
 	if a.book != nil && a.accountID == "" {
 		if a.auth != nil {
 			scopes = mergeScopeList(a.auth.knownScopesList(), scopes)
@@ -243,8 +320,7 @@ func (a *app) authorizeGate() {
 	a.startLoginWithScopes(scopes)
 }
 
-// cancelAuthGate 放弃授权：待重跑调用一并丢弃，避免以后某次登录成功后突然
-// 执行一个早就过期的操作。
+// cancelAuthGate 放弃授权：清空整个授权状态。
 func (a *app) cancelAuthGate(reason string) {
 	a.authGate = authGate{}
 	if reason == "" {
@@ -254,42 +330,19 @@ func (a *app) cancelAuthGate(reason string) {
 	a.status = reason
 }
 
-// authGateWindowClosed 在某个窗口关掉时把它从授权弹窗里摘掉：这个窗口等待
-// 重跑的调用一并丢弃，别的窗口缺权限的那一份继续保留。最后一个发起窗口也
-// 关掉时整次授权作废，避免以后某次无关的登录成功突然执行一个没人再关心的
-// 操作。只在 UI 线程调用。
+// authGateWindowClosed 在某个窗口关掉时把它从授权弹窗里摘掉：别的窗口缺权限
+// 的那一份继续保留。最后一个发起窗口也关掉时整次授权作废。只在 UI 线程调用。
 func (a *app) authGateWindowClosed(owner toastTarget) {
-	if !a.authGate.open && len(a.authGate.replays) == 0 {
+	if !a.authGate.open && len(a.authGate.owners) == 0 {
 		return
 	}
 	if a.authGate.owners != nil {
 		delete(a.authGate.owners, owner)
 	}
-	kept := a.authGate.replays[:0]
-	for _, r := range a.authGate.replays {
-		if r.owner != owner {
-			kept = append(kept, r)
-		}
-	}
-	clear(a.authGate.replays[len(kept):])
-	a.authGate.replays = kept
-	if len(a.authGate.owners) > 0 || len(a.authGate.replays) > 0 {
+	if len(a.authGate.owners) > 0 {
 		return
 	}
 	a.authGate = authGate{}
-}
-
-// replayAuthorizedCalls 在授权成功后按登记顺序重跑被中断的调用，并清空整个
-// 授权状态。写操作每次都重新发起，因此统一使用新的 Idempotency-Key。
-func (a *app) replayAuthorizedCalls() {
-	replays := a.authGate.replays
-	a.authGate = authGate{}
-	for _, r := range replays {
-		r.fn()
-	}
-	if a.onAuthReplay != nil {
-		a.onAuthReplay()
-	}
 }
 
 // pendingAuthScopes 是登录回退页重新发起授权时要带上的额外 scope。
@@ -297,8 +350,8 @@ func (a *app) pendingAuthScopes() []string {
 	return append([]string(nil), a.authGate.need.Scopes...)
 }
 
-// hasPendingAuthorization 表示还有调用在等一次授权（弹窗可能已经关闭，用户
-// 正在浏览器里）。
+// hasPendingAuthorization 表示还有一次授权在进行中（弹窗可能已经关闭，用户
+// 正在浏览器里）。授权成功后应用不代跑操作，这里只用于放弃授权时清理状态。
 func (a *app) hasPendingAuthorization() bool {
-	return len(a.authGate.replays) > 0
+	return a.authGate.open || len(a.authGate.owners) > 0
 }

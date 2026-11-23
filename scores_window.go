@@ -119,7 +119,7 @@ func (a *app) showScoresWindow() {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
-		Content:           ui.View(a.scoresWindowView),
+		Content:           ui.View(a.windowView(a.scoresWindowView)),
 	})
 	a.scoresWin = win
 	win.OnClosed(func() {

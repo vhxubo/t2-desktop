@@ -86,7 +86,7 @@ func (a *app) replyBookmarked(d *detailState, id string) bool {
 }
 
 // toggleReplyBookmark 是评论底行书签按钮的动作：已加就取消，没加就加上。
-// 未登录先走全局授权弹窗，授权成功后同一次操作自动重跑。界面先乐观更新，
+// 未登录先走全局授权弹窗，授权成功后由用户自己再点一次。界面先乐观更新，
 // 失败回滚；结果用主窗口 toast 报告。
 func (a *app) toggleReplyBookmark(d *detailState, r replyItem) {
 	if d == nil || !a.detailLive(d) {
@@ -97,11 +97,7 @@ func (a *app) toggleReplyBookmark(d *detailState, r replyItem) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能给评论加书签。", func() {
-			if a.detailLive(d) {
-				a.submitReplyBookmark(d, r.ID, !a.replyBookmarked(d, r.ID))
-			}
-		})
+		a.requestLogin("登录后才能给评论加书签。")
 		return
 	}
 	if d.bmBusy != "" {
@@ -111,17 +107,13 @@ func (a *app) toggleReplyBookmark(d *detailState, r replyItem) {
 }
 
 // submitReplyBookmark 提交一次书签变更。desired 是目标状态，重试（网络
-// 超时、授权后重放）都带着同一个目标状态，不会因为本地已经乐观改过而反向。
+// 超时重试）都带着同一个目标状态，不会因为本地已经乐观改过而反向。
 func (a *app) submitReplyBookmark(d *detailState, id string, desired bool) {
 	if d == nil || !a.detailLive(d) || id == "" || d.bmBusy != "" {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能给评论加书签。", func() {
-			if a.detailLive(d) {
-				a.submitReplyBookmark(d, id, desired)
-			}
-		})
+		a.requestLogin("登录后才能给评论加书签。")
 		return
 	}
 	d.bmBusy = id
@@ -145,9 +137,7 @@ func (a *app) submitReplyBookmark(d *detailState, id string, desired bool) {
 			}
 			if err != nil {
 				setReplyBookmarked(d, id, !desired)
-				if a.handleAuthError(err, func() {
-					a.submitReplyBookmark(d, id, desired)
-				}) {
+				if a.handleAuthError(err) {
 					return
 				}
 				a.toast(a.detailToastFor(d), friendlyError(err))
@@ -205,7 +195,7 @@ func (a *app) removeProfileBookmark(it Item) {
 				ps.bookmarkBusy = ""
 			}
 			if err != nil {
-				if a.handleAuthErrorFor(toastProfile, err, func() { a.removeProfileBookmark(it) }) {
+				if a.handleAuthErrorFor(toastProfile, err) {
 					return
 				}
 				a.toast(toastProfile, friendlyError(err))

@@ -268,7 +268,7 @@ func TestProfileBadgesLoadOnTab(t *testing.T) {
 }
 
 // 读徽章墙缺 profile 权限（旧令牌）时也进入全局授权链路，而不是只把错误
-// 留在页面里；授权成功后同一次加载会自动重跑。
+// 留在页面里；授权成功后由用户自己重新打开页面。
 func TestProfileBadgesLoadPromptsAuth(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"c":403,"code":"insufficient_scope","m":"需要更多权限","d":null,
@@ -286,9 +286,6 @@ func TestProfileBadgesLoadPromptsAuth(t *testing.T) {
 	a.profile.infoLoaded = true
 	a.ensureProfileLoaded()
 	waitProfile(t, "授权弹窗", func() bool { return a.authGate.open })
-	if len(a.authGate.replays) != 1 {
-		t.Fatalf("被中断的徽章加载没有登记重放：%+v", a.authGate)
-	}
 	if len(a.authGate.need.Scopes) != 1 || a.authGate.need.Scopes[0] != "profile" {
 		t.Errorf("缺失的 scope 没有登记：%+v", a.authGate.need)
 	}
@@ -405,8 +402,8 @@ func TestProfileBadgeToggle(t *testing.T) {
 }
 
 // 缺 interact（或历史令牌只持 write:economy）时进入全局授权链路；授权成功后
-// 同一次点击自动重跑，并且重放沿用同一个 Idempotency-Key。
-func TestProfileBadgeEquipReplaysWithSameKey(t *testing.T) {
+// 应用不替用户重跑同一次点击。
+func TestProfileBadgeEquipNoAutoReplayAfterAuth(t *testing.T) {
 	var mu sync.Mutex
 	var keys []string
 	attempt := 0
@@ -429,26 +426,17 @@ func TestProfileBadgeEquipReplaysWithSameKey(t *testing.T) {
 	}
 	tt.Frame()
 	waitProfile(t, "授权弹窗", func() bool { return a.authGate.open })
-	if len(a.authGate.replays) != 1 {
-		t.Fatalf("被中断的佩戴没有登记重放：%+v", a.authGate)
-	}
 	if len(a.authGate.need.Scopes) != 2 ||
 		a.authGate.need.Scopes[0] != "interact" || a.authGate.need.Scopes[1] != "write:economy" {
 		t.Errorf("缺失的 scope 没有登记：%+v", a.authGate.need)
 	}
 
-	a.authGate.open = false
-	a.replayAuthorizedCalls()
-	waitProfile(t, "重放后的佩戴", func() bool {
-		return a.profile.badges[0].Equipped && a.profile.badgeBusyID == ""
-	})
+	// 授权完成不该触发第二次请求；用户要自己再点一次佩戴。
+	a.onAuthChanged(nil)
 	mu.Lock()
 	defer mu.Unlock()
-	if len(keys) != 2 {
-		t.Fatalf("重放没有重新发起请求：%v", keys)
-	}
-	if keys[0] == "" || keys[0] != keys[1] {
-		t.Errorf("重放换了幂等键：%q", keys)
+	if len(keys) != 1 {
+		t.Fatalf("授权后不该自动重发佩戴请求：%v", keys)
 	}
 }
 

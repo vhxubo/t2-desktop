@@ -222,11 +222,7 @@ func (a *app) openRewardPoolPopup(d *detailState) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能给金币池注资。", func() {
-			if a.detailLive(d) {
-				a.openRewardPoolPopup(d)
-			}
-		})
+		a.requestLogin("登录后才能给金币池注资。")
 		return
 	}
 	a.prepareRewardPoolAmount(d)
@@ -353,11 +349,7 @@ func (a *app) submitRewardPool(d *detailState) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能给金币池注资。", func() {
-			if a.detailLive(d) {
-				a.submitRewardPool(d)
-			}
-		})
+		a.requestLogin("登录后才能给金币池注资。")
 		return
 	}
 	amount := rewardPoolAmount(d.pool.amount)
@@ -385,7 +377,7 @@ func (a *app) submitRewardPool(d *detailState) {
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() { a.submitRewardPool(d) }) {
+				if a.handleAuthError(err) {
 					return
 				}
 				d.pool.err = friendlyError(err)

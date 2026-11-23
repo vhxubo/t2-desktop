@@ -35,7 +35,7 @@ func (a *app) showPandora() {
 // 的卡片，而不是先看一会儿空壳。
 func (a *app) openPandoraModal() {
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录 2Libra 后才能打开潘多拉盲盒。", a.showPandora)
+		a.requestLogin("登录 2Libra 后才能打开潘多拉盲盒。")
 		return
 	}
 	if a.pandora == nil {

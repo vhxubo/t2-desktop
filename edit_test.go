@@ -360,23 +360,30 @@ func TestEditGuardPayload(t *testing.T) {
 		t.Errorf("清除限制不该再带等级：%v", p)
 	}
 
-	// 属性门槛：属性名必填，数值 0～10。
+	// 属性门槛：下拉框存中文标签，请求体发官网字典的机器取值，数值 0～10。
 	attr := newTopicEditState(&topicDetail{
 		ShortID: "a1b2", Title: "标题", Content: "正文",
-		GuardKnown: true, GuardType: guardAttribute, GuardAttr: "力量", GuardAttrValue: 2,
+		GuardKnown: true, GuardType: guardAttribute, GuardAttr: "karma", GuardAttrValue: 2,
 	}, nil)
+	if attr.guardAttr != "财富" {
+		t.Errorf("属性门槛的初始标签应为财富，实际 %q", attr.guardAttr)
+	}
 	attr.guardChoice = editGuardLabel(guardAttribute)
 	attr.guardAttr = ""
-	if _, err := attr.payload(); err == nil || !strings.Contains(err.Error(), "属性名") {
-		t.Errorf("缺属性名应报错：%v", err)
+	if _, err := attr.payload(); err == nil || !strings.Contains(err.Error(), "D20") {
+		t.Errorf("没选属性应报错：%v", err)
 	}
-	attr.guardAttr = "敏捷"
+	attr.guardAttr = "力量"
+	if _, err := attr.payload(); err == nil {
+		t.Errorf("属性不在 D20 字典里应报错")
+	}
+	attr.guardAttr = "财富"
 	attr.guardAttrValue = 4
 	p, err = attr.payload()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p["access_guard_type"] != guardAttribute || p["access_guard_attr"] != "敏捷" ||
+	if p["access_guard_type"] != guardAttribute || p["access_guard_attr"] != "karma" ||
 		p["access_guard_attr_value"] != 4 {
 		t.Errorf("属性门槛请求体 = %v", p)
 	}
@@ -396,6 +403,15 @@ func TestEditGuardPayload(t *testing.T) {
 	}
 	if p["access_guard_type"] != "none" {
 		t.Errorf("未知原值时清除门槛请求体 = %v", p)
+	}
+}
+
+func TestEditGuardSummaryMapsD20Attr(t *testing.T) {
+	if got := editGuardSummary(guardSelection{Type: guardAttribute, Attr: "karma", AttrValue: 3}); got != "财富 ≥ 3 可见" {
+		t.Errorf("机器取值应显示中文标签：%q", got)
+	}
+	if got := editGuardSummary(guardSelection{Type: guardAttribute, Attr: "力量", AttrValue: 3}); got != "力量 ≥ 3 可见" {
+		t.Errorf("未知取值应原样显示：%q", got)
 	}
 }
 

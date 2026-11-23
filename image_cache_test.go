@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -609,5 +611,143 @@ func TestJPEGOrientationParsesEXIF(t *testing.T) {
 	}
 	if got := jpegOrientation([]byte{0xFF, 0xD8, 0xFF, 0xD9}); got != 1 {
 		t.Errorf("没有 EXIF 的 JPEG 方向 = %d，期望 1", got)
+	}
+}
+
+// 一页列表最多只能同时取 imageWorkerCount 张图：以前每张图单起一个协程，
+// 五十来个头像会一起抢连接，解码也一起抢 CPU。
+func TestImageCacheCapsConcurrentLoads(t *testing.T) {
+	c := newImageCache(t.TempDir())
+	release := make(chan struct{})
+	var running, peak int32
+	f := imageFetcher{
+		fetch: func(raw string) ([]byte, error) {
+			n := atomic.AddInt32(&running, 1)
+			for {
+				old := atomic.LoadInt32(&peak)
+				if n <= old || atomic.CompareAndSwapInt32(&peak, old, n) {
+					break
+				}
+			}
+			<-release
+			atomic.AddInt32(&running, -1)
+			return nil, errors.New("测试不出图")
+		},
+		redraw: func() {},
+	}
+	urls := make([]string, 0, imageWorkerCount*4)
+	for i := 0; i < imageWorkerCount*4; i++ {
+		u := fmt.Sprintf("https://example.com/pic-%d.png", i)
+		urls = append(urls, u)
+		c.prefetch(u, imageCacheTemporary, f)
+	}
+
+	// 等 worker 都把任务接住；其余任务应该仍在队列里排队。
+	deadline := time.Now().Add(3 * time.Second)
+	for atomic.LoadInt32(&running) < imageWorkerCount {
+		if time.Now().After(deadline) {
+			t.Fatalf("只有 %d 个任务开始，期望 %d 个", atomic.LoadInt32(&running), imageWorkerCount)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if got := atomic.LoadInt32(&peak); got > imageWorkerCount {
+		t.Fatalf("同时加载了 %d 张图，超过上限 %d", got, imageWorkerCount)
+	}
+
+	// 放行后所有排队的图都要依次完成，不能有漏掉的任务。
+	close(release)
+	for {
+		done := 0
+		for _, u := range urls {
+			if c.state(u) != imageLoading {
+				done++
+			}
+		}
+		if done == len(urls) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d 张图在 3 秒内没有完成", len(urls)-done)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// 头像（长期缓存）要排在帖子配图（临时缓存）前面：打开一页时先出人脸，
+// 正文配图再慢慢补齐。
+func TestImageCacheLoadsStableBeforeTemporary(t *testing.T) {
+	c := newImageCache(t.TempDir())
+	gate := make(chan struct{})
+	defer close(gate)
+	started := make(chan string, imageWorkerCount*2)
+	f := imageFetcher{
+		fetch: func(raw string) ([]byte, error) {
+			started <- raw
+			<-gate
+			return nil, errors.New("测试不出图")
+		},
+		redraw: func() {},
+	}
+	// 先占满所有 worker，让后面的任务只能排队。
+	for i := 0; i < imageWorkerCount; i++ {
+		c.prefetch(fmt.Sprintf("https://example.com/block-%d.png", i), imageCacheTemporary, f)
+	}
+	for i := 0; i < imageWorkerCount; i++ {
+		select {
+		case <-started:
+		case <-time.After(3 * time.Second):
+			t.Fatal("worker 没有接住占位任务")
+		}
+	}
+
+	post := "https://example.com/post.png"
+	avatar := "https://example.com/avatar.png"
+	c.prefetch(post, imageCacheTemporary, f)
+	c.prefetch(avatar, imageCacheStable, f)
+
+	gate <- struct{}{} // 放行一个 worker
+	select {
+	case got := <-started:
+		if got != avatar {
+			t.Fatalf("先加载的是 %q，期望头像 %q", got, avatar)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("放行后没有任务开始")
+	}
+}
+
+// 一张图加载完只请求「正在渲染它」的那扇窗口重绘。以前走 publish，会把主
+// 窗口和每一扇详情 / 设置 / 金币窗口全部重建一遍。
+func TestImageLoadInvalidatesOnlyRenderingWindow(t *testing.T) {
+	var hits int32
+	srv, _ := imageTestServer(t, &hits)
+	a := testApp(t)
+	a.autoLoad = true
+	a.client = &Client{HTTP: srv.Client()}
+	u := srv.URL + "/window.png"
+
+	withImage := ui.NewTester(a.windowView(func(c *ui.Context) {
+		a.articleImage(u, imageCacheTemporary)
+		ui.Text(c, "占位")
+	}), 64, 64)
+	other := ui.NewTester(a.windowView(func(c *ui.Context) {
+		ui.Text(c, "无关窗口")
+	}), 64, 64)
+	withImage.Frame()
+	other.Frame()
+
+	waitForSource(t, a, u)
+
+	// 16ms 的合并窗口过后，只有渲染过这张图的窗口会请求新的一帧。
+	deadline := time.Now().Add(time.Second)
+	for !withImage.FramePending() {
+		if time.Now().After(deadline) {
+			t.Fatal("图片加载完成后渲染它的窗口没有请求重绘")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if other.FramePending() {
+		t.Error("没显示这张图的窗口也被请求重绘了")
 	}
 }

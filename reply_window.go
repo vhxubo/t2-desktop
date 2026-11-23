@@ -98,7 +98,7 @@ func (a *app) openReplyWindow() {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、发帖窗口一样自绘标题栏
 		HideWindowButtons: true,
-		Content:           ui.View(a.replyWindowView),
+		Content:           ui.View(a.windowView(a.replyWindowView)),
 	})
 	a.replyWin = win
 	win.OnClosed(func() {

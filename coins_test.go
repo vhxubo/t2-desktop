@@ -934,7 +934,7 @@ func TestCoinSignConflictMarksSignedToday(t *testing.T) {
 }
 
 // 缺少 write:economy 时和收藏 / 表态一样交给全局授权弹窗，而不是弹一条
-// 普通错误 toast；授权成功后会原样重跑一次签到。
+// 普通错误 toast；授权成功后由用户自己再点一次签到。
 func TestCoinSignNeedsWriteEconomyScope(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/me/sign" && r.Method == http.MethodPost {
@@ -960,14 +960,73 @@ func TestCoinSignNeedsWriteEconomyScope(t *testing.T) {
 	if !found {
 		t.Errorf("授权弹窗缺少 write:economy：%+v", a.authGate.need)
 	}
-	if len(a.authGate.replays) != 1 {
-		t.Errorf("授权成功后应重跑签到：%+v", a.authGate.replays)
-	}
 	if len(a.toasts) != 0 {
 		t.Errorf("缺权限时不该弹普通错误 toast：%+v", a.toasts)
 	}
 	if a.coins.sign.Signed {
 		t.Error("缺权限失败时不能把状态改成已签到")
+	}
+}
+
+// 账号菜单 / 命令面板发起的签到，金币窗口通常没开。服务端返回带
+// required_scope 的 insufficient_scope 时，授权弹窗必须登记在主窗口上：
+// 硬编码 toastCoins 会被 demandAuthorizationFor 当成「发起窗口已关掉」而
+// 整个丢掉，用户只看到一条错误提示，没有「前往授权」可点。这里用服务端
+// 实际返回的完整信封（含 u / t）作为回归样本。
+func TestCoinSignScopePromptFallsBackToMain(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/me/sign" && r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"c":403,"code":"insufficient_scope","required_scope":["write:economy"],"m":"缺少权限范围：write:economy","d":null,"t":1795363233804,"u":"/api/v1/me/sign"}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	a := coinTestClient(t, srv)
+	a.coins.sign = coinSignStatus{Known: true, Signed: false}
+	if got := a.signInAuthTarget(); got != toastMain {
+		t.Fatalf("金币窗口没开时签到授权弹窗应归属主窗口，实际 %v", got)
+	}
+	a.signInNow()
+	waitCoin(t, "签到缺权限进主窗口授权弹窗", func() bool {
+		return !a.coins.signBusy && a.authGate.open
+	})
+	if !a.authGate.wants(toastMain) {
+		t.Errorf("授权弹窗应画在主窗口：%+v", a.authGate)
+	}
+	if got := a.authGate.need.Scopes; len(got) != 1 || got[0] != "write:economy" {
+		t.Errorf("授权弹窗缺少 write:economy：%+v", a.authGate.need)
+	}
+	mt := ui.NewTester(a.view, 1080, 720)
+	mt.Frame()
+	for _, want := range []string{"需要授权", "缺少的权限范围：write:economy", "前往授权"} {
+		if !mt.HasText(want) {
+			t.Errorf("主窗口授权弹窗缺少 %q：%q", want, mt.Texts())
+		}
+	}
+}
+
+// 服务端只回 insufficient_scope、没带 required_scope 时，签到已知需要的
+// write:economy 仍要进授权弹窗，否则「前往授权」会漏掉它，用户得再授权一次。
+func TestCoinSignScopePromptWithoutRequiredScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/me/sign" && r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"c":403,"code":"insufficient_scope","m":"缺少权限范围","d":null}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	a := coinTestClient(t, srv)
+	a.coins.sign = coinSignStatus{Known: true, Signed: false}
+	a.signInNow()
+	waitCoin(t, "签到缺权限进授权弹窗", func() bool {
+		return !a.coins.signBusy && a.authGate.open
+	})
+	if got := a.authGate.need.Scopes; len(got) != 1 || got[0] != "write:economy" {
+		t.Errorf("授权弹窗缺少 write:economy：%+v", a.authGate.need)
 	}
 }
 

@@ -363,42 +363,27 @@ func TestPandoraOpenNeedsAuthorization(t *testing.T) {
 	}
 }
 
-// 授权成功后要能接着重跑「第二次抽奖」：重新授权会重建金币等状态，但同一
-// 账号的潘多拉状态必须保留，重抽才拿得到原来的 box_instance_id。
-func TestPandoraRerollReplaysAfterAuthorization(t *testing.T) {
+// 重抽缺权限时不发第二次请求；授权成功后应用也不自动重跑，由用户自己再点
+// 一次。重新授权会重建金币等状态，但同一账号的潘多拉状态必须保留。
+func TestPandoraRerollNoAutoReplayAfterAuthorization(t *testing.T) {
 	freezePandoraNow(t)
 	var rerolls atomic.Int32
-	var rerolled atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/pandora/today":
-			used := 0
-			name, title := "金币雨", "小小金币雨，获得 67 金币。"
-			if rerolled.Load() {
-				used, name, title = 1, "头像翻转", "头像翻转 24 小时"
-			}
 			_, _ = io.WriteString(w, envelopeJSON(`{
 				"has_box":true,"can_open":false,"opened_today":true,
 				"next_open_at":"2026-11-12T16:00:00.000Z",
-				"box":{"box_instance_id":"b1","event_name":"`+name+`",
-					"event_title":"`+title+`","rarity":"bronze",
-					"reroll_used":`+strconv.Itoa(used)+`,"reroll_limit":1,
+				"box":{"box_instance_id":"b1","event_name":"金币雨",
+					"event_title":"小小金币雨，获得 67 金币。","rarity":"bronze",
+					"reroll_used":0,"reroll_limit":1,
 					"reroll_deadline_at":"2026-11-12T15:00:00.000Z",
 					"expire_at":"2026-11-12T16:05:46.604Z"}}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/pandora/reroll":
-			if rerolls.Add(1) == 1 {
-				w.WriteHeader(http.StatusForbidden)
-				_, _ = io.WriteString(w, `{"c":403,"code":"insufficient_scope",
-					"required_scope":["write:economy"],"m":"缺少权限范围","d":null}`)
-				return
-			}
-			rerolled.Store(true)
-			_, _ = io.WriteString(w, envelopeJSON(`{"box":{
-				"box_instance_id":"b1","event_name":"头像翻转",
-				"event_title":"头像翻转 24 小时","rarity":"silver",
-				"reroll_used":1,"reroll_limit":1,
-				"reroll_deadline_at":"2026-11-12T15:00:00.000Z",
-				"expire_at":"2026-11-12T16:05:46.604Z"}}`))
+			rerolls.Add(1)
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"c":403,"code":"insufficient_scope",
+				"required_scope":["write:economy"],"m":"缺少权限范围","d":null}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -419,19 +404,16 @@ func TestPandoraRerollReplaysAfterAuthorization(t *testing.T) {
 		t.Fatalf("等待授权时丢掉了盒子编号：%+v", a.pandora)
 	}
 
-	// 模拟用户在浏览器里完成授权：重跑登记的重抽，不再重新加载页面。
+	// 模拟用户在浏览器里完成授权：状态清掉，但不自动重跑重抽。
 	a.autoLoad = false // 不让 onAuthChanged 顺带启动后台轮询
 	a.onAuthChanged(nil)
-	waitPandora(t, "授权后重跑重抽", func() bool {
-		return rerolls.Load() == 2
-	})
-	waitPandora(t, "重抽结果", func() bool {
-		st := a.pandora
-		return st.busy == "" && st.loaded && st.status.Box.RerollUsed >= 1 &&
-			!st.status.canReroll(pandoraNow())
-	})
-	if pandoraHasToast(a, "已再抽一次") || pandoraHasToast(a, "盲盒已开启") {
-		t.Errorf("抽卡结果不该重复成 toast：%+v", a.toasts)
+	waitPandora(t, "授权状态已清", func() bool { return !a.hasPendingAuthorization() })
+	if got := rerolls.Load(); got != 1 {
+		t.Errorf("授权后不该自动重发重抽，请求次数 = %d", got)
+	}
+	if a.pandora == nil || !a.pandora.status.BoxKnown ||
+		a.pandora.status.Box.InstanceID != "b1" {
+		t.Fatalf("授权后丢掉了盒子编号：%+v", a.pandora)
 	}
 }
 

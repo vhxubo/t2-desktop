@@ -513,10 +513,7 @@ func (a *app) ensureUserCardCollNames() {
 			if err != nil {
 				st.failures++
 				st.triedAt = time.Now()
-				a.handleAuthErrorFor(toastUserCard, err, func() {
-					st.triedAt = time.Time{}
-					a.ensureUserCardCollNames()
-				})
+				a.handleAuthErrorFor(toastUserCard, err)
 				return
 			}
 			st.failures = 0
@@ -872,30 +869,21 @@ func (a *app) loadUserCardList(kind userCardListKind, page int) {
 --------------------------------------------------------------- */
 
 // toggleUserCardFollow 关注或取消关注资料卡上的这位用户。未登录时先走全局
-// 授权弹窗，授权成功后同一次操作自动重跑；缺 scope 的 403 也一样。
+// 授权弹窗，授权成功后由用户自己再点一次；缺 scope 的 403 也一样。
 func (a *app) toggleUserCardFollow(follow bool) {
 	cs := a.userCard
 	if cs == nil {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLoginFor(toastUserCard, "登录后才能关注这位用户。", func() {
-			if a.userCard == cs {
-				a.toggleUserCardFollow(follow)
-			}
-		})
+		a.requestLoginFor(toastUserCard, "登录后才能关注这位用户。")
 		return
 	}
 	if cs.follow.userID == "" {
 		cs.follow.userID = cs.user.ID
 	}
 	a.submitFollow(&cs.follow, follow, toastUserCard,
-		func() bool { return a.userCard == cs },
-		func() {
-			if a.userCard == cs {
-				a.toggleUserCardFollow(follow)
-			}
-		})
+		func() bool { return a.userCard == cs })
 }
 
 // userCardFollowing 报告关注按钮该显示「已关注」还是「关注他」。只认属于

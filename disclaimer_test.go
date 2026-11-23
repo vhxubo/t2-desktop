@@ -44,11 +44,17 @@ func TestFirstLaunchDisclaimerDialog(t *testing.T) {
 	for _, want := range []string{
 		"关于 T2", "Third Party 2Libra", "非官方桌面客户端", "基于开放 API 开发",
 		"界面完整性与接口一致性", "与开发者无关", "继续使用视为您已知悉并同意本条款",
-		"系统凭据库", "授权应用", "不可撤销", "退出", "继续使用",
+		"系统凭据库", "授权应用", "不可撤销", "Vibe Coding", "AI 辅助编程",
+		"不代表开发者的思想、观点或意识形态", "退出", "继续使用",
 	} {
 		if !tt.HasText(want) {
 			t.Errorf("首次启动声明弹窗缺少 %q：%q", want, tt.Texts())
 		}
+	}
+	// 新增的社区内容条款必须真的画在弹窗里，不能被 MaxLines 或弹窗高度裁掉。
+	if r, ok := tt.Find("社区内容均由 2Libra 用户提供，本应用仅按接口原样呈现，不参与内容生产；" +
+		"内容不代表开发者的思想、观点或意识形态，本应用对社区内容不承担责任。"); !ok || r.Y+r.H > 420 {
+		t.Errorf("社区内容条款超出弹窗可见范围：%+v, ok=%v", r, ok)
 	}
 	if err := tt.Click("继续使用"); err != nil {
 		t.Fatalf("点「继续使用」失败：%v（%q）", err, tt.Texts())
@@ -90,7 +96,8 @@ func TestAboutReplayDisclaimer(t *testing.T) {
 	for _, want := range []string{
 		"关于 T2", "Third Party 2Libra", "非官方桌面客户端", "基于开放 API 开发",
 		"界面完整性与接口一致性", "与开发者无关", "继续使用视为您已知悉并同意本条款",
-		"系统凭据库", "授权应用", "不可撤销", "退出", "继续使用",
+		"系统凭据库", "授权应用", "不可撤销", "Vibe Coding", "AI 辅助编程",
+		"不代表开发者的思想、观点或意识形态", "退出", "继续使用",
 	} {
 		if !tt.HasText(want) {
 			t.Errorf("重看声明弹窗缺少 %q：%q", want, tt.Texts())

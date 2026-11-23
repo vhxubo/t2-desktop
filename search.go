@@ -368,9 +368,7 @@ func (a *app) runSearch(st *searchState, gen uint64, page int) {
 			st.loading = false
 			st.firstLoading = false
 			if err != nil {
-				if a.handleAuthErrorFor(toastSearch, err, func() {
-					a.runSearch(st, gen, page)
-				}) {
+				if a.handleAuthErrorFor(toastSearch, err) {
 					if a.onSearchDone != nil {
 						a.onSearchDone(query, err)
 					}

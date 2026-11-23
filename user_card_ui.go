@@ -96,7 +96,7 @@ func (a *app) showUserCardWindow(username string) {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、通知、我的一样自绘标题栏
 		HideWindowButtons: true,
-		Content:           ui.View(a.userCardWindowView),
+		Content:           ui.View(a.windowView(a.userCardWindowView)),
 	})
 	a.userCardWin = win
 	win.OnShow(func() { a.setUserCardWindowShown(true) })

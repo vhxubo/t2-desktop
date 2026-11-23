@@ -61,7 +61,7 @@ func (a *app) openNodeEditWindow(st *nodeEditState) {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
-		Content:           ui.View(a.nodeEditWindowView),
+		Content:           ui.View(a.windowView(a.nodeEditWindowView)),
 	})
 	a.nodeEditWin = win
 	win.OnClosed(func() {

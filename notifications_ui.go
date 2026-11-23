@@ -114,7 +114,7 @@ func (a *app) showNotificationWindow() {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录 2Libra 后才能查看「通知」。", a.showNotifications)
+		a.requestLogin("登录 2Libra 后才能查看「通知」。")
 		return
 	}
 	a.refreshUnread()
@@ -146,7 +146,7 @@ func (a *app) showNotificationWindow() {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口一样自绘标题栏
 		HideWindowButtons: true,
-		Content:           ui.View(a.notificationsWindowView),
+		Content:           ui.View(a.windowView(a.notificationsWindowView)),
 	})
 	a.notifWin = win
 	// 显示状态跟着窗口事件走：用户收起、最小化、关掉窗口时铃铛都要跟着变，
@@ -470,8 +470,7 @@ func (a *app) notificationsList(c *ui.Context, st *tabState) {
 					if action.Button(c, "去授权", action.ButtonProps{
 						Size: lobetheme.Small, Variant: action.Primary,
 					}).Clicked() {
-						a.requestLoginFor(toastNotifications, "登录并授权后才能继续查看「通知」。",
-							func() { a.reloadNotifications() })
+						a.requestLoginFor(toastNotifications, "登录并授权后才能继续查看「通知」。")
 					}
 				}
 			})
@@ -813,7 +812,7 @@ func (a *app) notificationQuickReplyEditor(c *ui.Context, st *tabState, n *notif
 }
 
 // submitNotificationQuickReply 发一次快捷回复。未登录时先走授权弹窗，登录
-// 成功后用同一份草稿与父评论重跑；缺 write:comment 时同样授权后重放。
+// 成功后由用户自己再点发送；缺 write:comment 时同样走授权弹窗。
 // 网络结果经 publish 回到 UI 线程，失败保留草稿与输入框。
 func (a *app) submitNotificationQuickReply(st *tabState, n *notification, v notificationView) {
 	if st == nil || n == nil || st.quickReplyPosting {
@@ -829,9 +828,7 @@ func (a *app) submitNotificationQuickReply(st *tabState, n *notification, v noti
 		return
 	}
 	if a.auth == nil || !a.auth.loggedIn() {
-		a.requestLoginFor(toastNotifications, "登录后才能回复消息。", func() {
-			a.submitNotificationQuickReply(st, n, v)
-		})
+		a.requestLoginFor(toastNotifications, "登录后才能回复消息。")
 		return
 	}
 	if a.client == nil {
@@ -847,9 +844,7 @@ func (a *app) submitNotificationQuickReply(st *tabState, n *notification, v noti
 		a.publish(func() {
 			st.quickReplyPosting = false
 			if err != nil {
-				a.handleAuthErrorFor(toastNotifications, err, func() {
-					a.submitNotificationQuickReply(st, n, v)
-				})
+				a.handleAuthErrorFor(toastNotifications, err)
 				a.toast(toastNotifications, "回复失败："+friendlyError(err))
 				return
 			}
@@ -864,7 +859,7 @@ func (a *app) submitNotificationQuickReply(st *tabState, n *notification, v noti
 				a.toast(toastNotifications, "回复已发送")
 			}
 			// 回复本身就是对这条消息的处理：顺手标为已读，未读点与角标随之
-			// 落账（markNotificationRead 自带在途去重与授权重放）。
+			// 落账（markNotificationRead 自带在途去重）。
 			if !n.IsRead {
 				a.markNotificationRead(toastNotifications, id)
 			}

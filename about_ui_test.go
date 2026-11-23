@@ -13,9 +13,11 @@ func TestAboutWindowListsScopesAndTerms(t *testing.T) {
 	tt := ui.NewTester(a.aboutWindowView, aboutWindowWidth, aboutWindowHeight)
 	tt.Frame()
 	for _, want := range []string{
-		"与 2Libra 无隶属或合作关系", "授权与权限", "默认申请的权限及用途",
+		"与 2Libra 无隶属或合作关系", "Vibe Coding", "AI 辅助编程", "开发方式",
+		"授权与权限", "默认申请的权限及用途",
 		"read:me（通知、收藏、关注与合集）", "write:economy（签到、打赏、盲盒等金币变动）",
-		"撤销后下一个请求即失效", "责任与风险", "系统凭据库", "第三方服务与可用性",
+		"撤销后下一个请求即失效", "责任与风险", "系统凭据库", "社区内容",
+		"不代表开发者的思想、观点或意识形态", "第三方服务与可用性",
 	} {
 		if !tt.HasText(want) {
 			t.Errorf("关于窗口条款缺少 %q：%q", want, tt.Texts())

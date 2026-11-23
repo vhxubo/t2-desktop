@@ -22,7 +22,7 @@ import (
 //	POST /v1/pandora/reroll  重抽，body 是 box_instance_id（同上）🔑
 //
 // 两个写端点都标 🔑：每次用户动作铸一个新的 Idempotency-Key，超时重试沿用
-// 同一个键；授权链路重跑时是一次新的动作，换新键。响应字段没有在文档里逐项
+// 同一个键；用户重新点动作时是一次新的动作，换新键。响应字段没有在文档里逐项
 // 列出，按「认得的字段用、不认识的忽略」解码，并兼容「完整今日状态」与
 // 「只返回一个 box」两种形状。
 //
@@ -396,7 +396,7 @@ type pandoraState struct {
 	busy string
 
 	// owner 是这份状态属于哪个账号。重新授权（同一个账号补权限）时保留状态，
-	// 重抽才能接着用原来的 box_instance_id 重跑；换账号 / 退出则整体丢弃。
+	// 用户重新点重抽才能接着用原来的 box_instance_id；换账号 / 退出则整体丢弃。
 	owner string
 }
 
@@ -472,7 +472,7 @@ func (a *app) loadPandoraStatus() {
 			}
 			st.loading = false
 			if err != nil {
-				if a.handleAuthErrorFor(toastPandora, err, a.reloadPandora) {
+				if a.handleAuthErrorFor(toastPandora, err) {
 					st.wait = true
 					return
 				}
@@ -490,7 +490,7 @@ func (a *app) loadPandoraStatus() {
 	}()
 }
 
-// reloadPandora 丢掉当前状态后重读：刷新按钮、授权重跑与动作成功后的校准
+// reloadPandora 丢掉当前状态后重读：刷新按钮与动作成功后的校准
 // 都走这里。只在 UI 线程调用。
 func (a *app) reloadPandora() {
 	st := a.pandora
@@ -513,8 +513,7 @@ func (a *app) pandoraAction(kind string) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLoginFor(toastPandora, "登录 2Libra 后才能抽取潘多拉盲盒。",
-			func() { a.pandoraAction(kind) })
+		a.requestLoginFor(toastPandora, "登录 2Libra 后才能抽取潘多拉盲盒。")
 		return
 	}
 	switch kind {
@@ -566,7 +565,7 @@ func (a *app) pandoraAction(kind string) {
 					a.reloadPandora()
 					return
 				}
-				if a.handleAuthErrorFor(toastPandora, err, func() { a.pandoraAction(kind) }) {
+				if a.handleAuthErrorFor(toastPandora, err) {
 					return
 				}
 				a.toast(toastPandora, friendlyError(err))

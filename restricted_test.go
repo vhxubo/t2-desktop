@@ -81,6 +81,15 @@ func TestDecodeTopicRestrictedFlat(t *testing.T) {
 	}
 }
 
+// 新响应给的是官网字典里的机器取值，门槛说明要显示中文标签。
+func TestRestrictedGateLineMapsD20Attr(t *testing.T) {
+	r := restrictedInfo{AttrKnown: true, AttrName: "karma", AttrValue: 7}
+	lines := strings.Join(r.gateLines(), " / ")
+	if !strings.Contains(lines, "需要财富达到 7") {
+		t.Errorf("门槛说明 %q 里没有中文属性名", lines)
+	}
+}
+
 // 普通帖子没有门槛信号时不能凭空多出一块受限内容。
 func TestDecodeTopicRestrictedAbsent(t *testing.T) {
 	for _, raw := range []string{

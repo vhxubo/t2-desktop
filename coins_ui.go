@@ -130,8 +130,21 @@ func (a *app) coinBalanceCard(c *ui.Context, cs *coinState) {
 	})
 }
 
+// signInAuthTarget 是签到授权弹窗该画在哪个窗口。签到入口在标题栏「我的」
+// 账号菜单与命令面板里（主窗口），金币窗口只是碰巧也会显示结果；授权弹窗
+// 必须画在真正发起操作的窗口里——金币窗口没开时硬编码 toastCoins 会被
+// demandAuthorizationFor 当成「发起窗口已关掉」而整个丢掉，用户只能看到一条
+// 普通错误提示，永远等不到「前往授权」。普通 toast 仍用 toastCoins：窗口没开
+// 时它自己就会退回主窗口（见 mainClaimsToasts）。
+func (a *app) signInAuthTarget() toastTarget {
+	if a.toastWindow(toastCoins) != nil {
+		return toastCoins
+	}
+	return toastMain
+}
+
 // signInNow 提交今日签到。未登录或缺少 write:economy 时走全局授权弹窗，
-// 授权成功后同一次签到自动重跑；今日重复签到（409 conflict）按「已经签过」
+// 授权成功后由用户自己再点签到；今日重复签到（409 conflict）按「已经签过」
 // 处理。成功后先用响应里的状态点亮按钮，再刷新余额与今日明细，因为签到会
 // 同时改变金币与流水。
 func (a *app) signInNow() {
@@ -142,8 +155,9 @@ func (a *app) signInNow() {
 	if cs == nil || cs.signBusy {
 		return
 	}
+	authTarget := a.signInAuthTarget()
 	if !a.auth.loggedIn() {
-		a.requestLoginFor(toastCoins, "登录 2Libra 后才能签到。", a.signInNow)
+		a.requestLoginFor(authTarget, "登录 2Libra 后才能签到。")
 		return
 	}
 	if cs.sign.Known && cs.sign.Signed {
@@ -176,7 +190,10 @@ func (a *app) signInNow() {
 					a.reloadCoinBase()
 					return
 				}
-				if a.handleAuthErrorFor(toastCoins, err, a.signInNow) {
+				// 签到只可能缺 write:economy。服务端有时只回 insufficient_scope
+				// 而不带 required_scope，这里补上已知 scope，保证「前往授权」
+				// 一定把它带进授权地址，不用回来再补第二次授权。
+				if a.handleAuthErrorWithScopesFor(authTarget, err, []string{"write:economy"}) {
 					return
 				}
 				a.toast(toastCoins, friendlyError(err))
@@ -220,7 +237,7 @@ func (a *app) coinCoreError(c *ui.Context, cs *coinState) {
 	case cs.todayErr != "":
 		a.coinInlineError(c, cs.todayErr, func() { a.reloadCoinToday() })
 	case cs.todayWait:
-		display.Text(c, "今日金币明细在等待授权后继续加载。", display.TextProps{
+		display.Text(c, "今日金币明细加载失败，请授权后重新打开。", display.TextProps{
 			Type: display.TextSecondary, FontSize: 11, Rows: 1,
 		})
 	}
@@ -950,7 +967,7 @@ func (a *app) loadCoinBase() {
 			cs.baseLoaded = true
 			authHandled := false
 			if balanceErr != nil {
-				if a.handleAuthErrorFor(toastCoins, balanceErr, func() { a.ensureCoinBase() }) {
+				if a.handleAuthErrorFor(toastCoins, balanceErr) {
 					authHandled, cs.baseWait = true, true
 				} else {
 					cs.balanceErr = friendlyError(balanceErr)
@@ -969,7 +986,7 @@ func (a *app) loadCoinBase() {
 				cs.balanceErr = friendlyError(balanceErr)
 			}
 			if signErr != nil {
-				if !authHandled && a.handleAuthErrorFor(toastCoins, signErr, func() { a.ensureCoinBase() }) {
+				if !authHandled && a.handleAuthErrorFor(toastCoins, signErr) {
 					cs.baseWait = true
 				} else if !authHandled {
 					cs.signErr = friendlyError(signErr)
@@ -1022,7 +1039,7 @@ func (a *app) loadCoinToday() {
 					}
 					cs.todayLoading = false
 					cs.todayLoaded = true
-					if a.handleAuthErrorFor(toastCoins, ferr, func() { a.ensureCoinToday() }) {
+					if a.handleAuthErrorFor(toastCoins, ferr) {
 						cs.todayWait = true
 						return
 					}
@@ -1097,7 +1114,7 @@ func (a *app) loadCoinHistory(page int) {
 			cs.historyLoading = false
 			cs.historyLoaded = true
 			if err != nil {
-				if a.handleAuthErrorFor(toastCoins, err, func() { a.ensureCoinHistory() }) {
+				if a.handleAuthErrorFor(toastCoins, err) {
 					cs.historyWait = true
 					return
 				}

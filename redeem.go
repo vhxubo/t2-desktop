@@ -319,12 +319,7 @@ func (a *app) redeemOpenDialog(d *detailState, id string) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		target := id
-		a.requestLogin("登录后才能领取兑换码。", func() {
-			if a.detailLive(d) {
-				a.redeemOpenDialog(d, target)
-			}
-		})
+		a.requestLogin("登录后才能领取兑换码。")
 		return
 	}
 	st := &d.redeem
@@ -359,14 +354,10 @@ func (a *app) submitRedeemCode(d *detailState, id string) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能领取兑换码。", func() {
-			if a.detailLive(d) {
-				a.submitRedeemCode(d, id)
-			}
-		})
+		a.requestLogin("登录后才能领取兑换码。")
 		return
 	}
-	// 同一条码重试（超时、授权后重放）复用同一个键；换码即换新键。
+	// 同一条码的超时重试复用同一个键；换码即换新键。
 	sig := d.shortID + "|" + id
 	if d.redeem.key == "" || d.redeem.sig != sig {
 		d.redeem.key = randomURLSafe(24)
@@ -391,11 +382,7 @@ func (a *app) submitRedeemCode(d *detailState, id string) {
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() {
-					if a.detailLive(d) {
-						a.submitRedeemCode(d, id)
-					}
-				}) {
+				if a.handleAuthError(err) {
 					return
 				}
 				a.toast(a.detailToastFor(d), redeemErrorText(err))
@@ -486,7 +473,7 @@ func (a *app) redeemSection(c *ui.Context, d *detailState) {
 		if !a.auth.loggedIn() {
 			// 登录回来后详情页会整体重建，这里不需要另外登记重跑。
 			if ui.Button(c, "登录后领取").FontSize(11).Clicked() {
-				a.requestLogin("登录后才能领取兑换码。", nil)
+				a.requestLogin("登录后才能领取兑换码。")
 			}
 		}
 	})

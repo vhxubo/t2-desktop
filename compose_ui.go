@@ -113,17 +113,15 @@ func (a *app) showComposeWindow() {
 		a.compose.focusTitle = true
 	}
 	if !a.auth.loggedIn() {
-		// 没登录就先授权；回来后把窗口打开，用户不用再点一次 FAB。
-		after := a.showCompose
 		msg := "登录 2Libra 后才能发帖。"
 		if a.compose.mode == composeModeMoment {
-			after = a.showMomentComposeWindow
 			msg = "登录 2Libra 后才能发动态。"
 		}
 		// 先开窗口再登记授权：弹窗只画在发帖窗口里，登记时它必须已经存在。
-		// 登录授权一次就把发帖需要的 write:topic 一起申请下来。
+		// 登录授权一次就把发帖需要的 write:topic 一起申请下来。授权完成后由
+		// 用户自己点发送，应用不代发。
 		a.openComposeWindow()
-		a.requestLoginWithScopesFor(toastCompose, msg, []string{"write:topic"}, after)
+		a.requestLoginWithScopesFor(toastCompose, msg, []string{"write:topic"})
 		return
 	}
 	// 节点是选填的（留空由 AI 判定分类），但列表照样先读本地缓存、按新鲜度
@@ -157,7 +155,7 @@ func (a *app) openComposeWindow() {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、通知窗口一样自绘标题栏
 		HideWindowButtons: true,
-		Content:           ui.View(a.composeWindowView),
+		Content:           ui.View(a.windowView(a.composeWindowView)),
 	})
 	a.composeWin = win
 	win.OnClosed(func() {
@@ -449,7 +447,7 @@ func (a *app) composeMomentBody(c *ui.Context, st *composeState) {
 					if action.Button(c, "去授权", action.ButtonProps{
 						Size: lobetheme.Small,
 					}).Clicked() {
-						a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}), nil)
+						a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}))
 					}
 				})
 			}
@@ -1327,12 +1325,16 @@ func (a *app) composeGuard(c *ui.Context, st *composeState) {
 		case guardAttribute:
 			ui.Row(c).FillWidth().Gap(10).AlignItems(ui.End).Children(func() {
 				ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-					display.Text(c, "D20 属性名", display.TextProps{
+					display.Text(c, "D20 属性", display.TextProps{
 						Type: display.TextSecondary, FontSize: 12, Rows: 1,
 					})
-					composeInput(c, &st.guardAttr, field.InputProps{
-						Placeholder: "如 力量 / 智力",
-					}).Label("D20 属性名")
+					attrs := make([]field.SelectOption, 0, len(d20Attrs))
+					for _, at := range d20Attrs {
+						attrs = append(attrs, field.SelectOption{Value: at.Value, Label: at.Label})
+					}
+					composeInputRow(c, func() ui.Element {
+						return field.Select(c, &st.guardAttr, field.SelectProps{Options: attrs})
+					}).Label("D20 属性")
 				})
 				ui.Column(c).Width(160).Gap(4).Children(func() {
 					display.Text(c, "属性下限（0～10）", display.TextProps{
@@ -1344,8 +1346,8 @@ func (a *app) composeGuard(c *ui.Context, st *composeState) {
 				})
 			})
 		}
-		display.Text(c, "门槛由服务端判定；写错属性名时发表会返回 400 并说明原因。",
-			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
+		display.Text(c, "门槛由服务端判定；属性取自官网 D20 属性字典。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 	})
 }
 
@@ -1380,8 +1382,8 @@ func (a *app) composeRestricted(c *ui.Context, st *composeState) {
 					display.Text(c, "D20 属性", display.TextProps{
 						Type: display.TextSecondary, FontSize: 12, Rows: 1,
 					})
-					attrs := make([]field.SelectOption, 0, len(restrictedD20Attrs))
-					for _, at := range restrictedD20Attrs {
+					attrs := make([]field.SelectOption, 0, len(d20Attrs))
+					for _, at := range d20Attrs {
 						attrs = append(attrs, field.SelectOption{Value: at.Value, Label: at.Label})
 					}
 					composeInputRow(c, func() ui.Element {
@@ -1442,7 +1444,7 @@ func (a *app) composeMessages(c *ui.Context, st *composeState) {
 			display.Text(c, "当前授权还不能发帖，需要补充 write:topic 权限。",
 				display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 2}).Grow(1)
 			if action.Button(c, "去授权", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
-				a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}), nil)
+				a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}))
 			}
 		})
 	}
@@ -1564,7 +1566,7 @@ func (a *app) composeFooter(c *ui.Context, st *composeState) {
 ---------------------------------------------------------------- */
 
 // submitCompose 校验并发出 POST /v1/topics。失败时先交给全局授权链路：缺
-// write:topic 会弹授权窗，授权成功后按同一份内容与同一个幂等键自动重发，
+// write:topic 会弹授权窗，授权成功后由用户自己再点发送，
 // 用户不用把写好的正文丢掉重来。
 func (a *app) submitCompose() {
 	st := a.compose
@@ -1572,7 +1574,7 @@ func (a *app) submitCompose() {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLoginWithScopesFor(toastCompose, "登录 2Libra 后才能发帖。", []string{"write:topic"}, a.submitCompose)
+		a.requestLoginWithScopesFor(toastCompose, "登录 2Libra 后才能发帖。", []string{"write:topic"})
 		return
 	}
 	payload, err := st.payload()
@@ -1614,11 +1616,7 @@ func (a *app) submitCompose() {
 			}
 			st.posting = false
 			if err != nil {
-				a.handleAuthErrorWithScopesFor(toastCompose, err, []string{"write:topic"}, func() {
-					if a.compose == st {
-						a.submitCompose()
-					}
-				})
+				a.handleAuthErrorWithScopesFor(toastCompose, err, []string{"write:topic"})
 				st.err = friendlyError(err)
 				if a.onPostPublished != nil {
 					a.onPostPublished(createdTopic{}, err)
@@ -1661,7 +1659,7 @@ func (a *app) submitMoment() {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLoginWithScopesFor(toastCompose, "登录 2Libra 后才能发动态。", []string{"write:topic"}, a.submitMoment)
+		a.requestLoginWithScopesFor(toastCompose, "登录 2Libra 后才能发动态。", []string{"write:topic"})
 		return
 	}
 	content := strings.TrimSpace(st.momentDraft)
@@ -1692,7 +1690,7 @@ func (a *app) submitMoment() {
 			}
 			st.momentBusy = false
 			if err != nil {
-				if a.handleAuthErrorWithScopesFor(toastCompose, err, []string{"write:topic"}, func() { a.submitMoment() }) {
+				if a.handleAuthErrorWithScopesFor(toastCompose, err, []string{"write:topic"}) {
 					return
 				}
 				st.momentErr = friendlyError(err)

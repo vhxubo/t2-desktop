@@ -52,8 +52,8 @@ type tabState struct {
 	// 把整页换成错误页，只在新内容该出现的位置提示并可重试。
 	moreErr string
 	// authWait 表示首屏失败是在等全局授权把缺失的权限补上。等待期间
-	// ensureLoaded 不再重发同一个注定 403 的请求；授权成功后的重跑或用户点
-	// 「重试」会清掉它。
+	// ensureLoaded 不再重发同一个注定 403 的请求；换账号或用户点「重试」
+	// 会清掉它。
 	authWait bool
 	gen      uint64
 
@@ -98,6 +98,21 @@ type tabFold struct {
 	// open 记哪几组被展开了。键是组首条评论的评论 ID，不放下标：列表会定时
 	// 刷新，新评论插到最前面时下标整体后移，用下标会把展开状态挪到别组头上。
 	open map[string]bool
+	// rows 是 foldRows 的缓存。列表视图每帧都会要一遍可见行，而 items 与
+	// 展开状态只在数据到达 / 用户点开收起时才变；不缓存的话每帧都要把整份
+	// 列表重新展开、重新分配一遍。items 的签名（长度 + 首尾 Key）兜住绕过
+	// refold 直接改 items 的地方（例如测试与恢复路径）。
+	rows      []foldRow
+	rowsValid bool
+	rowsLen   int
+	rowsHead  string
+	rowsTail  string
+}
+
+// invalidateRows 让 foldRows 的缓存在下一次渲染时重建。
+func (f *tabFold) invalidateRows() {
+	f.rows = nil
+	f.rowsValid = false
 }
 
 // app holds only data and widget state. Never store ui.Element or *Context:
@@ -116,6 +131,10 @@ type app struct {
 	win       *mygo.Window
 	srv       ui.Services
 	autoLoad  bool
+	// frameSvc 是现在正在渲染的那一帧所属窗口的重绘服务（见 windowView）。
+	// 图片预取据此把「加载完成」只通知到真正显示它的窗口，而不是重建所有
+	// 附属窗口。只在 UI 线程读写。
+	frameSvc ui.Services
 
 	// viewer 是多图预览窗口的状态（见 image_viewer.go）：正文与每条评论各自
 	// 成组，点任意一张配图打开这一组，左右翻页、滚轮缩放、按住左键拖动平移、
@@ -243,12 +262,14 @@ type app struct {
 	laterTab        int
 	watchLaterWin   *mygo.Window
 	watchLaterPrefs *watchLaterPrefsStore
-	// readAt 是当前账号在本机读过的帖子（short_id → 首次打开时间），列表
-	// 据此把读过的帖子置灰（见 post_read.go）。它和阅读记录一样按账号
-	// 作用域懒加载，只记本机，不向服务端同步。只在 UI 线程读写。
-	readAt     map[string]time.Time
-	readFor    string
-	readLoaded bool
+	// readAt / commentReadAt 是当前账号在本机读过的帖子与评论（id → 首次打开
+	// 时间），列表据此把读过的行置灰（见 post_read.go）。两者和阅读记录一样
+	// 按账号作用域懒加载，存在同一个 read:<scope> 缓存里，只记本机，不向
+	// 服务端同步。只在 UI 线程读写。
+	readAt        map[string]time.Time
+	commentReadAt map[string]time.Time
+	readFor       string
+	readLoaded    bool
 	// toasts 是等着显示的窗口内提示（见 toasts.go）：操作结果先排队，等到
 	// 对应窗口下一次重建时再交给 Lobe 的 feedback.ShowToast。可能由后台 goroutine（经 publish）
 	// 写入，也由渲染帧读取，所以用 toastMu 保护，避免竞态。
@@ -523,10 +544,8 @@ type app struct {
 	// onNotificationsRead 是「按条已读」落账后的测试钩子：headless 测试没有
 	// 窗口，publish 在请求协程里直接执行，靠它把结果同步回测试。
 	onNotificationsRead func(ids []string)
-	// onAuthPrompt / onAuthReplay 是全局授权弹窗的测试钩子：弹窗打开与授权
-	// 成功后重跑被中断的调用时触发。生产为 nil。
+	// onAuthPrompt 是全局授权弹窗的测试钩子：弹窗打开时触发。生产为 nil。
 	onAuthPrompt func()
-	onAuthReplay func()
 	// onPostPublished 是发帖完成（成功或失败）后的测试钩子：headless 测试
 	// 没有窗口，publish 在请求协程里直接执行，靠它把结果同步回测试。
 	onPostPublished func(created createdTopic, err error)
@@ -563,6 +582,9 @@ type appDeps struct {
 	// watchLaterPrefs 是稍后再看的打开行为（默认移除 / 保留并区分已读），
 	// 进程级一份（见 watch_later_prefs.go）。
 	watchLaterPrefs *watchLaterPrefsStore
+	// imagePrefs 是图片显示的两项偏好：默认不加载图片、动图自动播放，
+	// 进程级一份（见 image_prefs.go）。
+	imagePrefs *imagePrefsStore
 	// notificationPrefs 是通知偏好，进程级一份（见 notification_prefs.go）。
 	notificationPrefs *notificationPrefsStore
 	// commands 是命令快捷键 / 收藏 / 最近使用的偏好，进程级一份。
@@ -587,6 +609,7 @@ func newAppDeps(dir string) appDeps {
 		commentCostPrefs:  newCommentCostPrefsStore(dir),
 		notificationPrefs: newNotificationPrefsStore(dir),
 		watchLaterPrefs:   newWatchLaterPrefsStore(dir),
+		imagePrefs:        newImagePrefsStore(dir),
 		commands:          newCommandPrefs(dir),
 	}
 }
@@ -665,6 +688,9 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 		profile:           newProfileState(),
 		commentCost:       newCommentCostState(),
 	}
+	// HTTP 出口的全局授权拦截：任何 insufficient_scope 都会回到这里登记弹窗，
+	// 不需要每个调用点自己接。必须在 a 建好之后再挂，回调要引用它。
+	a.client.onAuthError = a.handleGlobalAuthError
 	// 设置窗口的关键词草稿从已保存偏好起手；无头测试直接渲染设置页时也一致。
 	a.notifyKeywordDraft = a.notifPrefs().keywordText()
 	a.notifyQuietFromDraft = a.notifPrefs().quietFromText()
@@ -831,15 +857,14 @@ func (a *app) loadFor(owner toastTarget, idx, page int) {
 	st := a.tabs[idx]
 	spec := a.specFor(idx)
 	a.loadSpec(owner, st, spec, page,
-		func() { a.loadFor(owner, idx, page) },
 		func() { a.loadFor(owner, idx, page+1) })
 }
 
 // loadSpec 是通用的列表加载：把 spec 的第 page 页拉回来填进 st。「我的」
 // 窗口里的四类内容也走这条路，所以它按 spec 而不是按侧边栏下标工作。owner
-// 是发起这次加载的窗口；replay 是授权补上权限后重跑这次请求用的回调；next
-// 是整页都被屏蔽时自动续拉下一页的回调（没有则为 nil）。
-func (a *app) loadSpec(owner toastTarget, st *tabState, spec tabSpec, page int, replay, next func()) {
+// 是发起这次加载的窗口；next 是整页都被屏蔽时自动续拉下一页的回调（没有则
+// 为 nil）。授权成功后应用不自动重拉，由用户自己刷新或重新打开页面。
+func (a *app) loadSpec(owner toastTarget, st *tabState, spec tabSpec, page int, next func()) {
 	if st == nil || page < 1 {
 		return
 	}
@@ -875,7 +900,7 @@ func (a *app) loadSpec(owner toastTarget, st *tabState, spec tabSpec, page int, 
 			if err != nil {
 				// 首页因授权失败时，弹窗负责去补权限；把这一页标成等待授权，
 				// 避免每帧重建都再发一次注定失败的请求。
-				if a.handleAuthErrorFor(owner, err, replay) {
+				if a.handleAuthErrorFor(owner, err) {
 					st.authWait = true
 				}
 				if page == 1 {
@@ -957,6 +982,7 @@ func (a *app) loadSpec(owner toastTarget, st *tabState, spec tabSpec, page int, 
 // tab 留一组「每行自成一组」的空结果。
 func (st *tabState) refold(spec tabSpec) {
 	st.fold.on = spec.FoldByAuthor
+	st.fold.invalidateRows()
 	if !spec.FoldByAuthor {
 		st.fold.groups = nil
 		st.fold.open = nil
@@ -970,6 +996,7 @@ func (st *tabState) refold(spec tabSpec) {
 func (f *tabFold) reset() {
 	f.groups = nil
 	f.open = nil
+	f.invalidateRows()
 }
 
 // open 报告某一组当前是否展开。组键取组首条的评论 ID，没有 ID 时退回它在
@@ -993,6 +1020,8 @@ func (st *tabState) toggle(g commentGroup) bool {
 	} else {
 		delete(st.fold.open, key)
 	}
+	// 展开 / 收起改变可见行数，下一帧必须重新展开。
+	st.fold.invalidateRows()
 	return next
 }
 
@@ -1022,6 +1051,37 @@ type foldRow struct {
 // 收起入口挂在它下面（不是另起一行卡片）；折叠时组里只露这一条，展开时逐条
 // 跟全部成员。两条以内的组、单条的组与没开聚合的 tab 都逐行列出。
 func (st *tabState) foldRows() []foldRow {
+	if st.fold.rowsValid && st.fold.rowsLen == len(st.items) && st.fold.rowsHead == itemsHeadKey(st.items) &&
+		st.fold.rowsTail == itemsTailKey(st.items) {
+		return st.fold.rows
+	}
+	rows := st.buildFoldRows()
+	st.fold.rows = rows
+	st.fold.rowsValid = true
+	st.fold.rowsLen = len(st.items)
+	st.fold.rowsHead = itemsHeadKey(st.items)
+	st.fold.rowsTail = itemsTailKey(st.items)
+	return rows
+}
+
+// itemsHeadKey / itemsTailKey 是 items 缓存签名用的首尾 Key。
+func itemsHeadKey(items []Item) string {
+	if len(items) == 0 {
+		return ""
+	}
+	return items[0].Key
+}
+
+func itemsTailKey(items []Item) string {
+	if len(items) == 0 {
+		return ""
+	}
+	return items[len(items)-1].Key
+}
+
+// buildFoldRows 从 items 与分组状态重新展开可见行。只有 foldRows 在缓存
+// 失效时调用。
+func (st *tabState) buildFoldRows() []foldRow {
 	if !st.fold.on || len(st.fold.groups) == 0 {
 		rows := make([]foldRow, len(st.items))
 		for i, it := range st.items {
@@ -1194,9 +1254,7 @@ func (a *app) silentRefreshTab(owner toastTarget, idx int) {
 			if err != nil {
 				// 失败不打扰正在读列表的用户：旧列表继续显示。授权问题仍走
 				// 全球授权链路，补上权限后重跑这次静默刷新。
-				if a.handleAuthErrorFor(owner, err, func() {
-					a.silentRefreshTab(owner, idx)
-				}) {
+				if a.handleAuthErrorFor(owner, err) {
 					st.authWait = true
 				}
 				return
@@ -1297,8 +1355,8 @@ func (a *app) onAuthChanged(err error) {
 		a.loginMsg = friendlyError(err)
 		a.status = a.loginMsg
 		// 失败时才把回退页摆出来：那里有「重新打开浏览器」和粘贴回调链接，
-		// 正常授权成功不进这一页。授权弹窗先让位，待重跑调用保留：用户在
-		// 回退页重新授权成功后，它们照样会继续。
+		// 正常授权成功不进这一页。授权弹窗先让位，授权状态保留：用户可以
+		// 在回退页重新发起授权。
 		a.authGate.open = false
 		a.pageName = "login"
 	case a.auth.loggedIn():
@@ -1337,8 +1395,8 @@ func (a *app) onAuthChanged(err error) {
 	// 金币页同样绑定当前会话；授权补上的 read:economy 也从这个空状态重新
 	// 发起请求，不会沿用授权前的空结果。
 	a.coins = newCoinState()
-	// 潘多拉状态在「同一个账号重新授权」时要保留：授权成功后重跑的可能是
-	// 重抽，必须还拿着原来的 box_instance_id。换账号 / 退出才整体丢弃；
+	// 潘多拉状态在「同一个账号重新授权」时要保留：用户可能要重新点重抽，
+	// 需要还拿着原来的 box_instance_id。换账号 / 退出才整体丢弃；
 	// 保留时把「已加载」标成过期，弹窗下一帧会重读今日状态。
 	switch {
 	case !a.auth.loggedIn(), a.pandora == nil:
@@ -1424,10 +1482,10 @@ func (a *app) onAuthChanged(err error) {
 	// 关键词与类型保留。窗口本身留着：搜索结果大多是公开内容。
 	a.resetSearchResults()
 	a.ensureLoaded()
-	// 授权成功后，把因为缺权限被打断的调用照原样重跑。放在 ensureLoaded
-	// 之后：两者都只会真正发出一次请求（load 自己会去重）。
+	// 授权成功后只清掉这次授权状态，不替用户重跑被中断的操作——由用户自己
+	// 再点一次刚才的操作。
 	if err == nil && a.auth.loggedIn() {
-		a.replayAuthorizedCalls()
+		a.cancelAuthGate("")
 	}
 }
 
@@ -1761,8 +1819,7 @@ func (a *app) selectTab(idx int) {
 	a.tab = idx
 	a.navSel = tabID(idx)
 	if spec := tabSpecs[idx]; spec.NeedsAuth && !a.auth.loggedIn() {
-		a.requestLogin("「"+spec.Label+"」需要登录 2Libra 后才能查看。",
-			func() { a.load(idx, 1) })
+		a.requestLogin("「" + spec.Label + "」需要登录 2Libra 后才能查看。")
 	} else {
 		// 切页只做后台静默刷新：保留这一页已加载的多页与滚动位置。
 		a.refreshTabSilently(idx)
@@ -2224,9 +2281,7 @@ func (a *app) body(c *ui.Context) {
 				Description: "该端点要求 read:me / profile 权限，登录后才会发起请求。",
 				Action: func() {
 					if action.Button(c, "去登录", action.ButtonProps{Variant: action.Primary}).Clicked() {
-						idx := a.tab
-						a.requestLogin("「"+spec.Label+"」需要登录 2Libra 后才能查看。",
-							func() { a.load(idx, 1) })
+						a.requestLogin("「" + spec.Label + "」需要登录 2Libra 后才能查看。")
 					}
 				},
 			})
@@ -2255,9 +2310,7 @@ func (a *app) body(c *ui.Context) {
 					}
 					if strings.Contains(st.err, "登录") || strings.Contains(st.err, "授权") {
 						if action.Button(c, "去授权", action.ButtonProps{}).Clicked() {
-							idx := a.tab
-							a.requestLogin("登录并授权后才能继续查看「"+spec.Label+"」。",
-								func() { a.load(idx, 1) })
+							a.requestLogin("登录并授权后才能继续查看「" + spec.Label + "」。")
 						}
 					}
 				},
@@ -2378,10 +2431,7 @@ func (a *app) rowWithOptions(c *ui.Context, it Item, open func(Item), watchLater
 		return
 	}
 	tk := lobetheme.TokensOf(c)
-	titleColor := tk.Text
-	if a.isPostRead(it.ShortID) {
-		titleColor = tk.TextSecondary
-	}
+	titleColor := postReadInk(tk, a.isPostRead(it.ShortID))
 	// 统一的 Lobe 行表面：静止透明、悬停 FillTertiary、圆角与过渡取主题。
 	// 纵向 padding 收紧到 Lobe 节奏（内容行略高于导航行的 6），横向 12 对齐 token。
 	row := feedRowSurface(c).PaddingY(10).PaddingX(12)
@@ -2391,8 +2441,8 @@ func (a *app) rowWithOptions(c *ui.Context, it Item, open func(Item), watchLater
 	row.Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 			// 标题是这一行里唯一的重心：字号明显大于副标题和时效信息，
-			// 用常规字重，靠字号与颜色分层，而不是加粗。字号用 Lobe
-			// 的 LG（16），比原先的 19 收一档，贴近 Lobe 列表的密度。
+			// 靠字号与颜色分层：未读用正文色，已读退到四级文字色。字号用
+			// Lobe 的 LG（16），比原先的 19 收一档，贴近 Lobe 列表的密度。
 			ui.Text(c, it.Title).FontSize(tk.FontSizeLG).MaxLines(2).TextColor(titleColor)
 			// 副标题里的作者用统一用户标识渲染：头像跟着 11px 的昵称走，
 			// 同时保留「节点 · 昵称 · 发帖时间」的原有顺序；节点名或时间太长时
@@ -2558,7 +2608,7 @@ func (a *app) loginView(c *ui.Context) {
 			if iconActionButton(c, chevronLeftIcon, "返回",
 				"回到列表；离开这一页会放弃还没完成的授权").Clicked() {
 				// 从授权弹窗的「粘贴回调」来到这一页时，离开就等于放弃这次
-				// 授权：把待重跑调用一起丢掉，避免以后突然执行过期操作。
+				// 授权：清掉授权状态，避免以后再弹过期提示。
 				if a.hasPendingAuthorization() {
 					a.cancelAuthGate("已取消授权")
 				}
@@ -2587,7 +2637,7 @@ func (a *app) loginView(c *ui.Context) {
 			ui.Text(c, a.loginMsg).TextColor(t.TextMuted).MaxLines(4)
 		}
 		if a.hasPendingAuthorization() {
-			ui.Text(c, "完成这次授权后会自动继续刚才被中断的操作。").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "完成这次授权后，请回到刚才的页面自己再点一次操作。").FontSize(12).TextColor(t.TextMuted)
 		}
 		if ui.PrimaryButton(c, "打开浏览器授权").Clicked() {
 			a.startLoginFromPage()
@@ -2755,7 +2805,7 @@ func (a *app) startLoginWithScopes(scopes []string) {
 }
 
 // cancelLogin 放弃本次授权：AuthManager 丢掉 PKCE 会话，界面回到未登录。
-// 如果这次授权是为被中断的调用发起的，那些调用也一并丢弃。
+// 如果这次授权是为被中断的调用发起的，授权状态也一并清掉。
 func (a *app) cancelLogin() {
 	a.auth.Cancel()
 	a.loginPending = false

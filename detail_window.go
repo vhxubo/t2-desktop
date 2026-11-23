@@ -194,7 +194,7 @@ func (a *app) createDetailWindow(h *detailWindow) {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
-		Content:           ui.View(func(c *ui.Context) { a.detailWindowView(h, c) }),
+		Content:           ui.View(a.windowView(func(c *ui.Context) { a.detailWindowView(h, c) })),
 	})
 	h.win = win
 	win.OnClosed(func() {

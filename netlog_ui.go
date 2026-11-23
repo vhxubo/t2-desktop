@@ -76,7 +76,7 @@ func (a *app) showNetLogWindow() {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden, // 与其他窗口一样自绘标题栏
 		HideWindowButtons: true,
-		Content:           ui.View(a.netLogWindowView),
+		Content:           ui.View(a.windowView(a.netLogWindowView)),
 	})
 	a.netLogWin = win
 	win.OnClosed(func() {

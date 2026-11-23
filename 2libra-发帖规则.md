@@ -389,3 +389,47 @@ VIOLATION_TIMEOUT_COIN_PENALTY = 200
 5. 规则分散在多个 module：63987（匿名/金币池/提交）、58378（推广须知/预览）、及 create page 内的 37452 等。
 
 > 说明：文档中所有中文文案均为网页前端代码里的原文；表格中的数值为前端打包时写死的常量。后端是否二次校验、以及服务端 Actual 规则（如 AI 判定细则）不在网页前端可见范围内。
+
+---
+
+## 13. D20 属性鉴定字典（隐藏内容 / 可见性共用）
+
+> 2026-11-22 复核：站点前端已换到 `/_next/static/chunks/3824-c6bd6e08e690f1d0.js`（第 12 节里的 `3824-6809401b6b59987c.js` 是旧 hash），字典内容未变。同一份映射在发帖页 chunk、可见性弹窗 chunk（`9532-*.js`）与详情页 chunk（`layout-*.js`）里反复引用，是提交字段与界面文案的唯一来源。
+
+常量定义原文（`3824-*.js`）：
+
+```js
+function(e){
+  e.KARMA="karma"; e.EXPERIENCE="experience"; e.CHARM="charm";
+  e.LUCK="luck"; e.DILIGENCE="diligence"; e.CRAFT="craft"
+}(_||(t.PostRestrictedD20Attr=_={})),
+
+t.POST_RESTRICTED_D20_ATTR_LABEL_MAP={
+  [_.KARMA]:"财富", [_.EXPERIENCE]:"阅历", [_.CHARM]:"魅力",
+  [_.LUCK]:"幸运", [_.DILIGENCE]:"勤勉", [_.CRAFT]:"技艺"
+}
+```
+
+| 机器取值（枚举 `PostRestrictedD20Attr`） | 中文标签 | 提交字段 |
+| --- | --- | --- |
+| `karma` | 财富 | `restricted_d20_attr` / `access_guard_attr` |
+| `experience` | 阅历 | 同上 |
+| `charm` | 魅力 | 同上 |
+| `luck` | 幸运 | 同上 |
+| `diligence` | 勤勉 | 同上 |
+| `craft` | 技艺 | 同上 |
+
+相邻校验常量（同 chunk）：
+
+| 常量 | 值 | 用途 |
+| --- | --- | --- |
+| `POST_RESTRICTED_DURATION_MIN_MONTHS` / `MAX_MONTHS` | 1 / 12 | 隐藏内容有效期 |
+| `POST_RESTRICTED_CHECK_COST` | 100 | 每次属性检定花费金币 |
+| `POST_RESTRICTED_CHECK_AUTHOR_SHARE_RATIO` | 0.5 | 检定费用归作者的比例 |
+| 隐藏内容目标值 | 1～25 的整数 | 发帖页 `Number.isInteger(e) && e>=1 && e<=25` |
+| 可见性属性下限 | 0～10 | `9532-*.js` 的属性下限输入框 |
+
+应用内所有 D20 属性位置（发帖的隐藏内容与可见性、编辑帖子的可见性、受限内容门槛说明、草稿恢复）统一使用这一份字典，界面显示中文标签、请求只发机器取值。
+
+注意站点另有一套 `ATTR_NAME_MAP`：`craft:"工艺"`、`experience:"经历"`、`karma:"财富"`、`luck:"幸运"`、`diligence:"勤勉"`、`charm:"魅力"`。它出现在等级/签到检定文案里（`3300-*.js`），**不是**发帖 D20 字段的取值表；发帖的隐藏内容与可见性都只用上面的 `POST_RESTRICTED_D20_ATTR_LABEL_MAP`，不要把「工艺 / 经历」混进发帖字典。
+

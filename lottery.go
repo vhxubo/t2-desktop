@@ -245,11 +245,7 @@ func (a *app) startLottery(d *detailState) {
 					return
 				}
 				d.lottery.busy = false
-				if a.handleAuthErrorWithScopesFor(target, err, []string{lotteryScope}, func() {
-					if a.detailLive(d) {
-						a.startLottery(d)
-					}
-				}) {
+				if a.handleAuthErrorWithScopesFor(target, err, []string{lotteryScope}) {
 					return
 				}
 				a.toast(target, "发起抽奖失败："+friendlyError(err))

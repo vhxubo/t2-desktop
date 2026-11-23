@@ -61,7 +61,7 @@ func (a *app) loadCoinRedeem(page int) {
 			cs.redeemLoading = false
 			cs.redeemLoaded = true
 			if err != nil {
-				if a.handleAuthErrorFor(toastCoins, err, func() { a.ensureCoinRedeem() }) {
+				if a.handleAuthErrorFor(toastCoins, err) {
 					cs.redeemWait = true
 					return
 				}

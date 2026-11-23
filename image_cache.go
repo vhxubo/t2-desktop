@@ -112,6 +112,16 @@ const imageCacheMemoryBudget int64 = 192 << 20
 // 不能淘汰，否则下一帧又要重新解码，画面会闪。
 const imageCacheKeepWarm = 10 * time.Second
 
+// imageWorkerCount 是同时下载并解码的图片数。以前每张图单起一个协程，一页
+// 列表最多能同时起五十个：头像和正文配图一起抢连接，头像反而排在后面。
+// 五个足够喂满一条连接，也不会让解码一起抢满 CPU。
+const imageWorkerCount = 5
+
+// imageRedrawInterval 是图片加载完成后合并重绘的窗口。一屏几十张图经常在
+// 同一小段时间里接连解码完成，逐张重建界面会白烧几十帧；攒一帧再统一通知，
+// 图片照样在下一帧出现。
+const imageRedrawInterval = 16 * time.Millisecond
+
 // imageCache 是缓存本体。entries 由 UI 线程读写；无窗口测试里 publish 直接
 // 在网络协程执行，所以 map 也必须加锁。
 type imageCache struct {
@@ -130,6 +140,18 @@ type imageCache struct {
 	bytes    int64
 	budget   int64
 	keepWarm time.Duration
+
+	// 图片任务队列：下载与解码都交给有限数量的 worker（见 prefetch）。
+	// 头像这类长期缓存排在帖子配图前面，列表一打开时头像先出来。
+	jobMu   sync.Mutex
+	jobsHi  []imageJob
+	jobsLo  []imageJob
+	workers int
+
+	// frame 是正在渲染的那一帧所属窗口的重绘服务（见 beginFrame）。渲染时
+	// 读到的、仍在加载的图会登记它，加载完成只重绘真正显示这张图的窗口。
+	frameMu sync.Mutex
+	frame   ui.Services
 }
 
 // imageSize 是图片的宽高（像素）。ok 为 false 表示磁盘上还没有这张图，
@@ -155,6 +177,9 @@ type imageEntry struct {
 	// 有限重试据此判断失败项能否在下一批数据到达时再下载一次。
 	failures int
 	failedAt time.Time
+	// subs 是在这轮加载期间渲染过这张图的窗口。加载完成（成功或失败）时
+	// 只重绘这些窗口，不再让一张图的回包把每一扇附属窗口都重建一遍。
+	subs map[ui.Services]struct{}
 	// cache 是登记这张图的那份缓存，set 时把占用变化报回去；key 是它在
 	// entries 里的键，用来确认自己还没被淘汰。测试里手工造出来的条目可以为空。
 	cache *imageCache
@@ -180,7 +205,13 @@ func (e *imageEntry) set(src ui.ImageSource) {
 		e.failedAt = time.Time{}
 		e.lastUsed.Store(time.Now().UnixNano())
 	}
+	// 这一轮结束了：订阅者一次通知完就清空，下一轮（重试）重新登记。
+	subs := e.subs
+	e.subs = nil
 	e.mu.Unlock()
+	for svc := range subs {
+		imageRedraws.schedule(svc)
+	}
 	if e.cache != nil {
 		e.cache.adjustMemory(e, old, size)
 	}
@@ -209,6 +240,10 @@ func (e *imageEntry) loadState() imageLoadState {
 func (e *imageEntry) source() ui.ImageSource {
 	e.mu.Lock()
 	src := e.src
+	// 还没解码完的图，把当前渲染它的窗口记下来：回包到了只重绘这一扇窗口。
+	if src == nil && e.state == imageLoading && e.cache != nil {
+		e.subscribeLocked(e.cache.frameServices())
+	}
 	e.mu.Unlock()
 	if src != nil {
 		// 每帧都会走到这里：隔一秒记一次就够，不必为每次取图都写原子量。
@@ -218,6 +253,28 @@ func (e *imageEntry) source() ui.ImageSource {
 		}
 	}
 	return src
+}
+
+// subscribeLocked 登记一个正在渲染这张图的窗口。调用方持有 e.mu；零值服务
+// （无窗口的无头测试）不登记。只在加载中登记一次，加载完成即清空。
+func (e *imageEntry) subscribeLocked(svc ui.Services) {
+	if svc == (ui.Services{}) {
+		return
+	}
+	if e.subs == nil {
+		e.subs = make(map[ui.Services]struct{}, 1)
+	}
+	e.subs[svc] = struct{}{}
+}
+
+// subscribeRender 在界面查询加载状态时登记当前渲染窗口：占位转圈的那张图
+// 加载失败后也要让那一扇窗口换成失败说明。
+func (e *imageEntry) subscribeRender(svc ui.Services) {
+	e.mu.Lock()
+	if e.state == imageLoading {
+		e.subscribeLocked(svc)
+	}
+	e.mu.Unlock()
 }
 
 // bitmap 只在解码结果是位图时返回它（头像要的是位图）；SVG 表情对头像没有
@@ -234,13 +291,34 @@ func newImageCache(dir string) *imageCache {
 	if dir == "" {
 		dir = configDir()
 	}
-	return &imageCache{
+	c := &imageCache{
 		dir:      filepath.Join(dir, "cache", "images"),
 		entries:  make(map[string]*imageEntry),
 		sizes:    make(map[string]imageSize),
 		budget:   imageCacheMemoryBudget,
 		keepWarm: imageCacheKeepWarm,
 	}
+	return c
+}
+
+// beginFrame 记录正在渲染的窗口，endFrame 在帧尾清掉。图片预取都在渲染时
+// 发起，加载回包据此只重绘这一扇窗口（见 imageEntry.subs）。
+func (c *imageCache) beginFrame(svc ui.Services) {
+	c.frameMu.Lock()
+	c.frame = svc
+	c.frameMu.Unlock()
+}
+
+func (c *imageCache) endFrame() {
+	c.frameMu.Lock()
+	c.frame = ui.Services{}
+	c.frameMu.Unlock()
+}
+
+func (c *imageCache) frameServices() ui.Services {
+	c.frameMu.Lock()
+	defer c.frameMu.Unlock()
+	return c.frame
 }
 
 // memoryBudget 返回当前缓存的内存预算，未设置时用默认值。
@@ -377,9 +455,11 @@ func (c *imageCache) source(raw string) ui.ImageSource {
 }
 
 // state 返回某个地址的加载阶段，没登记过返回 imageIdle。界面只用它决定占位
-// 里要不要转圈，自身不发起任何请求。
+// 里要不要转圈，自身不发起任何请求。仍在加载的图顺手登记当前窗口，失败后
+// 那一扇窗口才会从转圈换成失败说明。
 func (c *imageCache) state(raw string) imageLoadState {
 	if e := c.get(strings.TrimSpace(raw)); e != nil {
+		e.subscribeRender(c.frameServices())
 		return e.loadState()
 	}
 	return imageIdle
@@ -664,11 +744,60 @@ func (a *app) prefetchImage(raw string, cat imageCategory) {
 }
 
 // imageFetcher 是本窗口取图与重绘的那一份实现：取图走配置的代理，结果到了
-// 经 Window.Update 回到界面。
+// 只让渲染这张图的窗口重绘。帧信息在渲染时由 app.windowView 记下；不在渲染
+// 帧里发起的预取（数据到达时的头像）退回主窗口。
 func (a *app) imageFetcher() imageFetcher {
+	svc := a.frameSvc
 	return imageFetcher{
-		fetch:  a.fetchImage,
-		redraw: func() { a.publish(func() {}) },
+		fetch: a.fetchImage,
+		redraw: func() {
+			if svc != (ui.Services{}) {
+				imageRedraws.schedule(svc)
+				return
+			}
+			if a.win != nil {
+				a.win.Invalidate()
+			}
+		},
+	}
+}
+
+// imageRedrawQueue 把图片加载完成的重绘请求攒到一帧再发。相邻几张图往往在
+// 同一小段时间里解码完成，逐张重建界面没有意义；同一个窗口在窗口期内多次
+// 请求只记一次。
+type imageRedrawQueue struct {
+	mu      sync.Mutex
+	pending map[ui.Services]struct{}
+	timer   *time.Timer
+}
+
+var imageRedraws = &imageRedrawQueue{}
+
+func (q *imageRedrawQueue) schedule(svc ui.Services) {
+	if svc == (ui.Services{}) {
+		return
+	}
+	q.mu.Lock()
+	if q.pending == nil {
+		q.pending = make(map[ui.Services]struct{}, 1)
+	}
+	q.pending[svc] = struct{}{}
+	if q.timer == nil {
+		q.timer = time.AfterFunc(imageRedrawInterval, q.flush)
+	}
+	q.mu.Unlock()
+}
+
+func (q *imageRedrawQueue) flush() {
+	q.mu.Lock()
+	svcs := q.pending
+	q.pending = nil
+	q.timer = nil
+	q.mu.Unlock()
+	// Invalidate 从任意协程调用都安全，并且它自己还会把同一帧内的重复请求
+	// 合并成一次重建。
+	for svc := range svcs {
+		svc.Invalidate()
 	}
 }
 
@@ -1026,8 +1155,16 @@ type imageFetcher struct {
 	redraw func()
 }
 
-// prefetch 启动一次后台加载。同一个地址只下一次：成功、失败还是仍在下载
-// 都记在缓存项的 state 里，不会因为每帧渲染而重发。
+// imageJob 是一张图的后台加载任务。头像这类长期缓存进高优先级队列，正文
+// 配图进低优先级队列，worker 始终先取高优先级。
+type imageJob struct {
+	raw string
+	cat imageCategory
+	f   imageFetcher
+}
+
+// prefetch 登记一张图并排进后台队列。同一个地址只下一次：成功、失败还是
+// 仍在下载都记在缓存项的 state 里，不会因为每帧渲染而重发。
 func (c *imageCache) prefetch(raw string, cat imageCategory, f imageFetcher) {
 	// 界面查状态用的是 trim 过的地址，登记缓存项也用同一个键。
 	raw = strings.TrimSpace(raw)
@@ -1037,7 +1174,56 @@ func (c *imageCache) prefetch(raw string, cat imageCategory, f imageFetcher) {
 	if _, created := c.begin(raw); !created {
 		return
 	}
-	go c.load(raw, cat, f)
+	c.enqueue(imageJob{raw: raw, cat: cat, f: f})
+}
+
+// enqueue 把任务放到对应优先级队列，并按排队数量补 worker。队列没有上限：
+// 每张图在 begin 时已去重，排队的都是还没取到的地址。
+func (c *imageCache) enqueue(j imageJob) {
+	c.jobMu.Lock()
+	defer c.jobMu.Unlock()
+	if j.cat == imageCacheStable {
+		c.jobsHi = append(c.jobsHi, j)
+	} else {
+		c.jobsLo = append(c.jobsLo, j)
+	}
+	c.ensureWorkersLocked()
+}
+
+// ensureWorkersLocked 按「排队任务 + 已在跑的 worker」补足 worker，最多
+// imageWorkerCount 个。只看排队数不够：worker 一旦把任务取走，队列就又短了，
+// 连续入队时会永远补不满。调用方持有 c.jobMu。
+func (c *imageCache) ensureWorkersLocked() {
+	busy := c.workers
+	want := min(imageWorkerCount, len(c.jobsHi)+len(c.jobsLo)+busy)
+	for c.workers < want {
+		c.workers++
+		go c.work()
+	}
+}
+
+// work 取图：高优先级（头像 / 表情）队列非空时先取它，否则才取帖子配图。
+// 同一时刻最多 imageWorkerCount 张图在下载 / 解码。队列空了就退出，不常驻
+// 持有缓存，窗口关掉或测试结束后这些图能正常回收。
+func (c *imageCache) work() {
+	for {
+		c.jobMu.Lock()
+		if len(c.jobsHi) == 0 && len(c.jobsLo) == 0 {
+			c.workers--
+			c.jobMu.Unlock()
+			return
+		}
+		var j imageJob
+		if len(c.jobsHi) > 0 {
+			j = c.jobsHi[0]
+			c.jobsHi = c.jobsHi[1:]
+		} else {
+			j = c.jobsLo[0]
+			c.jobsLo = c.jobsLo[1:]
+		}
+		c.jobMu.Unlock()
+		c.load(j.raw, j.cat, j.f)
+	}
 }
 
 // load 先看磁盘缓存，没有再下载，解好后通知界面重绘。

@@ -587,10 +587,8 @@ func (a *app) markNotificationsReadConfirmed(owner toastTarget, ids []string) {
 				delete(st.reading, id)
 			}
 			if err != nil {
-				// 缺 read:me 或登录失效：走全局授权，回调成功后把这批 id 重发
-				// 一次，已读状态照样落账。
-				batch := append([]string(nil), pending...)
-				a.handleAuthErrorFor(owner, err, func() { a.markNotificationsRead(owner, batch) })
+				// 缺 read:me 或登录失效：走全局授权弹窗，由用户自己重新操作。
+				a.handleAuthErrorFor(owner, err)
 				a.toast(toastNotifications, "标记已读失败："+friendlyError(err))
 				return
 			}
@@ -660,7 +658,7 @@ func (a *app) markAllNotificationsRead(owner toastTarget) {
 		a.publish(func() {
 			st.markingAll = false
 			if err != nil {
-				a.handleAuthErrorFor(owner, err, func() { a.markAllNotificationsRead(owner) })
+				a.handleAuthErrorFor(owner, err)
 				a.toast(toastNotifications, "全部已读失败："+friendlyError(err))
 				return
 			}

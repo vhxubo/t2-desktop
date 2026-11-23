@@ -80,7 +80,7 @@ func (b *accountBook) openLoginWindow(authorizeURL string) error {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口一样自绘标题栏
 		HideWindowButtons: true,
-		Content:           ui.View(b.loginWindowView),
+		Content:           ui.View(b.windowView(b.loginWindowView)),
 	})
 	b.loginWin = win
 	b.loginErr = ""

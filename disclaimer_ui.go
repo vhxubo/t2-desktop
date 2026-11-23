@@ -11,8 +11,8 @@ import (
 func disclaimerContent(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
-		ui.Text(c, "T2 全称 Third Party 2Libra（第三方 2Libra），是由 vhxubo 独立开发运营的非官方桌面客户端，"+
-			"与 2Libra 无隶属、合作或背书关系。").
+		ui.Text(c, "T2 全称 Third Party 2Libra（第三方 2Libra），是由 vhxubo 采用 Vibe Coding"+
+			"（AI 辅助编程）方式独立开发运营的非官方桌面客户端，与 2Libra 无隶属、合作或背书关系。").
 			TextColor(t.Text).MaxLines(3)
 		ui.Text(c, "2Libra 仅提供账号授权与开放接口，内容版权归原作者所有。"+
 			"本应用基于开放 API 开发，仅就界面完整性与接口一致性承担责任。").
@@ -26,6 +26,10 @@ func disclaimerContent(c *ui.Context) {
 			"撤销授权或逐项关闭权限，撤销后下一个请求即失效。以您名义发布的内容及打赏、盲盒等金币变动不可撤销，"+
 			"仅在您确认后执行，相关后果由您承担。未成年人须在监护人同意下使用。").
 			FontSize(11).TextColor(t.TextMuted).MaxLines(6)
+		// AI 开发方式与社区内容责任：只作工具属性声明，不把社区观点归到开发者名下。
+		ui.Text(c, "社区内容均由 2Libra 用户提供，本应用仅按接口原样呈现，不参与内容生产；"+
+			"内容不代表开发者的思想、观点或意识形态，本应用对社区内容不承担责任。").
+			FontSize(11).TextColor(t.TextMuted).MaxLines(4)
 	})
 }
 

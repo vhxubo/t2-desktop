@@ -22,6 +22,21 @@ func (a *app) windowTitle() string {
 	return "T2 Desktop"
 }
 
+// windowView 是所有窗口 view 的统一入口：记下这一帧属于哪扇窗口。正文图与
+// 表情在渲染时发起预取，加载完成后按这个记录只重绘那一扇窗口（见
+// imageFetcher），不再把主窗口、详情窗口和十来个附属窗口全部重建一遍。
+func (a *app) windowView(fn func(*ui.Context)) func(*ui.Context) {
+	return func(c *ui.Context) {
+		a.frameSvc = c.Services()
+		a.images.beginFrame(a.frameSvc)
+		defer func() {
+			a.images.endFrame()
+			a.frameSvc = ui.Services{}
+		}()
+		fn(c)
+	}
+}
+
 // windowStateKey 是窗口位置与大小的记忆键：每个账号一份，重开时回到原处。
 func (a *app) windowStateKey() string {
 	if a.accountID == "" {
@@ -50,7 +65,7 @@ func (a *app) openMainWindow() {
 		MinWidth:          760,
 		MinHeight:         520,
 		StateKey:          a.windowStateKey(),
-		Content:           ui.View(a.view),
+		Content:           ui.View(a.windowView(a.view)),
 		TitleBarStyle:     mygo.TitleBarHidden, // 隐藏原生标题栏
 		HideWindowButtons: true,                // 连系统按钮也隐藏，完全自绘最小化/最大化/关闭
 	}

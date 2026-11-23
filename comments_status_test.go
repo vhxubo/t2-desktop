@@ -323,7 +323,7 @@ func TestCommentsStatusTogglesThroughConfirm(t *testing.T) {
 	}
 }
 
-// 缺 write:topic 时走全局授权弹窗，授权成功后重跑同一次开关。
+// 缺 write:topic 时走全局授权弹窗，不自动重跑开关。
 func TestCommentsStatusMissingScopeGoesThroughAuthGate(t *testing.T) {
 	rec := &commentsStatusRecorder{
 		status: http.StatusForbidden,

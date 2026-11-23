@@ -284,6 +284,13 @@ type Client struct {
 	// 这里存指针而不是锁值：replyClientFor 会复制 Client 换会话，复制后仍
 	// 共用同一个闸门，go vet 的 copylocks 也不会报错。
 	rateLocal *rateLimitGate
+
+	// onAuthError 是 HTTP 层的全局授权拦截：任何 insufficient_scope 响应都在
+	// 这里回调一次，由应用把授权弹窗登记到当前聚焦的窗口，不必每个调用点记得
+	// 自己接 handleAuthError。401 仍由 withAuthRetry 先刷新再重试，不在这里
+	// 触发，避免一次可被刷新救回来的 401 白弹一次授权框。
+	// 裸客户端（测试）为 nil，表示不拦截。
+	onAuthError func(*apiError)
 }
 
 // 只在没有共享闸门时用来惰性建私有闸门。Client 本身会被复制，不能把锁
@@ -436,7 +443,7 @@ func (c *Client) deleteJSON(ctx context.Context, u, token string) (json.RawMessa
 }
 
 // deleteWithKeyJSON 给标 🔑 的 DELETE 端点带 Idempotency-Key：取消佩戴徽章
-// 也是幂等写（index.md #76），超时重试与授权后重放要复用同一个键。
+// 也是幂等写（index.md #76），超时重试要复用同一个键。
 func (c *Client) deleteWithKeyJSON(ctx context.Context, u, token, idempotencyKey string) (json.RawMessage, error) {
 	return c.writeJSON(ctx, http.MethodDelete, u, token, idempotencyKey, nil)
 }
@@ -521,6 +528,12 @@ func (c *Client) sendJSON(req *http.Request) (json.RawMessage, error) {
 			if secs := ceilSeconds(gate.remaining()); secs > ae.RetryAfter {
 				ae.RetryAfter = secs
 			}
+		}
+		// 全局授权拦截：文档在 index.md 4.2 / 4.4 把 {c, code, required_scope}
+		// 定义成所有 /api/v1/* 响应共用的错误契约，因此缺 scope 的弹窗也收敛在
+		// 出口这一处。回调只登记弹窗，不碰调用方的错误处理与重跑逻辑。
+		if ae.Code == "insufficient_scope" && c.onAuthError != nil {
+			c.onAuthError(ae)
 		}
 		return empty, ae
 	}

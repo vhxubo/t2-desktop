@@ -260,11 +260,7 @@ func (a *app) ensureCollections(d *detailState) {
 					return
 				}
 				d.coll.err = friendlyError(err)
-				a.handleAuthError(err, func() {
-					if a.detailLive(d) {
-						a.ensureCollections(d)
-					}
-				})
+				a.handleAuthError(err)
 				return
 			}
 			d.coll.items = items
@@ -301,11 +297,7 @@ func (a *app) assignTopicCollection(d *detailState, item collectionItem, add boo
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能管理合集。", func() {
-			if a.detailLive(d) {
-				a.assignTopicCollection(d, item, add)
-			}
-		})
+		a.requestLogin("登录后才能管理合集。")
 		return
 	}
 	if d.shortID == "" {
@@ -331,9 +323,7 @@ func (a *app) assignTopicCollection(d *detailState, item collectionItem, add boo
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() {
-					a.assignTopicCollection(d, item, add)
-				}) {
+				if a.handleAuthError(err) {
 					return
 				}
 				a.toast(a.detailToastFor(d), friendlyError(err))
@@ -370,11 +360,7 @@ func (a *app) createCollectionForTopic(d *detailState) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能新建合集。", func() {
-			if a.detailLive(d) {
-				a.createCollectionForTopic(d)
-			}
-		})
+		a.requestLogin("登录后才能新建合集。")
 		return
 	}
 	if d.shortID == "" {
@@ -402,7 +388,7 @@ func (a *app) createCollectionForTopic(d *detailState) {
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() { a.createCollectionForTopic(d) }) {
+				if a.handleAuthError(err) {
 					return
 				}
 				a.toast(a.detailToastFor(d), friendlyError(err))
@@ -506,11 +492,7 @@ func (a *app) collectionButton(c *ui.Context, d *detailState) {
 	if !d.coll.busy {
 		b.OnClick(func() {
 			if !a.auth.loggedIn() {
-				a.requestLogin("登录后才能管理合集。", func() {
-					if a.detailLive(d) {
-						a.toggleCollectionPicker(d)
-					}
-				})
+				a.requestLogin("登录后才能管理合集。")
 				return
 			}
 			a.toggleCollectionPicker(d)

@@ -91,12 +91,13 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item), watchLater bool) 
 		return
 	}
 	comment := it.CommentID != ""
-	// 帖子行跟着本地已读状态把标题置灰；评论行不跟着变——读过帖子不等于
-	// 读过这一条新评论，把评论标题也压灰会把新内容藏起来。
-	titleColor := tk.Text
-	if !comment && a.isPostRead(it.ShortID) {
-		titleColor = tk.TextSecondary
+	// 帖子看它的已读表，评论看评论自己的已读表——读过帖子不等于点开过这条
+	// 评论，反过来也一样，不能拿一边的状态给另一边置灰。
+	read := a.isPostRead(it.ShortID)
+	if comment {
+		read = a.isCommentRead(it.CommentID)
 	}
+	titleColor := postReadInk(tk, read)
 
 	// 统一的 Lobe 行表面：悬停 FillTertiary、圆角与过渡取主题；纵向 padding
 	// 收紧到 Lobe 节奏，和主页帖子行保持一致。
@@ -161,14 +162,15 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item), watchLater bool) 
 				body = it.Title
 			}
 			if body != "" {
-				// 正文用正文字色（不用灰色）并放宽行高：这是评论行里唯一
-				// 需要连续阅读的部分，压小或压灰都会让人先跳过它。
+				// 动态与点开过的评论，正文跟着这一行一起置灰；没点开的评论
+				// 仍用正文字色，它是新内容，压灰会让人先跳过它。行高不变。
 				size := richPreviewFontSize
 				if comment {
 					size = richCommentFontSize
 				}
+				bodyColor := postReadInk(tk, read)
 				ui.Text(c, body).FontSize(size).LineHeight(1.55).
-					MaxLines(3).TextColor(tk.Text)
+					MaxLines(3).TextColor(bodyColor)
 			}
 			// 被引用的父评论：嵌套回复里这是理解上下文的关键。
 			if x.Quote != "" {

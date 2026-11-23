@@ -108,7 +108,7 @@ func waitAuthGate(t *testing.T, a *app) {
 	}
 }
 
-// 关注接口缺 interact scope 时交给全局授权弹窗，并把这次关注登记为授权后重跑。
+// 关注接口缺 interact scope 时交给全局授权弹窗，由用户自己重新点关注。
 func TestUserCardFollowScopeErrorOpensAuthorization(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
@@ -130,13 +130,9 @@ func TestUserCardFollowScopeErrorOpensAuthorization(t *testing.T) {
 	if len(a.authGate.need.Scopes) != 1 || a.authGate.need.Scopes[0] != "interact" {
 		t.Errorf("授权弹窗缺少 interact scope：%v", a.authGate.need.Scopes)
 	}
-	if len(a.authGate.replays) != 1 {
-		t.Errorf("关注操作应登记为授权后重跑：%d", len(a.authGate.replays))
-	}
 }
 
-// 未登录点击资料卡上的「关注他」进入全局授权弹窗，并把这次关注登记为授权
-// 成功后重跑。
+// 未登录点击资料卡上的「关注他」进入全局授权弹窗，由用户自己重新点关注。
 func TestUserCardFollowAnonymousRequestsLogin(t *testing.T) {
 	a := testApp(t)
 	a.userCard = newUserCardState("jimmy")
@@ -152,8 +148,5 @@ func TestUserCardFollowAnonymousRequestsLogin(t *testing.T) {
 	}
 	if !strings.Contains(a.authGate.need.Message, "关注这位用户") {
 		t.Errorf("授权弹窗说明不对：%q", a.authGate.need.Message)
-	}
-	if len(a.authGate.replays) != 1 {
-		t.Errorf("关注操作应登记为授权后重跑：%d", len(a.authGate.replays))
 	}
 }

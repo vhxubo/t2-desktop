@@ -385,12 +385,7 @@ func (a *app) ensureProfileCollNames() {
 				st.failures++
 				st.triedAt = time.Now()
 				// 补完授权后要立刻重跑，清掉刚记下的退避时间。
-				a.handleAuthError(err, func() {
-					if a.profile == ps {
-						ps.collNames.triedAt = time.Time{}
-					}
-					a.ensureProfileCollNames()
-				})
+				a.handleAuthError(err)
 				return
 			}
 			st.failures = 0
@@ -425,7 +420,7 @@ func (a *app) loadProfileTopicColl(page int) {
 		return
 	}
 	spec := profileTopicCollSpec(name, ps.topicColl, page)
-	a.loadSpec(toastProfile, &ps.topicCollSt, spec, page, func() { a.loadProfileTopicColl(page) }, nil)
+	a.loadSpec(toastProfile, &ps.topicCollSt, spec, page, nil)
 }
 
 // applyProfileTopicColl 应用或清除合集筛选。合集名变了就把旧列表整份丢掉，
@@ -775,8 +770,7 @@ func (a *app) loadProfileContent(kind, page int) {
 	if ps == nil || kind < 0 || kind >= profileContentCount {
 		return
 	}
-	a.loadSpec(toastProfile, &ps.content[kind], a.profileSpecFor(ps, kind, page), page,
-		func() { a.loadProfileContent(kind, page) }, nil)
+	a.loadSpec(toastProfile, &ps.content[kind], a.profileSpecFor(ps, kind, page), page, nil)
 }
 
 // reloadProfileContent 丢掉某一分段已拉到的内容，再从第一页重拉（分段上的

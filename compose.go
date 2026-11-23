@@ -169,15 +169,41 @@ func restrictedAccessFromLabel(label string) string {
 	return restrictedAccessD20 // 与官网发帖页的默认值一致
 }
 
-// 属性检定的 D20 属性：机器取值照官网 PostRestrictedD20Attr，中文标签照
-// POST_RESTRICTED_D20_ATTR_LABEL_MAP。界面直接绑定机器取值。
-var restrictedD20Attrs = []struct{ Value, Label string }{
+// D20 属性字典：机器取值照官网 PostRestrictedD20Attr，中文标签照
+// POST_RESTRICTED_D20_ATTR_LABEL_MAP（见 2libra-发帖规则.md 第 13 节）。
+// 隐藏内容的属性检定与「可见性 → 满足属性可见」共用这一份，界面直接绑定机器取值。
+var d20Attrs = []struct{ Value, Label string }{
 	{"karma", "财富"},
 	{"experience", "阅历"},
 	{"charm", "魅力"},
 	{"luck", "幸运"},
 	{"diligence", "勤勉"},
 	{"craft", "技艺"},
+}
+
+// d20AttrLabel 取机器取值对应的官网中文标签；不在字典里返回空串。
+func d20AttrLabel(value string) string {
+	for _, at := range d20Attrs {
+		if at.Value == value {
+			return at.Label
+		}
+	}
+	return ""
+}
+
+// d20AttrValue 接受机器取值或官网中文标签，统一返回机器取值；不认识返回空串。
+// 编辑窗口的下拉框绑定中文标签，提交前用它换回 access_guard_attr 的取值。
+func d20AttrValue(value string) string {
+	v := strings.TrimSpace(value)
+	if d20AttrLabel(v) != "" {
+		return v
+	}
+	for _, at := range d20Attrs {
+		if at.Label == v {
+			return at.Value
+		}
+	}
+	return ""
 }
 
 // voteTypeValues 是投票类型：文档的取值只有 pk（单选）与 multiple（多选）。
@@ -308,7 +334,8 @@ type composeState struct {
 	poolCoins       float64
 	poolProbability float64
 
-	// 可见性门槛：界面里存下拉框的标签，payload 时换成 access_guard_type。
+	// 可见性门槛：choice 存下拉框标签，payload 时换成 access_guard_type；
+	// attr 直接存 d20Attrs 里的机器取值，不能是自由输入的中文属性名。
 	guardOpen      bool
 	guardChoice    string
 	guardLevel     float64
@@ -377,10 +404,11 @@ func newComposeState() *composeState {
 		poolCoins:        100,
 		guardChoice:      guardTypeLabels[0],
 		guardLevel:       composeGuardLevelLo,
+		guardAttr:        d20Attrs[0].Value,
 		// 隐藏内容沿用官网发帖页的默认值：属性检定、财富、目标 10、竞拍前 3 名、
 		// 截止时间 48 小时后；有效期留空表示不发送。
 		restrictedAccessChoice:    restrictedAccessLabels[2],
-		restrictedD20Attr:         restrictedD20Attrs[0].Value,
+		restrictedD20Attr:         d20Attrs[0].Value,
 		restrictedD20Threshold:    10,
 		restrictedAuctionTopN:     3,
 		restrictedAuctionDeadline: time.Now().Add(48 * time.Hour),
@@ -881,8 +909,8 @@ func (st *composeState) guardPayload(p map[string]any) error {
 		return nil
 	case guardAttribute:
 		attr := strings.TrimSpace(st.guardAttr)
-		if attr == "" {
-			return fmt.Errorf("按属性可见需要填写 D20 属性名")
+		if d20AttrLabel(attr) == "" {
+			return fmt.Errorf("按属性可见需要选择有效的 D20 属性")
 		}
 		val := int(st.guardAttrValue)
 		if val < 0 || val > composeGuardAttrHi {
@@ -918,8 +946,8 @@ func (st *composeState) restrictedPayload(p map[string]any) error {
 
 	switch access {
 	case restrictedAccessD20:
-		if st.restrictedD20Attr == "" {
-			return fmt.Errorf("属性检定需要选择 D20 属性")
+		if d20AttrLabel(st.restrictedD20Attr) == "" {
+			return fmt.Errorf("属性检定需要选择有效的 D20 属性")
 		}
 		n := int(st.restrictedD20Threshold)
 		if n < composeRestrictedD20Lo || n > composeRestrictedD20Hi {

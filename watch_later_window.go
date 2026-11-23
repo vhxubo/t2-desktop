@@ -61,7 +61,7 @@ func (a *app) showWatchLaterWindow() {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
-		Content:           ui.View(a.watchLaterWindowView),
+		Content:           ui.View(a.windowView(a.watchLaterWindowView)),
 	})
 	a.watchLaterWin = win
 	win.OnClosed(func() {
@@ -231,10 +231,7 @@ func (a *app) watchLaterRow(c *ui.Context, r watchLaterRecord) {
 	if title == "" {
 		title = "帖子 " + r.ShortID
 	}
-	titleColor := tk.Text
-	if read {
-		titleColor = tk.TextSecondary
-	}
+	titleColor := postReadInk(tk, read)
 
 	row := feedRowSurface(c).PaddingY(10).PaddingX(12)
 	row.Children(func() {

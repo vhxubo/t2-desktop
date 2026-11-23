@@ -193,11 +193,7 @@ func (a *app) submitNodeEdit() {
 					a.nodeEditToast("改节点的机会已用完，入口已隐藏")
 					return
 				}
-				a.handleAuthErrorFor(toastNodeEdit, err, func() {
-					if a.nodeEdit == st {
-						a.submitNodeEdit()
-					}
-				})
+				a.handleAuthErrorFor(toastNodeEdit, err)
 				a.nodeEditToast(friendlyError(err))
 				return
 			}

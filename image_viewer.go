@@ -184,7 +184,7 @@ func (a *app) showViewerWindow() {
 		BackgroundColor:   "#101012",
 		TitleBarStyle:     mygo.TitleBarHidden, // 工具条兼作标题栏，见 imageViewerToolbar
 		HideWindowButtons: true,
-		Content:           ui.View(a.imageViewerWindowView),
+		Content:           ui.View(a.windowView(a.imageViewerWindowView)),
 	})
 	a.viewerWin = win
 	win.OnClosed(func() {
@@ -913,7 +913,7 @@ func (a *app) loadViewerImage(raw string) {
 			var err error
 			if data, err = a.fetchImage(raw); err != nil {
 				e.set(nil)
-				a.publish(func() { a.redrawViewerWindow() })
+				a.redrawViewerWindow()
 				return
 			}
 			if err := a.images.writeDisk(raw, imageCacheViewer, gen, data); err != nil {
@@ -923,11 +923,11 @@ func (a *app) loadViewerImage(raw string) {
 		src, err := decodeImageData(raw, imageCacheViewer, data)
 		if err != nil {
 			e.set(nil)
-			a.publish(func() { a.redrawViewerWindow() })
+			a.redrawViewerWindow()
 			return
 		}
 		e.set(src)
-		a.publish(func() { a.redrawViewerWindow() })
+		a.redrawViewerWindow()
 	}()
 }
 

@@ -261,7 +261,7 @@ func (a *app) loadFollows(kind, page int) {
 				} else {
 					l.moreErr = friendlyError(err)
 				}
-				a.handleAuthErrorFor(toastFollows, err, func() { a.loadFollows(kind, page) })
+				a.handleAuthErrorFor(toastFollows, err)
 				return
 			}
 			if page == 1 {
@@ -306,11 +306,7 @@ func (a *app) toggleFollowRow(kind int, u followUser) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLoginFor(toastFollows, "登录后才能关注用户。", func() {
-			if a.follows == fs {
-				a.toggleFollowRow(kind, u)
-			}
-		})
+		a.requestLoginFor(toastFollows, "登录后才能关注用户。")
 		return
 	}
 	desired := !u.IsFollowing
@@ -331,7 +327,7 @@ func (a *app) toggleFollowRow(kind int, u followUser) {
 				return
 			}
 			if err != nil {
-				if a.handleAuthErrorFor(toastFollows, err, func() { a.toggleFollowRow(kind, u) }) {
+				if a.handleAuthErrorFor(toastFollows, err) {
 					return
 				}
 				a.toast(toastFollows, friendlyError(err))

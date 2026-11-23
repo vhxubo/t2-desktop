@@ -169,10 +169,7 @@ func (a *app) ensureMyTopicPicker(t uploadTarget, e *mdEditor) {
 				e.topicFailures++
 				e.topicTriedAt = time.Now()
 				// 补完授权后立刻重跑，清掉刚记下的退避时间。
-				a.handleAuthErrorFor(a.editorToastTarget(t), err, func() {
-					e.topicTriedAt = time.Time{}
-					a.ensureMyTopicPicker(t, e)
-				})
+				a.handleAuthErrorFor(a.editorToastTarget(t), err)
 				return
 			}
 			e.topicFailures = 0

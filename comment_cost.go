@@ -751,7 +751,7 @@ func (a *app) loadCommentCostData() {
 				st.failures++
 				// 缺 profile 权限（旧令牌）或登录失效时走全局授权链路，授权
 				// 成功后重跑这次加载；普通网络错误只在状态栏里说明并给重试。
-				if a.handleAuthErrorFor(a.replyAuthTarget(), err, a.reloadCommentCostData) {
+				if a.handleAuthErrorFor(a.replyAuthTarget(), err) {
 					return
 				}
 				if !st.loaded {
@@ -781,7 +781,7 @@ func (a *app) loadCommentCostData() {
 }
 
 // reloadCommentCostData 丢掉已经拿到的徽章重新读一次（状态栏的「重试」与
-// 授权重放都走这里）。只在 UI 线程调用。
+// 手动重试都走这里）。只在 UI 线程调用。
 func (a *app) reloadCommentCostData() {
 	st := a.commentCost
 	if st == nil || st.loading || st.busyID != "" {
@@ -832,7 +832,7 @@ func (a *app) syncProfileBadgeState(badgeID string, equip bool) {
 
 // setCommentCostBadge 佩戴（equip）或摘下（!equip）状态栏里的一枚徽章。
 // 费用徽章只做「替换」，摘下只给「走个面」用。key 为空表示一次新的点击；
-// 授权重放会带着同一个 key 回来，避免重复提交。
+// 超时重试会带着同一个 key 回来，避免重复提交。
 //
 // 网页端切换前会先用 /api/badges/equip/check-cost 问一次这次要不要收费；开放
 // API v1 没有这个端点（api-economy.md 的「徽章佩戴」只有 equip），而按 2026-11-12
@@ -871,7 +871,7 @@ func (a *app) setCommentCostBadge(badge badgeWallEntry, equip bool, key string) 
 				return
 			}
 			if err != nil {
-				if a.handleAuthErrorFor(a.replyAuthTarget(), err, func() { a.setCommentCostBadge(badge, equip, key) }) {
+				if a.handleAuthErrorFor(a.replyAuthTarget(), err) {
 					return
 				}
 				verb := "切换"

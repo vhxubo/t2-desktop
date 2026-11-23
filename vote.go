@@ -19,7 +19,7 @@ import (
 // 这一组的请求体是 camelCase：voteId / optionId / optionIds，和别处的
 // snake_case 不能顺手统一。两个写端点都没标 🔑，不带 Idempotency-Key。
 // scope 与发帖同为 write:topic（v1 的 scope 表里没有 write:vote），缺权限
-// 时交给 auth_gate.go 的全局授权链路，授权成功后自动重放这一票。
+// 时交给 auth_gate.go 的全局授权链路，授权成功后由用户自己再投一次。
 //
 // 详情里的投票 uuid / 选项 uuid 由 detail.go 的 decodeVote 解码。投票结果
 // 用单独的读端点取：详情只带各选项票数，拿不到「结果是否公开、总共多少票」
@@ -239,11 +239,7 @@ func (a *app) loadVoteResult(d *detailState) {
 			}
 			d.vote.resultLoading = false
 			if err != nil {
-				if a.handleAuthError(err, func() {
-					if a.detailLive(d) {
-						a.loadVoteResult(d)
-					}
-				}) {
+				if a.handleAuthError(err) {
 					return
 				}
 				d.vote.resultErr = friendlyError(err)
@@ -309,11 +305,7 @@ func (a *app) submitVote(d *detailState, optionIDs []string, multi bool) {
 		}
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能参与投票。", func() {
-			if a.detailLive(d) {
-				a.submitVote(d, optionIDs, multi)
-			}
-		})
+		a.requestLogin("登录后才能参与投票。")
 		return
 	}
 	d.vote.busy = true
@@ -347,11 +339,7 @@ func (a *app) submitVote(d *detailState, optionIDs []string, multi bool) {
 					a.notifyInteractDone(nil)
 					return
 				}
-				if a.handleAuthError(err, func() {
-					if a.detailLive(d) {
-						a.submitVote(d, optionIDs, multi)
-					}
-				}) {
+				if a.handleAuthError(err) {
 					a.notifyInteractDone(err)
 					return
 				}

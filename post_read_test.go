@@ -97,7 +97,7 @@ func TestPostReadTrimsToNewest(t *testing.T) {
 	}
 }
 
-// 列表里读过的帖子只把标题置灰：标题从正文色退到次要文字色，卡片底色、
+// 列表里读过的帖子只把标题置灰：标题从正文色退到四级文字色，卡片底色、
 // 副标题与未读行保持一致。
 func TestReadPostRowIsGrayed(t *testing.T) {
 	a := testApp(t)
@@ -122,8 +122,8 @@ func TestReadPostRowIsGrayed(t *testing.T) {
 	img := tt.Image()
 	readInk := darkestLum(img, readR)
 	unreadInk := darkestLum(img, unreadR)
-	if readInk < unreadInk+40 {
-		t.Errorf("已读标题没有置灰：亮度 %.0f，未读 %.0f", readInk, unreadInk)
+	if readInk < unreadInk+110 {
+		t.Errorf("已读标题和未读的差距不够明显：亮度 %.0f，未读 %.0f", readInk, unreadInk)
 	}
 
 	// 标题左侧 8px、垂直居中处是卡片内边距：已读行与未读行的底色必须一样。
@@ -135,16 +135,20 @@ func TestReadPostRowIsGrayed(t *testing.T) {
 	}
 }
 
-// 富行（动态 / 「我的」里的评论）只把帖子标题置灰：正文摘要与评论都是帖子
-// 之外的新内容，不能因为帖子读过就一起变灰。
-func TestRichRowsOnlyGrayReadPosts(t *testing.T) {
+// 富行（动态 / 「我的」里的评论）里，读过的动态把标题和正文摘要一起置灰；
+// 评论走自己的已读表——没点开的评论是新内容不跟着帖子变灰，点开过的评论才
+// 置灰。
+func TestRichRowsGrayReadPostsAndClickedComments(t *testing.T) {
 	a := testApp(t)
 	a.markPostRead("P1")
+	a.markCommentRead("C2")
 	a.tabs[0].items = []Item{
 		{Key: "R1", ShortID: "P1", Title: "时间线里读过的帖子",
 			Extra: &rowExtra{Author: "某人", Excerpt: "读过的帖子摘要"}},
 		{Key: "C1", ShortID: "P1", CommentID: "C1", Title: "一条新评论",
-			Extra: &rowExtra{Author: "某人", Excerpt: "一条新评论"}},
+			Extra: &rowExtra{Author: "某人", Excerpt: "没点开的评论正文"}},
+		{Key: "C2", ShortID: "P1", CommentID: "C2", Title: "另一条评论",
+			Extra: &rowExtra{Author: "某人", Excerpt: "点开过的评论正文"}},
 		{Key: "U1", ShortID: "U1", Title: "时间线里没读的帖子",
 			Extra: &rowExtra{Author: "某人", Excerpt: "没读的帖子摘要"}},
 	}
@@ -161,18 +165,46 @@ func TestRichRowsOnlyGrayReadPosts(t *testing.T) {
 		return r
 	}
 	img := tt.Image()
-	readPost := darkestLum(img, find("时间线里读过的帖子"))
-	readBody := darkestLum(img, find("读过的帖子摘要"))
-	unreadPost := darkestLum(img, find("时间线里没读的帖子"))
-	comment := darkestLum(img, find("一条新评论"))
-	if readPost < unreadPost+40 {
-		t.Errorf("富行里读过的帖子没有置灰：亮度 %.0f，未读 %.0f", readPost, unreadPost)
+	lum := func(text string) float64 { return darkestLum(img, find(text)) }
+	readPost := lum("时间线里读过的帖子")
+	readBody := lum("读过的帖子摘要")
+	unreadPost := lum("时间线里没读的帖子")
+	unreadBody := lum("没读的帖子摘要")
+	freshComment := lum("没点开的评论正文")
+	readComment := lum("点开过的评论正文")
+
+	if readPost < unreadPost+110 {
+		t.Errorf("富行里读过的帖子标题和未读的差距不够明显：亮度 %.0f，未读 %.0f", readPost, unreadPost)
 	}
-	if readBody > unreadPost+30 {
-		t.Errorf("已读帖子只该把标题置灰，摘要也变灰了：亮度 %.0f", readBody)
+	if readBody < unreadPost+110 {
+		t.Errorf("已读动态的正文没有跟着置灰：亮度 %.0f，未读标题 %.0f", readBody, unreadPost)
 	}
-	if comment > unreadPost+30 {
-		t.Errorf("评论行跟着帖子的已读一起变灰了：亮度 %.0f，未读帖子 %.0f", comment, unreadPost)
+	if unreadBody > unreadPost+30 {
+		t.Errorf("未读动态的正文不该被置灰：亮度 %.0f，未读标题 %.0f", unreadBody, unreadPost)
+	}
+	if freshComment > unreadPost+30 {
+		t.Errorf("没点开的评论跟着帖子已读一起变灰了：亮度 %.0f，未读帖子 %.0f", freshComment, unreadPost)
+	}
+	if readComment < unreadPost+110 {
+		t.Errorf("点开过的评论正文没有置灰：亮度 %.0f，未读帖子 %.0f", readComment, unreadPost)
+	}
+}
+
+// 从最新评论点开一条评论就记下它的已读；没点过的评论不受影响。
+func TestOpenCommentMarksRead(t *testing.T) {
+	a := testApp(t)
+	a.autoLoad = false
+	it := Item{Key: "C1", ShortID: "P1", CommentID: "C1", Title: "点开过的评论",
+		Extra: &rowExtra{Author: "某人", Excerpt: "评论正文"}}
+	if a.isCommentRead("C1") {
+		t.Fatal("点开前不该是已读")
+	}
+	a.openDetail(it)
+	if !a.isCommentRead("C1") {
+		t.Fatal("点开评论后没有记下已读")
+	}
+	if a.isCommentRead("C2") {
+		t.Error("别的评论被误记为已读")
 	}
 }
 

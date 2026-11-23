@@ -266,7 +266,7 @@ func TestSubmitBetRecordsLocalAndFiresCoinEvent(t *testing.T) {
 	}
 }
 
-// 同一笔投注失败后重试（超时 / 授权后重放）复用幂等键；金额变了就是另一笔，
+// 同一笔投注超时重试复用幂等键；金额变了就是另一笔，
 // 换新键。成功提交后清空键，再点一次是新的投注，不能用旧键。
 func TestSubmitBetReusesIdempotencyKey(t *testing.T) {
 	topic, err := decodeTopic([]byte(betDetailJSON), "BET01")

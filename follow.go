@@ -70,9 +70,9 @@ func (a *app) followAuthorIsSelf(author string) bool {
 }
 
 // submitFollow 提交一次关注 / 取关，并把结果写回 fs。current 报告这份状态
-// 是否仍属于当前界面，replay 在重新授权成功后重跑同一次操作。target 是发起
-// 这次操作的窗口，结果就提示在那里，而不是一律回主窗口。
-func (a *app) submitFollow(fs *followState, follow bool, target toastTarget, current func() bool, replay func()) {
+// 是否仍属于当前界面；target 是发起这次操作的窗口，结果就提示在那里，而不是
+// 一律回主窗口。授权成功后应用不自动重发，由用户自己再点一次。
+func (a *app) submitFollow(fs *followState, follow bool, target toastTarget, current func() bool) {
 	if fs == nil || fs.busy || !current() || !a.auth.loggedIn() {
 		return
 	}
@@ -101,7 +101,7 @@ func (a *app) submitFollow(fs *followState, follow bool, target toastTarget, cur
 				return
 			}
 			if err != nil {
-				if a.handleAuthErrorFor(target, err, replay) {
+				if a.handleAuthErrorFor(target, err) {
 					return
 				}
 				a.toast(target, friendlyError(err))

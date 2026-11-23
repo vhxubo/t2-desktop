@@ -68,7 +68,7 @@ func (a *app) showSearchWindow() {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
-		Content:           ui.View(a.searchWindowView),
+		Content:           ui.View(a.windowView(a.searchWindowView)),
 	})
 	a.searchWin = win
 	win.OnClosed(func() {
@@ -232,9 +232,7 @@ func (a *app) searchBody(c *ui.Context, st *searchState) {
 					if action.Button(c, "去登录", action.ButtonProps{
 						Size: lobetheme.Small, Variant: action.Primary,
 					}).Clicked() {
-						a.requestLoginFor(toastSearch, "登录后才能搜索自己的收藏。", func() {
-							a.runSearch(st, st.gen, 1)
-						})
+						a.requestLoginFor(toastSearch, "登录后才能搜索自己的收藏。")
 					}
 				},
 			})

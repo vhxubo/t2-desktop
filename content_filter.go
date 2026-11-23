@@ -470,7 +470,7 @@ func (a *app) ensureContentFilter(force bool) {
 			if err != nil {
 				s.failures++
 				s.err = friendlyError(err)
-				if a.handleAuthErrorFor(toastProfile, err, func() { a.ensureContentFilter(true) }) {
+				if a.handleAuthErrorFor(toastProfile, err) {
 					return
 				}
 				if again {
@@ -560,7 +560,7 @@ func (a *app) writeContentFilter(d contentFilterDTO, owner toastTarget, onOK fun
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLoginFor(owner, "登录后才能修改内容屏蔽名单。", func() { a.writeContentFilter(d, owner, onOK) })
+		a.requestLoginFor(owner, "登录后才能修改内容屏蔽名单。")
 		return
 	}
 	if st := a.proxy.netStatus(); st != nil && st.isOffline() {
@@ -590,7 +590,7 @@ func (a *app) writeContentFilter(d contentFilterDTO, owner toastTarget, onOK fun
 			s.saving = false
 			s.savingUser = ""
 			if err != nil {
-				if a.handleAuthErrorFor(owner, err, func() { a.writeContentFilter(d, owner, onOK) }) {
+				if a.handleAuthErrorFor(owner, err) {
 					return
 				}
 				// 400 invalid_request 带 field 时把服务端文案放到对应那块下面，
@@ -637,7 +637,7 @@ func (a *app) setUserBlocked(name string, blocked bool) {
 		return
 	}
 	if a.auth == nil || !a.auth.loggedIn() {
-		a.requestLoginFor(toastMain, "登录后才能屏蔽用户。", func() { a.setUserBlocked(name, blocked) })
+		a.requestLoginFor(toastMain, "登录后才能屏蔽用户。")
 		return
 	}
 	s := a.contentFilter

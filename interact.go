@@ -62,7 +62,7 @@ type favoriteState struct {
 //	detailsOpen / detailsFor 表情明细气泡（点摘要胶囊）
 //
 // amount 是打赏金额草稿（1～500）。rewardKey / rewardSig 是打赏的幂等键与它
-// 对应的请求签名：同一笔打赏重试（网络超时、授权后重放）必须用同一个键，
+// 对应的请求签名：同一笔打赏的超时重试必须用同一个键，
 // 金额或目标变了才换新键。
 type reactionState struct {
 	reactOpen  bool
@@ -137,7 +137,7 @@ const (
 )
 
 // sendReward 提交一笔打赏。这个端点标了 🔑，必须带幂等键：同一笔打赏的
-// 重试（超时、授权后重放）要用同一个键，否则可能重复扣币。
+// 超时重试要用同一个键，否则可能重复扣币。
 func (c *Client) sendReward(ctx context.Context, key string, body rewardBody) error {
 	_, err := withAuthRetry(c, ctx, func(token string) (struct{}, error) {
 		_, err := c.postJSON(ctx, c.apiURL("/v1/rewards"), token, key, body)
@@ -364,17 +364,13 @@ func findReply(list []replyItem, id string) (replyItem, bool) {
 -------------------------------------------------------------- */
 
 // toggleFavorite 收藏或取消收藏当前帖子。未登录先走全局授权弹窗，授权成功
-// 后同一次操作自动重跑；缺 scope 的 403 也一样。界面先乐观更新，失败回滚。
+// 后由用户自己再点一次；缺 scope 的 403 也一样。界面先乐观更新，失败回滚。
 func (a *app) toggleFavorite(d *detailState) {
 	if d == nil || !a.detailLive(d) || d.topic == nil {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能收藏帖子。", func() {
-			if a.detailLive(d) {
-				a.toggleFavorite(d)
-			}
-		})
+		a.requestLogin("登录后才能收藏帖子。")
 		return
 	}
 	if d.fav.busy {
@@ -424,7 +420,7 @@ func (a *app) toggleFavorite(d *detailState) {
 				if d.topic == topic {
 					d.topic.FavoritedCount = countBefore
 				}
-				if a.handleAuthError(err, func() { a.toggleFavorite(d) }) {
+				if a.handleAuthError(err) {
 					a.notifyInteractDone(err)
 					return
 				}
@@ -478,11 +474,7 @@ func (a *app) openReactionPopup(d *detailState, target string) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能添加表情。", func() {
-			if a.detailLive(d) {
-				a.openReactionPopup(d, target)
-			}
-		})
+		a.requestLogin("登录后才能添加表情。")
 		return
 	}
 	a.prepareReactionPopup(d, target)
@@ -506,11 +498,7 @@ func (a *app) openRewardPopup(d *detailState, target string) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能打赏。", func() {
-			if a.detailLive(d) {
-				a.openRewardPopup(d, target)
-			}
-		})
+		a.requestLogin("登录后才能打赏。")
 		return
 	}
 	a.prepareRewardPopup(d, target)
@@ -628,11 +616,7 @@ func (a *app) toggleReaction(d *detailState, target, emoji string) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能添加表情。", func() {
-			if a.detailLive(d) {
-				a.toggleReaction(d, target, emoji)
-			}
-		})
+		a.requestLogin("登录后才能添加表情。")
 		return
 	}
 	topic := d.topic
@@ -691,7 +675,7 @@ func (a *app) toggleReaction(d *detailState, target, emoji string) {
 			}
 			if err != nil {
 				setReactionStatsOf(d, target, before)
-				if a.handleAuthError(err, func() { a.toggleReaction(d, target, emoji) }) {
+				if a.handleAuthError(err) {
 					a.notifyInteractDone(err)
 					return
 				}
@@ -1006,11 +990,7 @@ func (a *app) reactionEntry(c *ui.Context, d *detailState, target string, style 
 		if !a.auth.loggedIn() {
 			// Popover 已经把气泡打开了：未登录时撤销，先走全局授权弹窗。
 			d.react.reactOpen = false
-			a.requestLogin("登录后才能添加表情。", func() {
-				if a.detailLive(d) {
-					a.openReactionPopup(d, target)
-				}
-			})
+			a.requestLogin("登录后才能添加表情。")
 			return
 		}
 		a.prepareReactionPopup(d, target)
@@ -1052,11 +1032,7 @@ func (a *app) rewardEntry(c *ui.Context, d *detailState, target string, style in
 		if !a.auth.loggedIn() {
 			// Popover 已经把气泡打开了：未登录时撤销，先走全局授权弹窗。
 			d.react.rewardOpen = false
-			a.requestLogin("登录后才能打赏。", func() {
-				if a.detailLive(d) {
-					a.openRewardPopup(d, target)
-				}
-			})
+			a.requestLogin("登录后才能打赏。")
 			return
 		}
 		a.prepareRewardPopup(d, target)
@@ -1258,7 +1234,7 @@ func (a *app) loginHintFor(c *ui.Context, owner toastTarget, message string) {
 	if action.Button(c, "去登录", action.ButtonProps{
 		Size: lobetheme.Small, Variant: action.Primary,
 	}).Clicked() {
-		a.requestLoginFor(owner, message, nil)
+		a.requestLoginFor(owner, message)
 	}
 }
 
@@ -1340,7 +1316,7 @@ func rewardNeed(d *detailState, target string) (rewardBody, bool) {
 	return rewardBody{Type: "comment", CommentID: r.ID, Path: path}, true
 }
 
-// submitReward 提交一笔打赏。同一笔打赏的重试（超时、授权后重放）复用同一个
+// submitReward 提交一笔打赏。同一笔打赏的超时重试复用同一个
 // 幂等键；金额或目标变了才换新键。成功后本地先记账，并刷新标题栏余额。
 func (a *app) submitReward(d *detailState, target string) {
 	if d == nil || !a.detailLive(d) || d.react.rewardBusy || d.react.busy {
@@ -1351,11 +1327,7 @@ func (a *app) submitReward(d *detailState, target string) {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能打赏。", func() {
-			if a.detailLive(d) {
-				a.submitReward(d, target)
-			}
-		})
+		a.requestLogin("登录后才能打赏。")
 		return
 	}
 	body, ok := rewardNeed(d, target)
@@ -1389,7 +1361,7 @@ func (a *app) submitReward(d *detailState, target string) {
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() { a.submitReward(d, target) }) {
+				if a.handleAuthError(err) {
 					a.notifyInteractDone(err)
 					return
 				}

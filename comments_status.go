@@ -122,11 +122,7 @@ func (a *app) toggleTopicComments(d *detailState) {
 				}
 				// 缺 write:topic 时先补授权，回调成功后按同样的目标重发一次；
 				// 授权链路已经接手这次失败，不再另外弹一条错误提示。
-				if a.handleAuthError(err, func() {
-					if a.detailLive(d) {
-						a.toggleTopicComments(d)
-					}
-				}) {
+				if a.handleAuthError(err) {
 					return
 				}
 				a.toast(a.detailToastFor(d), friendlyError(err))

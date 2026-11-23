@@ -19,8 +19,8 @@ import (
 //	POST /v1/topics/:short_id/bets/:option_id/participate 🔑 scope write:economy，需开通
 //
 // 两个端点都标「需开通」：默认不授予，未开通时返回 403 insufficient_scope，
-// 交给 auth_gate.go 的授权链路引导补 scope，成功后自动重放。写端点带 🔑，
-// 必须带 Idempotency-Key；同一笔投注重试（超时、授权后重放）复用同一个键，
+// 交给 auth_gate.go 的授权链路引导补 scope，授权后由用户自己再点一次。写端点带 🔑，
+// 必须带 Idempotency-Key；同一笔投注的超时重试复用同一个键，
 // 金额或选项变了换新键，否则会重复扣币。
 //
 // 帖子详情 GET /v1/topics/:short_id 的 extra.bet（线上也可能在顶层 d.bet）
@@ -353,11 +353,7 @@ func (a *app) loadBets(d *detailState) {
 			}
 			d.bet.loading = false
 			if err != nil {
-				if a.handleAuthError(err, func() {
-					if a.detailLive(d) {
-						a.loadBets(d)
-					}
-				}) {
+				if a.handleAuthError(err) {
 					return
 				}
 				d.bet.err = friendlyError(err)
@@ -404,15 +400,11 @@ func (a *app) submitBet(d *detailState, optionID string) {
 	}
 	coins := betCoinsValue(d.bet.amount)
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录后才能参与竞猜。", func() {
-			if a.detailLive(d) {
-				a.submitBet(d, optionID)
-			}
-		})
+		a.requestLogin("登录后才能参与竞猜。")
 		return
 	}
 	// 同一笔投注（同选项、同金额）重试复用同一个幂等键；改了金额或选项
-	// 就是另一笔，换新键。授权后重放走的还是这一笔。
+	// 就是另一笔，换新键。
 	sig := fmt.Sprintf("%s|%s|%d", d.shortID, optionID, coins)
 	if d.bet.key == "" || d.bet.sig != sig {
 		d.bet.key = randomURLSafe(24)
@@ -438,7 +430,7 @@ func (a *app) submitBet(d *detailState, optionID string) {
 				return
 			}
 			if err != nil {
-				if a.handleAuthError(err, func() { a.submitBet(d, optionID) }) {
+				if a.handleAuthError(err) {
 					return
 				}
 				d.bet.err = friendlyError(err)

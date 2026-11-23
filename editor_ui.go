@@ -3,7 +3,6 @@ package main
 import (
 	"strconv"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
@@ -246,10 +245,7 @@ func (a *app) editorTopicDialog(c *ui.Context, t uploadTarget, e *mdEditor, body
 						Type: display.TextSecondary, FontSize: 11, Rows: 2,
 					}).Grow(1)
 					if action.Button(c, "登录", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
-						a.requestLoginFor(a.editorToastTarget(t), "登录后才能插入自己发过的帖子。", func() {
-							e.topicTriedAt = time.Time{}
-							a.ensureMyTopicPicker(t, e)
-						})
+						a.requestLoginFor(a.editorToastTarget(t), "登录后才能插入自己发过的帖子。")
 					}
 				})
 				return

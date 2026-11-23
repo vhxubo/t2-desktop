@@ -64,7 +64,7 @@ func (a *app) showProfileTab(tab int) {
 // 首帧里看到的就是当前账号，而不是空壳再闪一下。
 func (a *app) showProfileWindow() {
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录 2Libra 后才能查看「我的」。", a.showProfile)
+		a.requestLogin("登录 2Libra 后才能查看「我的」。")
 		return
 	}
 	if a.profile == nil {
@@ -96,7 +96,7 @@ func (a *app) showProfileWindow() {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、通知窗口一样自绘标题栏
 		HideWindowButtons: true,
-		Content:           ui.View(a.profileWindowView),
+		Content:           ui.View(a.windowView(a.profileWindowView)),
 	})
 	a.profileWin = win
 	win.OnShow(func() { a.setProfileWindowShown(true) })
@@ -1198,7 +1198,7 @@ func (a *app) submitRenameCollection() {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLoginFor(toastProfile, "登录后才能修改合集。", a.submitRenameCollection)
+		a.requestLoginFor(toastProfile, "登录后才能修改合集。")
 		return
 	}
 	id := ps.collEdit
@@ -1218,7 +1218,7 @@ func (a *app) submitRenameCollection() {
 				return
 			}
 			if err != nil {
-				if a.handleAuthErrorFor(toastProfile, err, a.submitRenameCollection) {
+				if a.handleAuthErrorFor(toastProfile, err) {
 					return
 				}
 				a.toast(toastProfile, friendlyError(err))
@@ -1254,7 +1254,7 @@ func (a *app) submitDeleteCollection() {
 		return
 	}
 	if !a.auth.loggedIn() {
-		a.requestLoginFor(toastProfile, "登录后才能删除合集。", a.submitDeleteCollection)
+		a.requestLoginFor(toastProfile, "登录后才能删除合集。")
 		return
 	}
 	id := ps.collDelete
@@ -1280,7 +1280,7 @@ func (a *app) submitDeleteCollection() {
 				return
 			}
 			if err != nil {
-				if a.handleAuthErrorFor(toastProfile, err, a.submitDeleteCollection) {
+				if a.handleAuthErrorFor(toastProfile, err) {
 					return
 				}
 				a.toast(toastProfile, friendlyError(err))

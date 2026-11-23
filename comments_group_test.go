@@ -391,6 +391,38 @@ func TestFoldToggleLeavesScrollAlone(t *testing.T) {
 	}
 }
 
+// 列表每帧都会要可见行；items 与展开状态都没变时必须直接复用上一份结果，
+// 而不是每帧把所有条目重新展开、重新分配一遍。
+func TestFoldRowsCachedUntilStateChanges(t *testing.T) {
+	st := &tabState{}
+	for i := 0; i < 5; i++ {
+		st.items = append(st.items, commentRow(i, "a", "S1", "帖子标题"))
+	}
+	st.refold(tabSpecs[4])
+	first := st.foldRows()
+	if len(first) != 1 || first[0].group == nil {
+		t.Fatalf("基线可见行 = %+v", first)
+	}
+	if again := st.foldRows(); &again[0] != &first[0] {
+		t.Fatal("items 与展开状态没变，foldRows 却重新构建了可见行")
+	}
+	st.toggle(*first[0].group)
+	expanded := st.foldRows()
+	if len(expanded) != 5 {
+		t.Fatalf("展开后可见行 = %d，期望 5", len(expanded))
+	}
+	if &expanded[0] == &first[0] {
+		t.Fatal("展开 / 收起后仍复用旧的可见行缓存")
+	}
+	// 新数据到达（items 变了）也必须重建。
+	st.toggle(st.fold.groups[0])
+	st.items = append(st.items, commentRow(6, "b", "S1", "帖子标题"))
+	st.refold(tabSpecs[4])
+	if rows := st.foldRows(); len(rows) != 2 {
+		t.Fatalf("追加后可见行 = %d，期望 2", len(rows))
+	}
+}
+
 // commentRow 造一条归一后的评论行，字段与 commentItemFrom 的结果一致。
 func commentRow(i int, author, shortID, postTitle string) Item {
 	id := "c" + string(rune('0'+i))

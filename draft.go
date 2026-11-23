@@ -673,11 +673,18 @@ func (a *app) applyComposeDraft(st *composeState, e draftEntry) {
 		if v := m.Guard; v != nil {
 			st.guardOpen = true
 			st.guardChoice, st.guardLevel, st.guardAttr, st.guardAttrValue = v.Choice, v.Level, v.Attr, v.AttrValue
+			// 老草稿可能存的是自由输入的中文属性名；下拉框只认官网字典里的机器取值。
+			if d20AttrLabel(st.guardAttr) == "" {
+				st.guardAttr = d20Attrs[0].Value
+			}
 		}
 		if v := m.Restricted; v != nil {
 			st.restrictedOpen = true
 			st.restrictedAccessChoice, st.restrictedContent = v.AccessChoice, v.Content
 			st.restrictedD20Attr, st.restrictedD20Threshold = v.D20Attr, v.D20Threshold
+			if d20AttrLabel(st.restrictedD20Attr) == "" {
+				st.restrictedD20Attr = d20Attrs[0].Value
+			}
 			st.restrictedDurationMonths, st.restrictedAuctionTopN, st.restrictedAuctionDeadline =
 				v.DurationMonths, v.AuctionTopN, v.AuctionDeadline
 		}

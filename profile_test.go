@@ -375,7 +375,7 @@ func TestProfileTabs(t *testing.T) {
 // 用户不用切回主窗口才知道为什么列表是空的。
 func TestProfileShowsAuthDialog(t *testing.T) {
 	a := profileWindowApp(t)
-	a.demandAuthorizationFor(toastProfile, scopeNeed([]string{"read:me"}), nil)
+	a.demandAuthorizationFor(toastProfile, scopeNeed([]string{"read:me"}))
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
 	for _, want := range []string{"需要授权", "缺少的权限范围：read:me", "前往授权", "取消"} {

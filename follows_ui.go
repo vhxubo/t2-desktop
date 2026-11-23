@@ -35,7 +35,7 @@ func (a *app) showFollows(tab int) {
 // showFollowsWindow 在主线程上真正打开窗口。打开时补齐当前分段的首屏。
 func (a *app) showFollowsWindow(tab int) {
 	if !a.auth.loggedIn() {
-		a.requestLoginFor(toastProfile, "登录 2Libra 后才能查看关注与粉丝。", func() { a.showFollows(tab) })
+		a.requestLoginFor(toastProfile, "登录 2Libra 后才能查看关注与粉丝。")
 		return
 	}
 	if a.follows == nil {
@@ -70,7 +70,7 @@ func (a *app) showFollowsWindow(tab int) {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
-		Content:           ui.View(a.followsWindowView),
+		Content:           ui.View(a.windowView(a.followsWindowView)),
 	})
 	a.followsWin = win
 	win.OnShow(func() { a.setFollowsWindowShown(true) })

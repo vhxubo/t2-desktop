@@ -158,10 +158,14 @@ func (t *topicDetail) editGuard() (guardSelection, bool) {
 	default:
 		return guardSelection{}, false
 	}
+	attr := d20AttrValue(t.GuardAttr)
+	if attr == "" {
+		attr = strings.TrimSpace(t.GuardAttr) // 老响应里的中文名原样留着，便于识别改动
+	}
 	return guardSelection{
 		Type:      typ,
 		Level:     t.GuardLevel,
-		Attr:      strings.TrimSpace(t.GuardAttr),
+		Attr:      attr,
 		AttrValue: t.GuardAttrValue,
 	}, true
 }
@@ -224,6 +228,7 @@ func newTopicEditState(t *topicDetail, mdOpts *markdown.Options) *editState {
 		origBody:       t.Content,
 		guardChoice:    editGuardKeep,
 		guardLevel:     composeGuardLevelLo,
+		guardAttr:      d20Attrs[0].Label,
 		guardAttrValue: 0,
 		emojis:         t.Emojis,
 		mdOpts:         mdOpts, // 正文排版（a.md）
@@ -237,7 +242,11 @@ func newTopicEditState(t *topicDetail, mdOpts *markdown.Options) *editState {
 		if guard.Level >= composeGuardLevelLo {
 			st.guardLevel = float64(guard.Level)
 		}
-		st.guardAttr = guard.Attr
+		if label := d20AttrLabel(guard.Attr); label != "" {
+			st.guardAttr = label
+		} else if guard.Attr != "" {
+			st.guardAttr = guard.Attr // 未知取值原样展示，作者可以重新选
+		}
 		if guard.AttrValue >= 0 {
 			st.guardAttrValue = float64(guard.AttrValue)
 		}
@@ -340,7 +349,10 @@ func (st *editState) selectedGuard() guardSelection {
 		sel.Level = int(st.guardLevel)
 	}
 	if sel.Type == guardAttribute {
-		sel.Attr = strings.TrimSpace(st.guardAttr)
+		sel.Attr = d20AttrValue(st.guardAttr)
+		if sel.Attr == "" {
+			sel.Attr = strings.TrimSpace(st.guardAttr)
+		}
 		sel.AttrValue = int(st.guardAttrValue)
 	}
 	return sel
@@ -388,8 +400,8 @@ func (st *editState) guardPayload(p map[string]any) error {
 		p["access_guard_type"] = guardLevel
 		p["access_guard_level"] = sel.Level
 	case guardAttribute:
-		if sel.Attr == "" {
-			return fmt.Errorf("按属性可见需要填写 D20 属性名")
+		if d20AttrLabel(sel.Attr) == "" {
+			return fmt.Errorf("按属性可见需要选择有效的 D20 属性")
 		}
 		if sel.AttrValue < 0 || sel.AttrValue > composeGuardAttrHi {
 			return fmt.Errorf("属性值应在 0～%d 之间", composeGuardAttrHi)

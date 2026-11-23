@@ -65,7 +65,7 @@ func (b *accountBook) showPanelWindow() {
 		BackgroundColor:   "light-dark(#ffffff, #18181b)",
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口一样自绘标题栏
 		HideWindowButtons: true,
-		Content:           ui.View(b.panelView),
+		Content:           ui.View(b.windowView(b.panelView)),
 	})
 	b.panelWin = win
 	win.OnClosed(func() {
@@ -88,6 +88,16 @@ func (b *accountBook) closePanelWindow() {
 func (b *accountBook) redrawPanel() {
 	if win := b.panelWin; win != nil {
 		win.Invalidate()
+	}
+}
+
+// windowView 是账号面板与登录窗口 view 的入口：记下这一帧属于哪扇窗口，
+// 面板头像加载完成时只重绘这一扇（见 accountBook.imageFetcher）。
+func (b *accountBook) windowView(fn func(*ui.Context)) func(*ui.Context) {
+	return func(c *ui.Context) {
+		b.images.beginFrame(c.Services())
+		defer b.images.endFrame()
+		fn(c)
 	}
 }
 

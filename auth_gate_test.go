@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -81,13 +82,13 @@ func TestBeginScopesAsksForExtraScopes(t *testing.T) {
 	m.Cancel()
 }
 
-// 弹窗里点「前往授权」：请求的 scope 带上缺失项，待重跑调用保留到回调。
+// 弹窗里点「前往授权」：请求的 scope 带上缺失项，授权状态保留到回调。
 func TestAuthPromptOpensBrowserWithMissingScope(t *testing.T) {
 	a := testApp(t)
 	a.handleAuthError(&apiError{
 		Status: http.StatusForbidden, Code: "insufficient_scope",
 		RequiredScope: []string{"write:vote"},
-	}, func() {})
+	})
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
@@ -104,7 +105,7 @@ func TestAuthPromptOpensBrowserWithMissingScope(t *testing.T) {
 		t.Error("点「前往授权」后弹窗应关闭")
 	}
 	if !a.hasPendingAuthorization() {
-		t.Error("等待回调期间不应丢掉待重跑的调用")
+		t.Error("等待回调期间不应丢掉授权状态")
 	}
 	if !a.loginPending {
 		t.Error("应进入等待浏览器授权状态")
@@ -126,7 +127,7 @@ func TestAuthPromptOpensBrowserWithMissingScope(t *testing.T) {
 // 窗口里，主窗口与别的附属窗口不跟着闪一个。
 func TestAuthPromptStaysInOriginatingWindow(t *testing.T) {
 	a := testApp(t)
-	a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}), func() {})
+	a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}))
 
 	if !a.authGate.wants(toastCompose) {
 		t.Errorf("发帖窗口应显示授权弹窗：%+v", a.authGate)
@@ -159,13 +160,12 @@ func TestAuthPromptStaysInOriginatingWindow(t *testing.T) {
 }
 
 // 同一个账号的两个窗口同时缺权限时，两处都弹；一次授权解决两条被中断的
-// 调用。主窗口仍然不跟着弹。
+// 请求。主窗口仍然不跟着弹。
 func TestAuthPromptShowsInEveryFailingWindow(t *testing.T) {
 	a := testApp(t)
 	a.userCard = newUserCardState("amy")
-	replays := 0
-	a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}), func() { replays++ })
-	a.demandAuthorizationFor(toastUserCard, scopeNeed([]string{"interact"}), func() { replays++ })
+	a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}))
+	a.demandAuthorizationFor(toastUserCard, scopeNeed([]string{"interact"}))
 
 	for _, owner := range []toastTarget{toastCompose, toastUserCard} {
 		if !a.authGate.wants(owner) {
@@ -199,18 +199,14 @@ func TestAuthPromptShowsInEveryFailingWindow(t *testing.T) {
 	if mt.HasText("需要授权") {
 		t.Errorf("主窗口不该跟着弹：%q", mt.Texts())
 	}
-	if replays != 0 {
-		t.Errorf("还没授权就重跑了 %d 次", replays)
-	}
 }
 
-// 关掉某个窗口只丢掉它自己等重跑的调用；别的窗口缺权限的那一份继续留着。
+// 关掉某个窗口只摘掉它自己那一份授权提示；别的窗口缺权限的那一份继续留着。
 // 最后一个发起窗口也关掉时整次授权作废。
 func TestAuthGateDropsCallsOfClosedWindow(t *testing.T) {
 	a := testApp(t)
-	composeRuns, cardRuns := 0, 0
-	a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}), func() { composeRuns++ })
-	a.demandAuthorizationFor(toastUserCard, scopeNeed([]string{"interact"}), func() { cardRuns++ })
+	a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}))
+	a.demandAuthorizationFor(toastUserCard, scopeNeed([]string{"interact"}))
 
 	a.authGateWindowClosed(toastCompose)
 	if a.authGate.wants(toastCompose) {
@@ -219,16 +215,8 @@ func TestAuthGateDropsCallsOfClosedWindow(t *testing.T) {
 	if !a.authGate.wants(toastUserCard) {
 		t.Error("还开着的窗口应继续显示授权弹窗")
 	}
-	if got := len(a.authGate.replays); got != 1 {
-		t.Fatalf("关掉窗口后待重跑调用 = %d，期望只剩 1 条", got)
-	}
-	a.replayAuthorizedCalls()
-	if composeRuns != 0 || cardRuns != 1 {
-		t.Errorf("重跑次数 compose=%d card=%d，期望 0/1", composeRuns, cardRuns)
-	}
 
 	// 另一条也关掉：授权状态整体清空，不会残留一个没人能看到的弹窗。
-	a.demandAuthorizationFor(toastUserCard, scopeNeed([]string{"interact"}), nil)
 	a.authGateWindowClosed(toastUserCard)
 	if a.authGate.open || a.hasPendingAuthorization() {
 		t.Errorf("最后一个发起窗口关掉后应清空授权状态：%+v", a.authGate)
@@ -250,8 +238,7 @@ func TestScopeReauthUsesEmbeddedBrowserForAccountWindow(t *testing.T) {
 	a := newAppWithDeps(b.deps(), acc)
 	a.autoLoad = false
 	acc.app = a
-	replayed := 0
-	a.demandAuthorization(scopeNeed([]string{"write:vote"}), func() { replayed++ })
+	a.demandAuthorization(scopeNeed([]string{"write:vote"}))
 	a.authorizeGate()
 
 	if systemURL != "" {
@@ -281,22 +268,19 @@ func TestScopeReauthUsesEmbeddedBrowserForAccountWindow(t *testing.T) {
 		t.Errorf("授权 URL 没有申请缺失的 scope：%q", u.Query().Get("scope"))
 	}
 
-	// 取消这次补授权：窗口里登记的待重跑调用一并丢掉。
+	// 取消这次补授权：窗口里的授权状态一并清掉。
 	b.cancelLogin()
 	if a.hasPendingAuthorization() {
-		t.Error("取消后仍留着待重跑的调用")
-	}
-	if replayed != 0 {
-		t.Error("取消后不该重跑被中断的调用")
+		t.Error("取消后仍留着授权状态")
 	}
 	if !strings.Contains(a.loginMsg, "已取消授权") {
 		t.Errorf("取消后窗口提示不对：%q", a.loginMsg)
 	}
 }
 
-// 内置浏览器里补权限成功后，窗口换成新会话并自动重跑被中断的操作 —— 与系统
-// 浏览器深链走的是同一条完成路径。
-func TestScopeReauthReplaysAfterEmbeddedLogin(t *testing.T) {
+// 内置浏览器里补权限成功后，窗口换成新会话并清掉授权状态，但应用不替用户
+// 重跑被中断的操作 —— 与系统浏览器深链走的是同一条完成路径。
+func TestScopeReauthDoesNotReplayAfterEmbeddedLogin(t *testing.T) {
 	srv := newTestTokenServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"c":0,"d":{"access_token":"NEW","refresh_token":"R","token_type":"Bearer","expires_in":3600}}`)
 	})
@@ -316,8 +300,7 @@ func TestScopeReauthReplaysAfterEmbeddedLogin(t *testing.T) {
 	a := newAppWithDeps(b.deps(), acc)
 	a.autoLoad = false
 	acc.app = a
-	replayed := atomic.Int32{}
-	a.demandAuthorization(scopeNeed([]string{"write:vote"}), func() { replayed.Add(1) })
+	a.demandAuthorization(scopeNeed([]string{"write:vote"}))
 	a.authorizeGate()
 
 	p := b.pendingLogin()
@@ -330,23 +313,19 @@ func TestScopeReauthReplaysAfterEmbeddedLogin(t *testing.T) {
 	}
 	b.handleDeepLink(defaultRedirectURI + "?code=c&state=" + u.Query().Get("state"))
 
-	waitFor(t, func() bool { return replayed.Load() == 1 }, "授权成功后重跑被中断的调用")
-	if a.auth.accessToken() != "NEW" {
-		t.Errorf("窗口仍用旧会话：%q", a.auth.accessToken())
-	}
+	waitFor(t, func() bool { return a.auth.accessToken() == "NEW" }, "授权成功后窗口没有换成新会话")
 	if a.hasPendingAuthorization() {
-		t.Error("重跑完成后授权状态应清空")
+		t.Error("授权完成后授权状态应清空")
 	}
 	if b.pendingLogin() != nil {
 		t.Error("授权结束后不该还挂着 pending")
 	}
 }
 
-// 取消授权会丢弃待重跑的调用：它们不能在某次无关登录成功后被突然执行。
+// 取消授权会清掉授权状态：之后某次无关的登录成功不该再弹出过期提示。
 func TestAuthPromptCancelDropsPendingCall(t *testing.T) {
 	a := testApp(t)
-	replayed := 0
-	a.demandAuthorization(scopeNeed([]string{"write:vote"}), func() { replayed++ })
+	a.demandAuthorization(scopeNeed([]string{"write:vote"}))
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
@@ -360,20 +339,20 @@ func TestAuthPromptCancelDropsPendingCall(t *testing.T) {
 		t.Errorf("取消后提示不对：%q", a.loginMsg)
 	}
 
-	// 之后的登录成功不能再触发已取消的调用。
+	// 之后的登录成功不能重新弹出已取消的授权提示。
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
 		t.Fatal(err)
 	}
 	a.onAuthChanged(nil)
-	if replayed != 0 {
-		t.Errorf("已取消的调用被执行了 %d 次", replayed)
+	if a.authGate.open || a.hasPendingAuthorization() {
+		t.Errorf("取消后登录不该重弹授权窗：%+v", a.authGate)
 	}
 }
 
-// 完整链路：403 缺权限 → 弹窗 → 打开浏览器 → 回调 → 自动重发原请求。
-func TestMissingScopeRetriesOriginalCallAfterCallback(t *testing.T) {
+// 完整链路：403 缺权限 → 弹窗 → 打开浏览器 → 回调。授权成功后应用不替用户
+// 重发原请求，由用户自己再点一次。
+func TestMissingScopeDoesNotRetryAfterCallback(t *testing.T) {
 	var favoritesCalls atomic.Int32
-	var sawNewToken atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/oauth/token":
@@ -382,13 +361,8 @@ func TestMissingScopeRetriesOriginalCallAfterCallback(t *testing.T) {
 			_, _ = fmt.Fprint(w, `{"c":0,"d":{"username":"jimmy"}}`)
 		case "/api/v1/me/follows/timeline":
 			favoritesCalls.Add(1)
-			if r.Header.Get("Authorization") != "Bearer NEW" {
-				w.WriteHeader(http.StatusForbidden)
-				_, _ = fmt.Fprint(w, `{"c":403,"code":"insufficient_scope","m":"缺少权限范围","required_scope":["write:vote"],"d":null}`)
-				return
-			}
-			sawNewToken.Store(true)
-			_, _ = fmt.Fprint(w, envelopeJSON(`{"items":[{"id":"f1","short_id":"REPLAY1","title":"授权后重新加载的内容","author":{"username":"jimmy"}}],"total":1,"page":1,"limit":50,"total_pages":1}`))
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = fmt.Fprint(w, `{"c":403,"code":"insufficient_scope","m":"缺少权限范围","required_scope":["write:vote"],"d":null}`)
 		default:
 			t.Errorf("意外路径 %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -461,22 +435,102 @@ func TestMissingScopeRetriesOriginalCallAfterCallback(t *testing.T) {
 	if err := a.auth.Complete(defaultRedirectURI + "?code=c&state=" + state); err != nil {
 		t.Fatalf("回调没有被接受：%v", err)
 	}
-	deadline := time.Now().Add(8 * time.Second)
-	for !tt.HasText("授权后重新加载的内容") {
-		if time.Now().After(deadline) {
-			t.Fatalf("回调后没有自动重发原请求：%q", tt.Texts())
-		}
-		tt.Frame()
-		time.Sleep(5 * time.Millisecond)
+	waitFor(t, func() bool { return !a.hasPendingAuthorization() }, "授权完成后没有清掉授权状态")
+	tt.Frame()
+	if tt.HasText("授权后重新加载的内容") {
+		t.Errorf("应用不该替用户重发原请求：%q", tt.Texts())
 	}
-	if !a.auth.loggedIn() || !sawNewToken.Load() {
-		t.Errorf("重发没有使用新令牌：loggedIn=%v", a.auth.loggedIn())
+	if !a.auth.loggedIn() || a.auth.accessToken() != "NEW" {
+		t.Errorf("窗口没有换用新令牌：loggedIn=%v", a.auth.loggedIn())
 	}
-	if a.authGate.open || a.hasPendingAuthorization() {
-		t.Errorf("重跑完成后授权状态应清空：%+v", a.authGate)
+	if got := favoritesCalls.Load(); got != 1 {
+		t.Errorf("动态请求次数 = %d，期望只发首次 403，不再自动重发", got)
 	}
-	if got := favoritesCalls.Load(); got != 2 {
-		t.Errorf("动态请求次数 = %d，期望首次 403 + 重跑 1 次", got)
+}
+
+// 全局拦截：HTTP 出口拿到 insufficient_scope 就登记授权弹窗，不需要调用点
+// 自己接 handleAuthError。弹窗画在当前聚焦窗口上（这里伪装成通知窗口），
+// 即使这次请求是从别处发出的——用户要先看见「前往授权」。
+func TestGlobalAuthInterceptionUsesFocusedWindow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprint(w, `{"c":403,"code":"insufficient_scope","required_scope":["write:economy"],"m":"缺少权限范围：write:economy","d":null,"t":1795363233804,"u":"/api/v1/me/sign"}`)
+	}))
+	defer srv.Close()
+
+	a := newApp(t.TempDir())
+	a.autoLoad = false
+	a.client.Base = srv.URL + "/api"
+	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer", Scope: "read:economy"}); err != nil {
+		t.Fatal(err)
+	}
+	focused := &mygo.Window{}
+	a.notifWin = focused
+	old := authFocusedWindow
+	authFocusedWindow = func() *mygo.Window { return focused }
+	defer func() { authFocusedWindow = old }()
+
+	if _, err := a.client.fetchCoinSign(context.Background()); err == nil {
+		t.Fatal("403 insufficient_scope 应该返回错误")
+	}
+	waitFor(t, func() bool { return a.authGate.open }, "全局拦截没有打开授权弹窗")
+	if !a.authGate.wants(toastNotifications) {
+		t.Errorf("弹窗应画在聚焦的通知窗口：%+v", a.authGate)
+	}
+	if a.authGate.wants(toastMain) || a.authGate.wants(toastCoins) {
+		t.Errorf("弹窗不该画在没有聚焦的窗口：%+v", a.authGate)
+	}
+	if got := a.authGate.need.Scopes; len(got) != 1 || got[0] != "write:economy" {
+		t.Errorf("弹窗缺少 write:economy：%+v", a.authGate.need)
+	}
+}
+
+// 平台没给这个应用开通的端点也回 insufficient_scope，但 required_scope 当前
+// 令牌已经全有——再授权也拿不到，全局拦截要跳过，别让用户白跑一趟。
+func TestGlobalAuthInterceptionSkipsAlreadyGrantedScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprint(w, `{"c":403,"code":"insufficient_scope","required_scope":["write:economy"],"m":"未开通","d":null}`)
+	}))
+	defer srv.Close()
+
+	a := newApp(t.TempDir())
+	a.autoLoad = false
+	a.client.Base = srv.URL + "/api"
+	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer", Scope: "read:economy write:economy"}); err != nil {
+		t.Fatal(err)
+	}
+	focused := &mygo.Window{}
+	a.profileWin = focused
+	old := authFocusedWindow
+	authFocusedWindow = func() *mygo.Window { return focused }
+	defer func() { authFocusedWindow = old }()
+
+	if _, err := a.client.fetchCoinSign(context.Background()); err == nil {
+		t.Fatal("403 insufficient_scope 应该返回错误")
+	}
+	time.Sleep(30 * time.Millisecond)
+	if a.authGate.open {
+		t.Errorf("scope 已授予时全局拦截不该弹窗：%+v", a.authGate)
+	}
+}
+
+// 所有入口（显式 handleAuthError 与全局拦截）都收敛到当前聚焦窗口：后台从
+// 发帖窗口发出的失败，用户正在看「我的」窗口时弹在「我的」里。
+func TestAuthPromptOverridesToFocusedWindow(t *testing.T) {
+	a := testApp(t)
+	focused := &mygo.Window{}
+	a.profileWin = focused
+	old := authFocusedWindow
+	authFocusedWindow = func() *mygo.Window { return focused }
+	defer func() { authFocusedWindow = old }()
+
+	a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}))
+	if !a.authGate.wants(toastProfile) {
+		t.Errorf("弹窗应画在聚焦的「我的」窗口：%+v", a.authGate)
+	}
+	if a.authGate.wants(toastCompose) {
+		t.Errorf("弹窗不该留在发起调用的发帖窗口：%+v", a.authGate)
 	}
 }
 
