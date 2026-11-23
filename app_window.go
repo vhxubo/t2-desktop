@@ -165,6 +165,18 @@ func (a *app) accountWindowClosed(closed *mygo.Window) {
 	a.finalizeAccountWindow()
 }
 
+// auxiliaryWindows 是这个账号除主窗口外的全部弹窗窗口。主窗口关掉后靠它
+// 判断账号是否还活着、并挑一扇顶上来当 publish / toast 的出口。新增弹窗窗口
+// 必须加进这里，否则主窗口一关就会被误当成最后一扇窗口而收掉账号。
+func (a *app) auxiliaryWindows() []*mygo.Window {
+	return []*mygo.Window{
+		a.notifWin, a.settingsWin, a.aboutWin, a.netLogWin,
+		a.profileWin, a.coinWin, a.composeWin,
+		a.replyWin, a.editWin, a.nodeEditWin, a.searchWin, a.followsWin,
+		a.userCardWin, a.viewerWin,
+	}
+}
+
 // anyLiveWindow 找一扇这个账号还开着的窗口：详情窗口优先，然后是通知、
 // 设置、金币等附属窗口。主窗口关掉后用它顶上 a.win；无头测试里原生窗口
 // 都是 nil，这里也只会返回 nil，生命周期改由 hasLiveWindow 判断。
@@ -174,12 +186,7 @@ func (a *app) anyLiveWindow() *mygo.Window {
 			return h.win
 		}
 	}
-	for _, win := range []*mygo.Window{
-		a.notifWin, a.settingsWin, a.aboutWin, a.netLogWin,
-		a.profileWin, a.coinWin, a.composeWin,
-		a.replyWin, a.editWin, a.nodeEditWin, a.searchWin, a.followsWin,
-		a.userCardWin, a.viewerWin,
-	} {
+	for _, win := range a.auxiliaryWindows() {
 		if win != nil {
 			return win
 		}
@@ -199,12 +206,7 @@ func (a *app) hasLiveWindow() bool {
 			return true
 		}
 	}
-	for _, win := range []*mygo.Window{
-		a.notifWin, a.settingsWin, a.aboutWin, a.netLogWin,
-		a.profileWin, a.coinWin, a.composeWin,
-		a.replyWin, a.editWin, a.nodeEditWin, a.searchWin, a.followsWin,
-		a.userCardWin, a.viewerWin,
-	} {
+	for _, win := range a.auxiliaryWindows() {
 		if win != nil {
 			return true
 		}

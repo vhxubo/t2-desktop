@@ -1,7 +1,10 @@
 package main
 
 import (
+	"reflect"
 	"testing"
+
+	"github.com/egoist/mygo"
 )
 
 // 关主窗口不关其它窗口：详情窗口还开着时账号的生命周期继续，账号册里仍
@@ -89,5 +92,58 @@ func TestFinalizeAccountWindowOnlyOnce(t *testing.T) {
 	a.finalizeAccountWindow()
 	if !a.finalized {
 		t.Fatal("应收尾")
+	}
+}
+
+// 每一扇弹窗窗口都能独立撑住账号：主窗口关掉后任意一扇还开着，就不该收尾，
+// 并且能被挑出来当 publish / toast 的出口。反射先核对窗口字段数量，新增弹窗
+// 窗口忘了加进 auxiliaryWindows 或本用例时会在这里失败。
+func TestEveryPopupWindowSurvivesMainWindowClose(t *testing.T) {
+	setters := []struct {
+		name string
+		set  func(*app, *mygo.Window)
+	}{
+		{"notifWin", func(a *app, w *mygo.Window) { a.notifWin = w }},
+		{"settingsWin", func(a *app, w *mygo.Window) { a.settingsWin = w }},
+		{"aboutWin", func(a *app, w *mygo.Window) { a.aboutWin = w }},
+		{"netLogWin", func(a *app, w *mygo.Window) { a.netLogWin = w }},
+		{"profileWin", func(a *app, w *mygo.Window) { a.profileWin = w }},
+		{"coinWin", func(a *app, w *mygo.Window) { a.coinWin = w }},
+		{"composeWin", func(a *app, w *mygo.Window) { a.composeWin = w }},
+		{"replyWin", func(a *app, w *mygo.Window) { a.replyWin = w }},
+		{"editWin", func(a *app, w *mygo.Window) { a.editWin = w }},
+		{"nodeEditWin", func(a *app, w *mygo.Window) { a.nodeEditWin = w }},
+		{"searchWin", func(a *app, w *mygo.Window) { a.searchWin = w }},
+		{"followsWin", func(a *app, w *mygo.Window) { a.followsWin = w }},
+		{"userCardWin", func(a *app, w *mygo.Window) { a.userCardWin = w }},
+		{"viewerWin", func(a *app, w *mygo.Window) { a.viewerWin = w }},
+	}
+	v := reflect.ValueOf(&app{}).Elem()
+	winType := reflect.TypeOf((*mygo.Window)(nil))
+	fieldCount := 0
+	for i := 0; i < v.NumField(); i++ {
+		if v.Type().Field(i).Type == winType && v.Type().Field(i).Name != "win" {
+			fieldCount++
+		}
+	}
+	if fieldCount != len(setters) {
+		t.Fatalf("app 有 %d 个弹窗窗口字段，但用例只覆盖 %d 个", fieldCount, len(setters))
+	}
+
+	a := testApp(t)
+	a.mainClosed = true
+	for _, s := range setters {
+		// 先把所有窗口字段清空，只留当前这一扇。
+		for _, other := range setters {
+			other.set(a, nil)
+		}
+		want := new(mygo.Window)
+		s.set(a, want)
+		if !a.hasLiveWindow() {
+			t.Errorf("%s 还开着，却没算作活窗口", s.name)
+		}
+		if got := a.anyLiveWindow(); got != want {
+			t.Errorf("%s 还开着，顶上来的却是 %p", s.name, got)
+		}
 	}
 }
