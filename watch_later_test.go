@@ -509,7 +509,8 @@ func TestReadingSettingsKeepAfterOpen(t *testing.T) {
 	a.autoLoad = false
 	a.settingsTab = settingsTabReading
 
-	tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
+	// 阅读记录在「阅读与评论」页里排在评论下方，给足高度让开关与按钮可见。
+	tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1000)
 	tt.Frame()
 	for _, want := range []string{"阅读记录", "打开后保留在稍后再看", "打开稍后再看"} {
 		if !tt.HasText(want) {

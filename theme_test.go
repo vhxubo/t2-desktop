@@ -160,7 +160,7 @@ func TestThemeChoiceInSettingsSwitchesAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	a := newApp(dir)
 	a.autoLoad = false
-	a.settingsTab = settingsTabAppearance
+	a.settingsTab = settingsTabGeneral
 	st := ui.NewTesterWith(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight,
 		ui.TesterOptions{Dark: true})
 	st.Frame()

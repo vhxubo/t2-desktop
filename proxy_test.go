@@ -443,6 +443,7 @@ func TestSettingsProxySectionSaves(t *testing.T) {
 		t.Fatal("点击「设置」没有打开设置窗口")
 	}
 
+	a.settingsTab = settingsTabNetwork
 	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
 	st.Frame()
 	for _, want := range []string{"设置", "网络代理", "跟随系统", "手动代理", "直连", "当前生效"} {
@@ -501,10 +502,11 @@ func TestSettingsProxySectionSaves(t *testing.T) {
 // 确认接线，不碰更新插件的主循环）。
 func TestSettingsCheckForUpdatesWired(t *testing.T) {
 	a := testApp(t)
-	a.settingsTab = settingsTabUpdates
+	a.settingsTab = settingsTabGeneral
 	clicked := false
 	a.onUpdateCheck = func() { clicked = true }
-	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
+	// 检查更新在「通用」页底部，无头窗口给足高度，按钮才落在可视区内。
+	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1400)
 	st.Frame()
 	if !st.HasText("检查更新") {
 		t.Fatalf("设置窗口没有检查更新：%q", st.Texts())
@@ -524,40 +526,72 @@ func TestSettingsCheckForUpdatesWired(t *testing.T) {
    设置窗口分栏与代理连通性测试
 ---------------------------------------------------------------- */
 
-// 设置按分类分页：首帧只画「网络代理」这一块，其它分类的按钮不再把页面
-// 撑成一条要滚很久的长列表；切页之后只显示新分类的内容。
+// 设置按大类分页：默认「通用」页放外观、窗口与检查更新；图片相关几块合成
+// 「图片」页，评论与稍后再看合成「阅读与评论」页。切页之后只显示新分类的内容。
 func TestSettingsTabsShowOneSectionAtATime(t *testing.T) {
 	a := testApp(t)
-	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
+	if got := len(settingsTabLabels); got != 6 {
+		t.Fatalf("设置分类数量 = %d，期望 6", got)
+	}
+	// 合并后的页面更长，无头窗口给足高度，底部的按钮与统计也要布局出来。
+	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 2400)
 	st.Frame()
-	for _, want := range []string{"网络代理", "测试连通性", "保存代理设置", "当前生效"} {
+	// 六个分类要能在一行里放下：标签不能挤出窗口，顺序也要和 labels 一致。
+	lastX := float32(0)
+	for _, label := range settingsTabLabels {
+		r, ok := st.Find(label)
+		if !ok {
+			t.Fatalf("设置标签 %q 没有渲染：%q", label, st.Texts())
+		}
+		if r.X+r.W > float32(settingsWindowWidth) {
+			t.Errorf("设置标签 %q 超出窗口宽度：x=%.0f w=%.0f", label, r.X, r.W)
+		}
+		if r.X < lastX {
+			t.Errorf("设置标签 %q 的顺序错乱：x=%.0f < %.0f", label, r.X, lastX)
+		}
+		lastX = r.X
+	}
+	for _, want := range []string{"外观", "关闭主窗口时", "检查更新"} {
 		if !st.HasText(want) {
-			t.Errorf("默认分类缺少 %q：%q", want, st.Texts())
+			t.Errorf("默认「通用」页缺少 %q：%q", want, st.Texts())
 		}
 	}
-	for _, hidden := range []string{"保存图库设置", "清理缓存", "检查更新", "关闭主窗口时"} {
+	for _, hidden := range []string{"保存代理设置", "保存图库设置", "清理缓存", "金币消耗与徽章切换"} {
 		if st.HasText(hidden) {
-			t.Errorf("默认分类不该显示其它页的 %q：%q", hidden, st.Texts())
+			t.Errorf("默认「通用」页不该显示其它分类的 %q：%q", hidden, st.Texts())
 		}
 	}
 
-	if err := st.Click("图库"); err != nil {
+	if err := st.Click("图片"); err != nil {
 		t.Fatal(err)
 	}
 	st.Frame()
-	if a.settingsTab != settingsTabHosts {
-		t.Fatalf("点「图库」后分类 = %d", a.settingsTab)
+	if a.settingsTab != settingsTabImages {
+		t.Fatalf("点「图片」后分类 = %d", a.settingsTab)
 	}
-	if !st.HasText("保存图库设置") || st.HasText("保存代理设置") {
-		t.Errorf("切到图库页后内容不对：%q", st.Texts())
+	for _, want := range []string{"默认不加载图片", "清理缓存", "保存图库设置"} {
+		if !st.HasText(want) {
+			t.Errorf("「图片」页缺少 %q：%q", want, st.Texts())
+		}
+	}
+	if st.HasText("保存代理设置") {
+		t.Errorf("「图片」页不该显示代理内容：%q", st.Texts())
 	}
 
-	if err := st.Click("图片缓存"); err != nil {
+	if err := st.Click("阅读与评论"); err != nil {
 		t.Fatal(err)
 	}
 	st.Frame()
-	if !st.HasText("清理缓存") || st.HasText("保存图库设置") {
-		t.Errorf("切到图片缓存页后内容不对：%q", st.Texts())
+	if a.settingsTab != settingsTabReading {
+		t.Fatalf("点「阅读与评论」后分类 = %d", a.settingsTab)
+	}
+	for _, want := range []string{"金币消耗与徽章切换", "打开后保留在稍后再看"} {
+		if !st.HasText(want) {
+			t.Errorf("「阅读与评论」页缺少 %q：%q", want, st.Texts())
+		}
+	}
+	if st.HasText("保存图库设置") {
+		t.Errorf("「阅读与评论」页不该显示图库内容：%q", st.Texts())
 	}
 }
 
@@ -658,6 +692,7 @@ func TestSettingsProxyCheckButtonReportsResult(t *testing.T) {
 	a := testApp(t)
 	a.proxyMode = proxyManual
 	a.proxyURL = proxySrv.URL
+	a.settingsTab = settingsTabNetwork
 	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
 	st.Frame()
 	if !st.HasText("测试连通性") {

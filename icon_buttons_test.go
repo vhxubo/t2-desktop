@@ -169,9 +169,10 @@ func TestEditorImagePanelCloseIsIconButton(t *testing.T) {
 // 删除自定义图库是废纸篓图标，说明里写清删的是哪一条、之后会怎样。
 func TestImageHostDeleteIsIconButton(t *testing.T) {
 	a := testApp(t)
-	a.settingsTab = settingsTabHosts
+	a.settingsTab = settingsTabImages
 	a.addCustomImageHost()
-	tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
+	// 图库在「图片」页最下方，给足高度让删除按钮落在可视区内。
+	tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 2000)
 	tt.Frame()
 	info := assertIconAction(t, tt, "删除此图库")
 	if !containsString(a.allHostNames(), "我的图库 1") {

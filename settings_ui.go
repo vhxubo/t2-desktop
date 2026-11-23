@@ -18,7 +18,8 @@ import (
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 设置窗口的尺寸：比代理弹窗宽一些，放得下「代理 / 图库 / 缓存 / 更新 / 窗口 / 外观」几页。
+// 设置窗口的尺寸：比代理弹窗宽一些，放得下「通用 / 网络 / 图片 / 阅读与评论 /
+// 通知 / 快捷键」几页。
 const (
 	settingsWindowWidth  = 520
 	settingsWindowHeight = 700
@@ -26,24 +27,19 @@ const (
 	settingsWindowMinH   = 420
 )
 
-// 设置窗口按分类分页：每块内容各占一页，不再堆成一条要滚很久的长页面。
-// 标签固定在内容区上方；每页的草稿都绑在 app 字段上，切页不会丢。原有几页的
-// 序号保持不变，评论页追加在最后，默认打开仍是网络代理。
+// 设置窗口按大类分页：只有一两个配置的小页合并到同一类里，别让它们各占一个
+// 标签。同一页里各块仍用区块标题分开，配置项与持久化都保持原样。标签固定在
+// 内容区上方；每页的草稿都绑在 app 字段上，切页不会丢。默认打开「通用」。
 const (
-	settingsTabProxy = iota
-	settingsTabHosts
-	settingsTabCache
+	settingsTabGeneral = iota
+	settingsTabNetwork
 	settingsTabImages
-	settingsTabUpdates
-	settingsTabWindow
-	settingsTabAppearance
-	settingsTabComment
-	settingsTabNotify
 	settingsTabReading
+	settingsTabNotify
 	settingsTabShortcuts
 )
 
-var settingsTabLabels = []string{"网络代理", "图库", "图片缓存", "图片", "更新", "窗口", "外观", "评论", "通知", "阅读", "快捷键"}
+var settingsTabLabels = []string{"通用", "网络", "图片", "阅读与评论", "通知", "快捷键"}
 
 /* ------------------------------------------------------------------
    设置窗口：全局入口、显示与关闭
@@ -83,7 +79,7 @@ func (a *app) showSettingsWindow() {
 	}
 	a.reloadImageHostSettings()
 	// 重新开窗口时回到第一页；已经开着的窗口只带到前台，保留用户当前所在页。
-	a.settingsTab = settingsTabProxy
+	a.settingsTab = settingsTabGeneral
 	win := mygo.NewWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle("设置"),
 		Width:             settingsWindowWidth,
@@ -208,28 +204,23 @@ func (a *app) settingsWindowView(c *ui.Context) {
 		list := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
 			ui.Column(c).FillWidth().Padding(18, 20).Gap(10).Children(func() {
 				switch a.settingsTab {
-				case settingsTabHosts:
-					a.imageHostsSection(c)
-				case settingsTabCache:
-					a.imageCacheSection(c)
+				case settingsTabNetwork:
+					a.proxySettingsSection(c)
 				case settingsTabImages:
 					a.imageSettingsSection(c)
-				case settingsTabUpdates:
-					a.updateSettingsSection(c)
-				case settingsTabWindow:
-					a.windowSettingsSection(c)
-				case settingsTabAppearance:
-					a.appearanceSettingsSection(c)
-				case settingsTabComment:
+					a.imageCacheSection(c)
+					a.imageHostsSection(c)
+				case settingsTabReading:
 					a.commentSettingsSection(c)
+					a.readingSettingsSection(c)
 				case settingsTabNotify:
 					a.notificationSettingsSection(c)
-				case settingsTabReading:
-					a.readingSettingsSection(c)
 				case settingsTabShortcuts:
 					a.shortcutSettingsSection(c)
 				default:
-					a.proxySettingsSection(c)
+					a.appearanceSettingsSection(c)
+					a.windowSettingsSection(c)
+					a.updateSettingsSection(c)
 				}
 			})
 		})

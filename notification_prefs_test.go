@@ -115,7 +115,7 @@ func TestNotificationSettingsTogglesPersist(t *testing.T) {
 	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
 	st.Frame()
 	if st.HasText("桌面通知") {
-		t.Errorf("默认打开的代理页不该显示通知开关：%q", st.Texts())
+		t.Errorf("默认打开的通用页不该显示通知开关：%q", st.Texts())
 	}
 	if err := st.Click("通知"); err != nil {
 		t.Fatal(err)

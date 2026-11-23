@@ -108,9 +108,9 @@ func TestCommentSettingsTogglesPersist(t *testing.T) {
 	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
 	st.Frame()
 	if st.HasText("金币消耗与徽章切换") {
-		t.Errorf("默认打开的代理页不该显示评论开关：%q", st.Texts())
+		t.Errorf("默认打开的通用页不该显示评论开关：%q", st.Texts())
 	}
-	if err := st.Click("评论"); err != nil {
+	if err := st.Click("阅读与评论"); err != nil {
 		t.Fatal(err)
 	}
 	st.Frame()

@@ -254,7 +254,7 @@ func TestImageCacheCleansExpiredPostImagesOnly(t *testing.T) {
 // 设置窗口的「图片缓存」一块要能看到两类缓存的大小，并且能一键清空。
 func TestSettingsShowsCacheSizeAndClearsIt(t *testing.T) {
 	a := testApp(t)
-	a.settingsTab = settingsTabCache
+	a.settingsTab = settingsTabImages
 	c := a.images
 	postData := strings.Repeat("p", 2048)
 	avatarData := strings.Repeat("a", 1024)
@@ -279,7 +279,8 @@ func TestSettingsShowsCacheSizeAndClearsIt(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
+	// 合并到「图片」页后缓存区块在图片偏好下方，给足高度让按钮落在可视区内。
+	tt := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1400)
 	tt.Frame()
 	for _, want := range []string{"图片缓存", "头像与表情", "帖子图片", "合计", "清理缓存", "重新统计"} {
 		if !tt.HasText(want) {
