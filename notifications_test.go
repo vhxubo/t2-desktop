@@ -558,7 +558,9 @@ func TestMarkReadRemovesFromUnreadFilter(t *testing.T) {
 func TestMarkSelectedNotificationsRead(t *testing.T) {
 	srv, calls := readRecorder(t)
 	a, st := notificationApp(t, srv)
-	st.selected = map[string]bool{"n3": true, "n1": true, "n2": true} // n2 已读，应被忽略
+	for _, id := range []string{"n3", "n1", "n2"} { // n2 已读，应被忽略
+		setNotificationSelected(st, id, true)
+	}
 
 	if n := notificationSelectionCount(st); n != 2 {
 		t.Fatalf("可提交的勾选数 = %d，期望 2", n)
@@ -823,7 +825,7 @@ func TestNotificationCheckboxInsideCard(t *testing.T) {
 	if a.pageName != "list" {
 		t.Errorf("点勾选框不该打开消息：%q", a.pageName)
 	}
-	if st.selected["n1"] {
+	if st.notificationChecked("n1") {
 		t.Error("点一下应当取消这条消息的勾选")
 	}
 }
@@ -957,7 +959,7 @@ func notificationWindowApp(t *testing.T) *app {
 		}},
 		{Key: "n2", Notif: &notification{ID: "n2", Type: "reply", IsRead: true}},
 	}
-	st.selected = map[string]bool{"n1": true}
+	setNotificationSelected(st, "n1", true)
 	return a
 }
 

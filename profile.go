@@ -447,7 +447,7 @@ func (a *app) applyProfileTopicColl(collection string) {
 	st.authWait = false
 	st.loaded = false
 	st.items = nil
-	st.selected = nil
+	st.clearNotificationSelected()
 	st.loading = false
 	st.noMore = false
 	st.err = ""
