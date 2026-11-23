@@ -54,7 +54,7 @@ func TestSecondaryPagesUseFeedColumnWidth(t *testing.T) {
 		t.Errorf("浏览历史行左缘 %.0f，首页 %.0f，相差 %.0f", lref.X, href.X, d)
 	}
 
-	// 评分榜：筛选条外层吃掉 feedInset，卡片内边距 14；Segmented 自己的
+	// 评分榜：筛选条外层吃掉 feedInset，内容内边距 14；Segmented 自己的
 	// 按钮内边距还会再缩进一截，所以只要求落在首页列表左缘附近（相差
 	// 不超过 20），关键是别贴着侧边栏铺满整屏。
 	sc := testApp(t)

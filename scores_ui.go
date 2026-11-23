@@ -11,7 +11,6 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"github.com/lobehub/lobe-mygo/pkg/field"
-	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
@@ -22,9 +21,11 @@ import (
 // scores.go。它和首页、草稿箱一样内嵌在主窗口右侧内容区，共用标题栏与
 // 侧边栏，不新开 mygo 窗口。
 //
-// 界面走 Lobe UI：颜色取 TokensOf(c)，标题、筛选、卡片、空状态与按钮分别由
-// display / field / action / feedback / layout 提供，和主窗口其它页面保持
-// 同一套观感。版式：页头 → 排序与分类筛选 → 评分列表。每行是「对象名 +
+// 界面走 Lobe UI：颜色取 TokensOf(c)，标题、筛选、列表行、空状态与按钮分别由
+// display / field / action / feedback 提供，和主窗口其它页面保持
+// 同一套观感。评分行复用 feedRowSurface 的平面表面（静止透明、悬停浅色），
+// 不画圆角卡片与边框，和首页、草稿箱、稍后再看同一套行视觉。
+// 版式：页头 → 排序与分类筛选 → 评分列表。每行是「对象名 +
 // 分数 + 分类 + 短评 + 评分人」，点一下打开对应帖子。
 
 // scoresState 是评分榜页面的全部界面状态。只在 UI 线程读写；请求结果经
@@ -412,37 +413,34 @@ func scoreCategorySelect(c *ui.Context, selected *string, active *int, options [
 // st.sort，分类下拉绑定 st.category，改动由 view 里的 lastSort / lastCategory
 // 比对接住并重拉第一页。分类字典单独读，失败不影响评分列表。
 func (a *app) scoresFilters(c *ui.Context, st *scoresState) {
-	// 筛选卡片和首页正文栏同宽：外层吃掉 feedInset，卡片自己只留 Lobe 的
-	// 内边距，宽窗口里不会横贯整屏，最小窗口下仍按 24 DIP 收边。
+	// 筛选条和首页正文栏同宽：外层吃掉 feedInset，内层只留 padding。这里不套
+	// Block 卡片——静止透明、不描边、不画圆角，和首页页头的筛选条一样靠留白
+	// 分层；宽窗口里不会横贯整屏，最小窗口下仍按 24 DIP 收边。
 	ui.Row(c).FillWidth().Padding(0, feedInset(c)).Children(func() {
-		card := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
-			FillWidth().Padding(10, 14)
-		card.Children(func() {
-			ui.Column(c).FillWidth().Gap(8).Children(func() {
-				// 主窗口缩到最小宽度时，排序、标签、下拉与刷新挤在一行会把「评分分类」
-				// 截成「评…」。标签与下拉都不参与压缩，下拉宽度也按最小窗口留够余量，
-				// 让四个控件在主窗口最小宽度下仍能完整排在同一行。
-				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-					action.Segmented(c, &st.sort, scoreSortLabels, action.SegmentedProps{
-						Size: lobetheme.Small,
-					})
-					display.Text(c, "评分分类", display.TextProps{
-						Type: display.TextSecondary, FontSize: 11, Rows: 1,
-					}).Shrink(0)
-					scoreCategorySelect(c, &st.category, &st.categoryActive, scoreCategoryOptions(st)).
-						Label("评分分类").Tooltip("按分类筛选评分").Width(150).Shrink(0)
-					ui.Spacer(c).Grow(1)
-					a.smallRefreshButton(c, st.loading, a.reloadScores)
+		ui.Column(c).FillWidth().Padding(10, 14).Gap(8).Children(func() {
+			// 主窗口缩到最小宽度时，排序、标签、下拉与刷新挤在一行会把「评分分类」
+			// 截成「评…」。标签与下拉都不参与压缩，下拉宽度也按最小窗口留够余量，
+			// 让四个控件在主窗口最小宽度下仍能完整排在同一行。
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				action.Segmented(c, &st.sort, scoreSortLabels, action.SegmentedProps{
+					Size: lobetheme.Small,
 				})
-				if st.categoriesErr != "" {
-					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-						display.Text(c, "分类暂时不可用："+st.categoriesErr, display.TextProps{
-							Type: display.TextDanger, FontSize: 11, Rows: 2,
-						}).Grow(1).MinWidth(0)
-						a.smallAction(c, "重试", st.categoriesLoading, a.loadScoreCategories)
-					})
-				}
+				display.Text(c, "评分分类", display.TextProps{
+					Type: display.TextSecondary, FontSize: 11, Rows: 1,
+				}).Shrink(0)
+				scoreCategorySelect(c, &st.category, &st.categoryActive, scoreCategoryOptions(st)).
+					Label("评分分类").Tooltip("按分类筛选评分").Width(150).Shrink(0)
+				ui.Spacer(c).Grow(1)
+				a.smallRefreshButton(c, st.loading, a.reloadScores)
 			})
+			if st.categoriesErr != "" {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+					display.Text(c, "分类暂时不可用："+st.categoriesErr, display.TextProps{
+						Type: display.TextDanger, FontSize: 11, Rows: 2,
+					}).Grow(1).MinWidth(0)
+					a.smallAction(c, "重试", st.categoriesLoading, a.loadScoreCategories)
+				})
+			}
 		})
 	})
 }
@@ -506,12 +504,12 @@ func (a *app) scoresBody(c *ui.Context, st *scoresState) {
 	}
 }
 
-// scoreRow 是可点的 Lobe 描边卡片：左侧分值块，右侧对象名、分类、短评与评分人。
+// scoreRow 是可点的 Lobe 平面列表行：复用 feedRowSurface，和首页、草稿箱、
+// 稍后再看共用同一套表面（静止透明、悬停浅色），不画圆角卡片与边框。
+// 左侧分值块，右侧对象名、分类、短评与评分人。
 // 无障碍名沿用「评分 <对象名>」，点击仍走 openScorePost 打开对应帖子。
 func (a *app) scoreRow(c *ui.Context, e scoreEntry) {
-	row := layout.Block(c, layout.BlockProps{
-		Variant: layout.BlockOutlined, Clickable: true,
-	}).FillWidth().Padding(10, 12)
+	row := feedRowSurface(c).Padding(10, 12)
 	row.Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Start).Children(func() {
 			a.scoreBadge(c, e)
@@ -564,8 +562,9 @@ func (a *app) scoreBadge(c *ui.Context, e scoreEntry) {
 			ink = tk.Warning
 		}
 	}
-	ui.Box(c).Width(46).Shrink(0).Padding(6, 4).Radius(tk.BorderRadius).
-		Background(tk.FillTertiary).Border(1, tk.BorderSecondary).Center().Children(func() {
+	// 平面分值块：不画圆角与边框，和列表行的平面视觉一致。
+	ui.Box(c).Width(46).Shrink(0).Padding(6, 4).
+		Background(tk.FillTertiary).Center().Children(func() {
 		ui.Column(c).Gap(0).AlignItems(ui.Center).Children(func() {
 			display.Text(c, scoreText(e), display.TextProps{
 				Strong: true, FontSize: 16, Rows: 1,
