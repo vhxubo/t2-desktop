@@ -587,11 +587,13 @@ func (a *app) netQuery(c *ui.Context, raw string) {
 
 // netCodeBlock 画一段等宽感的正文块：JSON 已在传入前格式化过，用 Lobe 的
 // Block 给出浅底面板，正文用 display.Text 的等宽样式。面板不画圆角，和
-// 其它弹窗区块同一套平面视觉。
+// 其它弹窗区块同一套平面视觉。块Selectable：拖选带高亮，Cmd/Ctrl+C、右键
+// 菜单「复制 / 全选」都能拷走选中的那段——排查响应体时常常只需要其中
+// 几个字段，一键复制整块的按钮覆盖不了这种用法。请求体与响应体共用本块。
 func (a *app) netCodeBlock(c *ui.Context, text string) {
 	t := c.Theme()
 	block := layout.Block(c, layout.BlockProps{Variant: layout.BlockFilled}).
-		FillWidth().Padding(8, 10).Radius(0).TextColor(t.Text)
+		FillWidth().Padding(8, 10).Radius(0).TextColor(t.Text).Selectable()
 	block.Children(func() {
 		display.Text(c, text, display.TextProps{FontSize: 11, Rows: 0, Code: true})
 	})

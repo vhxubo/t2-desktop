@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -382,5 +383,44 @@ func TestNetCurlCommandEscapesSingleQuotes(t *testing.T) {
 	}
 	if strings.HasSuffix(cmd, "\\") {
 		t.Errorf("命令不应以续行符结尾：%q", cmd)
+	}
+}
+
+// 响应体代码块要能像普通文本一样选中：拖选画出高亮，Cmd/Ctrl+C 拷走选中
+// 的片段，全选 + Cmd/Ctrl+C 得到整块。排查响应体时常常只需要其中几个
+// 字段，一键复制整块的按钮覆盖不了这种用法。
+func TestNetLogBodySelectable(t *testing.T) {
+	clearProxyEnv(t)
+	a := testApp(t)
+	body := netPrettyJSON(`{"c":0,"m":"ok","d":{"total":1},"t":1}`)
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.netCodeBlock(c, body)
+	}, 480, 240)
+	tt.Frame()
+
+	r, ok := tt.Find(body)
+	if !ok {
+		t.Fatalf("找不到响应体文本：%q", tt.Texts())
+	}
+
+	// 从首行拖到中间：选中区域必须画出高亮（拖选前后的画面不同）。
+	before := append([]byte(nil), tt.Image().Pix...)
+	tt.Press(r.X+2, r.Y+2)
+	tt.Move(r.X+r.W/2, r.Y+r.H/2)
+	tt.Release(r.X+r.W/2, r.Y+r.H/2)
+	tt.Frame()
+	if bytes.Equal(before, tt.Image().Pix) {
+		t.Error("拖选后没有画出选中高亮")
+	}
+
+	// Cmd/Ctrl+C 复制当前选中的片段；全选再复制应得到整块。
+	tt.Key(ui.Cmd, ui.KeyC)
+	if got := tt.Clipboard(); got == "" {
+		t.Error("Cmd/Ctrl+C 没有复制选中的文本")
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Key(ui.Cmd, ui.KeyC)
+	if got := tt.Clipboard(); got != body {
+		t.Errorf("全选复制应得到整块响应体：%q", got)
 	}
 }
