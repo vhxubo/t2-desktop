@@ -15,7 +15,7 @@ func (a *app) feedNodeFilter(c *ui.Context, st *tabState) {
 		// 只有浮层打开时才懒加载节点表：普通首屏不额外发请求。
 		a.ensureNodeCatalog()
 	}
-	ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(6).Children(func() {
+	ui.Row(c).AlignItems(ui.Center).Gap(6).Shrink(0).Children(func() {
 		nodeCascader(c, a.nodeCatalogNodes(), nodeCascadeProps{
 			Label:             "节点筛选",
 			Value:             &st.homeFilterNode,

@@ -215,7 +215,13 @@ func (a *app) showNodeShortcut(ref nodeRef) {
 
 // activeNodeShortcutKey 是当前筛选命中的快捷入口 key，没命中时为空。
 // 展开列表与折叠图标轨共用这一份：节点筛选一清，自定义节点高亮同时熄灭。
+// 切到别的浏览页或草稿 / 稍后再看 / 评分榜页时，首页虽然还挂着筛选，高亮也
+// 要跟着熄灭——它只代表「当前正在看这个节点的首页」，不能留在侧边栏上冒充
+// 当前选中项。筛选本身不在这里清，点主页时由 selectTab 统一清掉。
 func (a *app) activeNodeShortcutKey() string {
+	if a.tab != 0 || a.pageName != "list" {
+		return ""
+	}
 	for _, r := range a.nodeShortcuts {
 		if shortcutFilter(r).sameAs(a.homeFilter()) {
 			return nodeShortcutKeyTag + r.key()
@@ -224,7 +230,9 @@ func (a *app) activeNodeShortcutKey() string {
 	return ""
 }
 
-// homeFilter 是首页当前筛选；没进首页时当作「全部」。
+// homeFilter 是首页 tab 当前挂着的筛选。这里不能按当前页面截断：selectTab
+// 点主页时要读它决定是否清筛选，而那时 a.tab / a.pageName 可能还停在别的页。
+// 是否亮自定义节点由 activeNodeShortcutKey 另行判断当前是否停在首页列表。
 func (a *app) homeFilter() nodeFilter {
 	if len(a.tabs) > 0 && a.tabs[0] != nil {
 		return a.tabs[0].homeFilterNode

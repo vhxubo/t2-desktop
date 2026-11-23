@@ -313,6 +313,9 @@ func TestNodeTagInsideRowDoesNotOpenPost(t *testing.T) {
 func TestFilterChipOpensCascade(t *testing.T) {
 	e := newNodeFeedEnv(t)
 	a := nodeFeedApp(t, e)
+	// 级联里的「职场」与列表行节点 Tag 同名，点右侧筛选 chip 后浮层不再盖住
+	// 行 Tag，去掉列表行免得 tt.Click 命中歧义。
+	a.tabs[0].items = nil
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 	if err := tt.Click("全部节点"); err != nil {
@@ -496,6 +499,76 @@ func TestHomeIconClickResetsNodeFilter(t *testing.T) {
 				t.Errorf("自定义节点高亮没熄灭：%q", got)
 			}
 		})
+	}
+}
+
+// 选中自定义节点后点侧边栏其它入口：节点高亮要跟着熄灭。筛选本身留到下次
+// 点主页时再清（见 TestHomeIconClickResetsNodeFilter），这里只管高亮状态。
+// 展开列表与折叠图标轨两条路径都要覆盖。
+func TestSidebarNavClearsCustomNodeHighlight(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		expanded bool
+		click    string
+	}{
+		{"折叠轨-稍后再看", false, "稍后再看"},
+		{"展开列表-稍后再看", true, "稍后再看"},
+		{"展开列表-评分榜", true, "评分榜"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newNodeFeedEnv(t)
+			a := nodeFeedApp(t, e)
+			work := nodeRef{ID: "n-work", Slug: "work", Name: "职场", ParentSlug: "life", ParentName: "生活"}
+			a.nodeShortcuts = []nodeRef{work}
+			a.tabs[0].homeFilterNode = nodeFilterOf(work)
+			a.navExpanded = tc.expanded
+			tt := ui.NewTester(a.view, 1100, 760)
+			tt.Frame()
+			if a.activeNodeShortcutKey() == "" {
+				t.Fatal("前置条件：节点快捷入口应处于高亮")
+			}
+			if err := tt.Click(tc.click); err != nil {
+				t.Fatal(err)
+			}
+			tt.Frame()
+			if got := a.activeNodeShortcutKey(); got != "" {
+				t.Errorf("点 %q 后自定义节点还高亮：%q", tc.click, got)
+			}
+			if a.navSel == tabID(0) || a.pageName == "list" {
+				t.Errorf("没离开首页：page=%q nav=%q", a.pageName, a.navSel)
+			}
+		})
+	}
+}
+
+// 切到别的浏览页同样熄灭自定义节点高亮；再点主页时按原有语义清掉筛选。
+func TestSwitchTabClearsCustomNodeHighlight(t *testing.T) {
+	e := newNodeFeedEnv(t)
+	a := nodeFeedApp(t, e)
+	work := nodeRef{ID: "n-work", Slug: "work", Name: "职场", ParentSlug: "life", ParentName: "生活"}
+	a.nodeShortcuts = []nodeRef{work}
+	a.tabs[0].homeFilterNode = nodeFilterOf(work)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if a.activeNodeShortcutKey() == "" {
+		t.Fatal("前置条件：节点快捷入口应处于高亮")
+	}
+	a.selectTab(1)
+	tt.Frame()
+	if a.tab != 1 {
+		t.Fatalf("没切到别的浏览页：tab=%d", a.tab)
+	}
+	if got := a.activeNodeShortcutKey(); got != "" {
+		t.Errorf("切到别的浏览页后自定义节点还高亮：%q", got)
+	}
+	// 高亮虽熄，筛选还挂在首页；点主页才是清筛选的入口。
+	if a.tabs[0].homeFilterNode.isAll() {
+		t.Fatal("切走时不该清掉筛选")
+	}
+	a.selectTab(0)
+	tt.Frame()
+	if !a.tabs[0].homeFilterNode.isAll() || a.activeNodeShortcutKey() != "" {
+		t.Errorf("点主页没清回默认筛选：%+v", a.tabs[0].homeFilterNode)
 	}
 }
 

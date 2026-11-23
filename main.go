@@ -2257,26 +2257,26 @@ func feedInset(c *ui.Context) float32 {
 	return inset
 }
 
-// feedHeader 是正文栏顶部的页头：左边是页面名的大标题，右端是条目数。
-// 整块靠留白、字号差与字距分层，不画底纹和方框；配色走 Lobe token，
-// 让页头与下方列表行的层次一致。
+// feedHeader 是正文栏顶部的页头：左边是页面名的大标题，右端依次是
+// 节点筛选 chip 与条目数。整块靠留白、字号差与字距分层，不画底纹和方框；
+// 配色走 Lobe token，让页头与下方列表行的层次一致。
 func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
 	tk := lobetheme.TokensOf(c)
 	ui.Column(c).FillWidth().Shrink(0).
 		Padding(24, feedInset(c)+16, 14, feedInset(c)+16).Children(func() {
-		ui.Row(c).FillWidth().AlignItems(ui.End).Gap(16).Children(func() {
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(24).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 				ui.Text(c, spec.Label).FontSize(tk.FontSizeHeading4).FontWeight(600).
 					LetterSpacing(-0.4).TextColor(tk.TextHeading).SingleLine()
 			})
+			if spec.FilterByNode {
+				a.feedNodeFilter(c, st)
+			}
 			if count := feedCountLabel(st); count != "" {
 				ui.Text(c, count).FontSize(tk.FontSizeSM).Font(sidebarFont).
 					TextColor(tk.TextDescription).SingleLine().Shrink(0)
 			}
 		})
-		if spec.FilterByNode {
-			a.feedNodeFilter(c, st)
-		}
 	})
 }
 
