@@ -7,6 +7,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/display"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 全应用统一的用户标识：昵称旁永远画头像，头像边长按昵称字号换算，
@@ -25,6 +26,10 @@ const userAvatarScale float32 = 1.5
 // userAvatarMinSize 是头像的最小边长：再小的字号也不至于把头像压成看不清
 // 的小点。
 const userAvatarMinSize float32 = 14
+
+// userHoverPadX 是「头像 + 昵称」悬浮块左右常驻的内边距，让圆角底色和阴影
+// 不紧贴文字；只加水平方向，免得撑高详情评论头部那一行固定的高度。
+const userHoverPadX float32 = 6
 
 // userAvatarSize 返回昵称字号对应的头像边长。结果向上取整到整数 DIP：
 // 圆形头像与半透明边缘在 0.5px 尺寸下容易被抗锯齿吃掉一圈，看起来就像
@@ -58,6 +63,10 @@ type userTagSpec struct {
 	// Click 覆盖点击行为。默认点开这个用户的资料卡（见 user_card.go）；
 	// 标题栏的账号区传自己的动作，点它打开「我的」而不是资料卡。
 	Click func()
+	// UserMenu 不为 nil 时给「头像 + 昵称」这一块挂右键菜单。收到的是本次
+	// 构建出的元素，必须当帧使用（菜单要拿它做锚点）；userTag 全应用通用，
+	// 只有详情页的作者与评论头像会传它。
+	UserMenu func(identity ui.Element)
 }
 
 // userTag 画一个带头像与佩戴徽章的用户标识。Color 为零值（透明）时沿用主题
@@ -84,9 +93,26 @@ func (a *app) userTag(c *ui.Context, u userTagSpec) ui.Element {
 	}
 	// 头像与昵称之间保留原来的呼吸感；徽章单独成组，紧贴昵称（2px），
 	// 不给徽章左右留大块空白。
+	tk := lobetheme.TokensOf(c)
 	row := ui.Row(c).Gap(2).AlignItems(ui.Center).Cursor(ui.CursorPointer)
 	row.Children(func() {
-		ui.Row(c).Gap(gap).AlignItems(ui.Center).Children(func() {
+		// 头像 + 昵称是右键菜单的锚点：以前靠「查看 @xx 的资料」tooltip
+		// 提示可点，现在悬浮时铺一层圆角背景加柔和阴影代替，不画描边。
+		// 内边距常驻，悬浮只换底色与阴影，版式不会跟着跳动。
+		identity := ui.Row(c).Gap(gap).AlignItems(ui.Center).
+			Radius(tk.BorderRadiusSM).PaddingX(userHoverPadX)
+		if identity.Hovered() {
+			identity.Background(tk.FillSecondary)
+			// Lobe 的 BoxShadowTertiary 两层阴影，但不走 tk.Elevate：
+			// 它在阴影外还会补一圈 1px 描边，那正是要去掉的边框。
+			alpha1, alpha2 := float32(0.04), float32(0.02)
+			if tk.Dark {
+				alpha1, alpha2 = 0.06, 0.03
+			}
+			identity.Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, alpha1)).
+				Shadow(0, 2, 4, 0, ui.RGBA(0, 0, 0, alpha2))
+		}
+		identity.Children(func() {
 			a.avatarWithPro(c, u.Name, a.avatarBitmap(u.Avatar), avatar, u.Pro)
 			label := u.Label
 			if label == "" {
@@ -101,6 +127,9 @@ func (a *app) userTag(c *ui.Context, u userTagSpec) ui.Element {
 				text.TextColor(u.Color)
 			}
 		})
+		if u.UserMenu != nil {
+			u.UserMenu(identity)
+		}
 		// 徽章跟着昵称，数据来自响应里的 equipped_badges，没拿到就什么都不画。
 		if len(u.Badges) > 0 {
 			ui.Row(c).Gap(2).AlignItems(ui.Center).Children(func() {
@@ -111,7 +140,6 @@ func (a *app) userTag(c *ui.Context, u userTagSpec) ui.Element {
 	click := u.Click
 	if click == nil {
 		click = func() { a.showUserCard(u.Name) }
-		row.Tooltip("查看 @" + u.Name + " 的资料")
 	}
 	row.OnClick(click)
 	return row

@@ -123,6 +123,14 @@ type detailState struct {
 	notifID        string
 	notifCommentID string
 
+	// avatarFollow 按用户 uuid 记头像右键菜单发起的关注状态：正文作者与
+	// 多条评论里的同一个人共用一份，提交中不会被连点重复发起。只在内存，
+	// 关掉详情就丢；状态写回走 submitFollow 的 publish，不碰 UI 元素。
+	avatarFollow map[string]*followState
+	// avatarRelations 按昵称记右键菜单打开时异步取到的用户关系（公开资料里的
+	// is_following）。筛选名单是进程级共享快照，由 ensureContentFilter 统一
+	// 拉取；这里只补资料卡之外的关注状态，失败按 30s 退避。
+	avatarRelations map[string]*avatarRelationState
 	// fav 是标题下方作者行收藏按钮的状态；react 是表态条与选择器的状态
 	// （见 interact.go），vote 是正文末尾投票块的状态（见 vote.go）。三者
 	// 都只在 UI 线程读写，网络结果通过 publish 回来。
@@ -1835,6 +1843,9 @@ func (a *app) topicAuthorLine(c *ui.Context, d *detailState) {
 				a.userTag(c, userTagSpec{
 					Name: p.Author, Avatar: p.Avatar, Size: postAuthorFontSize, Bold: true,
 					Badges: p.Badges, Pro: p.AuthorIsPro,
+					UserMenu: func(identity ui.Element) {
+						a.detailAvatarMenu(c, identity, d, p.Author, p.AuthorID)
+					},
 				})
 			}
 			// 等级用等宽小字弱化，和昵称的强调拉开层次。
@@ -2276,6 +2287,10 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 	tk := lobetheme.TokensOf(c)
 	focused := focusID != "" && r.ID != "" && r.ID == focusID
 	mine := a.isMine(r.Author)
+	// 头像右键菜单要用构建这一帧的详情：内联浏览换层后 a.detail 会变，
+	// 把 d 抓在闭包里，操作才落在看到这条评论的那篇帖子上。
+	d := a.detail
+	name, userID := r.Author, r.AuthorID
 	// 被屏蔽的评论数据不动（楼层号、树形导轨、定位与阅读位置都依赖它），
 	// 只把这一行画成提示。展开态按评论 id 记在 detailState 里，只在内存。
 	if reason, blocked := a.commentBlocked(r.Author, r.Content, r.Deleted); blocked &&
@@ -2347,12 +2362,15 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 			// 评论作者统一由 userTag 渲染：头像跟着 13px 的昵称大小走，
 			// 头部行固定 22 高时头像恰好与昵称齐平。
 			a.userTag(c, userTagSpec{
-				Name:   r.Author,
+				Name:   name,
 				Avatar: r.Avatar,
 				Size:   metaFontSize,
 				Bold:   true,
 				Badges: r.Badges,
 				Pro:    r.AuthorIsPro,
+				UserMenu: func(identity ui.Element) {
+					a.detailAvatarMenu(c, identity, d, name, userID)
+				},
 			})
 			// 楼主的回复紧跟着昵称挂一枚 OP 标签，读长帖时一眼分得清哪几条
 			// 是发帖人自己在下场回话（见 opTag）。
