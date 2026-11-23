@@ -192,10 +192,12 @@ type profileState struct {
 	infoErr     string
 	user        accountProfile
 
-	// 头像：更换 / 重置入口在资料头的气泡里（见 avatar.go）。
+	// 头像：更换 / 重置入口在资料头的气泡里（见 avatar.go）。选好图片先进
+	// 裁剪编辑器，确认后才上传并扣金币（见 avatar_crop.go）。
 	avatarOpen bool
 	avatarBusy bool
 	avatarErr  string
+	avatarCrop avatarCropState
 
 	// 个人简介：正文在单独的 about 端点（见 user_card.go），切到那个标签页
 	// 才拉一次。本人可以编辑，保存一次消耗 500 金币（见 about_edit.go）。

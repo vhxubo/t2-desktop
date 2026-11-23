@@ -25,8 +25,8 @@ import (
 // 都要滚动和分页，塞进主窗口的弹窗里只会互相挤。
 //
 // 整套界面走 Lobe UI：标题栏、资料头与四个标签页统一用 Token 配色和 Lobe
-// 组件（nav.Tabs、display.Avatar、layout.Block 等），与账号面板、设置窗口
-// 是同一套设计语言。文案与动作保持不变，只换观感。
+// 组件（nav.Tabs、display.Avatar、popupSurface / popupRow 等），与账号面板、
+// 设置窗口是同一套设计语言。区块与列表行不画圆角与整圈描边。文案与动作不变。
 //
 // 数据、状态与请求在 profile.go；这里只负责窗口的开关与界面。
 
@@ -433,6 +433,8 @@ func (a *app) profileWindowView(c *ui.Context) {
 	// 合集改名 / 删除、个人简介编辑的对话框：盖在整扇窗口上，画在最后。
 	a.profileCollectionDialogs(c)
 	a.profileAboutEditor(c)
+	// 换头像的裁剪编辑器同样是盖在窗口上的模态框：选好图片后先在这里调整。
+	a.profileAvatarCrop(c)
 }
 
 // profileTitleName 是窗口标题栏上的账号名：优先昵称，其次用户名。
@@ -550,17 +552,14 @@ func profileCountText(known bool, n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// profileStatChip 是一块统计。onClick 非空时整块是可点的 Lobe Block（粉丝 /
-// 关注打开名单），悬停给浅底与强调色描边，免得它看起来和旁边的只读数字一样。
+// profileStatChip 是一块统计。onClick 非空时整块可点（粉丝 / 关注打开名单），
+// 悬停给浅底，不画圆角与描边，靠交互本身和旁边的只读数字区分。
 func profileStatChip(c *ui.Context, label, value string, onClick func()) {
 	tk := lobetheme.TokensOf(c)
-	b := layout.Block(c, layout.BlockProps{
-		Variant:   layout.BlockOutlined,
-		Clickable: onClick != nil,
-	}).Padding(6, 10).Shrink(0)
+	b := popupSurface(c, onClick != nil).Padding(6, 10).Shrink(0)
 	if onClick != nil {
 		if b.Hovered() {
-			b.Background(tk.FillTertiary).Border(1, tk.Primary)
+			b.Background(tk.FillTertiary)
 		}
 		b.Label(label).Tooltip("查看" + label + "名单")
 		b.OnClick(onClick)
@@ -988,11 +987,8 @@ func (a *app) profileMoreReplies(c *ui.Context, ps *profileState, name string) {
 }
 
 func (a *app) profileReplyRow(c *ui.Context, it Item) {
-	// 整行是一张可点的 Lobe Block：描边、圆角与悬停底色都跟随主题 token。
-	row := layout.Block(c, layout.BlockProps{
-		Variant:   layout.BlockOutlined,
-		Clickable: true,
-	}).FillWidth().Padding(10, 12)
+	// 整行是扁平列表行：不画圆角与整圈描边，只留底部分隔线，悬停底色跟随主题。
+	row := popupRow(c, true).FillWidth().Padding(10, 12)
 	row.Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
 			display.Text(c, it.Title, display.TextProps{FontSize: 12, Rows: 2})
