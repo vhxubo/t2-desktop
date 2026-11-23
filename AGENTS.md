@@ -136,6 +136,35 @@ a pure white page.
 - SSE 通知流有自己的 5s→10s→20s→40s→60s 重连退避（`stream.go`）；第三方
   图床与 multipart 上传各有自己的配额规则，不受 2Libra API 闸门影响。
 
+## 媒体预览：图片、视频与按需加载
+
+正文与评论里的媒体统一走 `media.go` 的识别与 `image_viewer.go` 的预览窗口，
+改动前先弄清分工：
+
+- `media.go` 按链接认媒体：图片按扩展名（png / jpg / gif / webp / avif / bmp /
+  svg），视频认 YouTube（watch / shorts / youtu.be / embed）与哔哩哔哩
+  （BV / av / b23.tv 短链）以及直链视频。认不出来的一律按普通链接处理，别
+  凭猜测把页面变成卡片。`standaloneMediaLink` 只认「独占一段的一条链接」，
+  正文中间夹着的链接不能变成嵌入内容。
+- `article_render.go` 从解析树收组（`articlePictures`）：图片、裸图片地址与
+  视频按源文顺序进同一组，点任意一项打开这一组并停在它上面。视频卡片点开
+  预览，预览里点「播放」走 `openExternal` → 系统浏览器；不要为播放另开一套
+  webview 或直连流，那条路既没有 webview 页面也绕开了代理规则。
+- `image_viewer.go` 的预览窗口画图片与视频：gif / apng 由 `animated.go` 认出
+  多帧后用 mygo 的 `ui.VideoPlayer` 逐帧播放，播放器按地址缓存、换图暂停、
+  关窗关闭。动画 WebP 没有纯 Go 解码器，只显示首帧，不要为此引入 cgo 库。
+  2Libra 的 wsrv.nl 图片代理默认把 gif 转成动画 WebP，`fetchImageBytes` 发
+  请求前会用 `image_source.go` 的 `imageRequestURL` 去掉 `output=webp`，让
+  代理按原格式返回；真正的动画 WebP 再由 `webpFirstFrame` 退回首帧。
+- `image_prefs.go` 是进程级的图片偏好（`images.json`）：`lazy` 打开时正文与
+  评论的配图先画占位、点一下才 `prefetchImage`；点过的地址记在 `app.revealedImages`
+  里。头像、行内表情与徽章不受影响，别把整个界面变成灰块。`animate` 关掉时
+  预览只显示动图首帧。两项都在设置窗口「图片」页改，改完 `publish` 让所有
+  账号窗口重建。
+
+新增媒体类型时先补 `media.go` 的识别与对应测试，再让 `articlePictures` 与
+预览舞台同源：收组数量与画面里画出来的项数必须一致。
+
 ## 2Libra 开放 API 文档
 
 应用里的数据全部来自 2Libra 开放 API v1。文档入口：
@@ -183,7 +212,7 @@ a pure white page.
 | oauth.md | `auth.go`、`auth_ui.go`、`auth_gate.go` |
 | api-read.md | `api.go`（列表与解码）、`detail.go`、`profile.go`（`/v1/me` 与公开资料）、`attributes.go`（六维属性）、`badges.go`（我的徽章墙与佩戴状态）、`user_card.go`（资料卡、个人介绍、他人徽章墙）、`notifications.go`（含 `keyword` 搜索）、`follows.go`（关注 / 粉丝名单、关注流未读数）、`collections.go`（公开合集、合集内帖子，浏览界面见 `collection_browse.go`）、`redeem_history.go`（我兑换过的兑换码，界面在金币窗口「兑换」页） |
 | api-write.md | `compose.go`（发帖与短动态，含隐藏内容 `restricted_*`）、`topic_node.go`（不选节点时的 AI 自动分区轮询与「节点寻找中」）、`vote.go`（投票与结果分布）、`detail.go`（发评论）、`edit.go`（编辑帖子 / 编辑评论 / 追加附言，界面在 `edit_window.go`）、`comments_status.go`（关闭 / 开启评论）、`node_edit.go` + `node_edit_window.go`（发帖 10 分钟内改节点）、`follow.go`、`interact.go`、`bookmarks.go`（评论书签）、`collections.go`（新建合集 / 改名 / 删除 / 归入与移出） |
-| api-economy.md | `coins.go`、`coins_window.go`、`pandora.go`（盲盒）、`badges.go`（佩戴切换，scope `write:economy`）、`restricted.go`（受限内容读取、竞拍与解锁）、`bets.go`（竞猜）、`redeem.go`（兑换码领取，界面在详情页正文末尾）、`reward_pool.go`（金币池状态与注资，含评论领到的金币）、`avatar.go`（换头像 / 重置，界面在「我的」资料头）、`about_edit.go`（个人介绍编辑，界面在本人资料卡）、`scores.go` / `scores_window.go`（评分榜）、`image_hosts.go`（上传；官方图床只对 Pro 会员与守护者开放）、`image_hosts_adapters.go`（第三方图床协议：Imgur / Tikolu / MJJ.Today / ImgBB / Skyimg / 111666.best / StarDots，来自「通用图片上传助手」脚本） |
+| api-economy.md | `coins.go`、`coins_window.go`、`pandora.go`（盲盒）、`badges.go`（佩戴切换，scope `write:economy`）、`restricted.go`（受限内容读取、竞拍与解锁）、`bets.go`（竞猜）、`redeem.go`（兑换码领取，界面在详情页正文末尾）、`reward_pool.go`（金币池状态与注资，含评论领到的金币）、`avatar.go`（换头像 / 重置，界面在「我的」资料头）、`about_edit.go`（个人介绍编辑，界面在本人资料卡）、`scores.go` / `scores_ui.go`（评分榜）、`image_hosts.go`（上传；官方图床只对 Pro 会员与守护者开放）、`image_hosts_adapters.go`（第三方图床协议：Imgur / Tikolu / MJJ.Today / ImgBB / Skyimg / 111666.best / StarDots，来自「通用图片上传助手」脚本） |
 | 搜索（`/v1/search`） | `search.go`、`search_ui.go` |
 | 标签（`/v1/tags/hot`） | `tags.go`、`search_ui.go`（搜索空状态的热门标签） |
 | 节点（`/v1/nodes`） | `nodes.go`（请求、父子关系、本地缓存、单节点详情）、`compose.go`（两列选项与选后简介）、`cascader.go`（级联选择组件） |

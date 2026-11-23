@@ -206,7 +206,13 @@ func (a *app) replyIdentityBadge(c *ui.Context, d *detailState, host replySurfac
 	badge := ui.ButtonBase(c).Gap(5).AlignItems(ui.Center).Padding(2, 7).
 		Radius(999).Shrink(0).Background(bg).Border(1, border)
 	badge.Children(func() {
-		avatarView(c, identity.Name, a.avatarBitmap(identity.Avatar), userAvatarSize(10))
+		pro := false
+		if identity.Auth != nil {
+			pro, _ = identity.Auth.proStatus()
+		}
+		a.avatarHost(c, userAvatarSize(10), pro, func() ui.Element {
+			return avatarView(c, identity.Name, a.avatarBitmap(identity.Avatar), userAvatarSize(10))
+		})
 		text := "当前账号"
 		if identity.Name != "" {
 			text += " @" + identity.Name
@@ -268,6 +274,7 @@ type replyIdentityOption struct {
 	Avatar     string
 	Current    bool
 	NeedsLogin bool
+	IsPro      bool
 }
 
 // replyIdentityPanel 是身份弹窗里的内容：当前账号、本机其他账号，以及「只对
@@ -279,6 +286,7 @@ func (a *app) replyIdentityPanel(c *ui.Context, d *detailState, host replySurfac
 		current := replyIdentityOption{Current: true, Name: a.currentReplyName()}
 		if a.auth != nil {
 			current.Avatar = a.auth.avatarURL()
+			current.IsPro, _ = a.auth.proStatus()
 		}
 		a.replyIdentityRow(c, d, host, current)
 		if a.book != nil {
@@ -291,6 +299,7 @@ func (a *app) replyIdentityPanel(c *ui.Context, d *detailState, host replySurfac
 					Name:       acc.Name,
 					Avatar:     acc.Avatar,
 					NeedsLogin: acc.NeedsLogin,
+					IsPro:      acc.IsPro,
 				})
 			}
 		}
@@ -319,7 +328,9 @@ func (a *app) replyIdentityRow(c *ui.Context, d *detailState, host replySurface,
 		row.Background(t.SurfaceHover)
 	}
 	row.Children(func() {
-		avatarView(c, opt.Name, a.avatarBitmap(opt.Avatar), 22)
+		a.avatarHost(c, 22, opt.IsPro, func() ui.Element {
+			return avatarView(c, opt.Name, a.avatarBitmap(opt.Avatar), 22)
+		})
 		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 			text := "@" + opt.Name
 			if opt.Current {

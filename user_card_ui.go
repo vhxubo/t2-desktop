@@ -248,9 +248,9 @@ func (a *app) userCardTitleBar(c *ui.Context) {
 	})
 }
 
-// userCardHeader 是资料头：头像、昵称、等级 / PRO / 徽章、身份信息与关注
-// 按钮。关注按钮与身份信息同一行，不再单独占一行；资料头是整张卡里唯一
-// 需要突出的地方，其余区块都贴着它往下排。
+// userCardHeader 是资料头：头像（Pro 用户右下角带官网图标）、昵称、等级 /
+// 徽章、身份信息与关注按钮。关注按钮与身份信息同一行，不再单独占一行；
+// 资料头是整张卡里唯一需要突出的地方，其余区块都贴着它往下排。
 func (a *app) userCardHeader(c *ui.Context, cs *userCardState) {
 	u := cs.user
 	ui.Row(c).FillWidth().Padding(12, 16).Gap(14).AlignItems(ui.Center).Children(func() {

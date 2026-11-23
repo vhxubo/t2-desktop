@@ -113,7 +113,10 @@ func (a *app) accountBadge(c *ui.Context) ui.Element {
 		Border(1, t.Accent.Mix(t.Background, 0.55)).
 		Cursor(ui.CursorPointer)
 	badge.Children(func() {
-		avatarView(c, name, a.avatarBitmap(a.auth.avatarURL()), userAvatarSize(10))
+		pro, _ := a.auth.proStatus()
+		a.avatarHost(c, userAvatarSize(10), pro, func() ui.Element {
+			return avatarView(c, name, a.avatarBitmap(a.auth.avatarURL()), userAvatarSize(10))
+		})
 		text := "当前账号"
 		if name != "" {
 			text = "当前账号 @" + name

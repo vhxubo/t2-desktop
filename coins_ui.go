@@ -674,6 +674,7 @@ func (a *app) coinTransactionRow(c *ui.Context, tx coinTransaction, today bool) 
 								Size:   12,
 								Color:  tk.TextSecondary,
 								Badges: tx.FromBadges,
+								Pro:    tx.FromIsPro,
 							})
 							if after != "" {
 								display.Text(c, after, display.TextProps{

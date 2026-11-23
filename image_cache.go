@@ -832,6 +832,15 @@ func decodeImageData(raw string, cat imageCategory, data []byte) (ui.ImageSource
 func decodeBoundedImage(data []byte, maxSide int) (ui.ImageSource, error) {
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
+		// 动画 WebP 不在 x/image/webp 的支持范围里（ANIM 容器直接报 invalid
+		// format）。退回首帧，至少能显示一张静态图，而不是整张图加载失败。
+		if frame := webpFirstFrame(data); frame != nil {
+			if still, _, ferr := image.Decode(bytes.NewReader(frame)); ferr == nil {
+				img, err = still, nil
+			}
+		}
+	}
+	if err != nil || img == nil {
 		return ui.DecodeImage(data)
 	}
 	if maxSide > 0 {

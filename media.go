@@ -91,11 +91,15 @@ func parseMediaRef(raw string) (mediaRef, bool) {
 	return mediaRef{}, false
 }
 
-// isImageLink 报告一条链接是不是图片：只看路径的扩展名，查询串与锚点不参与。
+// isImageLink 报告一条链接是不是图片：先看是不是已知图片代理并指向一张图，
+// 再看路径的扩展名，查询串与锚点不参与。
 func isImageLink(raw string) bool {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return false
+	}
+	if imageProxyTarget(u) != "" {
+		return true
 	}
 	return imageExts[strings.ToLower(path.Ext(u.Path))]
 }
@@ -217,36 +221,45 @@ func (r mediaRef) providerLabel() string {
 	return "视频"
 }
 
-// title 是这条媒体的说明文字：视频给出「来源 · 编号」，图片取地址最后一段，
-// 取不到就叫「图片」。它同时是占位与读屏用的名字。
+// title 是这条媒体的说明文字：站外视频给出「来源 · 编号」，直链视频与图片
+// 取地址最后一段，取不到就叫「图片」。它同时是占位、卡片与读屏用的名字。
 func (r mediaRef) title() string {
-	if r.Kind == mediaVideo {
+	if r.Kind == mediaVideo && r.Provider != videoDirect {
 		if r.ID != "" {
 			return r.providerLabel() + " · " + r.ID
 		}
 		return r.providerLabel() + "视频"
 	}
-	return imageNameFromURL(r.URL)
+	return mediaNameFromURL(r.URL)
 }
 
-// imageNameFromURL 从图片地址里取一个好认的名字，取不到就叫「图片」。
-func imageNameFromURL(raw string) string {
-	if u, err := url.Parse(strings.TrimSpace(raw)); err == nil {
-		if name := strings.TrimSpace(path.Base(u.Path)); name != "" && name != "." && name != "/" {
-			return name
+// mediaNameFromURL 从地址最后一段取一个好认的名字，取不到就叫「图片」。
+// 图片代理地址取它真正指向的那张图的名字。
+func mediaNameFromURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "图片"
+	}
+	if target := imageProxyTarget(u); target != "" {
+		if inner, err := url.Parse(target); err == nil {
+			u = inner
 		}
+	}
+	if name := strings.TrimSpace(path.Base(u.Path)); name != "" && name != "." && name != "/" {
+		return name
 	}
 	return "图片"
 }
 
 // standaloneMediaLink 认出一段「整段只有一条链接或一条裸地址」的段落，并返回
-// 它指向的媒体。Markdown 图片语法（![]()）走解析树的 Image 节点，不在这里。
+// 它指向的媒体与链接文字（裸地址时为空串）。Markdown 图片语法（![]()）走
+// 解析树的 Image 节点，不在这里。
 //
 // 只认顶层内联、且段里没有别的文字：正文中间夹着的链接仍然是普通链接，
 // 不能因为指向视频就把整段变成卡片。强调 / 行内代码 / 图片一律不认，交给
 // 原来的渲染路径。
-func standaloneMediaLink(in []parser.Inline) (mediaRef, bool) {
-	var text strings.Builder
+func standaloneMediaLink(in []parser.Inline) (mediaRef, string, bool) {
+	var text, label strings.Builder
 	dest := ""
 	links := 0
 	for k := 0; k < len(in); k = in[k].Next {
@@ -261,20 +274,31 @@ func standaloneMediaLink(in []parser.Inline) (mediaRef, bool) {
 			dest = strings.TrimSpace(n.Dest)
 			// 链接文字里还有强调或图片时不是「一条链接独占一段」。
 			for j := k + 1; j < n.Next; j++ {
-				if inner := &in[j]; inner.Kind != parser.Text && inner.Kind != parser.Mention {
-					return mediaRef{}, false
+				inner := &in[j]
+				if inner.Kind != parser.Text && inner.Kind != parser.Mention {
+					return mediaRef{}, "", false
 				}
+				label.WriteString(inner.Text)
 			}
 		default:
-			return mediaRef{}, false
+			return mediaRef{}, "", false
 		}
 	}
 	body := strings.TrimSpace(text.String())
+	alt := strings.TrimSpace(label.String())
+	if alt == dest {
+		// Markdown 自动链接的文字就是地址本身，不是人写的说明。
+		alt = ""
+	}
 	switch {
 	case links == 1 && (body == "" || body == dest):
-		return parseMediaRef(dest)
+		if ref, ok := parseMediaRef(dest); ok {
+			return ref, alt, true
+		}
 	case links == 0 && body != "" && !strings.ContainsAny(body, " \n\t"):
-		return parseMediaRef(body)
+		if ref, ok := parseMediaRef(body); ok {
+			return ref, "", true
+		}
 	}
-	return mediaRef{}, false
+	return mediaRef{}, "", false
 }

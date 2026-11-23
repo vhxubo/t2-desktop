@@ -64,11 +64,16 @@ const (
 	imageViewerZoomOut  = "缩小"
 	imageViewerActual   = "实际大小"
 	imageViewerSave     = "另存为"
+	imageViewerPlay     = "播放"
+	imageViewerOpen     = "在浏览器中播放"
 	imageViewerMinimize = "最小化"
 	imageViewerClose    = "关闭预览"
-	imageViewerLabel    = "图片预览"
+	imageViewerLabel    = "媒体预览"
 	imageViewerSaving   = "正在保存…"
 	imageViewerEmpty    = "图片还没加载好"
+	// imageViewerVideoHint 是视频那一项的底栏说明：正文与预览里都不内嵌
+	// 播放器，播放交给系统浏览器（见 playVideo）。
+	imageViewerVideoHint = "回车或点「播放」，在浏览器里打开这个视频"
 )
 
 // viewerNoticeSeconds 是另存为结果说明在窗口底部的停留时长，测试可以调短。
@@ -82,10 +87,21 @@ var viewerNoteInterval = 2 * time.Second
 // 撤掉（见 image_viewer_test.go）。
 var nowTime = time.Now
 
-// imageViewerGroup 是窗口正在看的那组图：按源文顺序排列的配图。正文的一段、
-// 附言、某条评论各是一组，组内翻页，组间互不影响。
+// imageViewerGroup 是窗口正在看的那组媒体：按源文顺序排列的配图与视频。
+// 正文的一段、附言、某条评论各是一组，组内翻页，组间互不影响。
 type imageViewerGroup struct {
 	Items []articlePicture
+}
+
+// mixed 报告这组里有没有视频：只有视频与图片混在一起时才用「项」计数，
+// 整组都是图片仍按「张」说。
+func (g imageViewerGroup) mixed() bool {
+	for _, it := range g.Items {
+		if it.Kind == mediaVideo {
+			return true
+		}
+	}
+	return false
 }
 
 // same 报告两组是不是同样几张图：同一处再点一次不必重置缩放。
@@ -148,6 +164,11 @@ type imageViewer struct {
 	// keys 是快捷键层（见 viewerKeyLayer）的身份：窗口每帧重建，靠它把键盘
 	// 焦点稳定地留在窗口里，不落回页面的正文。
 	keys ui.Handle
+	// players 是动图在预览里的播放器，按图片地址各一份：gif / apng 在舞台上
+	// 按「动图自动播放」的设置播放，换图时暂停，关窗时关闭（见 viewerPlayer）。
+	// 播放器解出来的像素尺寸记在 playerSizes 里，第一帧到达之前先按它排版。
+	players     map[string]*ui.VideoPlayer
+	playerSizes map[string][2]float32
 }
 
 /* ------------------------------------------------------------------
@@ -268,6 +289,7 @@ func (a *app) openImage(group imageViewerGroup, key string) {
 	v.dragging, v.imagePress = false, false
 	v.clearNote()
 	v.want = nil
+	v.pausePlayers()
 	a.publish(a.showViewerWindow)
 }
 
@@ -310,6 +332,7 @@ func (v *imageViewer) step(delta int) {
 	v.panX, v.panY = 0, 0
 	v.dragging, v.imagePress = false, false
 	v.clearNote()
+	v.pausePlayers()
 }
 
 // current 返回正在看的那张图。
@@ -326,7 +349,8 @@ func (v *imageViewer) canStep(delta int) bool {
 	return next >= 0 && next < len(v.group.Items)
 }
 
-// close 关掉预览状态：缩放、平移、结果说明、菜单与待打开的图都清掉。
+// close 关掉预览状态：缩放、平移、结果说明、菜单与待打开的图都清掉，动图的
+// 播放器一并关闭——播放器在后台持有解码好的帧，窗口关掉之后不该留着。
 func (v *imageViewer) close() {
 	v.open = false
 	v.zoom = 0
@@ -335,6 +359,28 @@ func (v *imageViewer) close() {
 	v.clearNote()
 	v.want = nil
 	v.menuOpen = false
+	v.closePlayers()
+}
+
+// pausePlayers 暂停所有动图播放器：换图、翻页与重开时调用，舞台上只该有当前
+// 这一张在动。记着 nil 的条目是「不是动图」，跳过。
+func (v *imageViewer) pausePlayers() {
+	for _, pl := range v.players {
+		if pl != nil {
+			pl.Pause()
+		}
+	}
+}
+
+// closePlayers 关闭并丢掉所有动图播放器：关窗与关掉「动图自动播放」时调用。
+func (v *imageViewer) closePlayers() {
+	for key, pl := range v.players {
+		if pl != nil {
+			pl.Close()
+		}
+		delete(v.players, key)
+	}
+	v.playerSizes = nil
 }
 
 // startViewerClose 是「关闭」这个动作的统一入口：窗口里的按钮、右键菜单与
@@ -472,7 +518,31 @@ func (a *app) imageViewer(c *ui.Context) {
 		a.startViewerClose()
 		return
 	}
-	src, iw, ih := a.viewerImage(p.URL)
+	var src ui.ImageSource
+	var pl *ui.VideoPlayer
+	var iw, ih float32
+	if p.Kind == mediaVideo {
+		// 视频按 16:9 排：卡片自己按舞台算尺寸，缩放与平移对它没有意义。
+		iw, ih = 16, 9
+	} else {
+		src, iw, ih = a.viewerImage(p.URL)
+		// 只有图片已经解出来（字节也在磁盘上）才去认动图：没加载完时每帧
+		// 摸一次磁盘没有意义。
+		if src != nil {
+			pl = a.viewerPlayer(v, p)
+		}
+		if pl != nil {
+			// 动图按播放器解出来的像素尺寸排版；第一帧还没到时用静态那一份的
+			// 尺寸，实在不知道才退回 1×1。
+			if pw, ph := pl.Size(); pw > 0 && ph > 0 {
+				iw, ih = float32(pw), float32(ph)
+				v.playerSizes[p.URL] = [2]float32{iw, ih}
+			} else if sz, ok := v.playerSizes[p.URL]; ok {
+				iw, ih = sz[0], sz[1]
+			}
+			pl.Play()
+		}
+	}
 	if iw <= 0 || ih <= 0 {
 		// 尺寸还不知道（原图还没到）：先按 1×1 占着，图片到位后的下一帧
 		// 窗口会自己换成清楚的（见 viewerImage）。
@@ -496,7 +566,7 @@ func (a *app) imageViewer(c *ui.Context) {
 		// 按键、不挡点击（见 viewerKeyLayer）。
 		a.viewerKeyLayer(c, v, fit)
 		ui.Column(c).FillWidth().FillHeight().Clip().Children(func() {
-			a.imageViewerToolbar(c, v, lay, zoom, fit)
+			a.imageViewerToolbar(c, v, p, lay, zoom, fit)
 			a.imageViewerStage(c, v, p, src, iw, ih, lay, zoom)
 			a.imageViewerFooter(c, v, lay)
 		})
@@ -566,31 +636,49 @@ func (a *app) viewerKeyLayer(c *ui.Context, v *imageViewer, fit float32) {
 		v.zoom = 1
 		a.redrawViewerWindow()
 	})
+	// 视频那一项：回车或空格在浏览器里播放（工具条上的「播放」是同一个动作）。
+	play := func() {
+		if p, ok := v.current(); ok && p.Kind == mediaVideo {
+			a.playVideo(p.ref())
+		}
+	}
+	keys.OnShortcut(0, ui.KeyEnter, play)
+	keys.OnShortcut(0, ui.KeySpace, play)
 	keys.OnShortcut(ui.Cmd, ui.KeyS, func() {
-		if p, ok := v.current(); ok {
+		// 另存为只对图片有意义：视频地址存下来只是一个网页。
+		if p, ok := v.current(); ok && p.Kind == mediaImage {
 			a.saveImage(p.URL)
 		}
 	})
 	keys.Bind(&v.keys)
 }
 
-// imageViewerMenu 是图片上的右键菜单：一张藏在光标位置的定位块负责弹出 Lobe
-// 菜单，菜单项「另存为」「实际大小」「关闭预览」。Ctrl+S 由 viewerKeys 单独绑定，
-// 这里的 Hotkey 只负责在菜单里显示。
+// imageViewerMenu 是媒体上的右键菜单：图片给「另存为」「实际大小」「关闭
+// 预览」，视频给「在浏览器中播放」与「关闭预览」。一张藏在光标位置的定位块
+// 负责弹出 Lobe 菜单。Ctrl+S 由 viewerKeyLayer 单独绑定，这里的 Hotkey 只
+// 负责在菜单里显示。
 func (a *app) imageViewerMenu(c *ui.Context, v *imageViewer, p articlePicture) {
 	at := ui.Box(c).Absolute().Left(v.menuAt.X).Top(v.menuAt.Y).Size(1, 1)
-	switch lobeoverlay.ContextMenu(c, at, lobeoverlay.DropdownMenuProps{
-		Items: []lobeoverlay.MenuItem{
-			{Key: "save", Label: imageViewerSave, Hotkey: "mod+s"},
+	items := []lobeoverlay.MenuItem{
+		{Key: "save", Label: imageViewerSave, Hotkey: "mod+s"},
+		{Divider: true},
+		{Key: "actual", Label: imageViewerActual},
+		{Key: "close", Label: imageViewerClose},
+	}
+	if p.Kind == mediaVideo {
+		items = []lobeoverlay.MenuItem{
+			{Key: "play", Label: imageViewerOpen},
 			{Divider: true},
-			{Key: "actual", Label: imageViewerActual},
 			{Key: "close", Label: imageViewerClose},
-		},
-	}) {
+		}
+	}
+	switch lobeoverlay.ContextMenu(c, at, lobeoverlay.DropdownMenuProps{Items: items}) {
 	case "save":
 		a.saveImage(p.URL)
 	case "actual":
 		v.zoom = 0
+	case "play":
+		a.playVideo(p.ref())
 	case "close":
 		a.startViewerClose()
 	}
@@ -603,9 +691,22 @@ func (a *app) imageViewerMenu(c *ui.Context, v *imageViewer, p articlePicture) {
 // 的那一下点击也由 imagePress 认领，不会把窗口关掉。按在图上但没拖动就是一次
 // 普通单击，同样不关窗口；点空白处才关（见 imageViewer）。右键按位置判断是不是
 // 落在图上，记下来的位置留给下一帧弹菜单。
+//
+// 视频那一项没有缩放与平移：整个舞台都算「在图上」，左键交给卡片的点击（在
+// 浏览器里播放），右键弹视频菜单。
 func (a *app) viewerInput(v *imageViewer, p articlePicture, lay viewerLayout, iw, ih, zoom, fit float32, ev ui.InputEvent) bool {
+	video := p.Kind == mediaVideo
+	over := func() bool {
+		if video {
+			return viewerStageRect(lay).Contains(v.pointerX, v.pointerY)
+		}
+		return v.overImage(lay, iw, ih, zoom)
+	}
 	switch ev.Kind {
 	case ui.InputScroll:
+		if video {
+			return false
+		}
 		// 滚轮：向上放大、向下缩小。窗口开着时滚轮只缩放，不再滚动背后的正文
 		// 或评论列表。
 		switch {
@@ -619,6 +720,9 @@ func (a *app) viewerInput(v *imageViewer, p articlePicture, lay viewerLayout, iw
 		a.redrawViewerWindow()
 		return true
 	case ui.InputZoom:
+		if video {
+			return false
+		}
 		// 触控板的双指缩放：按它给的比例缩放。
 		if ev.Scale <= 0 || ev.Scale == 1 {
 			return false
@@ -630,17 +734,19 @@ func (a *app) viewerInput(v *imageViewer, p articlePicture, lay viewerLayout, iw
 		v.pointerX, v.pointerY = ev.X, ev.Y
 		// 每一次按下都重新认领点击：这一次落在图上，松手就不算点空白。
 		v.imagePress = false
-		if ev.Button == 0 && v.overImage(lay, iw, ih, zoom) {
-			v.dragging, v.imagePress = true, true
+		if ev.Button == 0 && over() {
+			v.imagePress = true
+			// 视频卡片不拖动，只是别让这次点击被当成「点空白处关闭」。
+			v.dragging = !video
 			return true
 		}
 		// 右键（有的鼠标把副键报成中键）落在图上时弹菜单：位置先记下，菜单
 		// 在下一帧按它弹出。之前那次移动可能没落到遮罩上（比如点开图片那
 		// 一下），所以这里以按下时的位置为准；按在图上别处则收起旧菜单。
 		switch {
-		case v.overImage(lay, iw, ih, zoom) && (ev.Button == 1 || ev.Button == 2):
+		case over() && (ev.Button == 1 || ev.Button == 2):
 			v.menuAt, v.menuOpen = ui.Point{X: ev.X, Y: ev.Y}, true
-		case !v.overImage(lay, iw, ih, zoom):
+		case !over():
 			v.menuOpen = false
 		}
 	case ui.InputPointerMove:
@@ -668,45 +774,81 @@ func (a *app) viewerInput(v *imageViewer, p articlePicture, lay viewerLayout, iw
 	return false
 }
 
-// imageViewerToolbar 是预览窗口顶部的工具条：左边说明这是第几张、共几张与
-// 当前缩放，右边是翻页、缩放、另存为、最小化与关闭。按钮都是图标 + tooltip。
+// imageViewerToolbar 是预览窗口顶部的工具条：左边说明这是第几项、共几项与
+// 当前缩放，右边是翻页、缩放 / 播放、另存为、最小化与关闭。按钮都是图标 +
+// tooltip。视频那一项没有缩放与另存为，换成「播放」。
 // 工具条同时兼作自绘标题栏：空白处可以拖动窗口（双击最大化 / 还原）。
-func (a *app) imageViewerToolbar(c *ui.Context, v *imageViewer, lay viewerLayout, zoom, fit float32) {
+func (a *app) imageViewerToolbar(c *ui.Context, v *imageViewer, p articlePicture, lay viewerLayout, zoom, fit float32) {
 	t := c.Theme()
-	total := len(v.group.Items)
 	// 正在另存为时按钮禁用；状态一次读出来，别在 Children 里再去碰（后台
 	// 线程可能正好写回结果）。
 	saving, _ := v.viewerSaveState()
+	video := p.Kind == mediaVideo
 	ui.Row(c).FillWidth().Height(lay.toolbarH).Shrink(0).
 		Padding(0, 18).Gap(8).AlignItems(ui.Center).
 		Background(t.Surface.Alpha(0.96)).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).
 		DragWindow().Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-			// 显示与读屏用同一句话：「第 2 / 3 张 · 100%」。
-			ui.Text(c, fmt.Sprintf("第 %d / %d 张 · %s", v.index+1, total, viewerPercent(zoom))).
+			// 显示与读屏用同一句话：「第 2 / 3 张 · 100%」，视频项写来源。
+			ui.Text(c, viewerStatusText(v, p, zoom)).
 				FontSize(11).TextColor(t.TextMuted).SingleLine()
 		})
 		a.viewerButton(c, prevImageIcon, imageViewerPrev, "看上一张（←）", !v.canStep(-1), func() { v.step(-1) })
 		a.viewerButton(c, nextImageIcon, imageViewerNext, "看下一张（→）", !v.canStep(1), func() { v.step(1) })
 		ui.Box(c).Width(1).Height(18).Background(t.Border).Shrink(0)
-		a.viewerButton(c, zoomOutIcon, imageViewerZoomOut, "缩小（− 键或滚轮向下）", zoom <= imageViewerMinZoom, func() {
-			v.zoom = zoomBy(zoom, fit, 1/imageViewerKeyZoom)
-		})
-		a.viewerButton(c, zoomInIcon, imageViewerZoomIn, "放大（+ 键或滚轮向上）", zoom >= imageViewerMaxZoom, func() {
-			v.zoom = zoomBy(zoom, fit, imageViewerKeyZoom)
-		})
-		a.viewerButton(c, actualSizeIcon, imageViewerActual, "还原成完整显示（0 键）", false, func() {
-			v.zoom = 0
-		})
-		a.viewerButton(c, saveImageIcon, imageViewerSave, "把这张图另存为文件", saving, func() {
-			if cur, ok := v.current(); ok {
-				a.saveImage(cur.URL)
-			}
-		})
+		if video {
+			ref := p.ref()
+			a.viewerButton(c, playIcon, imageViewerPlay, imageViewerOpen, false, func() {
+				a.playVideo(ref)
+			})
+		} else {
+			a.viewerButton(c, zoomOutIcon, imageViewerZoomOut, "缩小（− 键或滚轮向下）", zoom <= imageViewerMinZoom, func() {
+				v.zoom = zoomBy(zoom, fit, 1/imageViewerKeyZoom)
+			})
+			a.viewerButton(c, zoomInIcon, imageViewerZoomIn, "放大（+ 键或滚轮向上）", zoom >= imageViewerMaxZoom, func() {
+				v.zoom = zoomBy(zoom, fit, imageViewerKeyZoom)
+			})
+			a.viewerButton(c, actualSizeIcon, imageViewerActual, "还原成完整显示（0 键）", false, func() {
+				v.zoom = 0
+			})
+			a.viewerButton(c, saveImageIcon, imageViewerSave, "把这张图另存为文件", saving, func() {
+				if cur, ok := v.current(); ok {
+					a.saveImage(cur.URL)
+				}
+			})
+		}
 		ui.Box(c).Width(1).Height(18).Background(t.Border).Shrink(0)
 		a.viewerWindowButton(c, minimizeIcon, imageViewerMinimize, "把预览窗口最小化", a.minimizeViewerWindow)
 		a.viewerCloseButton(c, closeIcon, imageViewerClose, "关闭预览（Esc）", a.startViewerClose)
 	})
+}
+
+// viewerStatusText 是工具条左边那句位置说明：整组都是图片时按「张」计数并
+// 带上缩放百分比，掺了视频时按「项」计数，视频项写来源。底栏的读屏文案与
+// 测试都按这一句认位置。
+func viewerStatusText(v *imageViewer, p articlePicture, zoom float32) string {
+	total := len(v.group.Items)
+	if p.Kind == mediaVideo {
+		return fmt.Sprintf("第 %d / %d 项 · %s", v.index+1, total, p.ref().providerLabel())
+	}
+	if v.group.mixed() {
+		return fmt.Sprintf("第 %d / %d 项 · %s", v.index+1, total, viewerPercent(zoom))
+	}
+	return fmt.Sprintf("第 %d / %d 张 · %s", v.index+1, total, viewerPercent(zoom))
+}
+
+// playVideo 播放一段站外视频：交给系统浏览器打开原页面。应用里不内嵌播放器
+// ——没有 webview 页面，浏览器自己的代理设置也才能决定它怎么联网（与打开
+// 普通外链同一条出口，见 AGENTS.md）。
+func (a *app) playVideo(ref mediaRef) {
+	url := strings.TrimSpace(ref.WatchURL)
+	if url == "" {
+		url = strings.TrimSpace(ref.URL)
+	}
+	if url == "" {
+		return
+	}
+	a.openExternal(url)
 }
 
 // minimizeViewerWindow 最小化预览窗口：从任务栏或 Alt+Tab 可以再还原回来。
@@ -781,14 +923,20 @@ func (a *app) viewerIconButton(c *ui.Context, icon *ui.SVG, label, tip string, d
 	b.Label(label).Tooltip(tip).OnClick(onClick)
 }
 
-// imageViewerStage 是图片舞台：铺满工具条与底栏之间，图片按 zoom 缩放后居中，
-// 再按 panX / panY 平移。放大到超出舞台时四周被裁掉，按住左键拖动可以挪着看；
-// 指针停在图上时给出抓手光标，拖动中换成抓紧的样子。
+// imageViewerStage 是媒体舞台：铺满工具条与底栏之间。图片按 zoom 缩放后居中，
+// 再按 panX / panY 平移；放大到超出舞台时四周被裁掉，按住左键拖动可以挪着看，
+// 指针停在图上时给出抓手光标。动图（gif / apng）在「动图自动播放」打开时用
+// 播放器逐帧播放，否则只显示首帧。视频是一张封面卡片，点一下在浏览器里播放。
 func (a *app) imageViewerStage(c *ui.Context, v *imageViewer, p articlePicture, src ui.ImageSource, iw, ih float32, lay viewerLayout, zoom float32) {
 	t := c.Theme()
 	stage := ui.Box(c).Grow(1).FillWidth().MinHeight(0).Center().Clip()
+	if p.Kind == mediaVideo {
+		stage.Children(func() { a.imageViewerVideoStage(c, p, lay) })
+		return
+	}
+	pl := a.viewerPlayer(v, p)
 	stage.Children(func() {
-		if src == nil {
+		if src == nil && pl == nil {
 			ui.Column(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				lobeSpin(c, feedback.SpinProps{CustomSize: 20}).Label("图片加载中")
 				ui.Text(c, imageViewerEmpty).FontSize(13).TextColor(t.TextMuted)
@@ -801,8 +949,14 @@ func (a *app) imageViewerStage(c *ui.Context, v *imageViewer, p articlePicture, 
 		if w <= 0 || h <= 0 {
 			return
 		}
-		img := ui.Image(c, src).Size(w, h).Fit(ui.FillBox).Translate(px, py).
-			Label(p.Alt).Tooltip(p.Alt)
+		var img ui.Element
+		if pl != nil {
+			img = ui.Video(c, pl).Size(w, h).Fit(ui.Contain).Translate(px, py).
+				Label(p.Alt).Tooltip(p.Alt)
+		} else {
+			img = ui.Image(c, src).Size(w, h).Fit(ui.FillBox).Translate(px, py).
+				Label(p.Alt).Tooltip(p.Alt)
+		}
 		if viewerPanLimit(w, lay.stageW) > 0 || viewerPanLimit(h, lay.stageH) > 0 {
 			if v.dragging {
 				img.Cursor(ui.CursorGrabbing)
@@ -811,6 +965,23 @@ func (a *app) imageViewerStage(c *ui.Context, v *imageViewer, p articlePicture, 
 			}
 		}
 	})
+}
+
+// imageViewerVideoStage 在舞台里画视频卡片：按 16:9 放进可用区域，最多 720
+// 宽，居中显示封面与播放按钮。点卡片在浏览器里打开这个视频（见 playVideo）。
+func (a *app) imageViewerVideoStage(c *ui.Context, p articlePicture, lay viewerLayout) {
+	ref := p.ref()
+	title := ref.title()
+	w := min(lay.stageW, 720)
+	h := w * 9 / 16
+	if h > lay.stageH {
+		h = lay.stageH
+		w = h * 16 / 9
+	}
+	card := ui.Box(c).Size(w, h).Radius(10).Background(videoCardBG).Clip().Center()
+	card.Label("打开视频：" + title).Tooltip(imageViewerOpen)
+	card.OnClick(func() { a.playVideo(ref) })
+	card.Children(func() { a.videoCover(c, ref, title, true) })
 }
 
 // imageViewerFooter 是窗口底部的一行：上一次另存为的结果（成功给出文件名，
@@ -832,7 +1003,11 @@ func (a *app) imageViewerFooter(c *ui.Context, v *imageViewer, lay viewerLayout)
 			ui.Text(c, note).FontSize(11).TextColor(ink).SingleLine().MaxWidthPercent(70)
 		}
 		ui.Spacer(c).Grow(1)
-		ui.Text(c, imageViewerHint).FontSize(11).TextColor(t.TextMuted).SingleLine()
+		hint := imageViewerHint
+		if p, ok := v.current(); ok && p.Kind == mediaVideo {
+			hint = imageViewerVideoHint
+		}
+		ui.Text(c, hint).FontSize(11).TextColor(t.TextMuted).SingleLine()
 	})
 }
 
@@ -935,6 +1110,52 @@ func (a *app) loadViewerImage(raw string) {
 // 两份，放大时用清楚的这一份，正文里按栏宽缩小仍用省内存的那一份。
 func viewerCacheKey(raw string) string {
 	return raw + "|preview"
+}
+
+// viewerPlayer 返回一张动图在预览里的播放器：gif 与 apng 交给 mygo 自带的
+// 解码器逐帧播放，其余格式（含只有一帧的 gif）返回 nil，按普通图片画。
+// 「动图自动播放」关掉时同样返回 nil。
+//
+// 播放器按地址缓存在预览状态里：同一张图来回翻不会反复解码；换图时暂停、
+// 关窗时关闭（见 pausePlayers / closePlayers）。原始字节取自磁盘缓存，正文
+// 与预览两档都看——同一张图的字节只有一份（见 imageCacheViewer）。
+func (a *app) viewerPlayer(v *imageViewer, p articlePicture) *ui.VideoPlayer {
+	if v == nil || p.Kind != mediaImage || !a.imagePrefs.autoAnimate() {
+		return nil
+	}
+	raw := strings.TrimSpace(p.URL)
+	if pl, checked := v.players[raw]; checked {
+		// 记着 nil 的是「看过了，不是动图」：静态图不必每帧重新解码一遍。
+		return pl
+	}
+	data, ok := a.images.readDisk(raw, imageCacheViewer)
+	if !ok {
+		data, ok = a.images.readDisk(raw, imageCacheTemporary)
+	}
+	if !ok {
+		return nil
+	}
+	dec, ok := animatedDecoder(data)
+	if !ok {
+		if v.players == nil {
+			v.players = make(map[string]*ui.VideoPlayer, 1)
+		}
+		v.players[raw] = nil
+		return nil
+	}
+	pl, err := ui.NewVideoPlayer(dec)
+	if err != nil {
+		return nil
+	}
+	pl.SetLoop(true)
+	if v.players == nil {
+		v.players = make(map[string]*ui.VideoPlayer, 1)
+	}
+	if v.playerSizes == nil {
+		v.playerSizes = make(map[string][2]float32, 1)
+	}
+	v.players[raw] = pl
+	return pl
 }
 
 /* ------------------------------------------------------------------

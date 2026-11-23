@@ -178,17 +178,23 @@ func (a *app) profileTag(c *ui.Context, name string) {
 // 的点击传到外层的账号菜单锚点，由 Popover 开合气泡。昵称还没读到时只画头像。
 func (a *app) profileTagIdentity(c *ui.Context, name string) {
 	tk := lobetheme.TokensOf(c)
+	size := userAvatarSize(12)
+	pro, _ := a.auth.proStatus()
 	ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 		if name == "" {
 			// 昵称还没读到（身份接口慢或失败）：仍然给一个可点的头像位，
 			// 账号菜单自己会带进「我的」窗口，不至于没有入口。
-			display.Avatar(c, "", display.AvatarProps{
-				Size: userAvatarSize(12), Shape: display.AvatarCircle,
-				Image: a.avatarBitmap(a.auth.avatarURL()),
+			a.avatarHost(c, size, pro, func() ui.Element {
+				return display.Avatar(c, "", display.AvatarProps{
+					Size: size, Shape: display.AvatarCircle,
+					Image: a.avatarBitmap(a.auth.avatarURL()),
+				})
 			})
 			return
 		}
-		avatarView(c, name, a.avatarBitmap(a.auth.avatarURL()), userAvatarSize(12))
+		a.avatarHost(c, size, pro, func() ui.Element {
+			return avatarView(c, name, a.avatarBitmap(a.auth.avatarURL()), size)
+		})
 		ui.Text(c, name).FontSize(12).SingleLine().TextColor(tk.TextSecondary)
 	})
 }

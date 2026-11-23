@@ -91,9 +91,6 @@ func (a *app) openMainWindow() {
 // afterMainWindowOpen 是窗口建好之后要接上的东西：表情表、未读数、通知长
 // 连接、金币数、潘多拉入口、头像与 Pro 状态。都在主线程。
 func (a *app) afterMainWindowOpen() {
-	// Pro 图标是全应用共用的小图：启动时预取一次，头像右下角的圆章直接读缓存，
-	// 不在渲染里发请求。多个账号窗口共用同一份图片缓存，重复预取会被去重。
-	a.prefetchAvatars(proMarkURL)
 	// 表情表启动时就拉一次（文档同样建议启动时取并缓存）：等到第一次打开
 	// 详情再拉，正文会先按 :code: 短码排一遍，短码变成图片时整段重排。
 	a.ensureEmojis()
@@ -181,7 +178,7 @@ func (a *app) anyLiveWindow() *mygo.Window {
 		a.notifWin, a.settingsWin, a.aboutWin, a.netLogWin,
 		a.profileWin, a.coinWin, a.composeWin,
 		a.replyWin, a.editWin, a.nodeEditWin, a.searchWin, a.followsWin,
-		a.userCardWin, a.viewerWin, a.scoresWin, a.watchLaterWin,
+		a.userCardWin, a.viewerWin,
 	} {
 		if win != nil {
 			return win
@@ -206,7 +203,7 @@ func (a *app) hasLiveWindow() bool {
 		a.notifWin, a.settingsWin, a.aboutWin, a.netLogWin,
 		a.profileWin, a.coinWin, a.composeWin,
 		a.replyWin, a.editWin, a.nodeEditWin, a.searchWin, a.followsWin,
-		a.userCardWin, a.viewerWin, a.scoresWin, a.watchLaterWin,
+		a.userCardWin, a.viewerWin,
 	} {
 		if win != nil {
 			return true
@@ -267,7 +264,6 @@ func (a *app) closeAllWindows() {
 	a.closeFollowsWindow()
 	a.closeUserCardWindow()
 	a.closeViewerWindow()
-	a.closeWatchLaterWindow()
 	a.closeAllDetailWindows()
 	if a.netStatusUnwatch != nil {
 		a.netStatusUnwatch()

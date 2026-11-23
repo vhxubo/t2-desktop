@@ -158,6 +158,7 @@ type coinTransaction struct {
 	FromUser      string
 	FromAvatar    string // 打赏人等来源用户的头像地址
 	FromBadges    []badgeInfo
+	FromIsPro     bool
 	IsAlias       bool
 	CheckData     object
 }
@@ -406,6 +407,7 @@ func decodeCoinTransaction(raw json.RawMessage) coinTransaction {
 		tx.FromUser = from.str("username", "name", "nickname")
 		tx.FromAvatar = authorAvatar(from)
 		tx.FromBadges = decodeBadges(from)
+		tx.FromIsPro = from.flag("is_pro", "isPro")
 	}
 	return tx
 }

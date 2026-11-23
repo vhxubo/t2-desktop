@@ -68,6 +68,7 @@ type mentionPerson struct {
 	Username string
 	Avatar   string
 	IsAlias  bool
+	IsPro    bool
 }
 
 // mentionRoster 是名单响应：total 用来判断「@所有人」是否超过 50 人上限。
@@ -124,6 +125,7 @@ func decodeMentionRoster(d json.RawMessage) mentionRoster {
 			Username: name,
 			Avatar:   row.str("avatar_url"),
 			IsAlias:  row.flag("is_alias"),
+			IsPro:    row.flag("is_pro", "isPro"),
 		})
 	}
 	if out.Total == 0 {
@@ -161,7 +163,7 @@ func (c *Client) searchMentionUsers(ctx context.Context, q string) ([]mentionPer
 		if name == "" {
 			continue
 		}
-		out = append(out, mentionPerson{Username: name, Avatar: hit.avatar})
+		out = append(out, mentionPerson{Username: name, Avatar: hit.avatar, IsPro: hit.isPro})
 	}
 	return out, nil
 }

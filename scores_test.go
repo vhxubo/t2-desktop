@@ -114,8 +114,9 @@ func TestFetchScores(t *testing.T) {
 	}
 }
 
-// 窗口：筛选、数量、评分行与作者都画出来；点一行打开对应帖子。
-func TestScoresWindowRenders(t *testing.T) {
+// 页面：筛选、数量、评分行与作者都画出来；点一行打开对应帖子。页面和草稿箱
+// 一样内嵌在主窗口，不新开 mygo 窗口。
+func TestScoresPageRenders(t *testing.T) {
 	a := testApp(t)
 	a.scores = newScoresState()
 	st := a.scores
@@ -127,7 +128,14 @@ func TestScoresWindowRenders(t *testing.T) {
 	st.totalPages = 3
 	st.items = decodeScores([]byte(scoresJSON)).Items
 
-	tt := ui.NewTester(a.scoresWindowView, scoresWindowWidth, scoresWindowHeight)
+	a.showScores()
+	if a.pageName != "scores" || a.navSel != "scores" {
+		t.Fatalf("没进评分榜页：page=%q nav=%q", a.pageName, a.navSel)
+	}
+	if a.win != nil {
+		t.Fatal("进评分榜页不该新开窗口")
+	}
+	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 	for _, want := range []string{
 		"评分榜", "共 63 条", "全部", "高分", "低分", "评分分类",
@@ -178,10 +186,11 @@ func TestScoresCategoryDropdownNoOverflow(t *testing.T) {
 	st.categoriesLoaded = true
 	st.loaded = true
 
-	tt := ui.NewTester(a.scoresWindowView, scoresWinMinWidth, scoresWindowHeight)
+	a.showScores()
+	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	// 点分类下拉的 trigger 打开弹层。位置从实际渲染的 trigger 取，标题栏
-	// 变高后 y 会整体下移，写死坐标会点空。
+	// 点分类下拉的 trigger 打开弹层。位置从实际渲染的 trigger 取，页头
+	// 或侧边栏尺寸一变 y 就会跟着移动，写死坐标会点空。
 	trigger, ok := tt.Find("全部分类")
 	if !ok {
 		t.Fatalf("找不到分类下拉 trigger：%q", tt.Texts())
@@ -204,8 +213,8 @@ func TestScoresCategoryDropdownNoOverflow(t *testing.T) {
 	}
 }
 
-// 最小窗口宽度下筛选条排得下：标签不被压缩成「评…」，刷新也没被挤到下一行。
-func TestScoresFiltersFitMinWidth(t *testing.T) {
+// 主窗口最小宽度下筛选条排得下：标签不被压缩成「评…」，刷新也没被挤到下一行。
+func TestScoresFiltersFitMainMinWidth(t *testing.T) {
 	a := testApp(t)
 	a.scores = newScoresState()
 	st := a.scores
@@ -213,7 +222,8 @@ func TestScoresFiltersFitMinWidth(t *testing.T) {
 	st.categoriesLoaded = true
 	st.loaded = true
 
-	tt := ui.NewTester(a.scoresWindowView, scoresWinMinWidth, scoresWindowHeight)
+	a.showScores()
+	tt := ui.NewTester(a.view, 760, 720)
 	tt.Frame()
 	label, ok := tt.Find("评分分类")
 	if !ok {
@@ -226,8 +236,8 @@ func TestScoresFiltersFitMinWidth(t *testing.T) {
 	if refresh.Y > label.Y+label.H || refresh.Y+refresh.H < label.Y {
 		t.Errorf("刷新被挤到下一行：标签 %+v / 刷新 %+v", label, refresh)
 	}
-	if refresh.X+refresh.W > scoresWinMinWidth {
-		t.Errorf("刷新按钮溢出窗口：%+v", refresh)
+	if refresh.X+refresh.W > 760 {
+		t.Errorf("刷新按钮溢出主窗口：%+v", refresh)
 	}
 }
 
@@ -258,9 +268,9 @@ func TestLoadScores(t *testing.T) {
 	}
 }
 
-// 评分榜入口在侧边栏「草稿箱 / 稍后再看」那一组的下方分割线之后：带外链窗口
-// 图标与「在新窗口打开」说明；点它走 showScores，headless 下至少准备好状态。
-// 主页不再画评分榜 FAB。
+// 评分榜入口在侧边栏「草稿箱 / 稍后再看」那一组的下方分割线之后，和前两项
+// 一样是主窗口内嵌页；点它走 showScores，只换右侧内容区，不新开窗口。入口
+// 用奖杯图标对应名次含义，主页不再画评分榜 FAB。
 func TestScoresSidebarEntryAndOpen(t *testing.T) {
 	a := testApp(t)
 	a.tabs[0].items = []Item{{Key: "k1", Title: "一条列表"}}
@@ -278,7 +288,7 @@ func TestScoresSidebarEntryAndOpen(t *testing.T) {
 	}
 
 	// 排在「动态」下面，上面是「草稿箱 / 稍后再看」那一组，组的两头各有
-	// 一条分割线，和浏览页、独立窗口入口分开。
+	// 一条分割线，和浏览页、评分榜分开。
 	timeline, ok := tt.Find("动态")
 	if !ok {
 		t.Fatalf("侧边栏没有「动态」：%q", tt.Texts())
@@ -307,14 +317,18 @@ func TestScoresSidebarEntryAndOpen(t *testing.T) {
 	if a.scores == nil {
 		t.Error("点侧边栏评分榜没有准备好评分榜状态")
 	}
+	if a.pageName != "scores" || a.navSel != "scores" {
+		t.Fatalf("没进评分榜页：page=%q nav=%q", a.pageName, a.navSel)
+	}
+	if a.win != nil || len(a.detailWindows) != 0 {
+		t.Error("进评分榜页不该新开窗口")
+	}
 
-	// 展开态额外给出「在新窗口打开」的说明，和外链窗口图标一起标明它开的是
-	// 独立窗口，不是上面那种页内导航。
+	// 展开态也不再有「在新窗口打开」的说明：它和草稿箱一样是页内导航。
 	a.navExpanded = true
-	expanded := ui.NewTester(a.view, 1100, 760)
-	expanded.Frame()
-	if !expanded.HasText("在新窗口打开") {
-		t.Errorf("评分榜入口没有标出是独立窗口：%q", expanded.Texts())
+	tt.Frame()
+	if tt.HasText("在新窗口打开") {
+		t.Errorf("评分榜页不该出现独立窗口说明：%q", tt.Texts())
 	}
 }
 
@@ -337,7 +351,9 @@ func TestScoreCategoryFallsBack(t *testing.T) {
 
 	a.loadScoreCategories()
 	waitProfile(t, "分类回退", func() bool {
-		return st.categoriesLoaded && st.category == scoreCategoryAll
+		// 分类字典回来后会再拉一次评分，等这次请求也落地再断言，避免
+		// 只看分类回退就误判重拉还没完成。
+		return st.categoriesLoaded && st.category == scoreCategoryAll && st.loaded
 	})
 	if !st.loaded || len(st.items) != 2 {
 		t.Errorf("回退后没有重拉评分：%+v", st)

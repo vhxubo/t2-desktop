@@ -328,6 +328,7 @@ type notificationView struct {
 	ActorName    string
 	ActorAvatar  string
 	ActorBadges  []badgeInfo
+	ActorIsPro   bool // 操作者是 Pro 会员时头像带官网 Pro 图标
 	ActorIsAlias bool
 	Action       string
 	TargetTitle  string
@@ -440,6 +441,7 @@ func notificationViewOf(n *notification) notificationView {
 		// 徽章只能用消息里已经带的 equipped_badges；没有就不显示，
 		// 不为补徽章单独请求用户资料。
 		v.ActorBadges = decodeBadges(n.FromUser)
+		v.ActorIsPro = n.FromUser.flag("is_pro", "isPro")
 	}
 
 	v.Action = notificationAction(kind, payload)
@@ -762,6 +764,7 @@ type notificationReactionUser struct {
 	Name   string
 	Avatar string
 	Badges []badgeInfo
+	IsPro  bool
 }
 
 // notificationReactionGroup 是一种表情的表态计数。
@@ -825,6 +828,7 @@ func notificationReactionOverviewOf(p object) notificationReactionOverview {
 			Name:   name,
 			Avatar: authorAvatar(r),
 			Badges: decodeBadges(r),
+			IsPro:  r.flag("is_pro", "isPro"),
 		})
 	}
 	if ro := p.sub("reactions"); ro != nil {

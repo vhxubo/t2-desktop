@@ -73,6 +73,7 @@ type searchHit struct {
 	username string
 	avatar   string
 	badges   []badgeInfo
+	isPro    bool
 	name     string
 	parent   string
 	count    int
@@ -177,6 +178,7 @@ func decodeSearch(kind searchKind, d json.RawMessage, page int) searchResult {
 				}
 				hit.avatar = authorAvatar(o)
 				hit.badges = decodeBadges(o)
+				hit.isPro = o.flag("is_pro", "isPro")
 				hit.url = siteBaseURL + "/user/" + url.PathEscape(hit.username) + "/about"
 			case searchNodes:
 				hit.name = o.str("name")

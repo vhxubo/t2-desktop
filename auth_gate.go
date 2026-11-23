@@ -145,8 +145,6 @@ func (a *app) focusedAuthTarget() (toastTarget, bool) {
 		return toastViewer, true
 	case a.netLogWin:
 		return toastNetLog, true
-	case a.watchLaterWin:
-		return toastWatchLater, true
 	}
 	for _, h := range a.detailWindows {
 		if h.win == w && !h.removed {

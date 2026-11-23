@@ -335,7 +335,9 @@ func (a *app) mentionListItems(c *ui.Context, rows []mentionRow) []display.ListI
 		if row.Person.Username != "" {
 			a.prefetchAvatars(row.Person.Avatar)
 			item.Avatar = func() {
-				avatarView(c, row.Person.Username, a.avatarBitmap(row.Person.Avatar), 22)
+				a.avatarHost(c, 22, row.Person.IsPro, func() ui.Element {
+					return avatarView(c, row.Person.Username, a.avatarBitmap(row.Person.Avatar), 22)
+				})
 			}
 		} else {
 			item.Avatar = func() {

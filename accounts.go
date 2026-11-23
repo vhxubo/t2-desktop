@@ -125,6 +125,7 @@ type accountView struct {
 	Open       bool
 	Unread     int
 	NeedsLogin bool
+	IsPro      bool // 头像右下角 Pro 图标：状态来自该账号的令牌缓存
 }
 
 // accountLogin 是一次账号授权（添加账号或重新登录）。浏览器里点的可能是任何
@@ -158,6 +159,9 @@ type accountBook struct {
 	notificationPrefs *notificationPrefsStore
 	// watchLaterPrefs 是稍后再看的打开行为，进程级一份（见 watch_later_prefs.go）。
 	watchLaterPrefs *watchLaterPrefsStore
+	// imagePrefs 是图片显示的两项偏好（默认不加载图片、动图自动播放），
+	// 进程级一份（见 image_prefs.go）。
+	imagePrefs *imagePrefsStore
 	// commands 是命令中心的快捷键 / 收藏 / 最近使用偏好，进程级一份。
 	commands *commandPrefs
 
@@ -238,6 +242,7 @@ func newAccountBook(dir string) *accountBook {
 		commentCostPrefs:  newCommentCostPrefsStore(dir),
 		notificationPrefs: newNotificationPrefsStore(dir),
 		watchLaterPrefs:   newWatchLaterPrefsStore(dir),
+		imagePrefs:        newImagePrefsStore(dir),
 		commands:          newCommandPrefs(dir),
 		openURL:           func(u string) error { return mygo.Shell.OpenExternal(u) },
 	}
@@ -502,6 +507,9 @@ func (b *accountBook) accountsView() []accountView {
 			Open:       acc.app != nil,
 			Unread:     acc.unread,
 			NeedsLogin: acc.sessionChanged(),
+		}
+		if acc.auth != nil {
+			v.IsPro, _ = acc.auth.proStatus()
 		}
 		if acc.app != nil {
 			// 窗口开着时以窗口里的未读数为准（它由 SSE 与角标请求维护）。

@@ -29,9 +29,11 @@ type rowExtra struct {
 	Author        string
 	AuthorAvatar  string // 作者头像地址；统一用户标识据此在昵称旁画头像
 	AuthorBadges  []badgeInfo
+	AuthorIsPro   bool // 作者是 Pro 会员时，头像右下角叠加 Pro 图标
 	ReplyTo       string
 	ReplyToAvatar string // 被回复人的头像地址（通常同父评论作者）
 	ReplyToBadges []badgeInfo
+	ReplyToIsPro  bool
 	Excerpt       string
 	Quote         string
 	NodeLabel     string
@@ -54,6 +56,7 @@ type commentItem struct {
 	Author        string
 	Avatar        string
 	Badges        []badgeInfo
+	AuthorIsPro   bool
 	CreatedAt     string
 	Floor         int
 	FlatFloor     int
@@ -63,6 +66,7 @@ type commentItem struct {
 	ParentAuthor  string
 	ParentAvatar  string
 	ParentBadges  []badgeInfo
+	ParentIsPro   bool
 	ParentContent string
 	ParentExcerpt string
 	ParentDeleted bool
@@ -187,12 +191,14 @@ func decodeCommentItem(o object) commentItem {
 		c.Author = authorName(a)
 		c.Avatar = authorAvatar(a)
 		c.Badges = decodeBadges(a)
+		c.AuthorIsPro = a.flag("is_pro", "isPro")
 	}
 	if c.Author == "" {
 		if a := o.sub("author", "user"); a != nil {
 			c.Author = authorName(a)
 			c.Avatar = authorAvatar(a)
 			c.Badges = decodeBadges(a)
+			c.AuthorIsPro = a.flag("is_pro", "isPro")
 		}
 	}
 	// 接口没给 author（例如 /v1/me/bookmarks）时保持空，不填「匿名」：
@@ -239,6 +245,7 @@ func decodeCommentItem(o object) commentItem {
 			c.ParentAuthor = authorName(a)
 			c.ParentAvatar = authorAvatar(a)
 			c.ParentBadges = decodeBadges(a)
+			c.ParentIsPro = a.flag("is_pro", "isPro")
 		}
 		c.ParentContent = parent.str("content")
 		c.ParentDeleted = parent.flag("is_deleted")
@@ -384,17 +391,21 @@ func commentItemFrom(o object) Item {
 	// 拿到的父评论对象里取，不单独请求。
 	replyAvatar := ""
 	replyBadges := []badgeInfo(nil)
+	replyIsPro := false
 	if c.ReplyTo != "" && c.ReplyTo == c.ParentAuthor {
 		replyAvatar = c.ParentAvatar
 		replyBadges = c.ParentBadges
+		replyIsPro = c.ParentIsPro
 	}
 	it.Extra = &rowExtra{
 		Author:        c.Author,
 		AuthorAvatar:  c.Avatar,
 		AuthorBadges:  c.Badges,
+		AuthorIsPro:   c.AuthorIsPro,
 		ReplyTo:       c.ReplyTo,
 		ReplyToAvatar: replyAvatar,
 		ReplyToBadges: replyBadges,
+		ReplyToIsPro:  replyIsPro,
 		Excerpt:       title,
 		Quote:         c.quote(),
 		NodeLabel:     c.nodeLabel(),
@@ -552,7 +563,7 @@ func rewardsTotal(o object) int {
 
 // topicExtra 给动态流里的帖子补上正文摘要与互动数据；普通榜单没有 content，
 // 因此不会多出这一层展示。
-func topicExtra(o object, author, avatar string, badges []badgeInfo, nodeName, when string) *rowExtra {
+func topicExtra(o object, author, avatar string, badges []badgeInfo, pro bool, nodeName, when string) *rowExtra {
 	content := commentContent(o)
 	reactions := reactionTextFrom(o)
 	rewards := rewardsTotal(o)
@@ -563,6 +574,7 @@ func topicExtra(o object, author, avatar string, badges []badgeInfo, nodeName, w
 		Author:       author,
 		AuthorAvatar: avatar,
 		AuthorBadges: badges,
+		AuthorIsPro:  pro,
 		Excerpt:      truncate(commentExcerpt(content), 240),
 		NodeLabel:    nodeName,
 		When:         when,

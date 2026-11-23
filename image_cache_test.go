@@ -721,7 +721,25 @@ func TestImageCacheLoadsStableBeforeTemporary(t *testing.T) {
 // 窗口和每一扇详情 / 设置 / 金币窗口全部重建一遍。
 func TestImageLoadInvalidatesOnlyRenderingWindow(t *testing.T) {
 	var hits int32
-	srv, _ := imageTestServer(t, &hits)
+	pixels := solidPNG(t, 8, 8, marker)
+	// 等两扇窗口都画完再回图：加载占位的转圈会让无头窗口连续重建二十帧，
+	// 期间到达的重绘请求会被下一轮 Frame 开头清掉，测试就看不到「这张图让
+	// 窗口重绘」的信号了。用门闩把回包放到 Frame 之后，断言才是确定的。
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		<-release
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(pixels)
+	}))
+	t.Cleanup(srv.Close)
 	a := testApp(t)
 	a.autoLoad = true
 	a.client = &Client{HTTP: srv.Client()}
@@ -736,6 +754,7 @@ func TestImageLoadInvalidatesOnlyRenderingWindow(t *testing.T) {
 	}), 64, 64)
 	withImage.Frame()
 	other.Frame()
+	close(release)
 
 	waitForSource(t, a, u)
 

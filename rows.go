@@ -119,6 +119,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item), watchLater bool) 
 						Size:   richAuthorFontSize,
 						Bold:   true,
 						Badges: x.AuthorBadges,
+						Pro:    x.AuthorIsPro,
 					})
 				}
 				if comment && x.ReplyTo != "" {
@@ -131,6 +132,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item), watchLater bool) 
 						Size:   richAuthorFontSize,
 						Bold:   true,
 						Badges: x.ReplyToBadges,
+						Pro:    x.ReplyToIsPro,
 					})
 				} else if comment {
 					ui.Text(c, "评论了帖子").FontSize(richAuthorFontSize).TextColor(tk.TextDescription)

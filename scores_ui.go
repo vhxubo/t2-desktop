@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/display"
@@ -18,22 +17,17 @@ import (
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 评分榜窗口：侧边栏「动态」下方（分割线之后）的「评分榜」入口（见
-// sidebarNavItems）打开的一扇独立窗口，数据与解码在 scores.go。
+// 评分榜页面：侧边栏「动态」下方（分割线之后）的「评分榜」入口（见
+// sidebarNavItems）打开的主窗口页面（pageName = "scores"），数据与解码在
+// scores.go。它和首页、草稿箱一样内嵌在主窗口右侧内容区，共用标题栏与
+// 侧边栏，不新开 mygo 窗口。
 //
 // 界面走 Lobe UI：颜色取 TokensOf(c)，标题、筛选、卡片、空状态与按钮分别由
-// display / field / action / feedback / layout 提供，和其它窗口保持同一套观感。
-// 版式：标题栏（拖动 / 最小化 / 关闭）→ 排序与分类筛选 → 评分列表。
-// 每行是「对象名 + 分数 + 分类 + 短评 + 评分人」，点一下打开对应帖子。
+// display / field / action / feedback / layout 提供，和主窗口其它页面保持
+// 同一套观感。版式：页头 → 排序与分类筛选 → 评分列表。每行是「对象名 +
+// 分数 + 分类 + 短评 + 评分人」，点一下打开对应帖子。
 
-const (
-	scoresWindowWidth  = 680
-	scoresWindowHeight = 720
-	scoresWinMinWidth  = 460
-	scoresWinMinHeight = 420
-)
-
-// scoresState 是评分榜窗口的全部界面状态。只在 UI 线程读写；请求结果经
+// scoresState 是评分榜页面的全部界面状态。只在 UI 线程读写；请求结果经
 // publish 回来，用 seq 丢弃过期页。
 type scoresState struct {
 	categories        []string
@@ -84,69 +78,22 @@ func (st *scoresState) categoryOptions() []string {
 }
 
 /* ------------------------------------------------------------------
-   窗口
+   页面
 --------------------------------------------------------------- */
 
+// showScores 进入评分榜页：和草稿箱一样只换主窗口右侧的内容区，标题栏与
+// 侧边栏照常保留，任务栏里的窗口数不变。
 func (a *app) showScores() {
-	a.publish(a.showScoresWindow)
-}
-
-func (a *app) showScoresWindow() {
 	if a.scores == nil {
 		a.scores = newScoresState()
 	}
 	a.ensureScoresLoaded()
-	// headless 测试没有主循环：只准备状态，测试直接渲染 scoresWindowView。
-	if a.win == nil {
-		return
-	}
-	if win := a.scoresWin; win != nil {
-		if win.IsMinimized() {
-			win.Restore()
-		}
-		win.Show()
-		win.Focus()
-		win.Invalidate()
-		return
-	}
-	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             a.subWindowTitle("评分榜"),
-		Width:             scoresWindowWidth,
-		Height:            scoresWindowHeight,
-		MinWidth:          scoresWinMinWidth,
-		MinHeight:         scoresWinMinHeight,
-		StateKey:          "scores",
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
-		TitleBarStyle:     mygo.TitleBarHidden,
-		HideWindowButtons: true,
-		Content:           ui.View(a.windowView(a.scoresWindowView)),
-	})
-	a.scoresWin = win
-	win.OnClosed(func() {
-		a.scoresWin = nil
-		a.accountWindowClosed(win)
-	})
-	a.win.Invalidate()
-}
-
-func (a *app) closeScoresWindow() {
-	win := a.scoresWin
-	a.scoresWin = nil
-	if win != nil {
-		win.Close()
-	}
+	a.pageName = "scores"
+	a.navSel = "scores"
 	if a.win != nil {
 		a.win.Invalidate()
 	}
 }
-
-func (a *app) redrawScoresWindow() {
-	if win := a.scoresWin; win != nil {
-		win.Invalidate()
-	}
-}
-
-func (a *app) scoresWindowVisible() bool { return a.scoresWin != nil }
 
 /* ------------------------------------------------------------------
    加载
@@ -196,7 +143,7 @@ func (a *app) loadScoreCategories() {
 				st.lastCategory = scoreCategoryAll
 				a.reloadScores()
 			}
-			a.redrawScoresWindow()
+			// 页面内嵌在主窗口，publish 已经让主窗口重建，不必再单独重画。
 		})
 	}()
 }
@@ -300,45 +247,33 @@ func (a *app) reloadScores() {
    界面（Lobe UI）
 --------------------------------------------------------------- */
 
-func (a *app) scoresWindowView(c *ui.Context) {
-	a.applyTheme(c)
-	tk := lobetheme.TokensOf(c)
-	a.srv = c.Services()
-	c.Root().Background(tk.BgLayout)
-	c.OnShortcut(0, ui.KeyEscape, a.closeScoresWindow)
-
+func (a *app) scoresPage(c *ui.Context) {
 	st := a.scores
 	if st == nil {
 		return
 	}
+	tk := lobetheme.TokensOf(c)
+	// Fill 而不是 FillWidth：根节点要占满内容区给出的高度，评分列表才有
+	// 固定的可视范围可以滚动；只给宽度时列表按全部内容撑高，内容溢出
+	// 窗口且滚轮无效。
 	ui.Column(c).Fill().Children(func() {
-		// 自绘标题栏：拖动窗口、最小化与关闭，画法与其它窗口一致。图标仍用
-		// 评分榜的柱状图，文字走 display.Text，配色走 Lobe token。
-		ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
-			Background(tk.BgLayout).DragWindow().Children(func() {
-			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
-				AlignItems(ui.Center).Children(func() {
-				display.Icon(c, scoresIcon, display.IconProps{Size: display.IconSmall}).
-					TextColor(tk.Primary)
-				display.Text(c, "评分榜", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
-				if st.loaded {
-					display.Text(c, fmt.Sprintf("共 %d 条", st.total), display.TextProps{
-						Type: display.TextSecondary, FontSize: 11, Rows: 1,
-					})
-				}
-				a.accountWindowTag(c)
-			})
-			titleBarButton(c, titleMinimize, "最小化", func() {
-				if win := a.scoresWin; win != nil {
-					win.Minimize()
-				}
-			})
-			titleBarButton(c, titleClose, "关闭", a.closeScoresWindow)
+		// 页头：图标 + 页面名 + 总数。留白照首页 feedHeader 来（左右
+		// feedInset+16），和首页正文栏是同一条居中列宽；自绘标题栏由主窗口
+		// 统一画，这里不再有拖动 / 最小化 / 关闭那一套。
+		ui.Row(c).FillWidth().Shrink(0).Padding(24, feedInset(c)+16, 14, feedInset(c)+16).
+			Gap(10).AlignItems(ui.Center).Children(func() {
+			display.Icon(c, lucide.Trophy(), display.IconProps{Size: display.IconSmall}).
+				TextColor(tk.Primary)
+			ui.Text(c, "评分榜").FontSize(tk.FontSizeHeading4).FontWeight(600).
+				LetterSpacing(-0.4).TextColor(tk.TextHeading).SingleLine()
+			if st.loaded {
+				ui.Text(c, fmt.Sprintf("共 %d 条", st.total)).FontSize(tk.FontSizeSM).
+					Font(sidebarFont).TextColor(tk.TextDescription).SingleLine()
+			}
 		})
-		layout.Divider(c, layout.DividerProps{})
 
+		// 页头、筛选条与列表之间只靠留白分层，不画横线。
 		a.scoresFilters(c, st)
-		layout.Divider(c, layout.DividerProps{})
 
 		// 排序 / 分类变了：丢掉旧页，重新拉第 1 页。
 		if st.sort != st.lastSort {
@@ -350,7 +285,8 @@ func (a *app) scoresWindowView(c *ui.Context) {
 			a.reloadScores()
 		}
 
-		ui.Column(c).Grow(1).MinHeight(0).Padding(8, 14).Children(func() {
+		// 列表左右同样收进 feedInset，和页头、筛选条、首页列表同一列宽。
+		ui.Column(c).Grow(1).MinHeight(0).Padding(8, feedInset(c)).Children(func() {
 			a.scoresBody(c, st)
 		})
 	})
@@ -358,7 +294,7 @@ func (a *app) scoresWindowView(c *ui.Context) {
 }
 
 // scoreCategoryLabelMax 是下拉选项展示文案的长度上限。Lobe 的 Select 按最长
-// 选项决定弹层宽度且没有 MaxWidth，分类名太长会把弹层撑出窗口；Value 仍保留
+// 选项决定弹层宽度且没有 MaxWidth，分类名太长会把弹层撑出内容区；Value 仍保留
 // 完整分类名，只是显示文案截断。
 const scoreCategoryLabelMax = 10
 
@@ -476,33 +412,37 @@ func scoreCategorySelect(c *ui.Context, selected *string, active *int, options [
 // st.sort，分类下拉绑定 st.category，改动由 view 里的 lastSort / lastCategory
 // 比对接住并重拉第一页。分类字典单独读，失败不影响评分列表。
 func (a *app) scoresFilters(c *ui.Context, st *scoresState) {
-	card := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
-		FillWidth().Padding(10, 14)
-	card.Children(func() {
-		ui.Column(c).FillWidth().Gap(8).Children(func() {
-			// 窗口缩到最小宽度时，排序、标签、下拉与刷新挤在一行会把「评分分类」
-			// 截成「评…」。标签与下拉都不参与压缩，下拉宽度也按最小窗口留够余量，
-			// 让四个控件在 460 DIP 下仍能完整排在同一行。
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				action.Segmented(c, &st.sort, scoreSortLabels, action.SegmentedProps{
-					Size: lobetheme.Small,
-				})
-				display.Text(c, "评分分类", display.TextProps{
-					Type: display.TextSecondary, FontSize: 11, Rows: 1,
-				}).Shrink(0)
-				scoreCategorySelect(c, &st.category, &st.categoryActive, scoreCategoryOptions(st)).
-					Label("评分分类").Tooltip("按分类筛选评分").Width(150).Shrink(0)
-				ui.Spacer(c).Grow(1)
-				a.smallRefreshButton(c, st.loading, a.reloadScores)
-			})
-			if st.categoriesErr != "" {
+	// 筛选卡片和首页正文栏同宽：外层吃掉 feedInset，卡片自己只留 Lobe 的
+	// 内边距，宽窗口里不会横贯整屏，最小窗口下仍按 24 DIP 收边。
+	ui.Row(c).FillWidth().Padding(0, feedInset(c)).Children(func() {
+		card := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
+			FillWidth().Padding(10, 14)
+		card.Children(func() {
+			ui.Column(c).FillWidth().Gap(8).Children(func() {
+				// 主窗口缩到最小宽度时，排序、标签、下拉与刷新挤在一行会把「评分分类」
+				// 截成「评…」。标签与下拉都不参与压缩，下拉宽度也按最小窗口留够余量，
+				// 让四个控件在主窗口最小宽度下仍能完整排在同一行。
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-					display.Text(c, "分类暂时不可用："+st.categoriesErr, display.TextProps{
-						Type: display.TextDanger, FontSize: 11, Rows: 2,
-					}).Grow(1).MinWidth(0)
-					a.smallAction(c, "重试", st.categoriesLoading, a.loadScoreCategories)
+					action.Segmented(c, &st.sort, scoreSortLabels, action.SegmentedProps{
+						Size: lobetheme.Small,
+					})
+					display.Text(c, "评分分类", display.TextProps{
+						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+					}).Shrink(0)
+					scoreCategorySelect(c, &st.category, &st.categoryActive, scoreCategoryOptions(st)).
+						Label("评分分类").Tooltip("按分类筛选评分").Width(150).Shrink(0)
+					ui.Spacer(c).Grow(1)
+					a.smallRefreshButton(c, st.loading, a.reloadScores)
 				})
-			}
+				if st.categoriesErr != "" {
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+						display.Text(c, "分类暂时不可用："+st.categoriesErr, display.TextProps{
+							Type: display.TextDanger, FontSize: 11, Rows: 2,
+						}).Grow(1).MinWidth(0)
+						a.smallAction(c, "重试", st.categoriesLoading, a.loadScoreCategories)
+					})
+				}
+			})
 		})
 	})
 }

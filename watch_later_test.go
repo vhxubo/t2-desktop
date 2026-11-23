@@ -142,9 +142,20 @@ func TestWatchLaterClearOnlyCurrentAccount(t *testing.T) {
 	}
 }
 
-// 窗口：两页都在，行里画标题、节点、作者与数量；点一行打开正文并按默认
-// 偏好从列表移除。
-func TestWatchLaterWindowRendersAndRemovesOnOpen(t *testing.T) {
+// 内嵌页的操作结果走主窗口 toast，不再单独认领一种 toastTarget：页面和
+// 草稿箱一样没有自己的窗口，提示得画在唯一那扇主窗口里。
+func TestWatchLaterToastUsesMainWindow(t *testing.T) {
+	a := testApp(t)
+	a.addWatchLater(Item{ShortID: "P1", Title: "待读"}, nil)
+	a.clearWatchLater()
+	if len(a.toasts) != 1 || a.toasts[0].target != toastMain {
+		t.Fatalf("清空结果没有走主窗口 toast：%+v", a.toasts)
+	}
+}
+
+// 页面：两段都在，行里画标题、节点、作者与数量；点一行打开正文并按默认
+// 偏好从列表移除。页面和草稿箱一样内嵌在主窗口，不新开 mygo 窗口。
+func TestWatchLaterPageRendersAndRemovesOnOpen(t *testing.T) {
 	a := testApp(t)
 	a.addWatchLater(Item{
 		ShortID: "P1", Title: "稍后要读的帖子", Author: "jimmy",
@@ -152,31 +163,40 @@ func TestWatchLaterWindowRendersAndRemovesOnOpen(t *testing.T) {
 	}, nil)
 	a.addWatchLater(Item{ShortID: "P2", Title: "第二篇待读"}, nil)
 
-	tt := ui.NewTester(a.watchLaterWindowView, watchLaterWindowWidth, watchLaterWindowHeight)
+	a.showWatchLater()
+	if a.pageName != "watchlater" || a.navSel != "watchlater" {
+		t.Fatalf("没进稍后再看页：page=%q nav=%q", a.pageName, a.navSel)
+	}
+	if a.win != nil {
+		t.Fatal("进稍后再看页不该新开窗口")
+	}
+	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 	for _, want := range []string{
 		"稍后再看", "浏览历史", "稍后要读的帖子", "第二篇待读", "共 2 条", "jimmy",
 	} {
 		if !tt.HasText(want) {
-			t.Errorf("稍后再看窗口缺少 %q：%q", want, tt.Texts())
+			t.Errorf("稍后再看页缺少 %q：%q", want, tt.Texts())
 		}
 	}
 
 	if err := tt.Click("稍后要读的帖子"); err != nil {
 		t.Fatalf("点击待读行失败：%v", err)
 	}
+	// 无头路径下详情页占了主窗口，回到稍后再看页再看列表。
+	a.showWatchLater()
 	tt.Frame()
 	if a.inWatchLater("P1") {
-		t.Error("从窗口点开后没有从稍后再看移除")
+		t.Error("从页面点开后没有从稍后再看移除")
 	}
 	if !tt.HasText("共 1 条") {
 		t.Errorf("列表没有按移除后的数量重建：%q", tt.Texts())
 	}
 }
 
-// 保留模式下窗口区分已读与未读：未读带「未读」标签，读过的带「已读」且
+// 保留模式下页面区分已读与未读：未读带「未读」标签，读过的带「已读」且
 // 标题置灰。
-func TestWatchLaterWindowMarksRead(t *testing.T) {
+func TestWatchLaterPageMarksRead(t *testing.T) {
 	a := testApp(t)
 	if err := a.watchLaterPrefs.setKeepAfterOpen(true); err != nil {
 		t.Fatal(err)
@@ -185,7 +205,8 @@ func TestWatchLaterWindowMarksRead(t *testing.T) {
 	a.addWatchLater(Item{ShortID: "P2", Title: "还没读的帖子"}, nil)
 	a.handleWatchLaterOpen("P1")
 
-	tt := ui.NewTester(a.watchLaterWindowView, watchLaterWindowWidth, watchLaterWindowHeight)
+	a.showWatchLater()
+	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 	if !tt.HasText("已读") {
 		t.Errorf("保留模式下没有已读标签：%q", tt.Texts())
@@ -210,8 +231,9 @@ func TestReadingHistoryTabRenders(t *testing.T) {
 		ShortID: "R1", Title: "浏览过的帖子",
 	}})
 	a.laterTab = 1
+	a.showWatchLater()
 
-	tt := ui.NewTester(a.watchLaterWindowView, watchLaterWindowWidth, watchLaterWindowHeight)
+	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 	for _, want := range []string{"浏览历史", "浏览过的帖子", "amy", "共 1 条"} {
 		if !tt.HasText(want) {
@@ -238,7 +260,7 @@ func TestReadingHistoryTabRenders(t *testing.T) {
 }
 
 // 稍后再看入口收进侧边栏，和草稿箱一上一下成组：待读数走 Lobe 红点角标，
-// 折叠成图标轨与展开态都展示同一个数字；点它打开那扇双页窗口。
+// 折叠成图标轨与展开态都展示同一个数字；点它切到主窗口里的双段页面。
 func TestSidebarWatchLaterEntry(t *testing.T) {
 	a := testApp(t)
 
@@ -259,6 +281,10 @@ func TestSidebarWatchLaterEntry(t *testing.T) {
 
 	checkDot := func(expanded bool, want string) {
 		t.Helper()
+		// 上一轮点过入口后停在这一页；回到列表再量侧边栏，免得页头里的
+		// 同名标题抢走「稍后再看」这一行。
+		a.pageName = "list"
+		a.navSel = "t0"
 		a.navExpanded = expanded
 		tt := ui.NewTester(a.view, 1100, 760)
 		tt.Frame()

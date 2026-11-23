@@ -33,6 +33,7 @@ const (
 	settingsTabProxy = iota
 	settingsTabHosts
 	settingsTabCache
+	settingsTabImages
 	settingsTabUpdates
 	settingsTabWindow
 	settingsTabAppearance
@@ -42,7 +43,7 @@ const (
 	settingsTabShortcuts
 )
 
-var settingsTabLabels = []string{"网络代理", "图库", "图片缓存", "更新", "窗口", "外观", "评论", "通知", "阅读", "快捷键"}
+var settingsTabLabels = []string{"网络代理", "图库", "图片缓存", "图片", "更新", "窗口", "外观", "评论", "通知", "阅读", "快捷键"}
 
 /* ------------------------------------------------------------------
    设置窗口：全局入口、显示与关闭
@@ -211,6 +212,8 @@ func (a *app) settingsWindowView(c *ui.Context) {
 					a.imageHostsSection(c)
 				case settingsTabCache:
 					a.imageCacheSection(c)
+				case settingsTabImages:
+					a.imageSettingsSection(c)
 				case settingsTabUpdates:
 					a.updateSettingsSection(c)
 				case settingsTabWindow:
@@ -409,7 +412,7 @@ func (a *app) commentSettingsSection(c *ui.Context) {
 
 // readingSettingsSection 是「阅读」一块：浏览历史与稍后再看都存在本机、按
 // 账号隔离，这里只提供「打开后保留」这一个行为开关。清空入口在稍后再看
-// 窗口的两页顶部，按当前账号清，不和服务端收藏混在一起。
+// 页的两段顶部，按当前账号清，不和服务端收藏混在一起。
 func (a *app) readingSettingsSection(c *ui.Context) {
 	p := a.watchLaterPrefs
 	settingsSection(c, "阅读记录", func() {
@@ -422,6 +425,8 @@ func (a *app) readingSettingsSection(c *ui.Context) {
 
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			if action.Button(c, "打开稍后再看", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+				// 稍后再看是主窗口内嵌页：先收起设置窗口，免得新页面被它盖住。
+				a.closeSettingsWindow()
 				a.showWatchLater()
 			}
 			ui.Spacer(c).Grow(1)
@@ -442,7 +447,7 @@ func (a *app) setKeepWatchLater(on bool) {
 	if !on {
 		a.clearWatchLaterReadMarks()
 	}
-	a.redrawWatchLaterWindow()
+	a.redrawWatchLaterPage()
 	if on {
 		a.toast(toastSettings, "打开后保留在稍后再看，已读与未读分开显示")
 	} else {
@@ -776,4 +781,70 @@ func cacheRow(c *ui.Context, label, value string, strong bool) {
 			Type: display.TextSecondary, FontSize: 12, Rows: 1,
 		})
 	})
+}
+
+/* ------------------------------------------------------------------
+   图片一块：默认不加载图片、动图自动播放
+---------------------------------------------------------------- */
+
+// imageSettingsSection 是「图片」一块：正文与评论里的配图怎么加载、动图放不
+// 放。两枚开关都立即落盘、进程级共享，所有账号窗口下一帧就按新状态重建。
+func (a *app) imageSettingsSection(c *ui.Context) {
+	p := a.imagePrefs
+	settingsSection(c, "图片", func() {
+		if v := settingsCheckbox(c, "默认不加载图片", p.lazyLoad()); v != p.lazyLoad() {
+			a.setLazyImages(v)
+		}
+		settingsDescription(c, "打开后配图先显示占位、点一下才下载；"+
+			"头像、行内表情与徽章不受影响。", 2)
+		if v := settingsCheckbox(c, "动图自动播放", p.autoAnimate()); v != p.autoAnimate() {
+			a.setAnimateImages(v)
+		}
+		settingsDescription(c, "关掉后预览里的 gif / apng 只显示首帧。", 1)
+	})
+}
+
+// setLazyImages 开关「默认不加载图片」。打开时立刻生效：所有窗口下一帧起把
+// 配图画成占位；关掉时把「已点开」的记录清空，之后照常自动加载。
+func (a *app) setLazyImages(on bool) {
+	if a.imagePrefs == nil || a.imagePrefs.lazyLoad() == on {
+		return
+	}
+	if err := a.imagePrefs.setLazy(on); err != nil {
+		a.toast(toastSettings, err.Error())
+		return
+	}
+	if !on {
+		a.revealedImages = nil
+	}
+	a.publish(func() {})
+	if on {
+		a.toast(toastSettings, "配图先显示占位，点一下才加载")
+	} else {
+		a.toast(toastSettings, "配图恢复自动加载")
+	}
+}
+
+// setAnimateImages 开关动图自动播放。关掉时顺手关掉预览里已经在放的播放器，
+// 免得它们在后台继续解码。
+func (a *app) setAnimateImages(on bool) {
+	if a.imagePrefs == nil || a.imagePrefs.autoAnimate() == on {
+		return
+	}
+	if err := a.imagePrefs.setAnimate(on); err != nil {
+		a.toast(toastSettings, err.Error())
+		return
+	}
+	if !on {
+		if v := a.viewer; v != nil {
+			v.closePlayers()
+		}
+	}
+	a.publish(func() {})
+	a.redrawViewerWindow()
+	if on {
+		a.toast(toastSettings, "动图将在预览里播放")
+	} else {
+		a.toast(toastSettings, "动图只显示首帧")
+	}
 }

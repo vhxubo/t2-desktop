@@ -21,11 +21,26 @@ import (
 // 解码结果与磁盘字节都由全局图片缓存（image_cache.go）管理：表情进长期
 // 缓存，帖子配图进临时缓存。
 
-// articlePicture 是从源文里认出的一张配图：地址与说明文字。多图预览窗口
-// （见 image_viewer.go）按这些翻页与另存为。
+// articlePicture 是从源文里认出的一项媒体：地址、说明文字，以及它是一张图
+// 还是一段站外视频。多图预览窗口（见 image_viewer.go）按这些翻页、缩放与
+// 另存为，视频则在预览里给出封面卡片、点开在浏览器里播放。
 type articlePicture struct {
 	URL string
 	Alt string
+	// Kind 是这一项的类型，零值是图片。视频条目由正文里「独占一段的视频
+	// 链接」认出来（见 media.go 的 standaloneMediaLink）。
+	Kind mediaKind
+}
+
+// ref 返回这一项的媒体信息：视频按地址重新认一遍来源与编号，图片只带地址。
+func (p articlePicture) ref() mediaRef {
+	if p.Kind == mediaVideo {
+		if ref, ok := parseVideoLink(p.URL); ok {
+			return ref
+		}
+		return mediaRef{URL: p.URL, Kind: mediaVideo, WatchURL: p.URL}
+	}
+	return mediaRef{URL: p.URL, Kind: mediaImage}
 }
 
 // articleBlockAt 返回 Markdown 的 Options.Block：接管含表情或配图的段落 /
@@ -59,6 +74,24 @@ func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float3
 		return false
 	}
 	in := d.Inlines(i)
+	// 独占一段的媒体链接：站外视频画成封面卡片，裸图片地址按图片嵌入。
+	// 这两种写法在 2Libra 的正文里很常见，Markdown 默认只会留下一条链接。
+	if b.Kind == parser.Paragraph {
+		if ref, alt, ok := standaloneMediaLink(in); ok {
+			if ref.Kind == mediaVideo {
+				if alt == "" {
+					alt = ref.title()
+				}
+				a.articleVideoEmbed(c, ref, alt, pictures)
+			} else {
+				if alt == "" {
+					alt = ref.title()
+				}
+				a.articlePicture(c, ref.URL, alt, pictures)
+			}
+			return true
+		}
+	}
 	emoji := a.hasEmojiImage(in)
 	picture := a.hasTopLevelPicture(in)
 	mention := mentions && hasMention(in)
@@ -311,12 +344,17 @@ func articleSegmentEmpty(in []parser.Inline, from, to int) bool {
 	return true
 }
 
-// 配图占位里的说明文案：加载中与失败各一句，测试也据此判断进度有没有退场。
-// 尺寸还不知道的第一张图给一条固定高度的空框，让转圈有个位置。
+// 配图占位里的说明文案：加载中、失败与「默认不加载图片」各一句，测试也据此
+// 判断进度有没有退场。尺寸还不知道的第一张图给一条固定高度的空框，让转圈
+// 有个位置。
 const (
 	imageLoadingText                     = "图片加载中…"
 	imageFailedText                      = "图片加载失败"
+	imageLazyText                        = "点一下加载图片"
 	imageUnknownSizePlaceholderH float32 = 72
+	// imageVideoCardMaxH 是正文里视频封面卡片的高度上限：再宽的一栏也不该让
+	// 一张卡片占满整屏。
+	imageVideoCardMaxH float32 = 380
 )
 
 // articlePicture 显示一张正文配图：仍在下载时转圈并说明，失败后给一句说明，
@@ -337,6 +375,10 @@ func (a *app) articlePicture(c *ui.Context, dest, alt string, pictures []article
 		alt = "图片"
 	}
 	dest = strings.TrimSpace(dest)
+	if a.imageHidden(dest) {
+		a.articlePictureLazy(c, dest, alt)
+		return
+	}
 	src := a.articleImage(dest, imageCacheTemporary)
 	w, h := ui.ImageSize(src)
 	if w <= 0 || h <= 0 {
@@ -405,6 +447,102 @@ func (a *app) articlePicturePending(c *ui.Context, dest, alt string, w, h float3
 			if !loading {
 				ui.Text(c, alt).FontSize(11).TextColor(th.Muted).MaxLines(2)
 			}
+		})
+	})
+}
+
+// imageHidden 报告一张配图此刻该不该先画占位：只在「默认不加载图片」打开、
+// 这张图还没被点开过、也没有已经在缓存里时成立。点过一次的地址记在
+// revealedImages 里，之后滚回来照常显示图片。
+func (a *app) imageHidden(dest string) bool {
+	if !a.imagePrefs.lazyLoad() || a.revealedImages[dest] {
+		return false
+	}
+	return a.images.source(dest) == nil
+}
+
+// revealImage 是「默认不加载图片」模式下点占位的结果：记下这张图已经点开，
+// 开始下载并让界面重建。图片到位后占位自己换成图片（见 articlePicture）。
+func (a *app) revealImage(dest string) {
+	dest = strings.TrimSpace(dest)
+	if dest == "" {
+		return
+	}
+	if a.revealedImages == nil {
+		a.revealedImages = make(map[string]bool, 1)
+	}
+	if a.revealedImages[dest] {
+		return
+	}
+	a.revealedImages[dest] = true
+	a.prefetchImage(dest, imageCacheTemporary)
+	a.publish(func() {})
+}
+
+// articlePictureLazy 画「默认不加载图片」时的占位：只留位置和一句说明，点
+// 一下才开始下载。尺寸已知时（磁盘缓存里有这张图）按真实宽高留白，图片到位
+// 后下面的文字不会跳；尺寸未知时用固定高度的空框。
+func (a *app) articlePictureLazy(c *ui.Context, dest, alt string) {
+	th := markdown.DefaultTheme(c.Theme())
+	w, h, _ := a.images.cachedSize(dest, imageCacheTemporary)
+	box := ui.Box(c).Radius(4).Background(th.CodeBackground).Center().Clip().
+		Cursor(ui.CursorPointer)
+	if w > 0 && h > 0 {
+		box.Width(w).MaxWidthPercent(100).AspectRatio(w / h)
+	} else {
+		box.FillWidth().Height(imageUnknownSizePlaceholderH)
+	}
+	box.Label(alt).Tooltip("点一下加载这张图")
+	box.OnClick(func() { a.revealImage(dest) })
+	box.Children(func() {
+		ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, imagePlaceholderIcon).Size(16, 16).TextColor(th.Muted)
+			ui.Text(c, imageLazyText).FontSize(12).TextColor(th.Muted).SingleLine()
+		})
+	})
+}
+
+// articleVideoEmbed 把一段站外视频画成封面卡片：封面、一个播放按钮与来源
+// 编号。title 是卡片上写的名字（链接文字优先，没有就用来源 · 编号）。点一下
+// 打开预览窗口停在这一项，播放交给浏览器——正文里不直接放一个能跳走的外链，
+// 免得读帖时误触。
+func (a *app) articleVideoEmbed(c *ui.Context, ref mediaRef, title string, pictures []articlePicture) {
+	card := ui.Box(c).FillWidth().AspectRatio(16.0 / 9).MaxHeight(imageVideoCardMaxH).
+		Radius(8).Background(videoCardBG).Clip().Cursor(ui.CursorPointer)
+	card.Label("打开视频：" + title).Tooltip("点开预览")
+	card.OnClick(func() { a.openImageGroup(pictures, ref.URL) })
+	// 「默认不加载图片」时正文里的封面也不下载：卡片只用来源底色，点开预览
+	// 之后才取封面（预览是明确的动作，不再省这一张）。
+	fetchCover := !a.imagePrefs.lazyLoad() || a.revealedImages[ref.ThumbURL]
+	card.Children(func() { a.videoCover(c, ref, title, fetchCover) })
+}
+
+// videoCardBG 是视频卡片没有封面时的底色：一块近黑的深色，与预览窗口的
+// 舞台同一套颜色。
+var videoCardBG = ui.Hex("#101012")
+
+// videoCover 画视频卡片的封面与中央的播放按钮。YouTube 的缩略图能直接由
+// 编号拼出来，走图片缓存下载；哔哩哔哩的封面要另调接口，这里只用来源底色
+// 加编号。title 是卡片上写的名字，fetchCover 为假时连封面也不下载
+// （「默认不加载图片」）。
+func (a *app) videoCover(c *ui.Context, ref mediaRef, title string, fetchCover bool) {
+	if fetchCover && ref.ThumbURL != "" {
+		if src := a.articleImage(ref.ThumbURL, imageCacheTemporary); src != nil {
+			ui.Image(c, src).Fill().Fit(ui.Cover).Label(ref.title())
+		}
+	}
+	ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).
+		Background(ui.RGBA(0, 0, 0, 0.38)).Center().Children(func() {
+		// 这一列撑满卡片再居中排，标题按卡片宽度决定能否单行放下；不撑满时
+		// 列的宽度会被最窄的按钮收窄，稍长的视频编号就被迫截断。
+		ui.Column(c).FillWidth().Padding(0, 24).Gap(8).AlignItems(ui.Center).Children(func() {
+			play := ui.Box(c).Size(52, 52).Radius(26).
+				Background(ui.RGBA(0, 0, 0, 0.55)).Center()
+			play.Children(func() { ui.Icon(c, playIcon).Size(22, 22).TextColor(ui.Hex("#ffffff")) })
+			ui.Text(c, title).FontSize(12).TextColor(ui.Hex("#ffffff")).
+				SingleLine().MaxWidthPercent(100)
+			ui.Text(c, "点开预览 · 在浏览器中播放").FontSize(11).
+				TextColor(ui.RGBA(255, 255, 255, 0.72)).SingleLine()
 		})
 	})
 }
@@ -624,6 +762,17 @@ func (a *app) articlePictures(d *parser.Document) []articlePicture {
 			i = b.Next - 1 // 表格的行与单元格不必再当独立块扫一遍
 		case parser.Paragraph, parser.Heading:
 			in := d.Inlines(i)
+			// 独占一段的媒体链接在正文里是一张卡片或一张图（见 articleBlock），
+			// 收组时按同一规则收，张数才与画面里显示的一致。
+			if b.Kind == parser.Paragraph {
+				if ref, alt, ok := standaloneMediaLink(in); ok {
+					if alt == "" {
+						alt = ref.title()
+					}
+					out = append(out, articlePicture{URL: ref.URL, Alt: alt, Kind: ref.Kind})
+					continue
+				}
+			}
 			collectArticlePictures(&out, a, in, 0, len(in))
 		}
 	}

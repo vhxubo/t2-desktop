@@ -36,7 +36,6 @@ const (
 	toastFollows                          // 关注与粉丝窗口：回关 / 取关
 	toastViewer                           // 图片预览窗口：另存为结果
 	toastNetLog                           // 网络调试窗口：复制请求数据的结果
-	toastWatchLater                       // 稍后再看 / 浏览历史窗口：清空与移除的结果
 )
 
 // toastNote 是一条等着显示的提示。
@@ -79,8 +78,6 @@ func (a *app) toastWindow(target toastTarget) *mygo.Window {
 		return a.viewerWin
 	case toastNetLog:
 		return a.netLogWin
-	case toastWatchLater:
-		return a.watchLaterWin
 	}
 	return a.win
 }

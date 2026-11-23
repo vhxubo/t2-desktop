@@ -191,8 +191,14 @@ func (b *accountBook) panelAccountRow(c *ui.Context, acc accountView) {
 		if bmp := b.avatarBitmap(acc.Avatar); bmp != nil {
 			image = bmp
 		}
-		display.Avatar(c, acc.Name, display.AvatarProps{
-			Size: 34, Shape: display.AvatarCircle, Image: image,
+		var proMark *ui.Bitmap
+		if acc.IsPro {
+			proMark = proMarkBitmapOf(b.images)
+		}
+		avatarHostWith(c, 34, acc.IsPro, proMark, func() ui.Element {
+			return display.Avatar(c, acc.Name, display.AvatarProps{
+				Size: 34, Shape: display.AvatarCircle, Image: image,
+			})
 		})
 
 		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {

@@ -429,6 +429,7 @@ func (a *app) searchRow(c *ui.Context, st *searchState, hit searchHit) {
 					Size:   14,
 					Bold:   true,
 					Badges: hit.badges,
+					Pro:    hit.isPro,
 				})
 				display.Text(c, "用户", display.TextProps{
 					Type: display.TextSecondary, FontSize: 11, Rows: 1,

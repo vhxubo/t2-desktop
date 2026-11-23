@@ -3,134 +3,77 @@ package main
 import (
 	"fmt"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/display"
-	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	"github.com/lobehub/lobe-mygo/pkg/nav"
 	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 稍后再看 / 浏览历史窗口：侧边栏「稍后再看」入口打开（见 sidebarNavItems），
-// 一扇窗口里分「稍后再看」「浏览历史」两页。
+// 稍后再看 / 浏览历史页面：侧边栏「稍后再看」入口打开（见 sidebarNavItems），
+// 一页里分「稍后再看」「浏览历史」两段。它和首页、草稿箱一样是主窗口右侧
+// 内容区的一个页面（pageName = "watchlater"），共用标题栏与侧边栏，不新开
+// mygo 窗口。
 //
 // 两页的数据都只在本机、按账号隔离（见 watch_later.go 与 reading_history.go）：
 // 换账号窗口时各自重新载入，清空只清当前账号。稍后再看的打开行为由设置窗口
 // 「阅读」页决定：默认打开即移除，打开「保留」后留在列表里并区分已读未读。
 //
 // 界面走 Lobe UI：分段、按钮、Tag、空状态、滚动区分别由 action / display /
-// feedback / layout 提供，颜色取 TokensOf(c)，和评分榜等附属窗口同一套观感。
+// feedback 提供，颜色取 TokensOf(c)，和主窗口其它页面同一套观感。
 
-const (
-	watchLaterWindowWidth  = 560
-	watchLaterWindowHeight = 680
-	watchLaterWinMinWidth  = 420
-	watchLaterWinMinHeight = 420
-)
-
+// showWatchLater 进入稍后再看页：和草稿箱一样只换主窗口右侧的内容区，
+// 标题栏与侧边栏照常保留，任务栏里的窗口数不变。
 func (a *app) showWatchLater() {
-	a.publish(a.showWatchLaterWindow)
-}
-
-func (a *app) showWatchLaterWindow() {
 	a.loadWatchLater()
 	a.loadReadingHistory()
-	// headless 测试没有主循环：只准备状态，测试直接渲染 watchLaterWindowView。
-	if a.win == nil {
-		return
-	}
-	if win := a.watchLaterWin; win != nil {
-		if win.IsMinimized() {
-			win.Restore()
-		}
-		win.Show()
-		win.Focus()
-		win.Invalidate()
-		return
-	}
-	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             a.subWindowTitle("稍后再看"),
-		Width:             watchLaterWindowWidth,
-		Height:            watchLaterWindowHeight,
-		MinWidth:          watchLaterWinMinWidth,
-		MinHeight:         watchLaterWinMinHeight,
-		StateKey:          "watch-later",
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
-		TitleBarStyle:     mygo.TitleBarHidden,
-		HideWindowButtons: true,
-		Content:           ui.View(a.windowView(a.watchLaterWindowView)),
-	})
-	a.watchLaterWin = win
-	win.OnClosed(func() {
-		a.watchLaterWin = nil
-		a.accountWindowClosed(win)
-	})
-	a.win.Invalidate()
-}
-
-func (a *app) closeWatchLaterWindow() {
-	win := a.watchLaterWin
-	a.watchLaterWin = nil
-	if win != nil {
-		win.Close()
-	}
+	a.pageName = "watchlater"
+	a.navSel = "watchlater"
 	if a.win != nil {
 		a.win.Invalidate()
 	}
 }
 
-// redrawWatchLaterWindow 在列表变化后让窗口按新数据重建。窗口没开时是空操作。
-func (a *app) redrawWatchLaterWindow() {
-	if win := a.watchLaterWin; win != nil {
-		win.Invalidate()
+// redrawWatchLaterPage 在清单变化后让主窗口重建：页面内嵌在主窗口，侧边栏
+// 角标也读这份数据，所以无论当前停在哪一页都要重画。窗口没开时是空操作。
+func (a *app) redrawWatchLaterPage() {
+	if a.win != nil {
+		a.win.Invalidate()
 	}
 }
 
-func (a *app) watchLaterToast() toastTarget { return toastWatchLater }
-
 /* ------------------------------------------------------------------
-   窗口
+   页面
 --------------------------------------------------------------- */
 
-func (a *app) watchLaterWindowView(c *ui.Context) {
-	a.applyTheme(c)
-	tk := lobetheme.TokensOf(c)
-	a.srv = c.Services()
-	c.Root().Background(tk.BgLayout)
-	c.OnShortcut(0, ui.KeyEscape, a.closeWatchLaterWindow)
-	defer a.drainToasts(c, a.claimsToasts(toastWatchLater))
-
+func (a *app) watchLaterPage(c *ui.Context) {
 	// 每帧确认内存里的两份列表属于当前账号：换账号、重新登录后自动换成
 	// 新的作用域，不会把上一个账号的记录画出来。
 	a.loadWatchLater()
 	a.loadReadingHistory()
 
+	tk := lobetheme.TokensOf(c)
+	title := "稍后再看"
+	if a.laterTab == 1 {
+		title = "浏览历史"
+	}
+	// 页头和首页 feedHeader 同一套留白与字号：大标题写当前段名，下面的 tab
+	// 只负责切换，不再兼当标题。整页左右收进 feedInset，和首页正文栏同宽。
+	// 页头、tab、列表之间不画横线，留白本身就是分层。
+	// Fill 而不是 FillWidth：根节点要占满内容区给出的高度，里面的列表才有
+	// 一个固定的可视范围可以滚动；只给宽度时列表会按全部内容撑高，内容
+	// 直接溢出窗口，滚轮也失效。
 	ui.Column(c).Fill().Children(func() {
-		// 自绘标题栏：拖动窗口、最小化与关闭，画法与其它窗口一致。
-		ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
-			Background(tk.BgLayout).DragWindow().Children(func() {
-			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
-				AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, lucide.Bookmark()).Size(16, 16).TextColor(tk.Primary)
-				display.Text(c, "稍后再看", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
-				a.accountWindowTag(c)
-			})
-			titleBarButton(c, titleMinimize, "最小化", func() {
-				if win := a.watchLaterWin; win != nil {
-					win.Minimize()
-				}
-			})
-			titleBarButton(c, titleClose, "关闭", a.closeWatchLaterWindow)
+		ui.Row(c).FillWidth().Shrink(0).
+			Padding(24, feedInset(c)+16, 14, feedInset(c)+16).Children(func() {
+			ui.Text(c, title).FontSize(tk.FontSizeHeading4).FontWeight(600).
+				LetterSpacing(-0.4).TextColor(tk.TextHeading).SingleLine()
 		})
-		layout.Divider(c, layout.DividerProps{})
-
 		a.watchLaterTabBar(c)
-		layout.Divider(c, layout.DividerProps{})
 
-		ui.Column(c).Grow(1).MinHeight(0).Padding(6, 10).Children(func() {
+		ui.Column(c).Grow(1).MinHeight(0).Padding(6, feedInset(c)).Children(func() {
 			if a.laterTab == 1 {
 				a.readingHistoryBody(c)
 				return
@@ -140,13 +83,17 @@ func (a *app) watchLaterWindowView(c *ui.Context) {
 	})
 }
 
-// watchLaterTabBar 是窗口顶部的一条：分页切两页，右侧是当前页的条数与清空
-// 入口。清空只清当前账号，不碰服务端的收藏 / 书签。
+// watchLaterTabBar 是页头下方的一行：方形下划线 tab 切两段，右侧是当前段
+// 的条数与清空入口。tab 样式与设置、详情页一致（TabsSquare + Small），
+// 左右留白收进 feedInset，和列表同一列宽。清空只清当前账号，不碰服务端
+// 的收藏 / 书签。
 func (a *app) watchLaterTabBar(c *ui.Context) {
 	tk := lobetheme.TokensOf(c)
-	ui.Row(c).FillWidth().Padding(6, 14).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Shrink(0).Padding(0, feedInset(c), 8, feedInset(c)).
+		Gap(8).AlignItems(ui.Center).Children(func() {
 		c.Key("watch-later-tabs")
 		sel := a.laterTab
+		// 和设置 / 详情页的 tab 同一套：方形下划线 + Small，不用胶囊默认效果。
 		nav.Tabs(c, &sel, nav.TabsProps{
 			Items:   []nav.TabItem{{Label: "稍后再看"}, {Label: "浏览历史"}},
 			Variant: nav.TabsSquare,
@@ -183,7 +130,7 @@ func (a *app) watchLaterTabBar(c *ui.Context) {
 			b.TextColor(tk.Error)
 			if b.Clicked() {
 				if a.laterTab == 1 {
-					a.clearReadingHistory(toastWatchLater)
+					a.clearReadingHistory(toastMain)
 					return
 				}
 				a.clearWatchLater()
@@ -251,6 +198,7 @@ func (a *app) watchLaterRow(c *ui.Context, r watchLaterRecord) {
 						Size:   tk.FontSizeSM - 1,
 						Color:  tk.TextDescription,
 						Badges: r.Badges,
+						Pro:    r.IsPro,
 					})
 				}
 				if when := watchLaterTimeText(r.AddedAt); when != "" {
@@ -289,7 +237,7 @@ func (a *app) watchLaterRow(c *ui.Context, r watchLaterRecord) {
 		// 默认偏好下点开即移除：给一句说明，免得列表里的条目突然消失让人
 		// 以为点错了。保留模式下它只是变成已读，不需要提示。
 		if !a.watchLaterPrefs.keepAfterOpen() {
-			a.toast(toastWatchLater, "已从稍后再看移除")
+			a.toast(toastMain, "已从稍后再看移除")
 		}
 	})
 }
@@ -368,9 +316,9 @@ func (a *app) feedWatchLaterButton(c *ui.Context, it Item, enabled, revealed boo
 	link.Label(label).Cursor(ui.CursorPointer)
 	link.OnClick(func() {
 		if a.toggleWatchLater(it, nil) {
-			a.toast(a.watchLaterToast(), "已加入稍后再看")
+			a.toast(toastMain, "已加入稍后再看")
 		} else {
-			a.toast(a.watchLaterToast(), "已移出稍后再看")
+			a.toast(toastMain, "已移出稍后再看")
 		}
 	})
 	link.Tooltip(tip)

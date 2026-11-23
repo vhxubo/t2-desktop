@@ -28,6 +28,7 @@ type watchLaterRecord struct {
 	Author    string      `json:"author,omitempty"`
 	Avatar    string      `json:"avatar,omitempty"`
 	Badges    []badgeInfo `json:"badges,omitempty"`
+	IsPro     bool        `json:"is_pro,omitempty"`
 	Node      string      `json:"node,omitempty"`
 	URL       string      `json:"url,omitempty"`
 	CommentID string      `json:"comment_id,omitempty"`
@@ -146,6 +147,7 @@ func watchLaterRecordFor(it Item, topic *topicDetail) watchLaterRecord {
 		Author:    it.Author,
 		Avatar:    it.AuthorAvatar,
 		Badges:    it.AuthorBadges,
+		IsPro:     it.AuthorIsPro,
 		Node:      nodeFromSubtitlePrefix(it.SubtitlePrefix),
 		URL:       it.URL,
 		CommentID: it.CommentID,
@@ -172,6 +174,9 @@ func watchLaterRecordFromTopic(rec watchLaterRecord, topic *topicDetail) watchLa
 	}
 	if len(topic.Badges) > 0 {
 		rec.Badges = topic.Badges
+	}
+	if topic.AuthorIsPro {
+		rec.IsPro = true
 	}
 	if topic.NodeName != "" {
 		rec.Node = topic.NodeName
@@ -207,6 +212,9 @@ func (a *app) addWatchLater(it Item, topic *topicDetail) {
 		if len(rec.Badges) == 0 {
 			rec.Badges = old.Badges
 		}
+		if !rec.IsPro {
+			rec.IsPro = old.IsPro
+		}
 		if rec.Node == "" {
 			rec.Node = old.Node
 		}
@@ -225,7 +233,7 @@ func (a *app) addWatchLater(it Item, topic *topicDetail) {
 	}
 	a.saveWatchLater()
 	a.prefetchAvatars(rec.Avatar)
-	a.redrawWatchLaterWindow()
+	a.redrawWatchLaterPage()
 }
 
 // removeWatchLater 把一条移出稍后再看。不在列表里时是空操作。
@@ -240,7 +248,7 @@ func (a *app) removeWatchLater(shortID string) {
 		}
 		a.later = append(a.later[:i], a.later[i+1:]...)
 		a.saveWatchLater()
-		a.redrawWatchLaterWindow()
+		a.redrawWatchLaterPage()
 		return
 	}
 }
@@ -276,7 +284,7 @@ func (a *app) handleWatchLaterOpen(shortID string) {
 	if !a.watchLaterPrefs.keepAfterOpen() {
 		a.later = append(a.later[:idx], a.later[idx+1:]...)
 		a.saveWatchLater()
-		a.redrawWatchLaterWindow()
+		a.redrawWatchLaterPage()
 		return
 	}
 	if !a.later[idx].ReadAt.IsZero() {
@@ -285,7 +293,7 @@ func (a *app) handleWatchLaterOpen(shortID string) {
 	a.later[idx].ReadAt = time.Now()
 	sortWatchLaterRecords(a.later)
 	a.saveWatchLater()
-	a.redrawWatchLaterWindow()
+	a.redrawWatchLaterPage()
 }
 
 // updateWatchLaterTopic 在正文加载成功后补全加入时还缺的标题、作者与节点。
@@ -306,7 +314,7 @@ func (a *app) updateWatchLaterTopic(shortID string, topic *topicDetail) {
 		}
 		a.later[i] = next
 		a.saveWatchLater()
-		a.redrawWatchLaterWindow()
+		a.redrawWatchLaterPage()
 		return
 	}
 }
@@ -330,6 +338,7 @@ func (a *app) watchLaterItem(r watchLaterRecord) Item {
 	}
 	it.AuthorAvatar = r.Avatar
 	it.AuthorBadges = r.Badges
+	it.AuthorIsPro = r.IsPro
 	if r.Node != "" {
 		it.SubtitlePrefix = r.Node + " · "
 	}
@@ -361,7 +370,7 @@ func (a *app) clearWatchLaterReadMarks() {
 	}
 	sortWatchLaterRecords(a.later)
 	a.saveWatchLater()
-	a.redrawWatchLaterWindow()
+	a.redrawWatchLaterPage()
 }
 
 // clearWatchLater 清空当前账号的稍后再看，只清本机数据。
@@ -374,8 +383,8 @@ func (a *app) clearWatchLater() {
 		}
 	}
 	a.laterList.ScrollTo(0, ui.Start)
-	a.redrawWatchLaterWindow()
-	a.toast(a.watchLaterToast(), "已清空稍后再看")
+	a.redrawWatchLaterPage()
+	a.toast(toastMain, "已清空稍后再看")
 }
 
 // watchLaterTimeText 是行尾「加入时间」的展示文本，和阅读记录共用同一套

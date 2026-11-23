@@ -414,13 +414,16 @@ func (a *app) fetchImage(raw string) ([]byte, error) {
 // fetchImageBytes 取一张图片的原始字节。hc 必须来自 proxyManager 的共享
 // transport：图片也是出站请求，同样要走配置的代理。账号面板预取账号头像
 // 时用的是同一个函数。
+//
+// 请求地址先经 imageRequestURL 适配图片代理：2Libra 的 wsrv.nl 代理默认把
+// gif 转成动画 WebP，而桌面端解不了动画 WebP，去掉转码参数才能拿到原图。
 func fetchImageBytes(hc *http.Client, raw string) ([]byte, error) {
 	if _, err := parseImageURL(raw); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageRequestURL(raw), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -433,7 +436,14 @@ func fetchImageBytes(hc *http.Client, raw string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("图片 HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, imageMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > imageMaxBytes {
+		return nil, fmt.Errorf("图片超过 %s 上限", formatBytes(imageMaxBytes))
+	}
+	return data, nil
 }
 
 // ensureAvatar 预取当前登录账号的头像。userTag 在标题栏和登录页读同一份
@@ -1772,7 +1782,7 @@ func (a *app) topicAuthorLine(c *ui.Context, d *detailState) {
 			if strings.TrimSpace(p.Author) != "" {
 				a.userTag(c, userTagSpec{
 					Name: p.Author, Avatar: p.Avatar, Size: postAuthorFontSize, Bold: true,
-					Badges: p.Badges,
+					Badges: p.Badges, Pro: p.AuthorIsPro,
 				})
 			}
 			// 等级用等宽小字弱化，和昵称的强调拉开层次。
@@ -2265,6 +2275,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 				Size:   metaFontSize,
 				Bold:   true,
 				Badges: r.Badges,
+				Pro:    r.AuthorIsPro,
 			})
 			// 楼主的回复紧跟着昵称挂一枚 OP 标签，读长帖时一眼分得清哪几条
 			// 是发帖人自己在下场回话（见 opTag）。

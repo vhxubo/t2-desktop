@@ -202,8 +202,9 @@ func (a *app) hideMainWindowToTray() {
 
 // hideAllWindowsToTray 把这个账号的全部窗口收进托盘：主窗口 Hide，其余窗口
 // （详情、设置、金币、编辑等）一律关掉。比 hideMainWindowToTray 多收的是详情
-// 窗口与关于 / 网络日志 / 评分这些相对独立的窗口 —— 托盘里点「关闭全部」
-// 就是要屏幕上什么都不留，只留一个托盘图标。
+// 窗口与关于 / 网络日志这些相对独立的窗口 —— 托盘里点「关闭全部」就是要
+// 屏幕上什么都不留，只留一个托盘图标。评分榜与稍后再看是主窗口内嵌页，随
+// 主窗口一起收起，没有独立窗口要关。
 // 只在主线程调用。
 func (a *app) hideAllWindowsToTray() {
 	a.hideMainWindowToTray()
@@ -212,7 +213,6 @@ func (a *app) hideAllWindowsToTray() {
 	a.closeEditWindow()
 	a.closeAboutWindow()
 	a.closeNetLogWindow()
-	a.closeScoresWindow()
 	a.closeAllDetailWindows()
 }
 

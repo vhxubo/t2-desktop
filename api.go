@@ -127,6 +127,7 @@ type Item struct {
 	Author         string
 	AuthorAvatar   string
 	AuthorBadges   []badgeInfo
+	AuthorIsPro    bool // 作者是 Pro 会员：头像右下角据此叠加官网 Pro 图标
 	SubtitlePrefix string
 	SubtitleSuffix string
 	// Extra 是最新评论 / 动态行的富展示字段；普通榜单行为 nil。
@@ -803,6 +804,7 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 	// 就不编一个「匿名」出来，列表行也不再画作者（见 main.go 的 rowWith）。
 	username := ""
 	avatarURL := ""
+	authorIsPro := false
 	var authorBadges []badgeInfo
 	if author != nil {
 		if name := author.str("username", "name", "nickname"); name != "" {
@@ -810,6 +812,7 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 		}
 		avatarURL = authorAvatar(author)
 		authorBadges = decodeBadges(author)
+		authorIsPro = author.flag("is_pro", "isPro")
 	}
 	nodeName := ""
 	nodeSlug := ""
@@ -903,6 +906,7 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 			it.Author = username
 			it.AuthorAvatar = avatarURL
 			it.AuthorBadges = authorBadges
+			it.AuthorIsPro = authorIsPro
 			it.SubtitlePrefix = "合集 · "
 			if when != "" {
 				it.SubtitleSuffix = " · " + when
@@ -939,6 +943,7 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 		it.Author = username
 		it.AuthorAvatar = avatarURL
 		it.AuthorBadges = authorBadges
+		it.AuthorIsPro = authorIsPro
 		if when != "" {
 			parts = append(parts, when)
 			it.SubtitleSuffix = " · " + when
@@ -963,7 +968,7 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 		it.URL = topicURL(shortID, nodeSlug)
 		// 动态流会带正文、表情表态与打赏；普通榜单没有这些字段，
 		// topicExtra 返回 nil，行还是原来的紧凑样式。
-		it.Extra = topicExtra(o, username, avatarURL, authorBadges, nodeName, when)
+		it.Extra = topicExtra(o, username, avatarURL, authorBadges, authorIsPro, nodeName, when)
 	}
 	return it
 }

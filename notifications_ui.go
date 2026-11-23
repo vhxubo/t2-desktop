@@ -668,6 +668,7 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 					Bold:     true,
 					MaxLines: 2,
 					Badges:   v.ActorBadges,
+					Pro:      v.ActorIsPro,
 				})
 			default:
 				action := v.Action
@@ -894,6 +895,7 @@ func (a *app) notificationReactionLine(c *ui.Context, o notificationReactionOver
 				Size:   11,
 				Color:  tk.TextSecondary,
 				Badges: u.Badges,
+				Pro:    u.IsPro,
 			})
 		}
 		if others := notificationReactionOthers(o, len(names)); others > 0 {

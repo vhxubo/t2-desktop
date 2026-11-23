@@ -50,6 +50,7 @@ type topicDetail struct {
 	AuthorID                      string // 作者 uuid，表态接口的 recUserId 需要
 	Avatar                        string // 作者头像 URL，标题下方展示
 	Badges                        []badgeInfo
+	AuthorIsPro                   bool // 作者是 Pro 会员时头像带官网 Pro 图标
 	AuthorLevel                   int
 	NodeName, NodeSlug            string
 	// NodeParentName / NodeParentSlug 是节点上一级：线上详情把父节点放在
@@ -203,6 +204,7 @@ type replyItem struct {
 	AuthorID string
 	// Avatar 是评论作者的头像地址；统一用户标识据此在昵称旁画头像。
 	Avatar                         string
+	AuthorIsPro                    bool // 评论作者是 Pro 会员时头像带 Pro 图标
 	Floor, FlatFloor, LocatedFloor int
 	// Level 是评论在楼层树里的层级：1 = 楼层评论，2 = 楼中楼，3 = 三级回复。
 	// 站点最多三级，回复三级评论产生的是同级的兄弟节点，不是第四层
@@ -316,6 +318,7 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 		t.AuthorLevel = a.num("level")
 		t.Avatar = authorAvatar(a)
 		t.Badges = decodeBadges(a)
+		t.AuthorIsPro = a.flag("is_pro", "isPro")
 	}
 	if n := o.sub("node"); n != nil {
 		t.NodeName = n.str("name")
@@ -616,6 +619,7 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 		r.AuthorID = a.str("id")
 		r.Avatar = authorAvatar(a)
 		r.Badges = decodeBadges(a)
+		r.AuthorIsPro = a.flag("is_pro", "isPro")
 	}
 	if p := o.sub("parent"); p != nil {
 		r.ParentID = p.str("id")

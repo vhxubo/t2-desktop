@@ -230,7 +230,7 @@ type app struct {
 	tabs        []*tabState
 	reqSeq      uint64
 
-	pageName    string // list / detail / login
+	pageName    string // list / detail / login / drafts / watchlater / scores
 	status      string
 	loginMsg    string
 	callbackURL string
@@ -252,15 +252,14 @@ type app struct {
 	readingLoaded bool
 	readingList   ui.ListState
 	// later 是当前账号的稍后再看（见 watch_later.go），laterFor 是它所属的
-	// 作用域；watchLaterPrefs 决定打开后移除还是保留。laterTab 是窗口里的
-	// 分段（0 稍后再看 / 1 浏览历史），laterList 是列表状态。窗口见
-	// watch_later_window.go，都只在主线程读写。
+	// 作用域；watchLaterPrefs 决定打开后移除还是保留。laterTab 是页面里的
+	// 分段（0 稍后再看 / 1 浏览历史），laterList 是列表状态。页面见
+	// watch_later_ui.go，和首页、草稿箱一样内嵌在主窗口，都只在主线程读写。
 	later           []watchLaterRecord
 	laterFor        string
 	laterLoaded     bool
 	laterList       ui.ListState
 	laterTab        int
-	watchLaterWin   *mygo.Window
 	watchLaterPrefs *watchLaterPrefsStore
 	// readAt / commentReadAt 是当前账号在本机读过的帖子与评论（id → 首次打开
 	// 时间），列表据此把读过的行置灰（见 post_read.go）。两者和阅读记录一样
@@ -314,6 +313,13 @@ type app struct {
 	// 金币消耗与徽章切换状态栏、发送按钮上的消耗金币数。进程级共享，
 	// 所有账号窗口的评论框据此决定要不要画状态栏与数字。只在 UI 线程读写。
 	commentCostPrefs *commentCostPrefsStore
+	// imagePrefs 是图片显示的两项偏好（见 image_prefs.go）：默认不加载图片时
+	// 正文与评论里的配图先画占位、点一下才下载；动图自动播放决定 gif / apng
+	// 在正文与预览里是动图还是首帧。进程级共享，只在本窗口的界面里读。
+	imagePrefs *imagePrefsStore
+	// revealedImages 是「默认不加载图片」模式下已经点开过的配图地址：点过一次
+	// 之后这张图不再退回占位。只在 UI 线程读写。
+	revealedImages map[string]bool
 
 	detail      *detailState
 	detailStack []*detailState // 正文内联跳转的返回栈
@@ -556,9 +562,9 @@ type app struct {
 	// onNodesLoaded 是节点表刷新完成（成功或失败）后的测试钩子，原因同上。
 	onNodesLoaded func(err error)
 
-	// scores / scoresWin 是评分榜窗口的状态与窗口（见 scores_window.go）。
-	scores    *scoresState
-	scoresWin *mygo.Window
+	// scores 是评分榜页面的状态（见 scores_ui.go），和首页、草稿箱一样
+	// 内嵌在主窗口，不单独占一扇窗口。只在主线程读写。
+	scores *scoresState
 }
 
 // tabID 把 tab 序号映射成导航项 id；导航轨的选中态由 selectTab 直接维护。
@@ -627,6 +633,7 @@ func (b *accountBook) deps() appDeps {
 		commentCostPrefs:  b.commentCostPrefs,
 		notificationPrefs: b.notificationPrefs,
 		watchLaterPrefs:   b.watchLaterPrefs,
+		imagePrefs:        b.imagePrefs,
 		commands:          b.commands,
 		book:              b,
 	}
@@ -677,6 +684,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 		commentCostPrefs:  d.commentCostPrefs,
 		notificationPrefs: d.notificationPrefs,
 		watchLaterPrefs:   d.watchLaterPrefs,
+		imagePrefs:        d.imagePrefs,
 		commands:          newCommandRegistry(d.commands),
 		draftDir:          d.dir,
 		tabs:              make([]*tabState, len(tabSpecs)),
@@ -1524,20 +1532,28 @@ func (a *app) view(c *ui.Context) {
 		ui.Row(c).Grow(1).MinHeight(0).Children(func() {
 			a.sidebar(c)
 			ui.Divider(c)
-			// 右侧内容区：草稿箱与主窗口共用标题栏和侧边栏，只换这一块。
-			// 草稿页不是信息流，不画右下角的 FAB 列（那里没有可刷新、可发帖的列表）。
+			// 右侧内容区：信息流、草稿箱、稍后再看与评分榜共用标题栏和
+			// 侧边栏，只换这一块。后三页不是信息流，不画右下角的 FAB 列
+			// （那里没有可刷新、可发帖的列表）。
 			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
-				if a.pageName == "drafts" {
+				switch a.pageName {
+				case "drafts":
 					a.draftsBody(c)
-				} else {
+				case "watchlater":
+					a.watchLaterPage(c)
+				case "scores":
+					a.scoresPage(c)
+				default:
 					a.body(c)
 					a.listFabs(c)
 				}
 			})
 		})
 	})
-	// 草稿页没有列表要拉，跳过 ensureLoaded，别白白发请求、占限流额度。
-	if a.pageName != "drafts" {
+	// 非信息流页没有主列表要拉，跳过 ensureLoaded，别白白发请求、占限流额度。
+	switch a.pageName {
+	case "drafts", "watchlater", "scores":
+	default:
 		a.ensureLoaded()
 	}
 	a.dialogs(c)
@@ -1618,8 +1634,8 @@ func (a *app) sidebar(c *ui.Context) {
 // 交给 sidebarRail 的 ActionIcon。
 //
 // 草稿箱与稍后再看是一组：两者都是「存到本地、稍后回来处理」的入口，上下各
-// 一条分割线把它们和浏览页、独立窗口分开。评分榜仍是最下面的独立窗口入口，
-// 图标用方框 + 向右上角外指的箭头，展开态再补一行说明。
+// 一条分割线把它们和浏览页分开。评分榜单独列在最下面，同样是主窗口内嵌页；
+// 图标用奖杯对应「榜」的名次含义，和前两项的笔记 / 书签区分开。
 func (a *app) sidebarNavItems() []display.ListItem {
 	items := make([]display.ListItem, 0, len(tabSpecs)+5)
 	for i, s := range tabSpecs {
@@ -1637,7 +1653,7 @@ func (a *app) sidebarNavItems() []display.ListItem {
 		})
 	}
 	// 草稿箱与稍后再看自成一组：上面一条线和浏览页分开，下面一条线再接
-	// 评分榜那种独立窗口入口。两项的小红点计数由 navBadgeCount 提供。
+	// 评分榜。两项的小红点计数由 navBadgeCount 提供。
 	items = append(items, display.ListItem{Divider: true})
 	items = append(items, display.ListItem{
 		Key: "drafts", Label: "草稿箱", Icon: lucide.NotebookPen(),
@@ -1647,8 +1663,7 @@ func (a *app) sidebarNavItems() []display.ListItem {
 	})
 	items = append(items, display.ListItem{Divider: true})
 	items = append(items, display.ListItem{
-		Key: "scores", Label: "评分榜", Icon: lucide.SquareArrowOutUpRight(),
-		Description: "在新窗口打开",
+		Key: "scores", Label: "评分榜", Icon: lucide.Trophy(),
 	})
 	return items
 }
@@ -1737,7 +1752,8 @@ func (a *app) sidebarNavList(c *ui.Context, nav layout.SideNavState) {
 }
 
 // handleSidebarNavItem 分发导航列表的点击：t<n> 是浏览页切换，其余（草稿箱、
-// 稍后再看、评分榜）走底部入口共用的动作分发。折叠图标轨与展开列表都走这里。
+// 稍后再看、评分榜）都是主窗口内嵌页，走底部入口共用的动作分发。折叠图标轨
+// 与展开列表都走这里。
 func (a *app) handleSidebarNavItem(key string) {
 	if idx, ok := tabIndexFromID(key); ok {
 		a.selectTab(idx)
@@ -1833,7 +1849,7 @@ func (a *app) selectTab(idx int) {
 // sidebarFooterItems 是底部常驻入口的数据：账号/设置/关于，未登录时再加登录
 // 与注册。退出登录已收进标题栏账号菜单的气泡里，外观三档也在设置窗口的
 // 「外观」页，侧边栏不再单独占这些行。评分榜入口在导航列表「动态」之后
-// （见 sidebarNavItems），不在这里。
+// （见 sidebarNavItems），和草稿箱、稍后再看一样是内嵌页，不在这里。
 func (a *app) sidebarFooterItems() []display.ListItem {
 	items := []display.ListItem{
 		{Key: "accounts", Label: "账号", Icon: lucide.UsersRound()},
@@ -2465,6 +2481,7 @@ func (a *app) rowWithOptions(c *ui.Context, it Item, open func(Item), watchLater
 							Size:   tk.FontSizeSM - 1,
 							Color:  tk.TextDescription,
 							Badges: it.AuthorBadges,
+							Pro:    it.AuthorIsPro,
 						})
 						// 有节点前缀时后缀自带「 · 」；没有前缀时昵称就是这一段的
 						// 开头，得自己补上分隔符，别让「·」落在最前面。
@@ -2617,12 +2634,14 @@ func (a *app) loginView(c *ui.Context) {
 			ui.Text(c, "登录 2Libra").FontSize(18).Bold()
 			ui.Spacer(c).Grow(1)
 			if name := a.auth.username(); name != "" {
+				pro, _ := a.auth.proStatus()
 				a.userTag(c, userTagSpec{
 					Name:   name,
 					Avatar: a.auth.avatarURL(),
 					Label:  "当前：" + name,
 					Size:   12,
 					Color:  t.TextMuted,
+					Pro:    pro,
 				})
 				if ui.Button(c, "退出登录").Clicked() {
 					a.logoutAccount()

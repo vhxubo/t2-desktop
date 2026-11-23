@@ -25,6 +25,7 @@ type readingRecord struct {
 	Author    string      `json:"author,omitempty"`
 	Avatar    string      `json:"avatar,omitempty"`
 	Badges    []badgeInfo `json:"badges,omitempty"`
+	IsPro     bool        `json:"is_pro,omitempty"`
 	Node      string      `json:"node,omitempty"`
 	URL       string      `json:"url,omitempty"`
 	CommentID string      `json:"comment_id,omitempty"`
@@ -102,6 +103,7 @@ func (a *app) recordReading(it Item, topic *topicDetail) {
 		Author:    it.Author,
 		Avatar:    it.AuthorAvatar,
 		Badges:    it.AuthorBadges,
+		IsPro:     it.AuthorIsPro,
 		Node:      nodeFromSubtitlePrefix(it.SubtitlePrefix),
 		URL:       it.URL,
 		CommentID: it.CommentID,
@@ -123,6 +125,9 @@ func (a *app) recordReading(it Item, topic *topicDetail) {
 		}
 		if len(rec.Badges) == 0 {
 			rec.Badges = old.Badges
+		}
+		if !rec.IsPro {
+			rec.IsPro = old.IsPro
 		}
 		if rec.Node == "" {
 			rec.Node = old.Node
@@ -182,6 +187,9 @@ func readingRecordFromTopic(rec readingRecord, topic *topicDetail) readingRecord
 	if len(topic.Badges) > 0 {
 		rec.Badges = topic.Badges
 	}
+	if topic.AuthorIsPro {
+		rec.IsPro = true
+	}
 	if topic.NodeName != "" {
 		rec.Node = topic.NodeName
 	}
@@ -218,6 +226,7 @@ func (a *app) readingItem(r readingRecord) Item {
 	}
 	it.AuthorAvatar = r.Avatar
 	it.AuthorBadges = r.Badges
+	it.AuthorIsPro = r.IsPro
 	when := readingTimeText(r.OpenedAt)
 	parts := []string{}
 	if r.Node != "" {
@@ -267,6 +276,6 @@ func (a *app) clearReadingHistory(target toastTarget) {
 		}
 	}
 	a.readingList.ScrollTo(0, ui.Start)
-	a.redrawWatchLaterWindow()
+	a.redrawWatchLaterPage()
 	a.toast(target, "已清空阅读记录与缓存的正文")
 }
