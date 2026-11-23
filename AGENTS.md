@@ -15,6 +15,7 @@
 - 正文里引用标识符照抄，包括代码中的中文 UI 文案（例如按钮文案）——那是引用
   代码里的字符串，不是用中文写提交信息。
 - 不写工具或代理署名（例如 "Generated with ..."）。
+- 如果多个功能则按照不同功能拆分成多个 commit。
 
 示例：
 
@@ -36,11 +37,11 @@ a pure white page.
 
 ## 项目约定
 
-- Go 桌面应用，界面是 github.com/egoist/mygo 的原生 UI 包 `ui`，没有 webview 页面；
+- Go 桌面应用，界面是 github.com/egoist/mygo 的原生 UI 包 `ui` 以及 mygo.lobehub.com/llms.txt](https://mygo.lobehub.com/llms.txt)，没有 webview 页面；
   唯一的例外是多账号授权页（见下方「授权走哪个浏览器」），它放在内置浏览器窗口里。
 - 应用状态里不要保存 `ui.Element` 或 `*ui.Context`：元素每次构建都会失效。
   后台结果通过 `Window.Update` / `app.publish` 回到 UI 线程。
-- 改 UI 前先按 `.agents/skills/mygo-maintenance/SKILL.md` 的约定核对 mygo 版本与 API， 基于 lobe ui。
+- 改 UI 前先按 `.agents/skills/mygo-maintenance/SKILL.md` 的约定核对 mygo 版本与 API，还有 [mygo.lobehub.com/skills.md](https://mygo.lobehub.com/skills.md)。
 - 登录令牌（含 refresh_token）一律走 `mygo.Secrets`（OS 凭据库：Windows
   凭据管理器 / macOS Keychain / Linux Secret Service），不得明文落盘。实现见
   `auth.go` 的 `tokenStore` 接口与 `secureTokenStore`：仅在凭据库不可用
@@ -48,6 +49,7 @@ a pure white page.
   文件（空键是旧版的 `token.json`，多账号是 `token-<id>.json`）。测试经
   `tokenStoreFactory` 改用文件实现以隔离并保留 `token.json` 断言。terms.md 要求
   令牌加密存储，这条硬规则对应。
+- 开发过程中应避免写入过多的注释/描述性文案，并且避免为功能增加 ToolTip 效果，除非明确要求增加。
 
 ### 界面参考：不得使用截图 / docs/image
 
