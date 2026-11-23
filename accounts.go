@@ -162,6 +162,9 @@ type accountBook struct {
 	// imagePrefs 是图片显示的两项偏好（默认不加载图片、动图自动播放），
 	// 进程级一份（见 image_prefs.go）。
 	imagePrefs *imagePrefsStore
+	// updateMirror 是更新包下载加速入口的选择（默认不选、走代理），
+	// 进程级一份（见 update_mirror.go）。
+	updateMirror *updateMirrorStore
 	// commands 是命令中心的快捷键 / 收藏 / 最近使用偏好，进程级一份。
 	commands *commandPrefs
 
@@ -246,6 +249,7 @@ func newAccountBook(dir string) *accountBook {
 		notificationPrefs: newNotificationPrefsStore(dir),
 		watchLaterPrefs:   newWatchLaterPrefsStore(dir),
 		imagePrefs:        newImagePrefsStore(dir),
+		updateMirror:      newUpdateMirrorStore(dir),
 		commands:          newCommandPrefs(dir),
 		openURL:           func(u string) error { return mygo.Shell.OpenExternal(u) },
 	}

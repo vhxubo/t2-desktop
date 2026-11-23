@@ -317,11 +317,39 @@ func settingsCheckbox(c *ui.Context, label string, checked bool) bool {
    更新一块：检查更新
 ---------------------------------------------------------------- */
 
+// updateMirrorSelectOptions 是「下载加速」下拉的完整选项：首项「不使用（走
+// 代理）」的 Value 是空串，选中它就清空加速入口——选过镜像后随时可以改回
+// 不经过第三方中转、只用「网络代理」里配置的代理直连 GitHub。
+func updateMirrorSelectOptions() []field.SelectOption {
+	options := make([]field.SelectOption, 0, len(updateMirrorOptions)+1)
+	options = append(options, field.SelectOption{Value: "", Label: updateMirrorNoChoice})
+	for _, m := range updateMirrorOptions {
+		options = append(options, field.SelectOption{Value: m, Label: m})
+	}
+	return options
+}
+
 // updateSettingsSection 是「更新」一块：应用每天在后台自动检查一次，这里给
-// 想立即确认版本的人一个入口。
+// 想立即确认版本的人一个入口；下载加速入口默认不选，选了镜像后检查更新与
+// 更新包下载都会经它转发，选回首项即清空。
 func (a *app) updateSettingsSection(c *ui.Context) {
 	settingsSection(c, "更新", func() {
-		settingsDescription(c, "应用每天自动检查一次 GitHub Release；检查更新和下载更新包都会走「网络代理」里设置的代理。现在想确认版本可以手动检查，更新窗口会说明结果或列出新版本。", 3)
+		settingsDescription(c, "应用每天自动检查一次 GitHub Release；检查更新和下载更新包都会走「网络代理」里设置的代理。GitHub 连不上或下载太慢时可以选一个加速入口，选完立即生效。", 3)
+		mirror := ""
+		if a.updateMirror != nil {
+			mirror = a.updateMirror.current()
+		}
+		var sel ui.Element
+		settingsField(c, "下载加速", func() ui.Element {
+			sel = field.Select(c, &mirror, field.SelectProps{
+				Options: updateMirrorSelectOptions(), Size: lobetheme.Small,
+			})
+			sel.Label("下载加速").Tooltip("仅作用于检查更新与更新包下载").Width(220)
+			return sel
+		})
+		if sel.Changed() {
+			a.setUpdateMirror(mirror)
+		}
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			if action.Button(c, "检查更新", action.ButtonProps{}).Clicked() {
 				a.checkForUpdates()
@@ -329,6 +357,25 @@ func (a *app) updateSettingsSection(c *ui.Context) {
 			ui.Spacer(c).Grow(1)
 		})
 	})
+}
+
+// setUpdateMirror 换下载加速入口：立即落盘并接到更新器上，结果用窗口内 toast
+// 说明。镜像选择是进程级的，publish 让所有窗口下一帧按新状态重建。
+func (a *app) setUpdateMirror(m string) {
+	if a.updateMirror == nil || a.updateMirror.current() == m {
+		return
+	}
+	if err := a.updateMirror.set(m); err != nil {
+		a.toast(toastSettings, err.Error())
+		return
+	}
+	applyUpdateMirror(m)
+	if m == "" {
+		a.toast(toastSettings, "已清空加速入口，更新改回走「网络代理」直连 GitHub")
+	} else {
+		a.toast(toastSettings, "检查更新与下载将经 "+m+" 加速")
+	}
+	a.publish(func() {})
 }
 
 /* ------------------------------------------------------------------

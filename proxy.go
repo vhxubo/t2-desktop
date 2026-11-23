@@ -231,8 +231,10 @@ func (p *proxyManager) closeIdleConnections() {
 // 一个 Proxy 函数。proxyFor 每次请求都读当前规则，所以在设置窗口保存代理、
 // 点「重新检测」之后，检查更新也立即跟着切换，不用重启应用。
 //
-// 注意这里依赖 mygo v0.8.3 的 updater.go 用 netproxy.Transport() 这个共享
-// 单例；升级 mygo 时要重新核对那一行，并跑 TestUpdateCheckUsesConfiguredProxy。
+// 注意这里依赖 mygo v0.10.0 的 updater.go/httpGet：客户端 transport 源自
+// netproxy.Transport().Clone()，Clone 发生在本函数换掉 nt.Proxy 之后，所以
+// Proxy 字段仍指向 p.proxyFor。升级 mygo 时要重新核对那一行，并跑
+// TestUpdateCheckUsesConfiguredProxy。
 func installGlobalProxy(p *proxyManager) {
 	// 必须先初始化 netproxy 的共享单例，再换掉 http.DefaultTransport：
 	// netproxy.Transport() 首次调用会把 DefaultTransport 断言成

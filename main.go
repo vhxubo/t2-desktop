@@ -317,6 +317,9 @@ type app struct {
 	// 正文与评论里的配图先画占位、点一下才下载；动图自动播放决定 gif / apng
 	// 在正文与预览里是动图还是首帧。进程级共享，只在本窗口的界面里读。
 	imagePrefs *imagePrefsStore
+	// updateMirror 是更新包下载加速入口的选择（见 update_mirror.go）：默认
+	// 不选、走「网络代理」里配置的代理。进程级共享，只在本窗口的界面里读。
+	updateMirror *updateMirrorStore
 	// revealedImages 是「默认不加载图片」模式下已经点开过的配图地址：点过一次
 	// 之后这张图不再退回占位。只在 UI 线程读写。
 	revealedImages map[string]bool
@@ -591,6 +594,8 @@ type appDeps struct {
 	// imagePrefs 是图片显示的两项偏好：默认不加载图片、动图自动播放，
 	// 进程级一份（见 image_prefs.go）。
 	imagePrefs *imagePrefsStore
+	// updateMirror 是更新包下载加速入口的选择，进程级一份（见 update_mirror.go）。
+	updateMirror *updateMirrorStore
 	// notificationPrefs 是通知偏好，进程级一份（见 notification_prefs.go）。
 	notificationPrefs *notificationPrefsStore
 	// commands 是命令快捷键 / 收藏 / 最近使用的偏好，进程级一份。
@@ -616,6 +621,7 @@ func newAppDeps(dir string) appDeps {
 		notificationPrefs: newNotificationPrefsStore(dir),
 		watchLaterPrefs:   newWatchLaterPrefsStore(dir),
 		imagePrefs:        newImagePrefsStore(dir),
+		updateMirror:      newUpdateMirrorStore(dir),
 		commands:          newCommandPrefs(dir),
 	}
 }
@@ -634,6 +640,7 @@ func (b *accountBook) deps() appDeps {
 		notificationPrefs: b.notificationPrefs,
 		watchLaterPrefs:   b.watchLaterPrefs,
 		imagePrefs:        b.imagePrefs,
+		updateMirror:      b.updateMirror,
 		commands:          b.commands,
 		book:              b,
 	}
@@ -685,6 +692,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 		notificationPrefs: d.notificationPrefs,
 		watchLaterPrefs:   d.watchLaterPrefs,
 		imagePrefs:        d.imagePrefs,
+		updateMirror:      d.updateMirror,
 		commands:          newCommandRegistry(d.commands),
 		draftDir:          d.dir,
 		tabs:              make([]*tabState, len(tabSpecs)),
@@ -2846,6 +2854,9 @@ func main() {
 	// 手动代理 / 直连 / 跟随系统三种模式与「不走代理的地址」对它同样生效，
 	// 设置窗口里改完代理立刻就能检查更新。
 	installGlobalProxy(b.proxy)
+	// 下载加速入口：设置里选了镜像时，检查更新与更新包下载都经它转发；
+	// 默认不选，走上面接好的代理规则。
+	applyUpdateMirror(b.updateMirror.current())
 	// 自动更新：更新包来自 github.com/vhxubo/t2-desktop 的 release，由
 	// mygo build 用 mygo.json 里 updates.publicKey 对应的私钥签名。native
 	// 更新窗口不需要 WebView，与本应用的原生 UI 一致：启动后检查一次，之后

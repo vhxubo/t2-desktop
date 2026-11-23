@@ -499,7 +499,8 @@ func TestSettingsProxySectionSaves(t *testing.T) {
 }
 
 // 设置窗口里必须有检查更新入口，点击时接到 updater 上（无头测试用钩子
-// 确认接线，不碰更新插件的主循环）。
+// 确认接线，不碰更新插件的主循环）；下载加速入口默认显示「不使用」，选了
+// 镜像后要落盘并显示出来。
 func TestSettingsCheckForUpdatesWired(t *testing.T) {
 	a := testApp(t)
 	a.settingsTab = settingsTabGeneral
@@ -514,11 +515,40 @@ func TestSettingsCheckForUpdatesWired(t *testing.T) {
 	if !st.HasText("都会走「网络代理」里设置的代理") {
 		t.Errorf("设置窗口没有说明检查更新也走代理：%q", st.Texts())
 	}
+	if !st.HasText("下载加速") || !st.HasText(updateMirrorNoChoice) {
+		t.Errorf("设置窗口没有下载加速入口：%q", st.Texts())
+	}
+	if st.HasText("gh-proxy.com") {
+		t.Errorf("默认不选镜像时不该显示任何镜像域名：%q", st.Texts())
+	}
 	if err := st.Click("检查更新"); err != nil {
 		t.Fatal(err)
 	}
 	if !clicked {
 		t.Fatal("点击「检查更新」没有触发更新检查")
+	}
+
+	// 选一个镜像：立即落盘，下一帧下拉里显示的就是它；换回「不使用」同样
+	// 立即生效。镜像选择是进程级的，重新读一份 store 确认写盘。
+	a.setUpdateMirror("gh-proxy.com")
+	if a.updateMirror.current() != "gh-proxy.com" {
+		t.Fatalf("镜像选择没有生效：%q", a.updateMirror.current())
+	}
+	if again := newUpdateMirrorStore(a.updateMirror.dir); again.current() != "gh-proxy.com" {
+		t.Errorf("镜像选择没有落盘：%q", again.current())
+	}
+	st.Frame()
+	if !st.HasText("gh-proxy.com") {
+		t.Errorf("选镜像后下拉没有显示它：%q", st.Texts())
+	}
+	a.setUpdateMirror("")
+	if again := newUpdateMirrorStore(a.updateMirror.dir); again.current() != "" {
+		t.Errorf("换回「不使用」没有落盘：%q", again.current())
+	}
+	st.Frame()
+	// 换回的 toast 里不能带镜像域名，说明确实回到了直连 GitHub。
+	if !st.HasText("已清空加速入口") || !st.HasText("更新改回走「网络代理」直连 GitHub") {
+		t.Errorf("换回「不使用」没有弹说明 toast：%q", st.Texts())
 	}
 }
 
