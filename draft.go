@@ -714,6 +714,7 @@ func (d *detailState) applyReplyDraft(e draftEntry) {
 	d.draft = e.Text
 	d.replyTo = e.ReplyTo.toRuntime()
 	d.composerIdle = false
+	d.composerFold = false
 	d.focusComposer = true
 	d.draftFP, d.draftSavedFP = d.draftFingerprint(), d.draftFingerprint()
 }

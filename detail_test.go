@@ -1583,65 +1583,144 @@ func TestTopicInteractionEntriesLargerThanCommentOnes(t *testing.T) {
 	}
 }
 
-// 发送按钮浮在评论框右下角，不再在输入栏行尾占一格：输入框铺满整条
-// （右边缘一直到评论框边框内侧），按钮压在文字区右下角的上方。折叠态与
-// 展开态都贴右下角，展开时输入框长高，按钮不会退回行尾。
+// 折叠态的发送按钮浮在评论框右下角，不算在输入栏行尾占一格：输入框铺满
+// 整条，按钮压在文字区右端、上下居中。展开态则把发送按钮与费用状态栏放到
+// 输入框下面一行——输入框独占整行，文字一直写到右边缘，不再被浮层切掉。
 func TestReplyComposerSendFloatsBottomRight(t *testing.T) {
 	a := detailAppWithReplies(t)
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 
 	mid := func(r ui.Rect) float32 { return r.Y + r.H/2 }
-	check := func(state string) (ui.Rect, ui.Rect) {
+	checkCollapsed := func() (ui.Rect, ui.Rect) {
 		t.Helper()
 		area, ok := tt.Find("写评论")
 		if !ok {
-			t.Fatalf("%s找不到回复输入框：%q", state, tt.Texts())
+			t.Fatalf("折叠态找不到回复输入框：%q", tt.Texts())
 		}
 		send, ok := tt.Find("发送")
 		if !ok {
-			t.Fatalf("%s找不到发送按钮：%q", state, tt.Texts())
+			t.Fatalf("折叠态找不到发送按钮：%q", tt.Texts())
 		}
 		// 按钮落在输入框的横向范围里：输入框没有在它左边就收住。
 		if send.X >= area.X+area.W {
-			t.Errorf("%s发送按钮应浮在输入框右下角，而不是又占一列：area=%+v send=%+v",
-				state, area, send)
+			t.Errorf("折叠态发送按钮应浮在输入框右端，而不是又占一列：area=%+v send=%+v", area, send)
 		}
 		// 输入框铺到评论框右端。发送按钮右侧还嵌着评论区操作组，所以它
 		// 不再贴着右边缘，但整排仍压在输入框上。
 		if gap := (area.X + area.W) - (send.X + send.W); gap < -6 || gap > replyComposerToolReserve+8 {
-			t.Errorf("%s输入框应铺到评论框右端，发送按钮浮在它上面：差 %.1f（area=%+v send=%+v）",
-				state, gap, area, send)
+			t.Errorf("折叠态输入框应铺到评论框右端，发送按钮浮在它上面：差 %.1f（area=%+v send=%+v）",
+				gap, area, send)
 		}
-		// 上下居中：发送中线与输入框中线重合，折叠态和编辑态都一样。
-		// 编辑态输入框长高，按钮跟着抬到中间，不再沉到整个评论框底部。
+		// 上下居中：发送中线与输入框中线重合。
 		if dy := mid(send) - mid(area); dy < -2 || dy > 2 {
-			t.Errorf("%s发送按钮应在输入框内上下居中：输入框中线 %.1f / 按钮中线 %.1f",
-				state, mid(area), mid(send))
+			t.Errorf("折叠态发送按钮应在输入框内上下居中：输入框中线 %.1f / 按钮中线 %.1f",
+				mid(area), mid(send))
 		}
 		return area, send
 	}
 
-	area, _ := check("折叠态")
-	// 选中展开：输入框长高，按钮仍浮在右下角。
+	area, _ := checkCollapsed()
+	// 选中展开：输入框长高，发送落到输入框下面一行、靠右对齐。
 	tt.ClickAt(area.X+area.W/2, area.Y+area.H/2)
 	tt.Frame()
-	area, _ = tt.Find("写评论")
-	if area.H < 60 {
-		t.Fatalf("输入框应已展开：%+v", area)
+	expandedArea, ok := tt.Find("写评论")
+	if !ok {
+		t.Fatalf("展开后找不到回复输入框：%q", tt.Texts())
 	}
-	check("展开态")
-	// 操作组收起后发送重新贴回输入栏右端，不必再为它留一整排宽度。
-	expandedArea, _ := tt.Find("写评论")
-	expandedSend, _ := tt.Find("发送")
-	if gap := (expandedArea.X + expandedArea.W) - (expandedSend.X + expandedSend.W); gap < -6 || gap > 14 {
-		t.Errorf("编辑态发送按钮应贴回输入栏右端：差 %.1f（area=%+v send=%+v）", gap, expandedArea, expandedSend)
+	if expandedArea.H < 60 {
+		t.Fatalf("输入框应已展开：%+v", expandedArea)
+	}
+	expandedSend, ok := tt.Find("发送")
+	if !ok {
+		t.Fatalf("展开后找不到发送按钮：%q", tt.Texts())
+	}
+	// 按钮不再压在文字区上：它整块落在输入框下方。
+	if expandedSend.Y < expandedArea.Y+expandedArea.H-1 {
+		t.Errorf("展开态发送按钮应在输入框下面一行，不再浮在文字上：area=%+v send=%+v",
+			expandedArea, expandedSend)
+	}
+	// 东西向靠右：输入框与发送按钮各自留 8 DIP 的内边距，右侧落差应在
+	// 一行内边距的量级，而不是被一整排控件挤开。
+	if gap := (expandedArea.X + expandedArea.W) - (expandedSend.X + expandedSend.W); gap < 0 || gap > 20 {
+		t.Errorf("展开态发送按钮应贴右端：差 %.1f（area=%+v send=%+v）", gap, expandedArea, expandedSend)
+	}
+	// 输入框不再为浮层让出右侧宽度：它的右端几乎到评论框内侧（外层留白
+	// 14 + 输入框内边距 8 + 边框 1）。
+	if outer, ok := tt.Find("评论输入栏"); ok {
+		if gap := (outer.X + outer.W) - (expandedArea.X + expandedArea.W); gap > 26 {
+			t.Errorf("展开态输入框应铺到评论框右端：差 %.1f（outer=%+v area=%+v）", gap, outer, expandedArea)
+		}
 	}
 	// 进入编辑态后评论操作组和计数一起收起，整条输入栏只留给写字与发送。
 	for _, label := range []string{"评论回到顶部", "切到扁平时间序", "切到楼层视图", "刷新评论", "评论数"} {
 		if r, ok := tt.Find(label); ok {
 			t.Errorf("编辑态不该再画 %q：%+v", label, r)
 		}
+	}
+}
+
+// 展开态工具条右端的「收起输入框」把向上展开的编辑框折回一行：草稿与
+// 回复目标都保留，右栏评论区不动，点折叠态的输入框（盖着的那枚透明展开
+// 按钮）接着写。折叠态没有工具条，按钮不画。工具条带 KeepFocus，点收起
+// 按钮后焦点仍留在输入框里，折叠必须经得住这一点，不能自己弹回来。
+func TestReplyComposerCollapseButton(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	// 折叠态没有工具条，也就没有这个按钮。
+	if _, ok := tt.Find("收起输入框"); ok {
+		t.Error("折叠态不该画收起输入框的按钮")
+	}
+
+	r, ok := tt.Find("写评论")
+	if !ok {
+		t.Fatal("找不到评论输入框")
+	}
+	tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+	tt.Frame()
+	if _, ok := tt.Find("收起输入框"); !ok {
+		t.Fatalf("展开态工具条上没有收起输入框的按钮：%q", tt.Texts())
+	}
+	// 有草稿的展开态按钮照常在。
+	a.detail.draft = "写一半的草稿"
+	tt.Frame()
+	if err := tt.Click("收起输入框"); err != nil {
+		t.Fatalf("点收起输入框失败：%v", err)
+	}
+	// KeepFocus 让焦点留在输入框里，多渲染几帧，折叠不能自己弹回去。
+	for i := 0; i < 3; i++ {
+		tt.Frame()
+	}
+	if a.detail.replyCollapsed {
+		t.Error("收起输入框不该动右栏的评论区")
+	}
+	area, ok := tt.Find("写评论")
+	if !ok {
+		t.Fatal("收起后输入框不见了")
+	}
+	if area.H > 45 {
+		t.Errorf("点收起输入框后应折回一行：高 %.1f", area.H)
+	}
+	if strings.TrimSpace(a.detail.draft) != "写一半的草稿" {
+		t.Errorf("收起后草稿丢了：%q", a.detail.draft)
+	}
+	if _, ok := tt.Find("收起输入框"); ok {
+		t.Error("已折回一行，不应再画收起按钮")
+	}
+
+	// 点折叠态输入框上盖着的那枚透明展开按钮重新展开，按钮回到工具条上。
+	if err := tt.Click("展开评论输入框"); err != nil {
+		t.Fatalf("点展开评论输入框失败：%v", err)
+	}
+	tt.Frame()
+	area, ok = tt.Find("写评论")
+	if !ok || area.H <= 45 {
+		t.Errorf("点展开评论输入框后应重新展开：%+v", area)
+	}
+	if _, ok := tt.Find("收起输入框"); !ok {
+		t.Error("重新展开后收起按钮应回到工具条上")
 	}
 }
 

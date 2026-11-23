@@ -178,6 +178,12 @@ type detailState struct {
 	// composerIdle folds the composer back after a comment was sent, until
 	// the input is selected again or the next draft is typed.
 	composerIdle bool
+	// composerFold 是点了「收起输入框」后的手动折叠标记：向上展开的输入框
+	// 折回一行，草稿与回复目标都保留。折叠态的输入框上盖着一枚透明的展开
+	// 按钮（见 replyInput）：工具条带 KeepFocus，点了收起按钮焦点仍留在
+	// 输入框里，靠焦点跳变认不出用户的下一次点击，只能给一个显式入口。
+	// 再次展开后标记即清，只存内存，换帖或关窗随 detailState 一起丢弃。
+	composerFold bool
 	// composerExpanded 记着上一帧评论输入框是不是展开的。输入框从一行长成
 	// 多行会吃掉评论列表的高度，展开那一帧要把列表往上推一段，免得底部
 	// 那条评论被长出来的编辑器盖住（见 replyPane）。
@@ -2821,6 +2827,11 @@ func replyComposerExpanded(d *detailState, focused bool) bool {
 	if d == nil {
 		return false
 	}
+	// 手动收起优先于一切展开条件：草稿、回复目标与焦点都还在，只是用户
+	// 暂时不想看到编辑框（见 composerFold）。
+	if d.composerFold {
+		return false
+	}
 	return d.replyTo.ID != "" || strings.TrimSpace(d.draft) != "" || d.focusComposer ||
 		(focused && !d.composerIdle) ||
 		d.emojiOpen || d.imageOpen || d.mdEditor.topicOpen || d.mdEditor.base64Open ||
@@ -2866,7 +2877,9 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	// 整个评论框也是拖放区。登记要在 Children 之前；拖进图片后草稿立刻有
 	// 内容，这一帧就该展开，让用户看见刚插进来的占位符。
 	over := a.editorDropZone(box, uploadTargetReply)
-	expanded = expanded || strings.TrimSpace(d.draft) != ""
+	// 草稿非空时保持展开（粘贴 / 拖放同一帧就落进草稿）；但手动收起优先：
+	// 折回一行不该被已有草稿顶回去（见 composerFold）。
+	expanded = expanded || (!d.composerFold && strings.TrimSpace(d.draft) != "")
 	// 记下这一帧的最终高度状态，供下一帧的 replyPane 认出展开瞬间。
 	d.composerExpanded = expanded
 	// 展开期间让列表跟着末尾走：编辑器继续长高（多写几行、开面板）时，
@@ -2896,15 +2909,14 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	box.Children(func() {
 		if expanded {
 			// 折叠态仍只有一行：工具条、视图切换与两个面板都只在展开时出现。
-			// 这两行带 KeepFocus：按下工具条、视图切换时焦点仍留在输入框里，
-			// 光标与选区不动，插入标记后可以接着打字（见 editorToolbar），
-			// 输入框也不会因为这一下失焦而缩回去。
+			// 展开后头部只留一行——编辑 / 预览、Markdown 标记、表情 / 图片 /
+			// 独立窗口都排在这一行里。原先工具条、视图切换、费用状态栏三层叠
+			// 在输入框上方，写评论时头重脚轻；现在费用与发送一起挪到输入框
+			// 下方，头部压成一行，正文区才是这一块的主体。
 			//
-			// 两行都按评论区的紧凑尺寸画：图标 15 DIP、间距 2，工具条与视图
-			// 切换合成一块，不再用分隔线把输入框上方切出一条灰带。
-			ui.Row(c).FillWidth().Padding(1, 2).KeepFocus().Children(func() {
-				a.editorToolbar(c, &d.mdEditor, &d.draft)
-			})
+			// 整行带 KeepFocus：按下按钮时焦点仍留在输入框里，光标与选区不动，
+			// 插入标记后可以接着打字（见 editorToolbar），输入框也不会因为这一
+			// 下失焦而缩回去。
 			ui.Row(c).FillWidth().Gap(2).AlignItems(ui.Center).KeepFocus().
 				Label("评论视图").Children(func() {
 				// 编辑 / 预览：两个图标按钮代替文字 Segmented，平时只显示图标，
@@ -2913,7 +2925,9 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 					func() { d.preview = 0 })
 				a.editorIconToggle(c, d.preview == 1, eyeIcon, "预览", "预览模式",
 					func() { d.preview = 1 })
-				ui.Spacer(c).Grow(1)
+				// 一条短竖线把「编辑 / 预览」与标记区隔开，不再用整条灰带。
+				ui.Box(c).Size(1, 14).Background(tk.BorderSecondary)
+				a.editorToolbar(c, &d.mdEditor, &d.draft)
 				a.editorPanelButtons(c, &d.mdEditor, &d.draft, a.replyCommunityEmojis(d), "插入表情", "插入图片")
 				// 独立窗口：把草稿搬到一个单独的 mygo 窗口里写，页面留在
 				// 帖子上，一边看正文一边写回复；文字一直留在 d.draft 里，
@@ -2922,12 +2936,33 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 					"在独立窗口里写评论，一边看帖一边写").Clicked() {
 					a.showReplyWindow()
 				}
+				// 收起输入框：把这个向上展开的编辑框折回一行，草稿与回复目标
+				// 都保留，点折叠态的输入框接着写。工具条的其它按钮带
+				// KeepFocus（插完标记不丢焦点），这一枚共用同样的外观但不带
+				// 它：收起不需要保住焦点，而残留的焦点也不影响折叠——展开
+				// 判定里 fold 优先于一切（见 replyComposerExpanded）。
+				fold := ui.Button(c, "").
+					Border(0, t.Border).
+					TextColor(t.Text).
+					FontSize(12).
+					Padding(editorIconPadY, editorIconPadX).
+					Radius(editorIconRadius)
+				fold.Background(ui.Transparent)
+				if fold.Hovered() {
+					fold.Background(t.SurfaceHover)
+				}
+				fold.Children(func() {
+					ui.Icon(c, chevronDownIcon).Size(editorIconSize, editorIconSize).TextColor(t.Text)
+				})
+				fold.Label("收起输入框").Tooltip("把评论输入框收回一行，草稿保留")
+				if fold.Clicked() {
+					d.composerFold = true
+				}
 				// 实时字数：评论正文在客户端不卡硬上限（只有表态通知正文按
 				// 2000 字截断），所以只显示当前有多少字，不报上限；超限由
-				// 服务端在发送时拦截。和独立写评论窗口同一套写法（见
-				// replyWindowBody），展开输入框时才出现，正好压在工具条右端。
-				// 登录后字数挪到评论费用状态栏里（见 comment_cost_ui.go），
-				// 那里同时报发评金币与徽章建议，同一条链上不重复写两遍。
+				// 服务端在发送时拦截。登录后字数在下面那条状态栏里报（见
+				// comment_cost_ui.go），那里同时报发评金币与徽章建议，同一条
+				// 链上不重复写两遍。
 				if d.replyAsID != "" || !a.commentCostBarVisible() {
 					ui.Text(c, fmt.Sprintf("%d 字", utf8.RuneCountInString(d.draft))).
 						FontSize(11).TextColor(t.TextMuted).SingleLine()
@@ -2939,23 +2974,16 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				a.editorPreviewView(c, d.draft, a.replyEmojis(d),
 					a.commentMdOptions(c), replyPreviewFit(d.draft))
 			}
-			// 评论费用状态栏：字数、预计发评金币、可省金币的徽章与「走个面」
-			// 活跃度开关。它和工具条一样带 KeepFocus，按上面的按钮不会让输入框
-			// 失焦缩回一行。
-			//
-			// 临时换成别的账号回复时这组数字不适用（费用、徽章与潘多拉事件都
-			// 是窗口自己账号的），先收起；字数退回到工具条右侧照常显示。
-			if d.replyAsID == "" {
-				a.commentCostBar(c, d.draft)
-			}
 		}
 		// 展开时上面会多出工具条、视图切换与面板。MyGo 的节点身份由
 		// 「父节点 + 子节点序号」推导，若不给这一行固定 key，多出来的兄弟
 		// 会把输入框挤到另一个 ID 上，焦点随之丢失（发送后折不回一行）。
 		// 输入框本身是复合控件不能带 key，key 给包着它的 Row。
 		c.Key("reply-composer-row")
-		// 输入框铺满整条：发送按钮不在行尾占一格，而是浮在输入框这一行的
-		// 右端、垂直居中（下面用 Absolute 以这一行为基准摆位），整行都归输入。
+		// 折叠态：输入框铺满整条，发送 / 计数 / 操作组浮在它右端（下面用
+		// Absolute 以这一行为基准摆位）。展开态：输入框独占整行，发送与费用
+		// 状态栏落到输入框下面一行（见文末），文字可以一直写到右边缘，不再
+		// 被浮层按钮切掉一截。
 		ui.Row(c).FillWidth().Children(func() {
 			area := a.replyTextArea(c, d, replySurfaceDetail, replyFieldInline, expanded)
 			// 从草稿箱恢复后一次性聚焦：只恢复「回谁」，不恢复面板与预览态。
@@ -2974,50 +3002,82 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 			// 数两枚计数，要多让出一段，占位文字才不会钻到它们底下。
 			pad := t.Space(1.5)
 			padX := t.Space(2.5)
-			reserve := replySendFloatReserve
+			// 展开态发送按钮在输入框下面一行，正文不再为它让出右侧宽度；
+			// 折叠态按钮仍浮在输入框右端，文字要让开按钮、两枚计数与操作组。
+			var reserve float32
 			if !expanded {
-				reserve += replyStatsReserve
-			}
-			// 打开「发送按钮显示金币数」后按钮会变宽，正文再多让出一段，
-			// 免得写字时最后一个字钻到数字底下。
-			if a.showCostOnSend() {
-				if _, ok := a.commentCostForDraft(d.draft); ok {
-					reserve += replySendCostReserve
+				reserve = replySendFloatReserve + replyStatsReserve
+				// 打开「发送按钮显示金币数」后按钮会变宽，正文再多让出一段，
+				// 免得写字时最后一个字钻到数字底下。
+				if a.showCostOnSend() {
+					if _, ok := a.commentCostForDraft(d.draft); ok {
+						reserve += replySendCostReserve
+					}
 				}
-			}
-			// 评论区自己的操作嵌在发送按钮右侧，文字再让出一段，免得
-			// 最后一个字钻到图标底下。编辑态与右栏收起时那组不画，不用留。
-			if !expanded && !d.replyCollapsed {
-				reserve += replyComposerToolReserve
+				// 评论区自己的操作嵌在发送按钮右侧，文字再让出一段，免得
+				// 最后一个字钻到图标底下。右栏收起时那组不画，不用留。
+				if !d.replyCollapsed {
+					reserve += replyComposerToolReserve
+				}
 			}
 			area.Padding(pad, padX+reserve, pad, padX)
 			// @ 候选面板在插入符处展开，没有工具栏入口（见 mentions_ui.go）。
 			a.mentionPopover(c, d, replySurfaceDetail, padX, pad)
 			// 键入 ":" 时同样的位置弹出社区表情短码候选（见 emoji_shortcode_ui.go）。
 			a.emojiShortcodePopover(c, d, replySurfaceDetail, padX, pad)
-			// 发送 / 登录后评论浮在这一行的右端，不参与排版，输入框因此不被
-			// 按钮切掉右侧一截。Absolute 以输入框这一行为基准：TopPercent +
-			// TranslatePercent 让整排按输入框自身高度上下居中，折叠态和编辑态
-			// （输入框长高）都贴着同一条中线，不再沉到整个评论框的底部。
-			// 折叠态发送左边并排着评论数与浏览数、右边嵌着评论操作组；进入
-			// 编辑态后两组都收起，只留发送按钮（见 replyComposerStats）。
-			footer := ui.Row(c).AlignItems(ui.Center).Gap(8).Shrink(0).
-				Absolute().TopPercent(50).TranslatePercent(0, -50).Right(0)
-			footer.Children(func() {
-				if !expanded {
+			// 手动收起后的折叠态：工具条带 KeepFocus，点「收起输入框」焦点仍
+			// 留在输入框里，靠焦点跳变认不出用户的下一次点击，这里盖一枚透明
+			// 的整行按钮当展开入口，点它清掉折叠标记、按草稿重新展开。普通
+			// 折叠态不画，点击输入框照旧聚焦展开。它构建在下面的 footer 之前，
+			// 右端的发送与计数浮在它上面，点击不受影响。
+			if d.composerFold {
+				reopen := ui.Button(c, "").Label("展开评论输入框").
+					Tooltip("展开输入框接着写").
+					Background(ui.Transparent).Border(0, t.Border).
+					Radius(tk.BorderRadius).
+					Absolute().Left(0).Top(0).Right(0).Bottom(0)
+				if reopen.Clicked() {
+					d.composerFold = false
+				}
+			}
+			// 折叠态的发送 / 登录后评论浮在这一行的右端，不参与排版，输入框
+			// 因此不被按钮切掉右侧一截。Absolute 以输入框这一行为基准：
+			// TopPercent + TranslatePercent 让整排按输入框自身高度上下居中。
+			// 发送左边并排着评论数与浏览数、右边嵌着评论操作组（见
+			// replyComposerStats）；展开态这两组都收起，改在下面一行。
+			if !expanded {
+				footer := ui.Row(c).AlignItems(ui.Center).Gap(8).Shrink(0).
+					Absolute().TopPercent(50).TranslatePercent(0, -50).Right(0)
+				footer.Children(func() {
 					a.replyComposerStats(c, d)
-				}
-				a.replyFieldActions(c, d, true)
-				// 评论区操作只在未点击输入框时嵌在发送按钮右侧；已有计数在
-				// 发送左边，两组之间加一条竖线区分，整排是「计数 → 发送 → 操作」。
-				// 进入编辑态后这一组和计数一起收起，把输入栏还给写字；右栏收起
-				// 时同理——输入框照旧平铺在正文底部，但此刻没有评论区可操作。
-				if !expanded && !d.replyCollapsed {
-					ui.Box(c).Size(1, 18).Background(tk.BorderSecondary)
-					a.replyComposerToolBar(c, d)
-				}
-			})
+					a.replyFieldActions(c, d, true)
+					// 评论区操作只在未点击输入框时嵌在发送按钮右侧；已有计数在
+					// 发送左边，两组之间加一条竖线区分，整排是「计数 → 发送 → 操作」。
+					// 右栏收起时同理——输入框照旧平铺在正文底部，但此刻没有评论区
+					// 可操作。
+					if !d.replyCollapsed {
+						ui.Box(c).Size(1, 18).Background(tk.BorderSecondary)
+						a.replyComposerToolBar(c, d)
+					}
+				})
+			}
 		})
+		// 展开态的底部一行：左边是评论费用状态栏（字数、预计发评金币与徽章），
+		// 右边是发送按钮。费用栏收起时左边只留空，发送仍靠右。整行带
+		// KeepFocus，按状态栏里的徽章切换不会把焦点从输入框挪走。
+		if expanded {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).KeepFocus().
+				Label("评论发送栏").Children(func() {
+				ui.Box(c).Grow(1).MinWidth(0).Children(func() {
+					// 临时换成别的账号回复时这组数字不适用（费用、徽章与潘多拉
+					// 事件都是窗口自己账号的），先收起；字数在头部那一行照常显示。
+					if d.replyAsID == "" {
+						a.commentCostBar(c, d.draft)
+					}
+				})
+				a.replyFieldActions(c, d, true)
+			})
+		}
 	})
 }
 
@@ -3407,7 +3467,8 @@ func (a *app) submitReply() {
 			d.replyTo = replyTarget{}
 			// 回复草稿随发送成功删除：箱子里不该再留一条已经发出去的内容。
 			a.deleteDraft(replyDraftID(d.shortID))
-			d.composerIdle = true // 发送后折回一行，把空间还给评论列表
+			d.composerIdle = true  // 发送后折回一行，把空间还给评论列表
+			d.composerFold = false // 发出去就回到默认状态，下次点开直接能写
 			// 工具面板与预览会让输入框保持展开（见 replyInput），发送后一并
 			// 收起，否则空输入框还占着面板的高度，折不回一行。
 			d.emojiOpen, d.imageOpen, d.preview = false, false, 0

@@ -642,13 +642,18 @@ func TestMentionPanelCornerAtAt(t *testing.T) {
 	if !has {
 		t.Fatal("输入框没有上报光标位置")
 	}
-	// 面板左边贴着 @；评论区在窗口底部，面板向上展开，下沿贴着 @。
+	// 面板左边贴着 @。面板贴着 @ 展开：向下时上沿贴 @ 的下沿，向上时
+	// 下沿贴 @ 的上沿——评论框在窗口底部时通常是后者，但不写死方向。
 	dx := int(panel.X - caret.X)
 	if dx < 0 {
 		dx = -dx
 	}
-	bottom := panel.Y + panel.H
-	dy := int(bottom - caret.Y)
+	var dy int
+	if panel.Y >= caret.Y+caret.H {
+		dy = int(panel.Y - (caret.Y + caret.H))
+	} else {
+		dy = int(panel.Y + panel.H - caret.Y)
+	}
 	if dy < 0 {
 		dy = -dy
 	}
