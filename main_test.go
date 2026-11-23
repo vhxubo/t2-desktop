@@ -37,7 +37,7 @@ func TestTabEndpointsMatchContract(t *testing.T) {
 		"https://2libra.com/api/v1/topics/hot?period=7d",
 		"https://2libra.com/api/v1/topics/latest",
 		"https://2libra.com/api/v1/comments/latest?limit=50",
-		"https://2libra.com/api/v1/topics?page=1&limit=50&node_id=" + communityNodeID,
+		"https://2libra.com/api/v1/topics?page=1&limit=20&dimensions=special&sort=value&parent_slug=All",
 		"https://2libra.com/api/v1/me/follows/timeline?page=1&limit=50",
 		"https://2libra.com/api/v1/me/notifications?page=1&limit=50",
 	}
@@ -67,6 +67,7 @@ func TestTabEndpointsMatchContract(t *testing.T) {
 		{1, "https://2libra.com/api/v1/topics/hot?page=2"},
 		{2, "https://2libra.com/api/v1/topics/hot?page=2&period=7d"},
 		{3, "https://2libra.com/api/v1/topics/latest?page=2"},
+		{5, "https://2libra.com/api/v1/topics?dimensions=special&limit=20&page=2&parent_slug=All&sort=value"},
 		{6, "https://2libra.com/api/v1/me/follows/timeline?limit=50&page=2"},
 		{7, "https://2libra.com/api/v1/me/notifications?limit=50&page=2"},
 	}

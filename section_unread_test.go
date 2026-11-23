@@ -64,7 +64,7 @@ func TestNavBadgeCountFromSectionUnread(t *testing.T) {
 			want[idx] = 3
 		case s.FilterByNode:
 			want[idx] = 5
-		case strings.Contains(s.Query, communityNodeID):
+		case s.IsCommunity:
 			want[idx] = 7
 		}
 	}
@@ -162,7 +162,7 @@ func TestMarkTabReadClearsSectionBadge(t *testing.T) {
 
 	idx := -1
 	for i, s := range tabSpecs {
-		if strings.Contains(s.Query, communityNodeID) {
+		if s.IsCommunity {
 			idx = i
 			break
 		}

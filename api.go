@@ -17,10 +17,9 @@ import (
 )
 
 const (
-	apiBaseURL      = "https://2libra.com/api"
-	siteBaseURL     = "https://2libra.com"
-	communityNodeID = "eb3e8ec7-6b0f-43bf-956f-7a18ca23396a"
-	defaultLimit    = 50
+	apiBaseURL   = "https://2libra.com/api"
+	siteBaseURL  = "https://2libra.com"
+	defaultLimit = 50
 )
 
 // pagingMode describes how a tab asks for its next page.
@@ -57,8 +56,11 @@ type tabSpec struct {
 	// 聚合等于把关注的人藏起来，不能跟着打开。
 	FoldByAuthor bool
 	// FilterByNode 只给首页：列表 query 由首页的节点筛选与排序偏好生成。
-	// 「社区讨论」同样打 /v1/topics，但它固定筛到社区节点，不吃首页筛选。
+	// 「社区讨论」同样打 /v1/topics，但它走固定 query（special 维度），不吃首页筛选。
 	FilterByNode bool
+	// IsCommunity 标记「社区讨论」那一页：它的未读角标读通知接口的 community
+	// 分项（见 section_unread.go），与首页的 home 分项分开。query 变了也不影响识别。
+	IsCommunity bool
 	// FilterBlocked 表示这个列表吃内容屏蔽名单（见 content_filter.go）。
 	// 帖子列表、最新评论与动态都过滤；通知与搜索不属于这个能力的范围。
 	FilterBlocked bool
@@ -73,7 +75,7 @@ var tabSpecs = []tabSpec{
 	// 不要跟着帖子评论的 100 一起改。它也只有这一页：排在同一帖子下连着
 	// 刷的评论会把别人挤出去，所以打开 FoldByAuthor，相邻同名评论收成一组。
 	{Label: "最新评论", Path: "/v1/comments/latest", Query: "limit=50", ListKey: "items", Paging: pagingIgnored, Kind: kindComment, FoldByAuthor: true, FilterBlocked: true},
-	{Label: "社区讨论", Path: "/v1/topics", Query: "page=1&limit=50&node_id=" + communityNodeID, ListKey: "posts", Paging: pagingPages, Kind: kindTopic, FilterBlocked: true},
+	{Label: "社区讨论", Path: "/v1/topics", Query: "page=1&limit=20&dimensions=special&sort=value&parent_slug=All", ListKey: "posts", Paging: pagingPages, Kind: kindTopic, IsCommunity: true, FilterBlocked: true},
 	{Label: "动态", Path: "/v1/me/follows/timeline", Query: "page=1&limit=50", ListKey: "items", NeedsAuth: true, Paging: pagingPages, Kind: kindTimeline, FilterBlocked: true},
 	// 收藏 / 书签 / 我的帖子 / 我的合集不在侧边栏：它们是「我的」窗口里的
 	// 四类内容，端点见 profile.go 的 profileContentSpecs 与 profileTopicsSpec。

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"time"
 )
 
@@ -82,7 +81,7 @@ func (a *app) markTabRead(idx int) {
 		a.markFollowsRead()
 	case s.FilterByNode:
 		a.markSectionRead(sectionHome)
-	case strings.Contains(s.Query, communityNodeID):
+	case s.IsCommunity:
 		a.markSectionRead(sectionCommunity)
 	}
 }
@@ -99,7 +98,7 @@ func (a *app) tabUnreadCount(idx int) int {
 	switch {
 	case s.FilterByNode:
 		return a.sectionUnread.Home
-	case strings.Contains(s.Query, communityNodeID):
+	case s.IsCommunity:
 		return a.sectionUnread.Community
 	}
 	return 0
