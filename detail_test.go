@@ -1505,6 +1505,52 @@ func TestReplyComposerSendIsQuietUntilTyped(t *testing.T) {
 	}
 }
 
+// 详情页草稿为空时发送按钮禁用：折叠态只是写评论的入口，展开态也没有内容
+// 可发，点了都不该弹「评论内容不能为空」。有草稿后按钮恢复可点；独立写评论
+// 窗口不受影响，空草稿的弱化按钮仍可点。
+func TestReplyComposerSendDisabledWhenCollapsedAndEmpty(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	sendDisabled := func() bool {
+		t.Helper()
+		info, ok := tt.Access("发送")
+		if !ok {
+			t.Fatal("找不到发送按钮")
+		}
+		return info.Disabled
+	}
+	// 默认折叠、空草稿：发送按钮不可点。
+	if !sendDisabled() {
+		t.Error("折叠且空草稿时发送按钮应禁用")
+	}
+	// 点一下也不会提交：草稿仍空、没有新的评论落进列表。
+	if err := tt.Click("发送"); err != nil {
+		t.Fatalf("点发送按钮失败：%v", err)
+	}
+	tt.Frame()
+	if a.detail.draft != "" {
+		t.Errorf("点禁用的发送按钮不该改动草稿：%q", a.detail.draft)
+	}
+
+	// 点开输入框后草稿仍为空，按钮依旧不可点（同样没有内容可发）。
+	if err := tt.Click("写评论"); err != nil {
+		t.Fatalf("点开评论输入框失败：%v", err)
+	}
+	tt.Frame()
+	if !sendDisabled() {
+		t.Error("展开输入框但草稿为空时发送按钮仍应禁用")
+	}
+
+	// 有草稿时（输入框随之展开）同样可点。
+	a.detail.draft = "有内容了"
+	tt.Frame()
+	if sendDisabled() {
+		t.Error("有草稿时发送按钮应可点")
+	}
+}
+
 // 正文底部那条互动栏比评论底行宽松，表态 / 打赏图标因此画大一号；评论底行
 // 仍用紧凑尺寸，一行评论不会被两枚大图标撑高。
 func TestTopicInteractionEntriesLargerThanCommentOnes(t *testing.T) {
@@ -1600,10 +1646,13 @@ func TestReplyComposerSendFloatsBottomRight(t *testing.T) {
 }
 
 // 浮在右下角的发送按钮仍然点得到：它压在输入框上，但要点在按钮上，不能被
-// 下面的输入框吃掉。空草稿点一下只走提交校验（提示「评论内容不能为空」），
-// 不发请求，正好用来验证命中。
+// 下面的输入框吃掉。草稿为空时这个按钮被禁用（见
+// TestReplyComposerSendDisabledWhenCollapsedAndEmpty），所以写一段带未上传图片
+// 占位符的草稿让它可点——点发送只走一条本地校验就返回，不发网络请求，正好用
+// 「还有 1 张图片未处理完」的提示验证点击确实落在了按钮上。
 func TestReplyComposerFloatingSendIsClickable(t *testing.T) {
 	a := detailAppWithReplies(t)
+	a.detail.draft = "![](upload:1)"
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 	if _, ok := tt.Find("发送"); !ok {
@@ -1613,7 +1662,7 @@ func TestReplyComposerFloatingSendIsClickable(t *testing.T) {
 		t.Fatalf("浮在右下角的发送按钮点不到：%v", err)
 	}
 	tt.Frame()
-	if !tt.HasText("评论内容不能为空") {
+	if !tt.HasText("还有 1 张图片未处理完") {
 		t.Errorf("点发送应走到提交校验：%q", tt.Texts())
 	}
 }

@@ -141,6 +141,14 @@ type detailState struct {
 	bmBusy string
 	// coll 是作者行「合集」气泡的状态（见 collections.go）。
 	coll collectionState
+	// collNav 是当前帖子所在合集的导航状态：读合集内的帖子列表，用它给出
+	// 合集条数与「上一篇」。按合集 id 记账，换帖子时不会把上一篇的结果串到
+	// 下一篇上（见 collection_browse.go）。
+	collNav detailCollectionNav
+	// collID / collName 是「从合集浏览点开」时带来的上下文。详情接口的稳定
+	// 字段没有合集归属，这份上下文是正文里能画出当前合集卡片的依据。
+	collID   string
+	collName string
 	// comments 是作者「关闭 / 开启评论」那一次操作的状态（见 comments_status.go）。
 	comments commentsStatusState
 	// lottery 是作者「发起抽奖」的状态：中奖人数、在途与回包代次
@@ -170,6 +178,18 @@ type detailState struct {
 	// composerIdle folds the composer back after a comment was sent, until
 	// the input is selected again or the next draft is typed.
 	composerIdle bool
+	// composerExpanded 记着上一帧评论输入框是不是展开的。输入框从一行长成
+	// 多行会吃掉评论列表的高度，展开那一帧要把列表往上推一段，免得底部
+	// 那条评论被长出来的编辑器盖住（见 replyPane）。
+	composerExpanded bool
+	// composerPushPending 是点某条评论的「回复」入口后的一次性标记：replyTo
+	// 在构建那一行的 Clicked 里才写入，而 replyPane 在构建列表之前就算完了
+	// 展开状态，会漏掉这次展开，下一帧靠它补一次向上推（见 replyEntry）。
+	composerPushPending bool
+	// replyBottomID 记着上一帧评论列表最底下那条可见评论的 id。推列表时列表
+	// 可能已经因为编辑器展开而变矮、那一行被裁掉，按 id 才能找回它并完整
+	// 推回视口（见 replyPane）。
+	replyBottomID string
 	// composerDetached 表示这份草稿正在独立写评论窗口里编辑（见
 	// reply_window.go）：页面里的评论框只留一行说明与「收回」入口，同一个
 	// 草稿不会在两个窗口里各有一个输入框。winPreview 是那个窗口右侧预览栏
@@ -190,6 +210,22 @@ type detailState struct {
 	// emojiShortcodes 是键入 ":" 弹出的社区表情短码候选面板状态。候选来自
 	// 进程级表情表，没有名单与网络请求（见 emoji_shortcode.go）。
 	emojiShortcodes emojiShortcodeState
+}
+
+// collectionContext 给出当前帖子的合集归属。详情响应偶尔也会带（本地归入后
+// 就会写回 topic），优先用它；没有时退回从合集浏览点开时带来的上下文。两者
+// 都没有时 known 为 false，正文不画合集卡片。
+func (d *detailState) collectionContext() (id, name string, known bool) {
+	if d == nil {
+		return "", "", false
+	}
+	if d.topic != nil && d.topic.CollectionKnown && d.topic.CollectionID != "" {
+		return d.topic.CollectionID, d.topic.CollectionName, true
+	}
+	if d.collID != "" {
+		return d.collID, d.collName, true
+	}
+	return "", "", false
 }
 
 func (d *detailState) originURL() string {
@@ -472,6 +508,8 @@ func (a *app) newDetailState(it Item) *detailState {
 		mdEditor:     newMDEditor(),
 		winPreview:   true,
 		shortID:      it.ShortID,
+		collID:       it.CollectionID,
+		collName:     it.CollectionName,
 		focusID:      it.CommentID,
 		focusPending: it.CommentID != "",
 		fallbackURL:  it.URL,
@@ -651,6 +689,9 @@ func (a *app) loadTopicFor(d *detailState) {
 			a.updateReadingTopic(d.shortID, &topic)
 			a.updateWatchLaterTopic(d.shortID, &topic)
 			a.saveCachedDetail(d)
+			// 正文带了合集归属就顺手读一次合集内帖子：条数与「上一篇」都
+			// 从这里来，没带则正文不出现合集卡片。
+			a.ensureDetailCollectionNav(d)
 		})
 	}()
 }
@@ -1474,6 +1515,11 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 		postEmojis := mergeEmojiMaps(a.emojis, p.Emojis, ps.Emojis)
 		a.markdownView(c, replaceEmoji(ps.Content, postEmojis, true), a.md)
 	}
+	// 帖子属于某个合集时才画合集卡片（见 collection_browse.go）。
+	if _, _, known := d.collectionContext(); known {
+		layout.Divider(c, layout.DividerProps{})
+		a.detailCollectionCard(c, d)
+	}
 	if v := p.Vote; v != nil {
 		layout.Divider(c, layout.DividerProps{})
 		ui.Column(c).FillWidth().Padding(14, 16).Gap(8).Radius(tk.BorderRadius).
@@ -1929,6 +1975,13 @@ func (a *app) replyComposerToolBar(c *ui.Context, d *detailState) {
 
 func (a *app) replyPane(c *ui.Context, d *detailState) {
 	tk := lobetheme.TokensOf(c)
+	// 输入框从一行展开成多行时，评论区高度被编辑器吃掉一截。列表本身在
+	// 这一帧之前还按折叠态排版，视口一缩，底部那条评论就被长出来的编辑器
+	// 盖住。认出这个瞬间后，把上一帧最底下那条可见评论钉到列表底部，整列
+	// 评论自然往上让出位置；滚动中的栏目和已经停在末尾的都一样处理。
+	pushUp := d.composerPushPending ||
+		(replyComposerExpanded(d, d.composerField.Focused(c)) && !d.composerExpanded)
+	d.composerPushPending = false
 	// 评论标题与计数已经挪到评论区底部折叠输入框里、发送按钮左侧（见
 	// replyComposerStats）；视图切换、回顶与刷新嵌在同一行的发送按钮右侧
 	// （见 replyComposerToolBar），跟着评论区一起显隐。列表区因此直接从面板
@@ -1976,6 +2029,24 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 			// 实时记录停留位置：视口顶部的行号与评论 ID，供离开时落盘恢复。
 			var last int
 			first, last = d.list.Visible()
+			// 先留住上一帧的底行 id，再记下这一帧的：展开可能发生在构建
+			// 列表之后（点「回复」），那一帧列表已经变矮、底行被裁掉，
+			// 只能用上一帧的 id 把它找回来。
+			bottomID := d.replyBottomID
+			if last >= first && last < len(rows) && rows[last].ID != "" {
+				d.replyBottomID = rows[last].ID
+			}
+			if pushUp {
+				target := last
+				if at := replyIndexByID(rows, bottomID); at >= 0 {
+					target = at
+				}
+				if target >= 0 && target < len(rows) {
+					// 把之前最底下的评论贴到新视口的底部，列表随之上移，
+					// 不会留下被编辑器盖住的半截评论。
+					d.list.ScrollTo(target, ui.End)
+				}
+			}
 			if first >= 0 && first < len(rows) {
 				d.stayIdx = first
 				if rows[first].ID != "" {
@@ -2496,19 +2567,16 @@ func (a *app) replyCopyEntry(c *ui.Context, d *detailState, r replyItem) {
 		return
 	}
 	t := c.Theme()
-	b := ui.Box(c).Size(20, 20).Radius(6).Center().Background(ui.Transparent)
-	hovered := b.Hovered()
-	if hovered {
-		b.Background(t.SurfaceHover)
-	}
+	// 评论底行的图标统一走 Lobe ActionIcon：方块热区、圆角与悬停底色由组件
+	// 给，这里只保留本应用原来的字形颜色层级和文案。
+	b := action.ActionIcon(c, copyLinkIcon, action.ActionIconProps{
+		BlockSize: interactEntryCompact.box, GlyphSize: interactEntryCompact.icon,
+	}).Radius(interactEntryCompact.radius)
 	ink := t.TextMuted
-	if hovered {
+	if b.Hovered() {
 		ink = t.Text
 	}
-	b.Children(func() {
-		ui.Icon(c, copyLinkIcon).Size(14, 14).TextColor(ink)
-	})
-	b.Label("复制评论链接").Tooltip("把这条评论的链接复制到剪贴板")
+	b.TextColor(ink).Label("复制评论链接").Tooltip("把这条评论的链接复制到剪贴板")
 	if b.Clicked() {
 		a.copyToClipboard(c, href, a.detailToastFor(d), "已复制评论链接")
 	}
@@ -2523,28 +2591,23 @@ func (a *app) bookmarkEntry(c *ui.Context, d *detailState, r replyItem) {
 	t := c.Theme()
 	on := a.replyBookmarked(d, r.ID)
 	busy := d.bmBusy == r.ID
-	b := ui.Box(c).Size(20, 20).Radius(6).Center().Background(ui.Transparent)
-	hovered := b.Hovered()
-	if hovered && !busy {
-		b.Background(t.SurfaceHover)
+	icon := bookmarkIcon
+	if on {
+		icon = bookmarkOnIcon
 	}
+	b := action.ActionIcon(c, icon, action.ActionIconProps{
+		BlockSize: interactEntryCompact.box, GlyphSize: interactEntryCompact.icon,
+	}).Radius(interactEntryCompact.radius)
 	ink := t.TextMuted
 	switch {
 	case on:
 		ink = t.Accent
-	case hovered:
+	case b.Hovered():
 		ink = t.Text
 	}
 	if busy {
 		b.Disabled(true)
 	}
-	b.Children(func() {
-		icon := bookmarkIcon
-		if on {
-			icon = bookmarkOnIcon
-		}
-		ui.Icon(c, icon).Size(14, 14).TextColor(ink)
-	})
 	label, tip := "加书签", "把这条评论加入书签"
 	if on {
 		label, tip = "取消书签", "已加书签，点一下移除"
@@ -2552,7 +2615,7 @@ func (a *app) bookmarkEntry(c *ui.Context, d *detailState, r replyItem) {
 	if busy {
 		tip = "正在提交…"
 	}
-	b.Label(label).Tooltip(tip)
+	b.TextColor(ink).Label(label).Tooltip(tip)
 	if !busy {
 		b.OnClick(func() { a.toggleReplyBookmark(d, r) })
 	}
@@ -2563,19 +2626,14 @@ func (a *app) bookmarkEntry(c *ui.Context, d *detailState, r replyItem) {
 // 改正文（见 edit_window.go）。
 func (a *app) replyEditEntry(c *ui.Context, d *detailState, r replyItem) {
 	t := c.Theme()
-	b := ui.Box(c).Size(20, 20).Radius(6).Center().Background(ui.Transparent)
-	hovered := b.Hovered()
-	if hovered {
-		b.Background(t.SurfaceHover)
-	}
+	b := action.ActionIcon(c, editIcon, action.ActionIconProps{
+		BlockSize: interactEntryCompact.box, GlyphSize: interactEntryCompact.icon,
+	}).Radius(interactEntryCompact.radius)
 	ink := t.TextMuted
-	if hovered {
+	if b.Hovered() {
 		ink = t.Text
 	}
-	b.Children(func() {
-		ui.Icon(c, editIcon).Size(14, 14).TextColor(ink)
-	})
-	b.Label("编辑评论").Tooltip("修改这条评论的正文")
+	b.TextColor(ink).Label("编辑评论").Tooltip("修改这条评论的正文")
 	if b.Clicked() {
 		a.showReplyEdit(d, r)
 	}
@@ -2584,19 +2642,14 @@ func (a *app) replyEditEntry(c *ui.Context, d *detailState, r replyItem) {
 // replyEntry 是回复入口：和表态 / 打赏一样是一枚图标，放在评论底行最右端。
 func (a *app) replyEntry(c *ui.Context, d *detailState, r replyItem) {
 	t := c.Theme()
-	b := ui.Box(c).Size(20, 20).Radius(6).Center().Background(ui.Transparent)
-	hovered := b.Hovered()
-	if hovered {
-		b.Background(t.SurfaceHover)
-	}
+	b := action.ActionIcon(c, replyIcon, action.ActionIconProps{
+		BlockSize: interactEntryCompact.box, GlyphSize: interactEntryCompact.icon,
+	}).Radius(interactEntryCompact.radius)
 	ink := t.TextMuted
-	if hovered {
+	if b.Hovered() {
 		ink = t.Text
 	}
-	b.Children(func() {
-		ui.Icon(c, replyIcon).Size(14, 14).TextColor(ink)
-	})
-	b.Label("回复").Tooltip("回复这条评论")
+	b.TextColor(ink).Label("回复").Tooltip("回复这条评论")
 	if b.Clicked() {
 		d.replyTo = replyTarget{
 			ID:       r.ID,
@@ -2607,6 +2660,11 @@ func (a *app) replyEntry(c *ui.Context, d *detailState, r replyItem) {
 			AuthorID: r.AuthorID,
 		}
 		d.composerIdle = false
+		// 回复入口在列表行里，Clicked 晚于 replyPane 算展开状态；记一笔让
+		// 下一帧补一次向上推，否则底部评论会被展开的输入框盖住。
+		if !d.composerExpanded {
+			d.composerPushPending = true
+		}
 		d.composerField.Focus(c)
 	}
 }
@@ -2755,6 +2813,20 @@ func (a *app) replyComposer(c *ui.Context, d *detailState) {
 	})
 }
 
+// replyComposerExpanded 判断评论输入框这一帧是否处于展开态。replyPane 要在
+// 构建列表时就认出「这一帧输入框会长高」，好把评论往上推；这里的条件必须和
+// replyInput 里真正决定高度的完全一致，否则列表按折叠态排版、编辑器却展开，
+// 底部评论仍会被盖住。focused 由调用方读 committed 焦点（两个地方读到同一值）。
+func replyComposerExpanded(d *detailState, focused bool) bool {
+	if d == nil {
+		return false
+	}
+	return d.replyTo.ID != "" || strings.TrimSpace(d.draft) != "" || d.focusComposer ||
+		(focused && !d.composerIdle) ||
+		d.emojiOpen || d.imageOpen || d.mdEditor.topicOpen || d.mdEditor.base64Open ||
+		d.preview == 1
+}
+
 // replyInput is the Markdown editor for a new comment. It rests one line
 // tall, like a quiet channel under the comments, and unfolds into the
 // multiline field as soon as it is selected (focused), carries a draft, or
@@ -2782,10 +2854,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	// 编码是 Lobe Modal，但弹窗盖在页面上时仍保留输入框的展开态，关窗后接着写。
 	// base64Open 必须算进来：Modal 会把焦点从输入框挪走，少这一条会让输入框
 	// 当场缩回、editorPanels 不再构建 Modal，Modal 又随之关闭，来回闪动。
-	expanded := d.replyTo.ID != "" || strings.TrimSpace(d.draft) != "" || d.focusComposer ||
-		(focused && !d.composerIdle) ||
-		d.emojiOpen || d.imageOpen || d.mdEditor.topicOpen || d.mdEditor.base64Open ||
-		d.preview == 1
+	expanded := replyComposerExpanded(d, focused)
 	// 折叠态的输入框是评论区底部的「入口」，不是一块空白的白板：上下留白
 	// 比展开态略收一点，整条撑满卡片宽度，鼠标移上去底色提亮一档，暗示点
 	// 一下就能写。
@@ -2798,6 +2867,11 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 	// 内容，这一帧就该展开，让用户看见刚插进来的占位符。
 	over := a.editorDropZone(box, uploadTargetReply)
 	expanded = expanded || strings.TrimSpace(d.draft) != ""
+	// 记下这一帧的最终高度状态，供下一帧的 replyPane 认出展开瞬间。
+	d.composerExpanded = expanded
+	// 展开期间让列表跟着末尾走：编辑器继续长高（多写几行、开面板）时，
+	// 底部评论同样被顶上去，不会重新被盖住。折叠时关掉，进详情仍从顶部看。
+	d.list.FollowEnd = expanded
 	if expanded {
 		box = box.FillWidth()
 	} else {
@@ -2933,7 +3007,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				if !expanded {
 					a.replyComposerStats(c, d)
 				}
-				a.replyFieldActions(c, d)
+				a.replyFieldActions(c, d, true)
 				// 评论区操作只在未点击输入框时嵌在发送按钮右侧；已有计数在
 				// 发送左边，两组之间加一条竖线区分，整排是「计数 → 发送 → 操作」。
 				// 进入编辑态后这一组和计数一起收起，把输入栏还给写字；右栏收起
@@ -2997,8 +3071,10 @@ func (a *app) replyComposerStats(c *ui.Context, d *detailState) {
 // 把草稿收回页面评论框的入口。文字不复制一份到这里，免得两处不同步。
 func (a *app) replyDetachedHint(c *ui.Context, d *detailState) {
 	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
+	// 提示条走平面样式：不画圆角与整圈描边，靠一层浅底和旁边内容分开。
 	row := ui.Row(c).FillWidth().Padding(6, 8).Gap(8).AlignItems(ui.Center).
-		Radius(10).Border(1, t.Border).Background(t.Background)
+		Background(tk.FillQuaternary)
 	row.Children(func() {
 		ui.Icon(c, expandIcon).Size(14, 14).TextColor(t.Accent)
 		ui.Text(c, "正在独立窗口里写评论，可以一边看帖一边写").FontSize(metaFontSize).
@@ -3078,7 +3154,12 @@ func (a *app) replyTextArea(c *ui.Context, d *detailState, host replySurface, mo
 // 它返回一个 Row，由调用方决定摆在哪里：页面里浮在评论框右下角（见
 // replyInput），独立写评论窗口里放在页脚、和账号标签并排（见
 // replyWindowBody）。发送中时转圈也在这里，跟着动作一起走。
-func (a *app) replyFieldActions(c *ui.Context, d *detailState) ui.Element {
+//
+// detailPage 表示这是详情页的评论框。这里草稿为空时发送按钮禁用：没内容可
+// 发，点它不该弹「评论内容不能为空」的 toast。折叠态是写评论的入口，展开态
+// 是正在写字的地方，两者都守同一条规则；有草稿后按钮恢复实心可点。独立写评
+// 论窗口传 false，保留原来可点的弱化按钮。
+func (a *app) replyFieldActions(c *ui.Context, d *detailState, detailPage bool) ui.Element {
 	t := c.Theme()
 	// 发送按钮上的金币数要用到徽章数据。开关关着时完全不碰网络（默认如此）；
 	// 打开后即使状态栏关着，也要在写评论时按需读一次。有缓存与退避，每帧调用
@@ -3111,6 +3192,12 @@ func (a *app) replyFieldActions(c *ui.Context, d *detailState) ui.Element {
 		// 按钮会把整条输入栏的重量压到右边，看着像「已经可以发」。有内容才
 		// 换成实心的主按钮，这时它才是这一行里唯一该被看见的动作。
 		empty := strings.TrimSpace(d.draft) == ""
+		// 详情页草稿为空时禁掉发送按钮：没内容可发，点它不再弹「评论内容
+		// 不能为空」的 toast。展开态与折叠态守同一条规则，免得点一下展开的
+		// 空发送按钮时，输入框失焦折回一行、按钮恰好被禁用而吞掉这次点击。
+		// 独立写评论窗口不在这里禁，空草稿的弱化按钮仍可点（submitReply 的
+		// 空判断兜着）。
+		sendDisabled := d.posting || (detailPage && empty)
 		send := ui.Button(c, "").
 			Background(ui.Transparent).
 			Border(0, t.Border).
@@ -3121,13 +3208,13 @@ func (a *app) replyFieldActions(c *ui.Context, d *detailState) ui.Element {
 			send = ui.PrimaryButton(c, "").Radius(8)
 			ink = t.AccentText
 		}
-		if send.Hovered() && !d.posting {
+		if send.Hovered() && !sendDisabled {
 			ink = t.Text
 			if empty {
 				send.Background(t.SurfaceHover)
 			}
 		}
-		send.Disabled(d.posting)
+		send.Disabled(sendDisabled)
 		send.Children(func() {
 			ui.Icon(c, sendIcon).Size(16, 16).TextColor(ink)
 			// 「在发送按钮上显示消耗金币数」默认关；只有数据已到才画，

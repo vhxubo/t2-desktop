@@ -316,7 +316,7 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 					// 「发送」就在这一行里。发送中的转圈跟着动作本身走（见
 					// replyFieldActions）。
 					a.replyIdentityBadge(c, d, replySurfaceWindow)
-					a.replyFieldActions(c, d)
+					a.replyFieldActions(c, d, false)
 				})
 			})
 			if d.winPreview {

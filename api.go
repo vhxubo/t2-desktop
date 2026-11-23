@@ -145,6 +145,11 @@ type Item struct {
 	// 合集里的帖子（由调用方给的 open 决定去哪）。默认 false，普通行的可点性
 	// 仍由 short_id / URL 决定。
 	Clickable bool
+	// CollectionID / CollectionName 是「从合集里点开」时带的上下文。详情接口
+	// 的稳定字段没有合集归属，只有合集浏览视图知道这篇帖子属于哪一张合集；
+	// 带上它，详情页正文才能画出当前合集卡片（见 collection_browse.go）。
+	CollectionID   string
+	CollectionName string
 }
 
 // replyStats 是帖子列表接口里与「最近一次回复」有关的一组字段：

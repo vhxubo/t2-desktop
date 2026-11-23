@@ -89,12 +89,19 @@ type topicDetail struct {
 	// 收藏」和「响应里没有这个字段」：后者不该在按钮旁边凭空写一个 0。
 	FavoritedCount     int
 	FavoriteCountKnown bool
-	// 合集归属：文档的稳定字段里没有它，线上可能带 collection_id 或
-	// collection 对象。CollectionKnown 区分「确实没归入合集」和「响应里
-	// 没有这个字段」——后者按钮只能提供归入，不能声称「没在合集里」。
+	// 合集归属：文档的稳定字段里没有它。线上实测在 d.post_collection
+	// （没归入时是 null），老响应可能是 collection_id / collection /
+	// collections。CollectionKnown 区分「确实没归入合集」和「响应里没有这个
+	// 字段」——后者按钮只能提供归入，不能声称「没在合集里」。
 	CollectionID    string
 	CollectionName  string
+	CollectionCount int
 	CollectionKnown bool
+	// CollectionPrev / CollectionNext 是详情接口 post_collection 里直接给出的
+	// 上 / 下一篇（short_id / node_slug / title）。有它们就不必再拉合集内帖子
+	// 列表去找位置，卡片点一下就能打开。
+	CollectionPrev *collectionNeighbor
+	CollectionNext *collectionNeighbor
 	// AccessGuard* 是可见性门槛（登录 / 等级 / 属性）。读接口的稳定字段表里
 	// 没有它，但线上详情会带；GuardKnown 区分「确实不限制」与「响应没有这个
 	// 字段」：编辑窗口在后者只能让作者重新选，不能替他清掉已有门槛。
@@ -123,6 +130,14 @@ type topicDetail struct {
 	// 这里，值可能是 /emojis/xxx.png 这样的相对地址。
 	Emojis map[string]string
 	URL    string // 原文链接，展示内容时必须保留
+}
+
+// collectionNeighbor 是合集里当前帖子的上 / 下一篇。详情接口直接给出
+// short_id / node_slug / title，不必再拉合集内帖子列表去找位置。
+type collectionNeighbor struct {
+	ShortID  string
+	NodeSlug string
+	Title    string
 }
 
 // reactionStat 是一种表情的聚合表态：谁、多少人、我是否也选了它。
@@ -373,6 +388,31 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 			}
 		}
 	}
+	// 线上真实字段是 d.post_collection：对象（可能再包一层 collection），
+	// 也可能是数组。它比上面那些兼容形状更准确，读到了就覆盖。
+	if raw := o["post_collection"]; len(raw) > 0 {
+		if list := rawArray(raw); len(list) > 0 {
+			raw = list[0]
+		}
+		if col := asObject(raw); col != nil {
+			if inner := col.sub("collection"); inner != nil {
+				col = inner
+			}
+			if id := col.str("id", "collection_id"); id != "" {
+				t.CollectionID = id
+				t.CollectionKnown = true
+			}
+			if name := cleanText(col.str("name", "title")); name != "" {
+				t.CollectionName = name
+				t.CollectionKnown = true
+			}
+			if n := col.num("topic_count", "post_count", "item_count", "count"); n > 0 {
+				t.CollectionCount = n
+			}
+			t.CollectionPrev = decodeCollectionNeighbor(col["prev"])
+			t.CollectionNext = decodeCollectionNeighbor(col["next"])
+		}
+	}
 	for _, raw := range rawArray(o["tags"]) {
 		tag := asObject(raw)
 		if tag == nil {
@@ -436,6 +476,24 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 	// 开奖结果：api-write.md「抽奖」一节写在 extra.lottery，顶层也认。
 	t.Lottery = decodeTopicLottery(o)
 	return t, nil
+}
+
+// decodeCollectionNeighbor 读 post_collection.prev / next。null、空对象、没有
+// short_id 时都按「没有这一篇」处理，卡片就不会画出点不开的入口。
+func decodeCollectionNeighbor(raw json.RawMessage) *collectionNeighbor {
+	n := asObject(raw)
+	if n == nil {
+		return nil
+	}
+	id := n.str("short_id")
+	if id == "" {
+		return nil
+	}
+	return &collectionNeighbor{
+		ShortID:  id,
+		NodeSlug: n.str("node_slug"),
+		Title:    cleanText(n.str("title")),
+	}
 }
 
 // boolFieldOf 读一个布尔字段并区分「缺失」与「false」。两个返回值分别是

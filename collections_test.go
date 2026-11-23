@@ -103,6 +103,60 @@ func TestDecodeTopicCollection(t *testing.T) {
 	}
 }
 
+// 线上实测：合集归属在 d.post_collection，没归入时是 null。这里的对象形状
+// 和数组形状都要认，条数也一并读出来给正文卡片用。
+func TestDecodeTopicPostCollection(t *testing.T) {
+	obj := decodeTopicRaw(t, `{"short_id":"T1","post_collection":`+
+		`{"id":"c1","name":"甲合集","topic_count":7}}`)
+	if !obj.CollectionKnown || obj.CollectionID != "c1" ||
+		obj.CollectionName != "甲合集" || obj.CollectionCount != 7 {
+		t.Errorf("post_collection 对象没有解析出来：%+v", obj)
+	}
+	nested := decodeTopicRaw(t, `{"short_id":"T1","post_collection":`+
+		`{"collection":{"id":"c2","name":"乙合集","post_count":3}}}`)
+	if !nested.CollectionKnown || nested.CollectionID != "c2" ||
+		nested.CollectionName != "乙合集" || nested.CollectionCount != 3 {
+		t.Errorf("post_collection 的嵌套形状没有解析出来：%+v", nested)
+	}
+	list := decodeTopicRaw(t, `{"short_id":"T1","post_collection":`+
+		`[{"id":"c3","name":"丙合集"}]}`)
+	if !list.CollectionKnown || list.CollectionID != "c3" || list.CollectionName != "丙合集" {
+		t.Errorf("post_collection 的数组形状没有解析出来：%+v", list)
+	}
+	null := decodeTopicRaw(t, `{"short_id":"T1","post_collection":null}`)
+	if null.CollectionKnown {
+		t.Errorf("post_collection 为 null 时不该算归入合集：%+v", null)
+	}
+}
+
+// 线上实测的 post_collection 形状：id/name/post_count + prev/next（下一篇可能
+// 为 null）。相邻两篇要解析成可直接打开的条目。
+func TestDecodeTopicCollectionNeighbors(t *testing.T) {
+	got := decodeTopicRaw(t, `{"short_id":"T1","post_collection":{
+		"id":"c1","name":"社区相关","post_count":6,"sort_order":0,
+		"prev":{"short_id":"LoFrwAQ","node_slug":"forum-function","title":"上一篇标题"},
+		"next":{"short_id":"NxT1234","node_slug":"personal-works","title":"下一篇标题"}
+	}}`)
+	if got.CollectionName != "社区相关" || got.CollectionCount != 6 {
+		t.Errorf("合集名 / 条数不对：%+v", got)
+	}
+	if got.CollectionPrev == nil || got.CollectionPrev.ShortID != "LoFrwAQ" ||
+		got.CollectionPrev.NodeSlug != "forum-function" || got.CollectionPrev.Title != "上一篇标题" {
+		t.Errorf("prev 没有解析出来：%+v", got.CollectionPrev)
+	}
+	if got.CollectionNext == nil || got.CollectionNext.ShortID != "NxT1234" ||
+		got.CollectionNext.NodeSlug != "personal-works" || got.CollectionNext.Title != "下一篇标题" {
+		t.Errorf("next 没有解析出来：%+v", got.CollectionNext)
+	}
+
+	onlyPrev := decodeTopicRaw(t, `{"short_id":"T1","post_collection":{
+		"id":"c1","name":"社区相关","post_count":6,
+		"prev":{"short_id":"P1","title":"上一篇"},"next":null}}`)
+	if onlyPrev.CollectionPrev == nil || onlyPrev.CollectionNext != nil {
+		t.Errorf("next 为 null 时不该有下一篇：%+v", onlyPrev)
+	}
+}
+
 func decodeTopicRaw(t *testing.T, raw string) topicDetail {
 	t.Helper()
 	td, err := decodeTopic(json.RawMessage(raw), "T1")

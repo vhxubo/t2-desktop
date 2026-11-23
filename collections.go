@@ -337,8 +337,13 @@ func (a *app) assignTopicCollection(d *detailState, item collectionItem, add boo
 			} else {
 				d.topic.CollectionID = ""
 				d.topic.CollectionName = ""
+				// 从合集浏览点进来时上下文也在 d 上，一起清掉，卡片才会消失。
+				d.collID, d.collName = "", ""
+				d.collNav = detailCollectionNav{}
 				a.toast(a.detailToastFor(d), "已移出合集")
 			}
+			// 归属变了，正文里的合集卡片跟着重读条数与上一篇。
+			a.ensureDetailCollectionNav(d)
 			a.invalidateCollections()
 		})
 	}()
@@ -410,6 +415,8 @@ func (a *app) createCollectionForTopic(d *detailState) {
 			} else {
 				d.coll.loaded = false
 			}
+			// 新建的合集 id 刚补齐，正文卡片据此读条数与上一篇。
+			a.ensureDetailCollectionNav(d)
 			a.invalidateCollections()
 			a.toast(a.detailToastFor(d), "已加入合集「"+name+"」")
 		})

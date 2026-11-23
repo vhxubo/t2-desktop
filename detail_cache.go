@@ -77,6 +77,8 @@ func (a *app) preloadDetailCache(d *detailState) {
 		AuthorAvatar: topic.Avatar,
 	}})
 	a.prefetchReplyAvatars(c.Replies)
+	// 缓存的正文也可能带合集归属：离线时先把条数与「上一篇」摆上。
+	a.ensureDetailCollectionNav(d)
 }
 
 // saveCachedDetail 写回当前正文与第一页评论。只有拿到正文时才写；续拉到
