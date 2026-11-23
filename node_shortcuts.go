@@ -143,7 +143,7 @@ func (a *app) sidebarNodeSection(c *ui.Context, nav layout.SideNavState) {
 			if nodeShortcutKeyTag+r.key() != clicked {
 				continue
 			}
-			a.showNodeFeed(r)
+			a.showNodeShortcut(r)
 			break
 		}
 	}
@@ -177,7 +177,7 @@ func (a *app) sidebarNodeRail(c *ui.Context) {
 	if chosen != "" {
 		for _, r := range a.nodeShortcuts {
 			if nodeShortcutKeyTag+r.key() == chosen {
-				a.showNodeFeed(r)
+				a.showNodeShortcut(r)
 				break
 			}
 		}
@@ -196,6 +196,21 @@ func shortcutFilter(r nodeRef) nodeFilter {
 		return parentFilter(r)
 	}
 	return nodeFilterOf(r)
+}
+
+// showNodeShortcut 是侧边栏快捷入口的点击动作。快捷入口落盘时只存了 nodeRef，
+// 父 / 子的区别要靠 shortcutFilter 还原：父分类发 parent_slug，子节点发 node_id。
+// 不能套用 showNodeFeed 里「解析后有没有 ID」的判断——父分类也能从节点表补到
+// ID，那会把它错当成子节点，请求参数变成 node_id，侧边栏高亮也跟着熄灭。
+func (a *app) showNodeShortcut(ref nodeRef) {
+	if ref.ID == "" && ref.Slug == "" {
+		return
+	}
+	f := shortcutFilter(ref)
+	// 只补全展示用的名字 / 父名，筛选类型（父 vs 子）保持原样；resolveNodeRef
+	// 补到的 ID 不参与父分类的 query，也不影响与高亮筛选的 sameAs 比较。
+	f.Ref = a.resolveNodeRef(f.Ref)
+	a.applyNodeFilter(f)
 }
 
 // activeNodeShortcutKey 是当前筛选命中的快捷入口 key，没命中时为空。

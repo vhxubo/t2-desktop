@@ -279,6 +279,12 @@ func (a *app) showNodeFeed(ref nodeRef) {
 		// 父分类没有 uuid，按 slug 走 parent_slug。
 		f = parentFilter(resolved)
 	}
+	a.applyNodeFilter(f)
+}
+
+// applyNodeFilter 把筛选应用到首页：切回列表页、回顶部、拉起主窗口。
+// showNodeFeed 与 showNodeShortcut 共用这一段，只在「父 vs 子」的判定上分叉。
+func (a *app) applyNodeFilter(f nodeFilter) {
 	a.pageName = "list"
 	a.tab = 0
 	a.navSel = tabID(0)

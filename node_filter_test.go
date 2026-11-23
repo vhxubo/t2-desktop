@@ -48,9 +48,10 @@ func TestHomeQueryPageTwoKeepsFilter(t *testing.T) {
 	if want := "https://2libra.com/api/v1/topics?limit=50&node_id=uuid-work&page=2&sort=value"; url != want {
 		t.Fatalf("第 2 页 URL = %q，期望 %q", url, want)
 	}
-	// 社区讨论不能被首页筛选污染。
-	if got := endpoint(apiBaseURL, a.specFor(5), 1); !strings.Contains(got, "node_id="+communityNodeID) {
-		t.Errorf("社区讨论的 node_id 被改掉了：%q", got)
+	// 社区讨论走固定的 special 维度 query，不能被首页筛选污染。
+	if got := endpoint(apiBaseURL, a.specFor(5), 1); !strings.Contains(got, "dimensions=special") ||
+		!strings.Contains(got, "parent_slug=All") {
+		t.Errorf("社区讨论的 query 被改掉了：%q", got)
 	}
 }
 
@@ -371,6 +372,34 @@ func TestSidebarShortcutClick(t *testing.T) {
 	waitQuery(t, e, "sort=latest")
 	if a.tabs[0].homeFilterNode.Ref.ID != "n-work" {
 		t.Errorf("快捷入口没有筛到节点：%+v", a.tabs[0].homeFilterNode)
+	}
+}
+
+// 侧边栏快捷入口选中父分类时发 parent_slug，不能因为从节点表补到了 ID
+// 就误判成子节点、改发 node_id（那样会筛到具体节点且高亮也熄灭）。
+func TestSidebarParentShortcutUsesParentSlug(t *testing.T) {
+	e := newNodeFeedEnv(t)
+	a := nodeFeedApp(t, e)
+	// 父分类快捷入口只有 slug / name，没有 id / parent_slug；节点表里却能补到
+	// id=n-life，正是原来误判的触发条件。
+	a.nodeShortcuts = []nodeRef{{Slug: "life", Name: "生活", Sort: nodeSortLatest}}
+	a.navExpanded = true
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if err := tt.Click("生活"); err != nil {
+		t.Fatal(err)
+	}
+	waitQuery(t, e, "parent_slug=life")
+	waitQuery(t, e, "sort=latest")
+	if q := e.lastQuery(); strings.Contains(q, "node_id=") {
+		t.Errorf("父分类快捷入口错用了 node_id：%q", q)
+	}
+	f := a.tabs[0].homeFilterNode
+	if f.Kind != nodeFilterParent || f.Ref.Slug != "life" {
+		t.Errorf("首页筛选不是父分类：%+v", f)
+	}
+	if a.activeNodeShortcutKey() == "" {
+		t.Error("父分类快捷入口点击后没有高亮")
 	}
 }
 
