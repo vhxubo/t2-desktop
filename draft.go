@@ -203,10 +203,11 @@ func (s *draftStore) load() {
 		log.Printf("草稿文件 %s 的版本 %d 不认识，按空草稿处理", s.path, f.Version)
 		return
 	}
-	// 旧版只选了节点 / 开了组件也会落盘，这类没有标题和正文的条目不再算草稿。
+	// 旧版只选了节点 / 开了组件的发帖草稿，以及只点了「回复」没写正文的回复
+	// 草稿，都不再算草稿，读盘时一并丢掉。
 	entries := make([]draftEntry, 0, len(f.Entries))
 	for _, e := range f.Entries {
-		if e.Kind == draftKindCompose && !composeDraftHasText(e) {
+		if draftEntryEmpty(e) {
 			continue
 		}
 		entries = append(entries, e)
@@ -728,10 +729,17 @@ func composeDraftHasText(e draftEntry) bool {
 		strings.TrimSpace(e.Moment) != ""
 }
 
+// replyDraftHasText 判断一条回复草稿有没有值得保存的正文。只点了某条评论的
+// 「回复」而记下 replyTo 不算：那样每点一次回复都会往草稿箱里塞一条没有任何
+// 内容的条目。上传占位符在 draftEntry 里已经被剥掉，只剩占位符的正文同样不算。
+func replyDraftHasText(e draftEntry) bool {
+	return strings.TrimSpace(e.Text) != ""
+}
+
 func draftEntryEmpty(e draftEntry) bool {
 	switch e.Kind {
 	case draftKindReply:
-		return strings.TrimSpace(e.Text) == "" && e.ReplyTo.ID == ""
+		return !replyDraftHasText(e)
 	default:
 		return !composeDraftHasText(e)
 	}

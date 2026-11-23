@@ -388,6 +388,79 @@ func TestComposeDraftNeedsTitleOrBody(t *testing.T) {
 	}
 }
 
+func TestReplyDraftNeedsText(t *testing.T) {
+	d := &detailState{shortID: "abc123", replyTo: replyTarget{ID: "cmt-88", Floor: 12, Author: "老王"}}
+	if !draftEntryEmpty(d.draftEntry()) {
+		t.Fatal("只点了「回复」没写正文，不该算草稿")
+	}
+	d.draft = "  \n\t "
+	if !draftEntryEmpty(d.draftEntry()) {
+		t.Fatal("只有空白正文，不该算草稿")
+	}
+	d.draft = "![](upload:7)"
+	if !draftEntryEmpty(d.draftEntry()) {
+		t.Fatal("只有未完成的上传占位符，不该算草稿")
+	}
+	d.draft = "回复 12 楼：确实如此"
+	if draftEntryEmpty(d.draftEntry()) {
+		t.Fatal("有正文就算草稿")
+	}
+}
+
+func TestFlushSkipsReplyDraftWithoutText(t *testing.T) {
+	dir := t.TempDir()
+	a := newApp(dir)
+	a.autoLoad = false
+	a.detail = &detailState{shortID: "abc123", replyTo: replyTarget{
+		ID: "cmt-88", Level: 2, ParentID: "cmt-12", Floor: 12, Author: "老王", AuthorID: "u-9",
+	}}
+	// 点「回复」会改变 replyTo 指纹并触发自动保存，但空正文不该落盘。
+	a.flushDrafts()
+	if a.drafts.count() != 0 {
+		t.Fatalf("只点回复不该落盘：count=%d rows=%+v", a.drafts.count(), a.drafts.rows())
+	}
+	a.detail.draft = "写点正文"
+	a.flushDrafts()
+	if a.drafts.count() != 1 {
+		t.Fatalf("写了正文后该落盘：count=%d", a.drafts.count())
+	}
+	if e, ok := a.drafts.find(replyDraftID("abc123")); !ok || e.Text != "写点正文" || e.ReplyTo.ID != "cmt-88" {
+		t.Fatalf("回复草稿内容 / 目标不对：%+v ok=%v", e, ok)
+	}
+	// 清空正文但保留回复目标，条目也要跟着删掉。
+	a.detail.draft = ""
+	a.flushDrafts()
+	if a.drafts.count() != 0 {
+		t.Fatalf("正文清空后条目该消失：count=%d", a.drafts.count())
+	}
+}
+
+func TestLegacyEmptyReplyDroppedOnLoad(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	empty := testDraftEntry(draftKindReply, now)
+	empty.Text, empty.ReplyTo = "", draftTarget{ID: "cmt-88", Floor: 12, Author: "老王"}
+	real := testDraftEntry(draftKindReply, now.Add(-time.Hour))
+	path := filepath.Join(dir, "drafts", "guest.json")
+	if err := writeJSONFile(path, &draftFile{
+		Version: draftVersion, Account: "guest",
+		Entries: []draftEntry{empty, real},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newDraftStore(dir, "guest")
+	if s.count() != 1 {
+		t.Fatalf("旧版空回复草稿不该再出现在箱子里：%+v", s.rows())
+	}
+	if _, ok := s.find(empty.ID); ok {
+		t.Error("旧版空回复草稿没被过滤")
+	}
+	if _, ok := s.find(real.ID); !ok {
+		t.Error("有正文的回复草稿不该被过滤")
+	}
+}
+
 func TestFlushSkipsComposeDraftWithoutText(t *testing.T) {
 	a := testApp(t)
 	a.compose = newComposeState()
