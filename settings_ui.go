@@ -239,11 +239,10 @@ func (a *app) settingsWindowView(c *ui.Context) {
 	a.authDialogFor(c, toastSettings)
 }
 
-// settingsSection 画一块带标题的 Lobe 卡片，各分类共用同一套版式。描边、圆角
-// 与底色来自 layout.Block，标题走 display.Text。
+// settingsSection 画一块带标题的平面区块，各分类共用同一套版式。区块之间
+// 只留一条细分隔线，不再用圆角描边卡片把设置项框起来。
 func settingsSection(c *ui.Context, title string, body func()) {
-	card := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
-		FillWidth().Padding(14, 14)
+	card := popupRow(c, false).FillWidth().Padding(14, 14)
 	card.Children(func() {
 		ui.Column(c).FillWidth().Gap(10).Children(func() {
 			display.Text(c, title, display.TextProps{Strong: true, FontSize: 13, Rows: 1})

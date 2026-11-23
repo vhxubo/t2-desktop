@@ -236,31 +236,32 @@ func (a *app) followsListBody(c *ui.Context, fs *followsState) {
 // 关注 / 回关 / 取关按钮。
 func (a *app) followsRow(c *ui.Context, fs *followsState, kind int, u followUser) {
 	t := c.Theme()
-	ui.Row(c).FillWidth().Padding(8, 10).Radius(10).Gap(10).
-		AlignItems(ui.Center).Background(t.Background).Border(1, t.Border).
-		Children(func() {
-			a.avatarWithPro(c, u.Username, a.avatarBitmap(u.Avatar), 32, u.IsPro)
-			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					name := ui.Button(c, u.Username).
-						Background(ui.Transparent).Border(0, t.Border).
-						Padding(0, 0).FontSize(13).Bold()
-					if name.Hovered() {
-						name.TextColor(t.Accent)
-					} else {
-						name.TextColor(t.Text)
-					}
-					name.Label("用户 " + u.Username).Tooltip("打开用户资料")
-					if name.Clicked() {
-						a.showUserCard(u.Username)
-					}
-				})
-				if when := followRowSummary(u); when != "" {
-					ui.Text(c, when).FontSize(11).TextColor(t.TextMuted).SingleLine()
+	// 名单行走扁平列表样式：不画圆角与整圈描边，只在行与行之间留一条细
+	// 分隔线。行内的关注按钮仍是胶囊，属于控件而不是区块。
+	popupRow(c, false).FillWidth().Row().Padding(8, 10).Gap(10).
+		AlignItems(ui.Center).Children(func() {
+		a.avatarWithPro(c, u.Username, a.avatarBitmap(u.Avatar), 32, u.IsPro)
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				name := ui.Button(c, u.Username).
+					Background(ui.Transparent).Border(0, t.Border).
+					Padding(0, 0).FontSize(13).Bold()
+				if name.Hovered() {
+					name.TextColor(t.Accent)
+				} else {
+					name.TextColor(t.Text)
+				}
+				name.Label("用户 " + u.Username).Tooltip("打开用户资料")
+				if name.Clicked() {
+					a.showUserCard(u.Username)
 				}
 			})
-			a.followRowButton(c, fs, kind, u)
+			if when := followRowSummary(u); when != "" {
+				ui.Text(c, when).FontSize(11).TextColor(t.TextMuted).SingleLine()
+			}
 		})
+		a.followRowButton(c, fs, kind, u)
+	})
 }
 
 // followRowButton 是行内的关注按钮：已关注时可取关，未关注时是「回关」。

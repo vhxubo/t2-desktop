@@ -542,7 +542,7 @@ func (a *app) scoreRow(c *ui.Context, e scoreEntry) {
 			})
 		})
 	})
-	row.Label("评分 " + e.Target).Tooltip("打开评分对应的帖子")
+	row.Label("评分 " + e.Target)
 	if e.ShortID != "" && row.Clicked() {
 		a.openScorePost(e)
 	}

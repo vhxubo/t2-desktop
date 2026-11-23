@@ -586,11 +586,12 @@ func (a *app) netQuery(c *ui.Context, raw string) {
 }
 
 // netCodeBlock 画一段等宽感的正文块：JSON 已在传入前格式化过，用 Lobe 的
-// Block 给出浅底圆角面板，正文用 display.Text 的等宽样式。
+// Block 给出浅底面板，正文用 display.Text 的等宽样式。面板不画圆角，和
+// 其它弹窗区块同一套平面视觉。
 func (a *app) netCodeBlock(c *ui.Context, text string) {
 	t := c.Theme()
 	block := layout.Block(c, layout.BlockProps{Variant: layout.BlockFilled}).
-		FillWidth().Padding(8, 10).Radius(6).TextColor(t.Text)
+		FillWidth().Padding(8, 10).Radius(0).TextColor(t.Text)
 	block.Children(func() {
 		display.Text(c, text, display.TextProps{FontSize: 11, Rows: 0, Code: true})
 	})

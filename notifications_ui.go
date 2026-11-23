@@ -24,10 +24,12 @@ import (
 // showNotifications 把它打开。点开一条消息，帖子与评论回到主窗口里打开。
 // 数据、长连接与已读落账在 notify.go。
 //
-// 界面整体走 Lobe UI：卡片、标签、按钮、勾选框、搜索框、转圈与空状态都用
+// 界面整体走 Lobe UI：列表行、标签、按钮、勾选框、搜索框、转圈与空状态都用
 // lobe-mygo 的组件，颜色取 TokensOf(c)，与主窗口及各附属窗口同一套观感。
-// 只有铃铛的红点角标仍是自绘 Box：它压在图标右下角且不能越出标题栏，像素
-// 几何被测试断言，Lobe 的 Badge 固定落在内容右上角，不能替代这一定位。
+// 消息行走扁平语言：无圆角、无整圈描边，只在行与行之间留一条细分隔线，悬停
+// 铺浅底；不再用圆角描边卡片把每条消息框起来。只有铃铛的红点角标仍是自绘
+// Box：它压在图标右下角且不能越出标题栏，像素几何被测试断言，Lobe 的 Badge
+// 固定落在内容右上角，不能替代这一定位。
 
 // 通知窗口的默认尺寸。用 StateKey 记住用户把它放在哪、拉成多大，所以这里
 // 只是首次打开时的默认值。
@@ -231,6 +233,9 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 	defer a.drainToasts(c, a.claimsToasts(toastNotifications))
 	// Esc 收起窗口而不是退出：消息中心随时可以再打开。
 	c.OnShortcut(0, ui.KeyEscape, a.hideNotificationWindow)
+	// Cmd/Ctrl+R 刷新当前列表：和浏览器一致的习惯，不必再去够右上角的小
+	// 刷新按钮。窗口级的快捷键，输入框聚焦时也不耽误。
+	c.OnShortcut(ui.Cmd, ui.KeyR, a.reloadNotifications)
 
 	idx := notificationTabIndex()
 	if idx < 0 {
@@ -252,9 +257,24 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 				display.Icon(c, lucide.Bell(), display.IconProps{Size: display.IconSmall}).
 					TextColor(tk.Primary)
 				display.Text(c, "通知", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
-				display.Text(c, unreadText, display.TextProps{
-					Type: display.TextSecondary, FontSize: 11, Rows: 1,
-				})
+				if a.unread > 0 {
+					// 未读数本身就是「只看未读」的快捷入口：点一下切到未读
+					// 筛选，再点回到全部。比在下方分段条里找「未读」更快。
+					toggle := action.Button(c, unreadText, action.ButtonProps{
+						Size: lobetheme.Small, Variant: action.Text,
+					})
+					toggle.Tooltip("只看未读消息；再点一次看全部").OnClick(func() {
+						if st.filter == notificationFilterUnread {
+							a.setNotificationFilter(notificationFilterAll)
+						} else {
+							a.setNotificationFilter(notificationFilterUnread)
+						}
+					})
+				} else {
+					display.Text(c, unreadText, display.TextProps{
+						Type: display.TextSecondary, FontSize: 11, Rows: 1,
+					})
+				}
 				switch {
 				case !a.notifPrefs().streamEnabled():
 					// 关掉长连接是用户的选择，不该显示成「未连接」那样像坏了。
@@ -517,7 +537,7 @@ func (a *app) notificationsList(c *ui.Context, st *tabState) {
 		}
 		ui.List(c, &st.list, len(items), func(i int) {
 			a.notificationRow(c, items[i])
-		}).Grow(1).MinHeight(0).Padding(4, 0).Gap(8)
+		}).Grow(1).MinHeight(0).Padding(4, 0)
 		a.loadMoreFooter(c, st.moreErr, st.loading, func() {
 			a.loadFor(toastNotifications, idx, st.page)
 		})
@@ -598,8 +618,8 @@ func resetNotificationQuickReply(st *tabState) {
 	st.quickReplyFocus = false
 }
 
-// notificationRow 一条消息就是一张和列表同宽的卡片：勾选框、未读点与「标为
-// 已读」都在卡片里，表态的表情与人名写在同一行。整张卡片是一张可点的 Lobe
+// notificationRow 一条消息就是一行和列表同宽的扁平列表项：勾选框、未读点与
+// 「标为已读」都在行内，表态的表情与人名写在同一行。整行是一张可点的 Lobe
 // Block，点开的是这条消息的目标。
 func (a *app) notificationRow(c *ui.Context, it Item) {
 	n := it.Notif
@@ -612,15 +632,17 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 	st := a.tabs[notificationTabIndex()]
 	reading := st != nil && st.reading[n.ID]
 
-	// 通知卡片沿用 Lobe 的描边 Block：容器底色 + 次级描边，悬停铺 FillTertiary，
-	// 圆角取主题；与主页列表行、账号面板同一套视觉语言。
-	card := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockOutlined}).
-		FillWidth().Padding(12, 16).Gap(4)
+	// 通知行走 Lobe 的扁平列表语言：无圆角、无整圈描边，只在行与行之间留
+	// 一条细分隔线；悬停铺 FillTertiary，整行仍是一张可点的 Block。正文不再
+	// 被卡片边框切碎，与主页列表行、账号面板同一套视觉语言。
+	card := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockBorderless}).
+		FillWidth().Padding(10, 12).Gap(4).Radius(0).
+		BorderWidth(0, 0, 1, 0).BorderColor(tk.BorderSecondary)
 	card.Children(func() {
 		ui.Column(c).FillWidth().Gap(4).Children(func() {
-			// 卡片头：勾选框（仅未读）、未读点、类型、时间，未读时右上角是
-			// 「标为已读」。这些都在卡片内，每行不再为它们各留一条竖带——旧
-			// 写法把勾选框和「已读」摆在卡片外面，正文被挤成窄窄一条。
+			// 行头：勾选框（仅未读）、未读点、类型、时间，未读时右上角是
+			// 「标为已读」。这些都在行内，每行不再为它们各留一条竖带——旧
+			// 写法把勾选框和「已读」摆在行外面，正文被挤成窄窄一条。
 			ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 				if unread && st != nil {
 					checked := st.selected[n.ID]

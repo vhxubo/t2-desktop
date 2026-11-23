@@ -18,9 +18,9 @@ import (
 // 以及添加 / 打开 / 重新登录 / 退出这几个动作。每个账号有自己的主窗口，
 // 关掉窗口只是把它挂回后台（见 accounts.go），账号面板是回到它的地方。
 //
-// 整套界面走 Lobe UI：颜色取 TokensOf(c)，行 / 标签 / 按钮 / 提示分别由
-// layout.Block、display.Tag、action.Button 与 feedback.Alert 提供，和主窗口
-// 及各附属窗口用的是同一套设计语言。文案与动作保持不变，只换观感。
+// 整套界面走 Lobe UI：颜色取 TokensOf(c)，平面行 / 标签 / 按钮 / 提示分别由
+// popupRow、display.Tag、action.Button 与 feedback.Alert 提供，和主窗口
+// 及各附属窗口用的是同一套设计语言。行不画圆角与整圈描边，只留一条细分隔线。
 
 const (
 	accountsWindowWidth  = 460
@@ -172,14 +172,13 @@ func (b *accountBook) panelView(c *ui.Context) {
 }
 
 // panelAccountRow 是面板里的一行：头像、昵称、未读与「打开 / 退出」两个动作。
-// 点这一行（头像与昵称那一块）就是打开它的窗口。行本体是一张可点的 Lobe
-// Block：描边卡片、圆角与悬停底色都来自主题，窗口开着时用主色描边标出。
+// 点这一行（头像与昵称那一块）就是打开它的窗口。行走扁平列表样式：不画
+// 圆角与整圈描边，只留底部分隔线；窗口开着时左侧一条主色竖条标出。
 func (b *accountBook) panelAccountRow(c *ui.Context, acc accountView) {
 	tk := lobetheme.TokensOf(c)
-	row := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockOutlined}).
-		FillWidth().Row().AlignItems(ui.Center).Padding(9, 10)
+	row := popupRow(c, true).FillWidth().Row().AlignItems(ui.Center).Padding(9, 10)
 	if acc.Open {
-		row.Border(1, tk.Primary)
+		row.BorderStartWidth(3).BorderColor(tk.Primary)
 	}
 	if row.Hovered() {
 		row.Background(tk.FillTertiary)

@@ -691,6 +691,56 @@ func TestNotificationWindowView(t *testing.T) {
 	}
 }
 
+// 标题栏的未读数是一键筛选入口：点一下只看未读，再点回到全部，省得去下方
+// 分段条里找「未读」。
+func TestNotificationUnreadCountTogglesFilter(t *testing.T) {
+	srv, _ := readRecorder(t)
+	a := notificationWindowApp(t)
+	a.client = readClient(srv)
+	a.unreadLoading = true
+	st := a.tabs[notificationTabIndex()]
+
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	if err := tt.Click("2 条未读"); err != nil {
+		t.Fatalf("点不到未读数：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if st.filter != notificationFilterUnread {
+		t.Errorf("点未读数应切到「未读」筛选，实际 %d", st.filter)
+	}
+	if err := tt.Click("2 条未读"); err != nil {
+		t.Fatalf("再点未读数失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if st.filter != notificationFilterAll {
+		t.Errorf("再点应回到「全部」筛选，实际 %d", st.filter)
+	}
+}
+
+// Cmd/Ctrl+R 刷新当前列表：和浏览器一致的习惯，不必去够右上角的小刷新按钮。
+func TestNotificationWindowRefreshShortcut(t *testing.T) {
+	srv, calls := readRecorder(t)
+	a := notificationWindowApp(t)
+	a.client = readClient(srv)
+	a.unreadLoading = true
+	st := a.tabs[notificationTabIndex()]
+	st.totalPages, st.noMore = 1, true // 别让无限滚动顺手再拉一页
+
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyR)
+
+	waitFor(t, func() bool {
+		for _, c := range calls() {
+			if c.method == http.MethodGet && strings.Contains(c.path, notificationsPath) {
+				return true
+			}
+		}
+		return false
+	}, "Cmd+R 没有刷新通知列表")
+}
+
 // 一条消息就是一张和列表同宽的卡片：未读行的勾选框与「标为已读」都在卡片里，
 // 已读行不再比未读行窄，也没有为按钮留出的空列。
 func TestNotificationRowActionInsideCard(t *testing.T) {
@@ -721,6 +771,30 @@ func TestNotificationRowActionInsideCard(t *testing.T) {
 	}
 	if action.Y+action.H > unread.Y+unread.H {
 		t.Errorf("「标为已读」超出卡片高度：按钮 %v，卡片 %v", action, unread)
+	}
+}
+
+// 消息行走 Lobe 的扁平列表语言：相邻两行之间没有留白缝隙，靠行底的一条
+// 细分隔线区分，整行也不再是圆角描边卡片。这里用几何钉住「无间隙」。
+func TestNotificationRowsAreFlush(t *testing.T) {
+	a := notificationWindowApp(t)
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+
+	unread, ok := tt.Find("打开消息：提到了你")
+	if !ok {
+		t.Fatalf("找不到未读消息行：%q", tt.Texts())
+	}
+	read, ok := tt.Find("打开消息：回复了你")
+	if !ok {
+		t.Fatalf("找不到已读消息行：%q", tt.Texts())
+	}
+	if unread.W != read.W {
+		t.Errorf("两行宽度不一致：未读 %v，已读 %v", unread, read)
+	}
+	gap := read.Y - (unread.Y + unread.H)
+	if gap < -1 || gap > 1 {
+		t.Errorf("相邻消息行之间有 %vpx 缝隙，扁平列表应紧贴：未读 %v，已读 %v", gap, unread, read)
 	}
 }
 

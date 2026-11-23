@@ -629,13 +629,12 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 				count.TextColor(tk.Error)
 			}
 		})
-		zone := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
-			FillWidth().Radius(10)
+		zone := popupSurface(c, false).FillWidth()
 		// 拖放区要在 Children 之前登记：这一帧就得把 flagDropTarget 记进
-		// 节点，下一次 drop 事件才找得到它。悬停时整圈换成强调色。
+		// 节点，下一次 drop 事件才找得到它。悬停时只铺浅底，不画整圈描边。
 		over := a.editorDropZone(zone, uploadTargetCompose)
 		if over {
-			zone.Border(1, tk.Primary).Background(tk.FillSecondary)
+			zone.Background(tk.FillSecondary)
 		}
 		zone.Children(func() {
 			// 工具条固定在输入框上方（「头部」），滚动正文时始终可见。
@@ -833,13 +832,12 @@ func (a *app) composeSidebar(c *ui.Context, st *composeState) {
 					index := i
 					on := *m.flag(st)
 					ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
-						// 整行是一张可点的 Lobe Block：描边卡片与悬停底色由组件提供，
-						// 启用时用主色描边。边框始终是 1 DIP，切换时按钮不会跳。
-						setup := layout.Block(c, layout.BlockProps{
-							Clickable: true, Variant: layout.BlockOutlined,
-						}).Grow(1).MinWidth(0).Row().AlignItems(ui.Center).Padding(8, 10)
+						// 整行是扁平列表行：不画圆角与整圈描边，只留底部分隔线；
+						// 启用时左侧一条主色竖条标出，切换时几何不会跳。
+						setup := popupRow(c, true).
+							Grow(1).MinWidth(0).Row().AlignItems(ui.Center).Padding(8, 10)
 						if on {
-							setup.Border(1, tk.Primary)
+							setup.BorderStartWidth(3).BorderColor(tk.Primary)
 						}
 						setup.Children(func() {
 							display.Text(c, m.name, display.TextProps{
@@ -995,8 +993,7 @@ func (a *app) composeOptionList(c *ui.Context, opts *[]string, checked *[]bool,
 		a.toast(toastCompose, msg)
 	}
 	if *batchOpen {
-		layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
-			FillWidth().Padding(8, 10).Children(func() {
+		popupSurface(c, false).FillWidth().Padding(8, 10).Children(func() {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				display.Text(c, "批量添加：一行一个，可直接粘贴多行",
 					display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1}).Grow(1)
@@ -1219,8 +1216,7 @@ func (a *app) composeRedeem(c *ui.Context, st *composeState) {
 // composeRedeemBatch 是兑换码的批量入口：粘贴一段多行文本，一次追加到兑换码
 // 列表里。空行自动丢掉，超过 500 个的部分省略，结果用 toast 报告。
 func (a *app) composeRedeemBatch(c *ui.Context, st *composeState) {
-	layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
-		FillWidth().Padding(8, 10).Children(func() {
+	popupSurface(c, false).FillWidth().Padding(8, 10).Children(func() {
 		// 按钮放在录入区最上面：弹窗不用滚动就能点「追加兑换码」。
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			display.Text(c, fmt.Sprintf("批量粘贴兑换码（已有 %d / %d 个）",

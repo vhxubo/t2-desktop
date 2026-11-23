@@ -40,10 +40,11 @@ import (
 // 横幅只剩大片空白。现在用和其他窗口相同的 32 DIP 自绘标题栏，头像、昵称
 // 与关注按钮并成一行，资料与列表因此整体上移。
 //
-// 整套界面走 Lobe UI：标题栏图标、资料头的标签、关注按钮、分段、统计卡片、
+// 整套界面走 Lobe UI：标题栏图标、资料头的标签、关注按钮、分段、统计块、
 // 加载 / 空 / 失败状态与列表行分别由 lucide、display.Tag、action.Button、
-// nav.Tabs、layout.Block 与 feedback 的组件提供。文案与动作保持不变，只换
-// 观感；配色统一取 lobetheme.TokensOf(c)。数据、状态与请求在 user_card.go。
+// nav.Tabs、popupSurface / popupRow 与 feedback 的组件提供。区块与列表行
+// 不画圆角与整圈描边，只留细分隔线。配色统一取 lobetheme.TokensOf(c)。
+// 数据、状态与请求在 user_card.go。
 
 /* ------------------------------------------------------------------
    入口、显示与关闭
@@ -429,7 +430,7 @@ func userCardAboutMeta(about userAbout) string {
 }
 
 // userCardStats 是统计条：主题数、回复数、粉丝、关注。数字都来自接口，
-// 列表还没拉到时显示占位而不是 0。四张统计卡走 Lobe 的 layout.Block。
+// 列表还没拉到时显示占位而不是 0。四块统计走 Lobe 的平面表面。
 func (a *app) userCardStats(c *ui.Context, cs *userCardState) {
 	known := cs.profileLoaded
 	ui.Row(c).FillWidth().Padding(10, 16).Gap(8).Wrap().Children(func() {
@@ -449,8 +450,7 @@ func userCardCountText(known bool, n int) string {
 }
 
 func userCardStat(c *ui.Context, label, value string) {
-	b := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
-		Grow(1).MinWidth(0).Padding(6, 8)
+	b := popupSurface(c, false).Grow(1).MinWidth(0).Padding(6, 8)
 	b.Children(func() {
 		ui.Column(c).Gap(1).Children(func() {
 			display.Text(c, value, display.TextProps{Strong: true, FontSize: 14, Rows: 1})
@@ -618,9 +618,7 @@ func (a *app) userCardRow(c *ui.Context, it Item, kind userCardListKind) {
 	if kind == userCardTopics && a.isPostRead(it.ShortID) {
 		titleColor = tk.TextSecondary
 	}
-	row := layout.Block(c, layout.BlockProps{
-		Variant: layout.BlockOutlined, Clickable: true,
-	}).FillWidth().Padding(8, 10)
+	row := popupRow(c, true).FillWidth().Padding(8, 10)
 	if row.Hovered() {
 		row.Background(tk.FillSecondary)
 	}

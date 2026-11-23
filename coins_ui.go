@@ -81,8 +81,7 @@ func (a *app) coinsBody(c *ui.Context) {
 
 func (a *app) coinBalanceCard(c *ui.Context, cs *coinState) {
 	tk := lobetheme.TokensOf(c)
-	card := layout.Block(c, layout.BlockProps{Variant: layout.BlockOutlined}).
-		FillWidth().Padding(12, 14)
+	card := popupRow(c, false).FillWidth().Padding(12, 14)
 	card.Children(func() {
 		ui.Row(c).FillWidth().Gap(20).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
@@ -599,8 +598,7 @@ func (a *app) coinRankingView(c *ui.Context, cs *coinState) {
 
 func (a *app) coinRankRow(c *ui.Context, e coinRankEntry) {
 	tk := lobetheme.TokensOf(c)
-	row := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockOutlined}).
-		FillWidth().Padding(10, 14)
+	row := popupRow(c, true).FillWidth().Padding(10, 14)
 	row.Children(func() {
 		display.Text(c, fmt.Sprintf("%d", e.Rank), display.TextProps{
 			Strong: true, FontSize: 14, Rows: 1,
@@ -634,8 +632,7 @@ func (a *app) coinRankRow(c *ui.Context, e coinRankEntry) {
 
 func (a *app) coinTransactionRow(c *ui.Context, tx coinTransaction, today bool) {
 	tk := lobetheme.TokensOf(c)
-	row := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockOutlined}).
-		FillWidth().Padding(10, 12)
+	row := popupRow(c, true).FillWidth().Padding(10, 12)
 	row.Children(func() {
 		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {

@@ -10,7 +10,6 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
-	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
@@ -187,8 +186,7 @@ func (a *app) coinRedeemView(c *ui.Context, cs *coinState) {
 // 备注 / 来源帖与兑换时间。原帖还在时整行可点，打开主窗口的正文。
 func (a *app) coinRedeemedRow(c *ui.Context, code redeemedCode) {
 	openable := code.PostShortID != "" && !code.PostDeleted
-	row := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockOutlined}).
-		FillWidth().Padding(10, 12)
+	row := popupRow(c, true).FillWidth().Padding(10, 12)
 	row.Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
