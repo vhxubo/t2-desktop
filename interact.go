@@ -818,9 +818,11 @@ func (a *app) topicInteractionBar(c *ui.Context, d *detailState) {
 	}
 	layout.Divider(c, layout.DividerProps{})
 	// 整条和右栏折叠态的评论输入框等高：外层分隔线 1px，这里吃满剩下的
-	// 高度，图标在中间垂直居中，两栏底边因此落在同一条线上。
+	// 高度，两栏底边因此落在同一条线上。Column 默认沿主轴（垂直）从顶部排
+	// 子元素，光有固定高度和对称内边距并不会让 28px 的图标居中（会偏上），
+	// 必须显式 Justify(ui.Center) 把互动行放到条带中线上。
 	ui.Column(c).FillWidth().Height(detailBottomBarHeight-1).
-		Padding(6, 20).Label("正文互动栏").Children(func() {
+		Padding(6, 20).Justify(ui.Center).Label("正文互动栏").Children(func() {
 		a.topicInteractionRow(c, d)
 	})
 }
@@ -836,8 +838,12 @@ func (a *app) reactionSummaryInfo(c *ui.Context, d *detailState, target string, 
 	shown := visibleReactions(reactionStatsOf(d, target))
 	total := reactionTotal(shown)
 	if len(shown) > 0 {
-		chip := ui.Row(c).Padding(1, 8).Radius(999).Gap(5).
-			Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center)
+		// 汇总胶囊走 Lobe 的 Small 圆角 Tag：FillTertiary 底、TextSecondary
+		// 字，和弹层里的 Tag 同一套视觉。Tag 自带一枚空文字，这里往后追加
+		// 叠放的表情与总数。
+		chip := display.Tag(c, "", display.TagProps{
+			Size: lobetheme.Small, Round: true,
+		})
 		chip.Tooltip(reactionSummaryTip(shown))
 		chip.Label(fmt.Sprintf("表情，共 %d 次", total))
 		chip.Children(func() {
@@ -959,10 +965,11 @@ func reactionSummaryTip(stats []reactionStat) string {
 func (a *app) reactionEntry(c *ui.Context, d *detailState, target string, style interactEntryStyle) {
 	t := c.Theme()
 	active := d.react.reactOpen && d.react.reactFor == target
-	b := ui.Box(c).Size(style.box, style.box).Radius(style.radius).Center().Background(ui.Transparent)
-	if active || b.Hovered() {
-		b.Background(t.SurfaceHover)
-	}
+	// Lobe 的 ActionIcon 统一给方块热区、圆角、悬停底色与过渡；样式只决定
+	// 尺寸，字形颜色沿用本应用原来的层级，展开态仍是强调色。
+	b := action.ActionIcon(c, reactionIcon, action.ActionIconProps{
+		BlockSize: style.box, GlyphSize: style.icon, Active: active,
+	}).Radius(style.radius)
 	ink := t.TextMuted
 	switch {
 	case active:
@@ -973,10 +980,7 @@ func (a *app) reactionEntry(c *ui.Context, d *detailState, target string, style 
 	if d.react.busy {
 		b.Disabled(true)
 	}
-	b.Children(func() {
-		ui.Icon(c, reactionIcon).Size(style.icon, style.icon).TextColor(ink)
-	})
-	b.Label("表情").Tooltip("添加一个表情")
+	b.TextColor(ink).Label("表情").Tooltip("添加一个表情")
 	// 气泡关着时每个入口都把 Popover 建出来，让这一帧的点击能传进去；
 	// 开着时只留目标那一个。开合交给 Lobe，这里只挑目标与做登录检查。
 	if !d.react.reactOpen || d.react.reactFor == target {
@@ -1003,10 +1007,11 @@ func (a *app) reactionEntry(c *ui.Context, d *detailState, target string, style 
 func (a *app) rewardEntry(c *ui.Context, d *detailState, target string, style interactEntryStyle) {
 	t := c.Theme()
 	active := d.react.rewardOpen && d.react.rewardFor == target
-	b := ui.Box(c).Size(style.box, style.box).Radius(style.radius).Center().Background(ui.Transparent)
-	if active || b.Hovered() {
-		b.Background(t.SurfaceHover)
-	}
+	// 和表态入口同一套 Lobe ActionIcon；展开态的金色是打赏的辨识色，
+	// 不跟 Lobe 默认的中性 Active 高亮，其余悬停 / 禁用反馈交给组件。
+	b := action.ActionIcon(c, rewardIcon, action.ActionIconProps{
+		BlockSize: style.box, GlyphSize: style.icon, Active: active,
+	}).Radius(style.radius)
 	ink := t.TextMuted
 	switch {
 	case active:
@@ -1017,10 +1022,7 @@ func (a *app) rewardEntry(c *ui.Context, d *detailState, target string, style in
 	if d.react.rewardBusy {
 		b.Disabled(true)
 	}
-	b.Children(func() {
-		ui.Icon(c, rewardIcon).Size(style.icon, style.icon).TextColor(ink)
-	})
-	b.Label("打赏").Tooltip("打赏作者金币")
+	b.TextColor(ink).Label("打赏").Tooltip("打赏作者金币")
 	if !d.react.rewardOpen || d.react.rewardFor == target {
 		lobeoverlay.Popover(c, b, &d.react.rewardOpen, lobeoverlay.PopoverProps{
 			Placement: lobeoverlay.Bottom,
@@ -1249,8 +1251,11 @@ func (a *app) rewardBadge(c *ui.Context, rewards rewardStat) {
 		return
 	}
 	t := c.Theme()
-	chip := ui.Row(c).Padding(1, 8).Radius(999).Gap(4).
-		Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center)
+	// 打赏汇总用 Lobe 的金色 Tag：金额一眼能认出是金币，仍是圆角小胶囊，
+	// 悬停说明与点击明细都挂在 Tag 上。
+	chip := display.Tag(c, "", display.TagProps{
+		Size: lobetheme.Small, Round: true, Color: display.TagWarning,
+	})
 	chip.Tooltip(rewardBadgeTip(rewards))
 	chip.Children(func() {
 		ui.Text(c, "💰").FontSize(12)

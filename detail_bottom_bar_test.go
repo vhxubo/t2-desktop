@@ -50,6 +50,42 @@ func TestDetailBottomBarsAligned(t *testing.T) {
 	}
 }
 
+// 正文底部的表态 / 打赏图标必须在互动栏内上下居中：Column 默认沿主轴
+// （垂直）从顶部排子元素，光靠固定的条带高度和对称内边距不会自动居中，
+// 图标会贴着上沿，看着像浮在框上方。
+func TestTopicInteractionEntriesCenteredInBar(t *testing.T) {
+	a := detailAppWithReplies(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	bar, ok := tt.Find("正文互动栏")
+	if !ok {
+		t.Fatal("正文底部互动栏没有渲染")
+	}
+	mid := bar.Y + bar.H/2
+	for _, name := range []string{"表情", "打赏"} {
+		entry, ok := tt.Find(name)
+		if !ok {
+			t.Fatalf("正文互动栏里没有 %s 入口：%q", name, tt.Texts())
+		}
+		if dy := (entry.Y + entry.H/2) - mid; dy < -2 || dy > 2 {
+			t.Errorf("%s 图标应在互动栏内上下居中：Δy=%.1f（栏中线 %.1f，%+v）",
+				name, dy, mid, entry)
+		}
+	}
+	// 汇总走 Lobe Small Tag：高度固定 20，和 28 的图标一起落在条带中线上。
+	chip, ok := tt.Find("表情，共 14 次")
+	if !ok {
+		t.Fatalf("正文互动栏里没有表态汇总：%q", tt.Texts())
+	}
+	if chip.H != 20 {
+		t.Errorf("表态汇总应是 20px 的 Lobe Tag：%+v", chip)
+	}
+	if dy := (chip.Y + chip.H/2) - mid; dy < -2 || dy > 2 {
+		t.Errorf("表态汇总应在互动栏内上下居中：Δy=%.1f（%+v）", dy, chip)
+	}
+}
+
 // 评论区列表必须吃满面板高度，最后一条评论一直铺到输入栏上方。列表容器
 // 里曾用一个 ui.Spacer 垫高右下角操作组：Spacer 默认 Grow(1)，和列表均分了
 // 整列高度，评论只占一半、下面空出一大片。操作组已经移到输入栏发送按钮
