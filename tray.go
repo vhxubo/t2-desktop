@@ -10,8 +10,9 @@ import (
 )
 
 // 系统托盘：Windows 是任务栏通知区域，macOS 是菜单栏。左键点图标把最近用过
-// 的账号窗口带回前台；右键弹出菜单，列出挂着的每个账号（带未读数）、账号
-// 管理入口、关闭全部（收进托盘，应用继续在后台跑）与退出。
+// 的账号窗口带回前台；没有账号时回到未登录的主页面（账号面板在右键菜单里）。
+// 右键弹出菜单，列出挂着的每个账号（带未读数）、账号管理入口、关闭全部
+// （收进托盘，应用继续在后台跑）与退出。
 //
 // 托盘是进程级资源：多账号共用这一个图标，菜单每次右键现建一份，账号列表、
 // 未读数因此不会落后于应用内的状态；菜单挂着时左键也会弹出菜单，所以弹出后
@@ -90,21 +91,37 @@ func (b *accountBook) startTray() {
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) { b.destroyTray() })
 }
 
-// showMainWindowFromTray 是左键单击：把最近用过的账号窗口带回前台；一个
-// 账号都没有时打开账号面板，那里有登录入口。
+// showMainWindowFromTray 是左键单击：把最近用过的账号窗口带回前台；没有账号
+// 时回到未登录的主页面，而不是账号面板（后者在右键菜单的「账号管理」里）。
 func (b *accountBook) showMainWindowFromTray() {
+	b.showMainFromTray(b.raiseAccountWindow, b.raiseGuestWindow)
+}
+
+// showMainFromTray 是可测试的托盘左键骨架：挑一扇主窗口带到前台。有账号就用
+// 最近用过的那个（窗口没开就开一扇），一个都没有时回未登录主页面。
+func (b *accountBook) showMainFromTray(raiseAccount func(string), raiseGuest func()) {
 	if id := b.activeAccountID(); id != "" {
 		if acc := b.account(id); acc != nil && acc.app != nil {
-			acc.app.raiseMainWindow()
+			raiseAccount(id)
 			return
 		}
 	}
-	if len(b.accountsView()) > 0 {
+	if accounts := b.accountsView(); len(accounts) > 0 {
 		// 有账号但窗口都关着：把第一个打开，别让人点了图标什么都没发生。
-		b.raiseAccountWindow(b.accountsView()[0].ID)
+		raiseAccount(accounts[0].ID)
 		return
 	}
-	b.showPanel()
+	raiseGuest()
+}
+
+// raiseGuestWindow 把未登录主窗口带回前台；没建过就开一扇。没有账号时它是
+// 应用默认的主页面：托盘左键与退出最后一个账号后都回到这里。
+func (b *accountBook) raiseGuestWindow() {
+	if guest := b.guest; guest != nil {
+		guest.raiseMainWindow()
+		return
+	}
+	b.openGuestWindow()
 }
 
 // showTrayMenu 是右键菜单的入口：现建一份反映当前账号状态的菜单，弹出，

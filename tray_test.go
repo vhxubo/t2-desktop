@@ -50,6 +50,42 @@ func TestTrayMenuOffersLoginWhenNoAccounts(t *testing.T) {
 	}
 }
 
+// 托盘左键是「回到主页面」，不是打开账号管理：没有账号时回未登录主窗口。
+// 账号面板仍可以从右键菜单的「账号管理」进入。
+func TestTrayClickReturnsToMainPageWithoutAccounts(t *testing.T) {
+	b := testBook(t)
+	var accounts []string
+	guestCalls := 0
+	b.showMainFromTray(
+		func(id string) { accounts = append(accounts, id) },
+		func() { guestCalls++ },
+	)
+	if guestCalls != 1 {
+		t.Fatalf("没有账号时托盘左键调用了 %d 次未登录主页面，期望 1 次", guestCalls)
+	}
+	if len(accounts) != 0 {
+		t.Errorf("没有账号时托盘左键不该打开账号窗口：%v", accounts)
+	}
+}
+
+// 有账号时托盘左键照旧回到账号主窗口（这里只断言挑账号，不建原生窗口）。
+func TestTrayClickStillRaisesAccountWindow(t *testing.T) {
+	b := testBook(t)
+	acc := addTestAccount(t, b, "jimmy")
+	var accounts []string
+	guestCalls := 0
+	b.showMainFromTray(
+		func(id string) { accounts = append(accounts, id) },
+		func() { guestCalls++ },
+	)
+	if len(accounts) != 1 || accounts[0] != acc.ID {
+		t.Fatalf("托盘左键选中的账号 = %v，期望 %q", accounts, acc.ID)
+	}
+	if guestCalls != 0 {
+		t.Errorf("有账号时托盘左键不该去未登录主页面，却去了 %d 次", guestCalls)
+	}
+}
+
 // 托盘菜单的可操作项都要带图标：和侧边栏入口同一套线性图标，系统菜单才会
 // 在图标列画出它们（Windows 任务栏、Linux 托盘的菜单都显示图标列）。
 func TestTrayMenuItemsCarryIcons(t *testing.T) {
