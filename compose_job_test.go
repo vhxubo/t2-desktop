@@ -200,8 +200,7 @@ func TestComposeJobModuleDialogFields(t *testing.T) {
 	}
 	tt.Frame()
 	for _, want := range []string{
-		"节点类型", "工作类型", "职位", "薪资", "支持远程", "联系方式",
-		"填写后生成前缀", "适合发在求职、招人啦节点；标题会自动加【…】前缀。",
+		"节点类型", "工作类型", "职位", "薪资", "支持远程", "联系方式", "不填",
 	} {
 		if !tt.HasText(want) {
 			t.Errorf("工作内容弹窗缺少 %q：%q", want, tt.Texts())
@@ -222,15 +221,7 @@ func TestComposeJobDialogBuildsPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if err := tt.Click("节点类型"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
 	if err := tt.Click("求职"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if err := tt.Click("工作类型"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()

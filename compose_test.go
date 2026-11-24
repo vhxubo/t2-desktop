@@ -977,6 +977,60 @@ func TestComposeWindowLayout(t *testing.T) {
 	openModule("竞猜", "竞猜标题", "设置截止时间")
 }
 
+// 选项少于 5 个的单选直接平铺：一眼看全、点一下就选好；6 个 D20 属性仍收在
+// 下拉里，免得一行铺不下。
+func TestComposeShortChoiceUsesFlatRadio(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 1100)
+	tt.Frame()
+	if err := tt.Click("工作内容"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	for _, want := range []string{"不填", "求职", "招人啦", "全职", "兼职"} {
+		if !tt.HasText(want) {
+			t.Errorf("工作内容没有平铺出 %q：%q", want, tt.Texts())
+		}
+	}
+	if err := tt.Click("求职"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if st.jobNode != jobNodeHunting {
+		t.Errorf("平铺单选没选中求职：%q", st.jobNode)
+	}
+
+	a.compose = newComposeState()
+	composeReady(a)
+	tt = ui.NewTester(a.composeWindowView, composeWindowWidth, 1100)
+	tt.Frame()
+	if err := tt.Click("可见性（谁可以看）"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	for _, want := range []string{"所有人可见", "登录用户可见", "达到等级可见", "满足属性可见"} {
+		if !tt.HasText(want) {
+			t.Errorf("可见范围没有平铺出 %q：%q", want, tt.Texts())
+		}
+	}
+	if err := tt.Click("登录用户可见"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.compose.guardChoice != guardTypeLabels[1] {
+		t.Errorf("平铺单选没选中登录用户可见：%q", a.compose.guardChoice)
+	}
+	// D20 属性有 6 项，仍留在下拉里：不点开看不到未选中的选项。
+	if err := tt.Click("满足属性可见"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if tt.HasText("阅历") {
+		t.Errorf("6 项属性不该平铺出来：%q", tt.Texts())
+	}
+}
+
 // 评分块改用 lobeui 的 Rate：10 颗星，点最后一颗给满分 10 分。
 func TestComposeScoreUsesTenStarRate(t *testing.T) {
 	a := testApp(t)

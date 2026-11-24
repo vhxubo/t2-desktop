@@ -264,6 +264,22 @@ func composeNumber(c *ui.Context, value *float64, p field.InputNumberProps) ui.E
 	return composeInputRow(c, func() ui.Element { return field.InputNumber(c, value, p) })
 }
 
+// composeChoice 画一组单选。选项少于 5 个时用 Lobe 的 RadioGroup 平铺摆出来，
+// 一眼看全、点一下就选好；再多仍用 lobeSelect，免得一行铺不下。label 给读屏与
+// 点击测试标识这一组。
+func composeChoice(c *ui.Context, selected *string, opts []field.SelectOption, label string) ui.Element {
+	if len(opts) >= 5 {
+		return composeInputRow(c, func() ui.Element {
+			return lobeSelect(c, selected, field.SelectProps{Options: opts})
+		}).Label(label)
+	}
+	return choice.RadioGroup(c, choice.RadioGroupProps{}, func() {
+		for _, o := range opts {
+			choice.Radio(c, selected, o.Value, o.Label, choice.RadioProps{})
+		}
+	}).Label(label)
+}
+
 // composeToggle 是一行 Lobe 开关：开关本体与文字都能切换。原来的 ui.Toggle
 // 把文字画在开关里，点文字也生效；这里开关与文字是两个控件，文字那一半补上
 // 点击，保住同样的手感，两者的无障碍名仍是 label。
@@ -979,9 +995,7 @@ func (a *app) composeJob(c *ui.Context, st *composeState) {
 				for _, o := range composeJobNodeLabels {
 					opts = append(opts, field.SelectOption{Value: o.Value, Label: o.Label})
 				}
-				composeInputRow(c, func() ui.Element {
-					return lobeSelect(c, &st.jobNode, field.SelectProps{Options: opts})
-				}).Label("节点类型")
+				composeChoice(c, &st.jobNode, opts, "节点类型")
 			})
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 				display.Text(c, "工作类型：", display.TextProps{FontSize: 12, Rows: 1})
@@ -989,9 +1003,7 @@ func (a *app) composeJob(c *ui.Context, st *composeState) {
 				for _, o := range composeJobTypeLabels {
 					opts = append(opts, field.SelectOption{Value: o.Value, Label: o.Label})
 				}
-				composeInputRow(c, func() ui.Element {
-					return lobeSelect(c, &st.jobType, field.SelectProps{Options: opts})
-				}).Label("工作类型")
+				composeChoice(c, &st.jobType, opts, "工作类型")
 			})
 		})
 		ui.Row(c).FillWidth().Gap(10).Children(func() {
@@ -1366,9 +1378,7 @@ func (a *app) composeGuard(c *ui.Context, st *composeState) {
 			for _, l := range guardTypeLabels {
 				options = append(options, field.SelectOption{Value: l, Label: l})
 			}
-			composeInputRow(c, func() ui.Element {
-				return lobeSelect(c, &st.guardChoice, field.SelectProps{Options: options})
-			}).Label("可见范围")
+			composeChoice(c, &st.guardChoice, options, "可见范围")
 		})
 		switch guardFromLabel(st.guardChoice) {
 		case guardLevel:
@@ -1419,9 +1429,7 @@ func (a *app) composeRestricted(c *ui.Context, st *composeState) {
 			for _, l := range restrictedAccessLabels {
 				options = append(options, field.SelectOption{Value: l, Label: l})
 			}
-			composeInputRow(c, func() ui.Element {
-				return lobeSelect(c, &st.restrictedAccessChoice, field.SelectProps{Options: options})
-			}).Label("解锁方式")
+			composeChoice(c, &st.restrictedAccessChoice, options, "解锁方式")
 		})
 		ui.Column(c).FillWidth().Gap(4).Children(func() {
 			display.Text(c, "隐藏正文（Markdown）", display.TextProps{FontSize: 12, Rows: 1})
