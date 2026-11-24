@@ -242,6 +242,55 @@ func TestCoinRowsShowUserAvatars(t *testing.T) {
 	}
 }
 
+// 金币排行榜每条记录只占一行，金额固定在最右侧，并用金币金加粗显示。
+func TestCoinRankRowSingleLineGoldCoin(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.coinRankRow(c, coinRankEntry{Rank: 1, Username: "bighammer", Balance: 1139778})
+	}, 480, 80)
+	tt.Frame()
+
+	name, ok := tt.Find("bighammer")
+	if !ok {
+		t.Fatalf("排行榜缺少昵称：%q", tt.Texts())
+	}
+	coin, ok := tt.Find("1,139,778 金币")
+	if !ok {
+		t.Fatalf("排行榜缺少金币金额：%q", tt.Texts())
+	}
+	if coin.X <= name.X+name.W {
+		t.Errorf("金币没有固定在最右侧：昵称 x=%.0f w=%.0f，金币 x=%.0f", name.X, name.W, coin.X)
+	}
+	if dy := (coin.Y + coin.H/2) - (name.Y + name.H/2); dy < -10 || dy > 10 {
+		t.Errorf("金币与昵称不在同一行：昵称 y=%.0f h=%.0f，金币 y=%.0f h=%.0f",
+			name.Y, name.H, coin.Y, coin.H)
+	}
+	if got := countGoldPixels(tt.Image(), coin); got < 20 {
+		t.Errorf("金币金额没有用金币颜色：金色像素 %d 个", got)
+	}
+}
+
+// countGoldPixels 数矩形里偏金的像素：红 > 绿 > 蓝且红蓝差明显，
+// 用来排除白底与灰阶文字。
+func countGoldPixels(img *image.RGBA, r ui.Rect) int {
+	if img == nil {
+		return 0
+	}
+	x0, y0 := max(int(r.X), img.Bounds().Min.X), max(int(r.Y), img.Bounds().Min.Y)
+	x1, y1 := min(int(r.X+r.W), img.Bounds().Max.X), min(int(r.Y+r.H), img.Bounds().Max.Y)
+	n := 0
+	for y := y0; y < y1; y++ {
+		for x := x0; x < x1; x++ {
+			rr, gg, bb, _ := img.At(x, y).RGBA()
+			r8, g8, b8 := byte(rr>>8), byte(gg>>8), byte(bb>>8)
+			if r8 > g8 && g8 > b8 && r8-b8 > 30 {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 // 通知里的聚合表态也把点名的用户画上头像：计数与 @昵称文案保持原样，
 // 头像跟着 11px 的名单字号走。
 func TestNotificationReactionNamesGetAvatars(t *testing.T) {
@@ -314,28 +363,64 @@ func TestAvatarImageIsNotCropped(t *testing.T) {
 	}
 }
 
-// 没有图片时画昵称首字母，文字要落在头像框内，不能被圆圈裁掉。
-func TestAvatarInitialsFallback(t *testing.T) {
-	tt := ui.NewTester(func(c *ui.Context) {
-		ui.Row(c).Padding(10).Children(func() {
-			avatarView(c, "jimmy", nil, 24)
-		})
-	}, 80, 80)
-	tt.Frame()
+// 没有图片时画按昵称生成的图案：不再出现昵称首字母，图案有底色与图形两
+// 种颜色，同一个昵称每次画出来完全一致，不同昵称画出来的不一样。
+func TestAvatarIdenticonFallback(t *testing.T) {
+	render := func(name string) (*ui.Tester, *image.RGBA) {
+		tt := ui.NewTester(func(c *ui.Context) {
+			ui.Row(c).Padding(10).Children(func() {
+				avatarView(c, name, nil, 32)
+			})
+		}, 80, 80)
+		tt.Frame()
+		return tt, tt.Image()
+	}
 
+	tt, img := render("jimmy")
+	if _, ok := tt.Find("J"); ok {
+		t.Errorf("头像仍在画昵称首字母：%q", tt.Texts())
+	}
 	avatar, ok := tt.Find("jimmy")
 	if !ok {
 		t.Fatalf("头像没有渲染：%q", tt.Texts())
 	}
-	initial, ok := tt.Find("J")
-	if !ok {
-		t.Fatalf("头像没有画昵称首字母：%q", tt.Texts())
+	if n := avatarColorCount(img, avatar); n < 2 {
+		t.Errorf("头像只有 %d 种颜色，没有画出图案", n)
 	}
-	if initial.X < avatar.X || initial.Y < avatar.Y ||
-		initial.X+initial.W > avatar.X+avatar.W ||
-		initial.Y+initial.H > avatar.Y+avatar.H {
-		t.Errorf("首字母 %v 超出了头像框 %v", initial, avatar)
+
+	_, again := render("jimmy")
+	if !samePixels(img, again) {
+		t.Error("同一个昵称两次画出的图案不一致")
 	}
+	_, other := render("alice")
+	if samePixels(img, other) {
+		t.Error("不同昵称画出了同一张图案")
+	}
+}
+
+// avatarColorCount 数头像框里的颜色种类，用来判断有没有画出图案。
+func avatarColorCount(img *image.RGBA, box ui.Rect) int {
+	seen := map[uint32]bool{}
+	for y := int(box.Y); y < int(box.Y+box.H); y++ {
+		for x := int(box.X); x < int(box.X+box.W); x++ {
+			r, g, b, a := img.At(x, y).RGBA()
+			seen[uint32(r>>8)<<24|uint32(g>>8)<<16|uint32(b>>8)<<8|uint32(a>>8)] = true
+		}
+	}
+	return len(seen)
+}
+
+// samePixels 比较两帧的像素是否完全一致。
+func samePixels(a, b *image.RGBA) bool {
+	if a.Bounds() != b.Bounds() {
+		return false
+	}
+	for i := range a.Pix {
+		if a.Pix[i] != b.Pix[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // 头像地址可能是协议相对或站内绝对路径：补成绝对地址后才能走下载与缓存。

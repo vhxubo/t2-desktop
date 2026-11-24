@@ -497,7 +497,7 @@ func fetchImageBytes(hc *http.Client, raw string) ([]byte, error) {
 }
 
 // ensureAvatar 预取当前登录账号的头像。userTag 在标题栏和登录页读同一份
-// 头像缓存；图片没到之前先画昵称首字母。
+// 头像缓存；图片没到之前先画按昵称生成的图案。
 func (a *app) ensureAvatar() {
 	a.prefetchAvatars(a.auth.avatarURL())
 }
@@ -796,7 +796,7 @@ func (a *app) loadRepliesFor(d *detailState, page int) {
 			d.replyPage = page
 			d.replyLoaded = true
 			// 评论作者头像随评论一起预取，列表行第一帧就能画（没到则先画
-			// 昵称首字母）。
+			// 生成的图案）。
 			a.prefetchReplyAvatars(rows)
 			// 定位目标评论：找到就滚过去。目标不在首屏时继续自动续拉，
 			// 直到找到、到底或用完预算；用户手动续拉时 focusPending 已

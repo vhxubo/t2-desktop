@@ -69,7 +69,7 @@ const (
 const imageCacheTTL = 7 * 24 * time.Hour
 
 // 失败头像的有限重试：网络抖动或刚切换代理时，头像可能下载失败一次。以前
-// 失败项永久不再下载，同一会话里这张头像一直是昵称首字母，直到换地址或清
+// 失败项永久不再下载，同一会话里这张头像一直是按昵称生成的图案，直到换地址或清
 // 缓存。现在允许在数据再次到达（重新打开窗口、刷新列表）时重试，但设上限
 // 与冷却，避免每批数据都重发请求，或对永久坏链无限重试。
 const (
@@ -278,7 +278,7 @@ func (e *imageEntry) subscribeRender(svc ui.Services) {
 }
 
 // bitmap 只在解码结果是位图时返回它（头像要的是位图）；SVG 表情对头像没有
-// 意义，返回 nil 让调用方继续画昵称首字母。
+// 意义，返回 nil 让调用方继续画生成的图案。
 func (e *imageEntry) bitmap() *ui.Bitmap {
 	b, _ := e.source().(*ui.Bitmap)
 	return b

@@ -184,20 +184,14 @@ func (b *accountBook) panelAccountRow(c *ui.Context, acc accountView) {
 		row.Background(tk.FillTertiary)
 	}
 	row.Children(func() {
-		// 头像：有缓存位图就用 Lobe Avatar 显示，没缓存过时它按昵称画
-		// 一个带纹理的占位，和 Lobe 里的用户头像一致。
-		var image ui.ImageSource
-		if bmp := b.avatarBitmap(acc.Avatar); bmp != nil {
-			image = bmp
-		}
+		// 头像与窗口里同一套：有缓存位图就用它，没缓存过时按用户名画同一个
+		// 图案，面板与窗口里看到的是同一张。
 		var proMark *ui.Bitmap
 		if acc.IsPro {
 			proMark = proMarkBitmapOf(b.images)
 		}
 		avatarHostWith(c, 34, acc.IsPro, proMark, func() ui.Element {
-			return display.Avatar(c, acc.Name, display.AvatarProps{
-				Size: 34, Shape: display.AvatarCircle, Image: image,
-			})
+			return avatarView(c, acc.Name, b.avatarBitmap(acc.Avatar), 34)
 		})
 
 		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
@@ -434,8 +428,8 @@ func (b *accountBook) panelLogoutDialog(c *ui.Context) {
    账号头像：面板不是 app，但它和窗口共用同一份图片缓存
 ------------------------------------------------------------------ */
 
-// avatarBitmap 取一个账号头像的位图。没加载过时返回 nil，调用方画昵称
-// 首字母（见 avatarView）。
+// avatarBitmap 取一个账号头像的位图。没加载过时返回 nil，调用方画按昵称
+// 生成的图案（见 avatarView）。
 func (b *accountBook) avatarBitmap(raw string) *ui.Bitmap {
 	raw = normalizeAvatarURL(raw)
 	if raw == "" {

@@ -759,7 +759,7 @@ func quickReplyToComment(shortID, commentID string, level int, p object) (string
 }
 
 // notificationReactionUser 是给这条内容表态的一个人；头像地址可能为空，界面
-// 退回昵称首字母。
+// 退回按昵称生成的图案。
 type notificationReactionUser struct {
 	Name   string
 	Avatar string

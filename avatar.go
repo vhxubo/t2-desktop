@@ -32,7 +32,7 @@ const (
 )
 
 // decodeAvatarURL 从换头像 / 重置头像的响应里取地址。重置时服务端给 null，
-// 这里解成空串，界面据此回到昵称首字母。
+// 这里解成空串，界面据此回到生成的图案。
 func decodeAvatarURL(d json.RawMessage) string {
 	return asObject(d).str("avatar_url", "avatarUrl", "avatar")
 }

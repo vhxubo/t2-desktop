@@ -387,7 +387,7 @@ func commentItemFrom(o object) Item {
 	it.Meta = strings.Join(meta, " · ")
 
 	// 被回复人通常就是父评论作者；只有两者对得上时才借它的头像与徽章，
-	// 否则统一用户标识会退回昵称首字母，不张冠李戴。徽章同样只从已经
+	// 否则统一用户标识会退回按昵称生成的图案，不张冠李戴。徽章同样只从已经
 	// 拿到的父评论对象里取，不单独请求。
 	replyAvatar := ""
 	replyBadges := []badgeInfo(nil)

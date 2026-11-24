@@ -15,7 +15,7 @@ import (
 // 都走 userTag，不再各自摆一个固定尺寸的 Avatar。
 //
 // 头像位图按地址缓存在全局图片缓存里（见 image_cache.go），并在数据到达时
-// 预取（见 prefetchAvatars）：渲染时只读缓存，没加载完就先画昵称首字母，
+// 预取（见 prefetchAvatars）：渲染时只读缓存，没加载完就先画生成的图案，
 // 避免在每一帧里发起网络请求。
 
 // userAvatarScale 是头像边长相对昵称字号的倍数。昵称的行高大约为字号的
@@ -146,8 +146,8 @@ func (a *app) userTag(c *ui.Context, u userTagSpec) ui.Element {
 }
 
 // avatarView 画一个头像。有图片时按头像框的实际尺寸等比缩放后完整显示
-// （Contain：不裁切、不偏移，框内的空白由底色补上）；没有图片时画昵称
-// 首字母。
+// （Contain：不裁切、不偏移，框内的空白由底色补上）；没有图片时画按昵称
+// 生成的图案（见 identicon.go）。
 //
 // 不能直接用 ui.Avatar：它按当前主题字号的 2.25 倍创建图片子元素，外部再
 // 用 Size 把头像框改小时，图片仍按主题尺寸绘制，被圆圈裁成中间一小块，
@@ -156,20 +156,29 @@ func avatarView(c *ui.Context, name string, bmp *ui.Bitmap, size float32) ui.Ele
 	if size <= 0 {
 		size = userAvatarMinSize
 	}
+	art := identiconFor(name, size)
 	box := ui.Box(c).Size(size, size).Radius(size / 2).Clip().Shrink(0).Center().
-		Background(avatarColor(name)).Role(ui.RoleImage).Label(name)
+		Background(art.bg).Role(ui.RoleImage).Label(name)
+	// 图案画在背景之上、图片之下；元素自己的 Clip 只裁子元素，所以这里
+	// 按同一个圆形再裁一次，图形不会溢出到圆外。
+	box.Draw(func(p *ui.Painter, r ui.Rect) {
+		if bmp != nil {
+			return
+		}
+		p.Clip(r, r.W/2, func() {
+			art.paint(p, r.X, r.Y)
+		})
+	})
 	box.Children(func() {
 		if bmp != nil {
 			ui.Image(c, bmp).Fit(ui.Contain).Size(size, size)
-			return
 		}
-		ui.Text(c, avatarInitials(name)).FontSize(size * 0.4).FontWeight(600).
-			TextColor(ui.RGB(255, 255, 255)).SingleLine()
 	})
 	return box
 }
 
-// avatarInitials 取昵称首尾词的首字母，与 ui.Avatar 的占位规则一致。
+// avatarInitials 取昵称首尾词的首字母，与 ui.Avatar 的占位规则一致。头像
+// 不再用它（见 identicon.go），只剩徽章图标没加载时画徽章名的首字。
 func avatarInitials(name string) string {
 	var first, last rune
 	inWord := false
@@ -193,17 +202,8 @@ func avatarInitials(name string) string {
 	return string([]rune{first, last})
 }
 
-// avatarColor 按昵称哈希出占位底色，与 ui.Avatar 的配色一致：头像还没
-// 加载完时，先显示一个和加载后同样位置的彩色圆。
-func avatarColor(name string) ui.Color {
-	h := uint32(2166136261)
-	for i := 0; i < len(name); i++ {
-		h = (h ^ uint32(name[i])) * 16777619
-	}
-	return avatarHSL(float64(h%360), 0.45, 0.55)
-}
-
-// avatarHSL 把 HSL（h 度、s/l 0–1）换成 RGB。
+// avatarHSL 把 HSL（h 度、s/l 0–1）换成 RGB。头像图案的底色与图形都用它
+// 从色相算出来，见 identicon.go。
 func avatarHSL(h, s, l float64) ui.Color {
 	c := (1 - math.Abs(2*l-1)) * s
 	x := c * (1 - math.Abs(math.Mod(h/60, 2)-1))
@@ -241,7 +241,7 @@ func normalizeAvatarURL(raw string) string {
 }
 
 // avatarBitmap 只读缓存，不发起下载：头像由数据到达时的 prefetchAvatars
-// 预取，还没到就先由 avatarView 画昵称首字母。
+// 预取，还没到就先由 avatarView 画生成的图案。
 func (a *app) avatarBitmap(raw string) *ui.Bitmap {
 	raw = normalizeAvatarURL(raw)
 	if raw == "" {

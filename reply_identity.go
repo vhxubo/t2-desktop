@@ -186,7 +186,7 @@ func (a *app) replyIdentityBadge(c *ui.Context, d *detailState, host replySurfac
 		return ui.Element{}
 	}
 	identity := a.replyIdentityFor(d)
-	// 另一个账号的头像第一次出现时先取一次：没到之前 avatarView 画昵称首字母。
+	// 另一个账号的头像第一次出现时先取一次：没到之前 avatarView 画生成的图案。
 	a.prefetchAvatars(identity.Avatar)
 	t := c.Theme()
 	bg := t.Accent.Mix(t.Background, 0.88)

@@ -195,17 +195,10 @@ func (a *app) profileTagIdentity(c *ui.Context, name string) {
 		if name == "" {
 			// 昵称还没读到（身份接口慢或失败）：仍然给一个可点的头像位，
 			// 账号菜单自己会带进「个人中心」窗口，不至于没有入口。
-			a.avatarHost(c, size, pro, func() ui.Element {
-				return display.Avatar(c, "", display.AvatarProps{
-					Size: size, Shape: display.AvatarCircle,
-					Image: a.avatarBitmap(a.auth.avatarURL()),
-				})
-			})
+			a.avatarWithPro(c, "", a.avatarBitmap(a.auth.avatarURL()), size, pro)
 			return
 		}
-		a.avatarHost(c, size, pro, func() ui.Element {
-			return avatarView(c, name, a.avatarBitmap(a.auth.avatarURL()), size)
-		})
+		a.avatarWithPro(c, name, a.avatarBitmap(a.auth.avatarURL()), size, pro)
 		ui.Text(c, name).FontSize(12).SingleLine().TextColor(tk.TextSecondary)
 	})
 }
@@ -226,8 +219,8 @@ func (a *app) profileMenuPanel(c *ui.Context) {
 
 // profileMenuRow 画账号菜单里的一行：图标 + 文案 + 可选右侧信息。整行可点，
 // 点下去先收起气泡，再执行 goAction。图标只是装饰；可见文案是 label，读屏
-// 与点击测试命中的无障碍名可用 accessName 另给（空时用 label），提示说明
-// 点了会发生什么。
+// 与点击测试命中的无障碍名可用 accessName 另给（空时用 label）。只有潘多拉
+// 行传 tip：它要借 tooltip 展示进行中事件的效果，其余行传空，不挂提示。
 func (a *app) profileMenuRow(c *ui.Context, icon *ui.SVG, label, accessName, tip string, trailing func(), goAction func()) {
 	tk := lobetheme.TokensOf(c)
 	row := ui.Row(c).FillWidth().Padding(7, 8).Radius(tk.BorderRadiusSM).
@@ -247,7 +240,10 @@ func (a *app) profileMenuRow(c *ui.Context, icon *ui.SVG, label, accessName, tip
 	if accessName != "" {
 		name = accessName
 	}
-	row.Label(name).Tooltip(tip)
+	row.Label(name)
+	if tip != "" {
+		row.Tooltip(tip)
+	}
 	if row.Clicked() {
 		a.profileMenuOpen = false
 		goAction()
@@ -274,7 +270,7 @@ func (a *app) profileMenuSignRow(c *ui.Context) {
 			status = "今日未签到"
 		}
 	}
-	a.profileMenuRow(c, lucide.CalendarCheck2(), "签到", "签到", "提交今日签到并领取金币", func() {
+	a.profileMenuRow(c, lucide.CalendarCheck2(), "签到", "签到", "", func() {
 		ui.Text(c, status).FontSize(11).TextColor(tk.TextSecondary).SingleLine()
 	}, func() { a.signInNow() })
 }
@@ -287,7 +283,7 @@ func (a *app) profileMenuCoinsRow(c *ui.Context) {
 	if a.coins != nil && a.coins.balanceOK {
 		balance = coinThousands(a.coins.balance)
 	}
-	a.profileMenuRow(c, lucide.Coins(), "金币", "金币", "查看金币余额、今日明细与流水", func() {
+	a.profileMenuRow(c, lucide.Coins(), "金币", "金币", "", func() {
 		ui.Text(c, balance).FontSize(11).TextColor(tk.TextSecondary).SingleLine()
 	}, func() { a.showCoins() })
 }
@@ -310,7 +306,7 @@ func (a *app) profileMenuPandoraRow(c *ui.Context) {
 func (a *app) profileMenuMineRow(c *ui.Context) {
 	// 可见文案与标题栏锚点一样是「个人中心」，无障碍名另给一个唯一的，读屏与
 	// 点击测试才分得清锚点和气泡里的入口。
-	a.profileMenuRow(c, lucide.UserRound(), "个人中心", "打开个人中心窗口", "打开「个人中心」窗口", nil, func() {
+	a.profileMenuRow(c, lucide.UserRound(), "个人中心", "打开个人中心窗口", "", nil, func() {
 		a.showProfile()
 	})
 }
@@ -319,7 +315,7 @@ func (a *app) profileMenuMineRow(c *ui.Context) {
 // 一行，现在和其余账号操作一起收在气泡里。退出实际走 a.logoutAccount，多账号
 // 时摘掉这个账号并关掉它的窗口，单账号时就是普通退出。
 func (a *app) profileMenuLogoutRow(c *ui.Context) {
-	a.profileMenuRow(c, logoutIcon, "退出登录", "", "退出当前账号并关闭它的窗口", nil, func() {
+	a.profileMenuRow(c, logoutIcon, "退出登录", "", "", nil, func() {
 		a.logoutAccount()
 	})
 }
@@ -457,31 +453,24 @@ func (a *app) profileTitleName(ps *profileState) string {
 func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 	tk := lobetheme.TokensOf(c)
 	u := ps.user
-	name := a.profileTitleName(ps)
+	// 头像图案按用户名生成：昵称会改、各页面拿到的也可能是昵称，只有用户名
+	// 能把同一个人的头像在列表、评论与资料头之间对上。
+	seed := u.Name
+	if seed == "" {
+		seed = a.auth.username()
+	}
 	avatar := u.Avatar
 	if avatar == "" {
 		avatar = a.auth.avatarURL()
 	}
-	title := u.DisplayName
-	if title == "" {
-		title = name
-	}
+	title := a.profileTitleName(ps)
 	if title == "" {
 		title = "已登录"
 	}
 	ui.Row(c).FillWidth().Padding(14, 16).Gap(14).AlignItems(ui.Center).Children(func() {
-		// 头像走 Lobe 的 Avatar：有缓存位图就用它，没加载过时按昵称画
-		// 首字母占位，形状、底色与账号面板里的头像一致。
-		var image ui.ImageSource
-		if bmp := a.avatarBitmap(avatar); bmp != nil {
-			image = bmp
-		}
-		a.avatarHost(c, 48, u.IsPro, func() ui.Element {
-			return display.Avatar(c, name, display.AvatarProps{
-				Size: 48, Shape: display.AvatarCircle, Image: image,
-				Fallback: display.AvatarText, Background: tk.FillTertiary,
-			})
-		})
+		// 头像与列表、评论、账号面板同一套：有缓存位图就用它，没有时按用户名
+		// 画同一个图案，各页面看到的是同一张。
+		a.avatarWithPro(c, seed, a.avatarBitmap(avatar), 48, u.IsPro)
 		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
 			// 昵称、等级与佩戴徽章同处一行，按这一行的 Gap 留白。等级紧跟
 			// 昵称，和用户资料卡的资料头是同一个位置；概览里的等级统计块

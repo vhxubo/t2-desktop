@@ -62,7 +62,7 @@ const (
 var mentionSearchDelay = mentionSearchDebounce
 
 // mentionPerson 是两份名单共用的最小字段。avatar_url 只用于参与人行的头像；
-// 守护者名单没有这个字段，留空即只画首字母。
+// 守护者名单没有这个字段，留空即只画生成的图案。
 type mentionPerson struct {
 	ID       string
 	Username string

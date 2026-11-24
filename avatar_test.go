@@ -162,7 +162,7 @@ func TestUploadAvatarFromFile(t *testing.T) {
 	}
 }
 
-// 重置头像后会话里的地址与资料头一起清空，界面回到首字母占位。
+// 重置头像后会话里的地址与资料头一起清空，界面回到生成的图案。
 func TestResetAvatarFromProfile(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/v1/me/avatar" {
