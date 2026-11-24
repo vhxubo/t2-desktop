@@ -314,16 +314,20 @@ const replyLocateMaxPages = 20
 
 // mdTextStyle 是一类 Markdown 视图的排版：基准字号、行高倍数与块间距（em）。
 // 标题、代码、列表缩进等以 em 计的长度都按 size 换算，所以只描述这三项。
+// imageMaxH 是这类视图的图片高度上限，单位为 DIP，0 表示不限制。
 type mdTextStyle struct {
 	size, line, block, item float32
+	imageMaxH               float32
 }
 
 // 正文与评论是两种阅读节奏：正文行距更松、段距更大，评论更紧凑但仍比
-// 旧版宽松；个人简介夹在资料卡里，比两者都紧。
+// 旧版宽松；个人简介夹在资料卡里，比两者都紧。评论的图片要限高，否则一张
+// 竖图就能占满整个评论区；正文保留撑栏宽的阅读体验。
 var (
 	postTextStyle    = mdTextStyle{size: postBodyFontSize, line: 1.7, block: 0.85, item: 0.35}
-	commentTextStyle = mdTextStyle{size: commentFontSize, line: 1.65, block: 0.7, item: 0.3}
-	bioTextStyle     = mdTextStyle{size: userCardBioFontSize, line: 1.6, block: 0.6}
+	commentTextStyle = mdTextStyle{size: commentFontSize, line: 1.65, block: 0.7, item: 0.3,
+		imageMaxH: commentImageMaxH}
+	bioTextStyle = mdTextStyle{size: userCardBioFontSize, line: 1.6, block: 0.6}
 )
 
 // newMarkdownOptions 造一套 Markdown 渲染选项。颜色、字体等未写的字段由
@@ -340,7 +344,7 @@ func newMarkdownOptions(a *app, st mdTextStyle, mentions bool) *markdown.Options
 		// [说明]；这类段落改由 article_render.go 接管。组图按解析好的文档
 		// 现认（见 articlePictures），点开的预览弹窗正好翻这一份源文里的图：
 		// 正文一份、每条评论各一份，互不掺和。
-		Block:    a.articleBlockAt(st.size, a.picturesForDoc, mentions),
+		Block:    a.articleBlockAt(st.size, st.imageMaxH, a.picturesForDoc, mentions),
 		WrapCode: true,
 		Theme: &markdown.Theme{
 			FontSize:     st.size,

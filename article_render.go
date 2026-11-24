@@ -47,20 +47,22 @@ func (p articlePicture) ref() mediaRef {
 // articleBlockAt 返回 Markdown 的 Options.Block：接管含表情或配图的段落 /
 // 标题，其余块（代码、列表等）继续交给 Markdown 默认渲染。size 是这类块的
 // 基准字号，0 表示跟随 Markdown 主题；评论区比正文小一号，用自己的一套。
+// imageMaxH 是这份视图的图片高度上限，0 表示不限制。
 //
 // pictures 按解析好的文档给出这份源文的整组配图（见 newMarkdownOptions 的
 // groupPictures）：Markdown 视图在重新解析之后才逐块调用 Block，这时按文档
 // 收图才对得上号，所以这里拿的是函数而不是一张事先算好的表。
-func (a *app) articleBlockAt(size float32, pictures func(d *parser.Document) []articlePicture, mentions bool) func(c *ui.Context, d *parser.Document, i int) bool {
+func (a *app) articleBlockAt(size, imageMaxH float32, pictures func(d *parser.Document) []articlePicture, mentions bool) func(c *ui.Context, d *parser.Document, i int) bool {
 	return func(c *ui.Context, d *parser.Document, i int) bool {
-		return a.articleBlock(c, d, i, size, pictures(d), mentions)
+		return a.articleBlock(c, d, i, size, imageMaxH, pictures(d), mentions)
 	}
 }
 
 // articleBlock 接管含表情、配图或提及的段落 / 标题 / 表格，size 见
-// articleBlockAt，pictures 是 d 所在那份 Markdown 的整组配图。mentions 为真
-// 时，正文里的 @名字 画成可点击的提及组件（只有评论区打开，见 detail_ui.go）。
-func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float32, pictures []articlePicture, mentions bool) bool {
+// articleBlockAt，pictures 是 d 所在那份 Markdown 的整组配图。imageMaxH 是这
+// 份视图的图片高度上限（0 表示不限）；mentions 为真时，正文里的 @名字 画成
+// 可点击的提及组件（只有评论区打开，见 detail_ui.go）。
+func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size, imageMaxH float32, pictures []articlePicture, mentions bool) bool {
 	b := d.Block(i)
 	if b.Kind == parser.Table {
 		// 表格单元格不会经过 Options.Block：Markdown 画表格时直接排每一格。
@@ -68,7 +70,7 @@ func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float3
 		if !a.tableHasImage(d, i) {
 			return false
 		}
-		a.articleTable(c, d, i, size, pictures, mentions)
+		a.articleTable(c, d, i, size, imageMaxH, pictures, mentions)
 		return true
 	}
 	if b.Kind != parser.Paragraph && b.Kind != parser.Heading {
@@ -83,12 +85,12 @@ func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float3
 				if alt == "" {
 					alt = ref.title()
 				}
-				a.articleVideoEmbed(c, ref, alt, pictures)
+				a.articleVideoEmbed(c, ref, alt, pictures, imageMaxH)
 			} else {
 				if alt == "" {
 					alt = ref.title()
 				}
-				a.articlePicture(c, ref.URL, alt, pictures)
+				a.articlePicture(c, ref.URL, alt, pictures, imageMaxH)
 			}
 			return true
 		}
@@ -105,7 +107,7 @@ func (a *app) articleBlock(c *ui.Context, d *parser.Document, i int, size float3
 		return true
 	}
 	// 有配图的段落：把段落按图片切成几段文字，图片在段落内部独占一行。
-	a.articleMixedParagraph(c, d, i, size, pictures, mentions)
+	a.articleMixedParagraph(c, d, i, size, imageMaxH, pictures, mentions)
 	return true
 }
 
@@ -274,9 +276,9 @@ func (a *app) articleParagraph(c *ui.Context, d *parser.Document, i int, b *pars
 
 // articleMixedParagraph 渲染「文字 + 配图 + 文字」的段落：每个文字
 // 片段仍是可换行的 RichText，配图作为片段之间的独立图片。
-func (a *app) articleMixedParagraph(c *ui.Context, d *parser.Document, i int, size float32, pictures []articlePicture, mentions bool) {
+func (a *app) articleMixedParagraph(c *ui.Context, d *parser.Document, i int, size, imageMaxH float32, pictures []articlePicture, mentions bool) {
 	base := articleBaseStyle(c, d, i, d.Block(i), size)
-	a.articleMixedInlines(c, d.Inlines(i), base, ui.Start, pictures, mentions)
+	a.articleMixedInlines(c, d.Inlines(i), base, ui.Start, pictures, imageMaxH, mentions)
 }
 
 // articleMixedInlines 是 articleMixedParagraph 的实现，也用于表格单元格：
@@ -285,7 +287,7 @@ func (a *app) articleMixedParagraph(c *ui.Context, d *parser.Document, i int, si
 // pictures 是这张表所在那份 Markdown 的全部配图（见 articlePictures）：每张
 // 图点开时打开它所在的那一组并停在自己身上。收图不在这里做——一段内联只
 // 知道自己的图，不知道同一份正文里还有几张，组要按整份源文认。
-func (a *app) articleMixedInlines(c *ui.Context, in []parser.Inline, base articleStyle, align ui.Align, pictures []articlePicture, mentions bool) {
+func (a *app) articleMixedInlines(c *ui.Context, in []parser.Inline, base articleStyle, align ui.Align, pictures []articlePicture, imageMaxH float32, mentions bool) {
 	col := ui.Column(c).Gap(4)
 	col.Children(func() {
 		from := 0
@@ -295,7 +297,7 @@ func (a *app) articleMixedInlines(c *ui.Context, in []parser.Inline, base articl
 				continue
 			}
 			a.articleTextSegment(c, in, from, k, base, align, mentions)
-			a.articlePicture(c, n.Dest, parser.PlainText(in[k+1:n.Next]), pictures)
+			a.articlePicture(c, n.Dest, parser.PlainText(in[k+1:n.Next]), pictures, imageMaxH)
 			from = n.Next
 		}
 		a.articleTextSegment(c, in, from, len(in), base, align, mentions)
@@ -354,13 +356,26 @@ const (
 	imageLazyText                        = "点一下加载图片"
 	imageUnknownSizePlaceholderH float32 = 72
 	// imageVideoCardMaxH 是正文里视频封面卡片的高度上限：再宽的一栏也不该让
-	// 一张卡片占满整屏。
+	// 一张卡片占满整屏。评论区用更小的 commentImageMaxH，见下。
 	imageVideoCardMaxH float32 = 380
+	// commentImageMaxH 是评论里配图与视频卡片的高度上限：再高的竖图也要
+	// 收窄到这个高度，不能让一条评论占满整个评论区。正文不设上限。
+	commentImageMaxH float32 = 240
 )
 
-// articlePicture 显示一张正文配图：仍在下载时转圈并说明，失败后给一句说明，
-// 加载完成后按原比例缩到栏宽。配图是帖子里的外部图片，进临时缓存，过期后
-// 自动清理。点一下打开多图预览窗口（见 image_viewer.go）。
+// imageBoxWidth 返回图片为不越过 imageMaxH 而需要的最大宽度。
+// 尺寸未知或不设上限时返回 0，调用方就不加 MaxWidth。
+func imageBoxWidth(w, h, maxH float32) float32 {
+	if w <= 0 || h <= 0 || maxH <= 0 {
+		return 0
+	}
+	return maxH * w / h
+}
+
+// articlePicture 显示一张配图：仍在下载时转圈并说明，失败后给一句说明，
+// 加载完成后按原比例缩到栏宽，imageMaxH 大于 0 时再按原比例收窄到不超过
+// 这个高度（评论区用，见 commentImageMaxH）。配图是帖子里的外部图片，进
+// 临时缓存，过期后自动清理。点一下打开多图预览窗口（见 image_viewer.go）。
 //
 // 占位按图片的真实宽高来：图片已经在磁盘缓存里时（读文件头，见
 // imageCache.cachedSize），先画一个同样大小的空框，图片解好后原地替换，
@@ -370,14 +385,14 @@ const (
 // pictures 是这份正文的全部配图（见 articlePictures），点开预览时按它在整
 // 组里翻页。还在加载或加载失败的占位也能点：加载中点一下先记下，图片到位后
 // 直接开预览窗口；失败的只留说明，点了什么也不会发生。
-func (a *app) articlePicture(c *ui.Context, dest, alt string, pictures []articlePicture) {
+func (a *app) articlePicture(c *ui.Context, dest, alt string, pictures []articlePicture, imageMaxH float32) {
 	th := markdown.DefaultTheme(c.Theme())
 	if alt == "" {
 		alt = "图片"
 	}
 	dest = strings.TrimSpace(dest)
 	if a.imageHidden(dest) {
-		a.articlePictureLazy(c, dest, alt)
+		a.articlePictureLazy(c, dest, alt, imageMaxH)
 		return
 	}
 	src := a.articleImage(dest, imageCacheTemporary)
@@ -389,6 +404,9 @@ func (a *app) articlePicture(c *ui.Context, dest, alt string, pictures []article
 		img := ui.Image(c, src).MaxWidthPercent(100).Radius(4).Label(alt)
 		if w > 0 && h > 0 {
 			img.AspectRatio(w / h)
+			if maxW := imageBoxWidth(w, h, imageMaxH); maxW > 0 {
+				img.MaxWidth(maxW)
+			}
 		}
 		img.Cursor(ui.CursorPointer).Tooltip("点开预览大图")
 		img.OnClick(func() { a.openImageGroup(pictures, dest) })
@@ -402,6 +420,9 @@ func (a *app) articlePicture(c *ui.Context, dest, alt string, pictures []article
 		}
 		ph := ui.Box(c).Width(w).MaxWidthPercent(100).AspectRatio(w / h).
 			Radius(4).Background(th.CodeBackground).Center().Clip()
+		if maxW := imageBoxWidth(w, h, imageMaxH); maxW > 0 {
+			ph.MaxWidth(maxW)
+		}
 		ph.Role(ui.RoleImage).Label(alt)
 		ph.Children(func() {
 			ui.Text(c, alt).FontSize(12).TextColor(th.Muted).MaxLines(2)
@@ -409,21 +430,25 @@ func (a *app) articlePicture(c *ui.Context, dest, alt string, pictures []article
 		ph.OnClick(func() { a.openImageGroup(pictures, dest) })
 		return
 	}
-	a.articlePicturePending(c, dest, alt, w, h, pictures)
+	a.articlePicturePending(c, dest, alt, w, h, pictures, imageMaxH)
 }
 
 // articlePicturePending 画「加载中」或「加载失败」的配图占位。尺寸已知时仍
-// 按真实宽高留白，图片到达后下面的文字不会跳；尺寸未知时用固定高度的空框。
+// 按真实宽高留白，图片到达后下面的文字不会跳；评论区的高度上限也按同一套
+// 宽度换算，保证占位与成图边界一致。尺寸未知时用固定高度的空框。
 // 失败态不转圈也不重发请求，只说明是哪张图没加载出来。
 //
 // 占位框只设 Label、不设 RoleImage：mygo 会把显式 RoleImage 盒的子树在访问树
 // 里压平，导致里面的转圈（RoleProgress）无法被读取；加载完成后真正的
 // ui.Image 自带图片角色，这里不必抢。
-func (a *app) articlePicturePending(c *ui.Context, dest, alt string, w, h float32, pictures []articlePicture) {
+func (a *app) articlePicturePending(c *ui.Context, dest, alt string, w, h float32, pictures []articlePicture, imageMaxH float32) {
 	th := markdown.DefaultTheme(c.Theme())
 	box := ui.Box(c).Radius(4).Background(th.CodeBackground).Center().Clip()
 	if w > 0 && h > 0 {
 		box.Width(w).MaxWidthPercent(100).AspectRatio(w / h)
+		if maxW := imageBoxWidth(w, h, imageMaxH); maxW > 0 {
+			box.MaxWidth(maxW)
+		}
 	} else {
 		box.FillWidth().Height(imageUnknownSizePlaceholderH)
 	}
@@ -482,14 +507,18 @@ func (a *app) revealImage(dest string) {
 
 // articlePictureLazy 画「默认不加载图片」时的占位：只留位置和一句说明，点
 // 一下才开始下载。尺寸已知时（磁盘缓存里有这张图）按真实宽高留白，图片到位
-// 后下面的文字不会跳；尺寸未知时用固定高度的空框。
-func (a *app) articlePictureLazy(c *ui.Context, dest, alt string) {
+// 后下面的文字不会跳；评论区的高度上限同样按宽度换算，占位与成图边界一致。
+// 尺寸未知时用固定高度的空框。
+func (a *app) articlePictureLazy(c *ui.Context, dest, alt string, imageMaxH float32) {
 	th := markdown.DefaultTheme(c.Theme())
 	w, h, _ := a.images.cachedSize(dest, imageCacheTemporary)
 	box := ui.Box(c).Radius(4).Background(th.CodeBackground).Center().Clip().
 		Cursor(ui.CursorPointer)
 	if w > 0 && h > 0 {
 		box.Width(w).MaxWidthPercent(100).AspectRatio(w / h)
+		if maxW := imageBoxWidth(w, h, imageMaxH); maxW > 0 {
+			box.MaxWidth(maxW)
+		}
 	} else {
 		box.FillWidth().Height(imageUnknownSizePlaceholderH)
 	}
@@ -507,8 +536,12 @@ func (a *app) articlePictureLazy(c *ui.Context, dest, alt string) {
 // 编号。title 是卡片上写的名字（链接文字优先，没有就用来源 · 编号）。点一下
 // 打开预览窗口停在这一项，播放交给浏览器——正文里不直接放一个能跳走的外链，
 // 免得读帖时误触。
-func (a *app) articleVideoEmbed(c *ui.Context, ref mediaRef, title string, pictures []articlePicture) {
-	card := ui.Box(c).FillWidth().AspectRatio(16.0 / 9).MaxHeight(imageVideoCardMaxH).
+func (a *app) articleVideoEmbed(c *ui.Context, ref mediaRef, title string, pictures []articlePicture, imageMaxH float32) {
+	limit := imageVideoCardMaxH
+	if imageMaxH > 0 {
+		limit = min(limit, imageMaxH)
+	}
+	card := ui.Box(c).FillWidth().AspectRatio(16.0 / 9).MaxHeight(limit).
 		Radius(8).Background(videoCardBG).Clip().Cursor(ui.CursorPointer)
 	card.Label("打开视频：" + title).Tooltip("点开预览")
 	card.OnClick(func() { a.openImageGroup(pictures, ref.URL) })
@@ -589,7 +622,7 @@ func (a *app) articleHasImage(in []parser.Inline, from, to int) bool {
 //
 // 与默认实现的唯一区别是单元格内容由 article_render.go 自己画，因此配图和
 // :code: 表情在表格里也能显示成图片。
-func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size float32, pictures []articlePicture, mentions bool) {
+func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size, imageMaxH float32, pictures []articlePicture, mentions bool) {
 	th := markdown.DefaultTheme(c.Theme())
 	b := d.Block(i)
 	cols := len(b.Align)
@@ -609,7 +642,7 @@ func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size float3
 			if row.Header {
 				s.weight = th.StrongWeight
 			}
-			w := a.articleCellWidth(c, d.Inlines(cell), s, maxW)
+			w := a.articleCellWidth(c, d.Inlines(cell), s, maxW, imageMaxH)
 			widths[k] = max(widths[k], min(w, maxW)+2*padX+1)
 			k++
 		}
@@ -655,7 +688,7 @@ func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size float3
 						if k > 0 {
 							box.BorderWidth(0, 0, 0, 1).BorderColor(th.TableBorder)
 						}
-						box.Children(func() { a.articleCell(c, d, cell, s, align, pictures, mentions) })
+						box.Children(func() { a.articleCell(c, d, cell, s, align, pictures, imageMaxH, mentions) })
 						k++
 					}
 				})
@@ -667,10 +700,10 @@ func (a *app) articleTable(c *ui.Context, d *parser.Document, i int, size float3
 
 // articleCell 画一格内容：有顶层配图时按「文字 + 图片 + 文字」排，否则就是
 // 一段可换行的文字（其中的表情仍是行内图片）。pictures 见 articlePicture。
-func (a *app) articleCell(c *ui.Context, d *parser.Document, cell int, base articleStyle, align ui.Align, pictures []articlePicture, mentions bool) {
+func (a *app) articleCell(c *ui.Context, d *parser.Document, cell int, base articleStyle, align ui.Align, pictures []articlePicture, imageMaxH float32, mentions bool) {
 	in := d.Inlines(cell)
 	if a.hasTopLevelPicture(in) {
-		a.articleMixedInlines(c, in, base, align, pictures, mentions)
+		a.articleMixedInlines(c, in, base, align, pictures, imageMaxH, mentions)
 		return
 	}
 	a.articleTextSegment(c, in, 0, len(in), base, align, mentions)
@@ -678,12 +711,12 @@ func (a *app) articleCell(c *ui.Context, d *parser.Document, cell int, base arti
 
 // articleCellWidth 估算一格内容需要的宽度：文字按硬换行拆行后取最宽的一行，
 // 配图按已知的自然宽度（还不知道时按列宽上限占位）。
-func (a *app) articleCellWidth(c *ui.Context, in []parser.Inline, base articleStyle, maxW float32) float32 {
+func (a *app) articleCellWidth(c *ui.Context, in []parser.Inline, base articleStyle, maxW, imageMaxH float32) float32 {
 	w := float32(0)
 	for k := 0; k < len(in); k = in[k].Next {
 		if n := &in[k]; n.Kind == parser.Image && !a.isEmojiImage(n.Dest) {
 			// 顶层配图独占一行，它比文字宽时整格按它算。
-			w = max(w, a.articlePictureWidth(n.Dest, maxW))
+			w = max(w, a.articlePictureWidth(n.Dest, maxW, imageMaxH))
 		}
 	}
 	th := markdown.DefaultTheme(c.Theme())
@@ -694,14 +727,21 @@ func (a *app) articleCellWidth(c *ui.Context, in []parser.Inline, base articleSt
 }
 
 // articlePictureWidth 返回配图在表格里需要的宽度：尺寸已知就用它，还没下载
-// 或解出来时按列宽上限占位（图片到位后表格重排一次，宽度随之收紧）。
-func (a *app) articlePictureWidth(dest string, maxW float32) float32 {
+// 或解出来时按列宽上限占位（图片到位后表格重排一次，宽度随之收紧）。评论里
+// 再按 imageMaxH 收窄，避免列宽按原图预留、实际图片却窄一截。
+func (a *app) articlePictureWidth(dest string, maxW, imageMaxH float32) float32 {
 	if src := a.images.source(dest); src != nil {
-		if w, _ := ui.ImageSize(src); w > 0 {
+		if w, h := ui.ImageSize(src); w > 0 {
+			if max := imageBoxWidth(w, h, imageMaxH); max > 0 {
+				w = min(w, max)
+			}
 			return min(w, maxW)
 		}
 	}
-	if w, _, ok := a.images.cachedSize(dest, imageCacheTemporary); ok && w > 0 {
+	if w, h, ok := a.images.cachedSize(dest, imageCacheTemporary); ok && w > 0 {
+		if max := imageBoxWidth(w, h, imageMaxH); max > 0 {
+			w = min(w, max)
+		}
 		return min(w, maxW)
 	}
 	return maxW
