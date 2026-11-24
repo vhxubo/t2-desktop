@@ -81,9 +81,11 @@ a pure white page.
 
 ### 授权走哪个浏览器
 
-- **第一个账号**走系统浏览器 + 自定义协议深链（`OnOpenURL` → `accountBook.handleDeepLink`）。
-- **第二个及以后的账号、以及重新登录**，只要系统 webview 可用（`mygo.WebViewAvailable()`），
-  就走 `login_window.go` 的内置浏览器窗口：`mygo.NewEphemeralSession()` 的独立会话，
+- **账号数不超过 1 时**，新增账号、重新登录与补充授权都直接走系统浏览器 +
+  自定义协议深链（`OnOpenURL` → `accountBook.handleDeepLink`）。
+- **本机挂了多个账号时**，新增账号、重新登录与补充授权只要系统 webview 可用
+  （`mygo.WebViewAvailable()`），就走 `login_window.go` 的内置浏览器窗口：
+  `mygo.NewEphemeralSession()` 的独立会话，
   没有系统浏览器里的 cookie，用户可以直接登录另一个账号，不必先去网页端退出。
   授权结果的回调是自定义协议，webview 不会加载它，由 `Page.OnWillNavigate` /
   `OnDidFailLoad` 拦下后交给同一个 `completeCallback`（跟深链完全同一条完成路径）。

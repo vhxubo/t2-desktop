@@ -656,10 +656,10 @@ func (b *accountBook) reloginAccount(id string) {
 // reauthorizeAccount 给一个已有账号重新授权：extraScopes 是补权限时要追加的
 // scope（普通重新登录为 nil）。
 //
-// 多账号时一律走内置浏览器的独立会话：系统浏览器里登着的可能正是另一个账号，
-// 补到的权限会落到别人头上。授权仍用一份临时会话，授权回来的昵称和这个账号
-// 核对，不是同一个人就另算新账号，绝不把别人的令牌装到它头上（见
-// persistLogin）。
+// 只有本机挂了多个账号才走内置浏览器的独立会话：系统浏览器里登着的可能正是
+// 另一个账号，补到的权限会落到别人头上。单个账号时重新授权直接走系统浏览器。
+// 授权仍用一份临时会话，授权回来的昵称和这个账号核对，不是同一个人就另算新
+// 账号，绝不把别人的令牌装到它头上（见 persistLogin）。
 func (b *accountBook) reauthorizeAccount(id string, extraScopes []string) {
 	acc := b.account(id)
 	if acc == nil {
@@ -697,7 +697,7 @@ func (b *accountBook) beginAccountLogin(auth *AuthManager, targetID string, extr
 	// 只记 scope，不打印完整授权地址（里面带 state 与 PKCE）。
 	log.Printf("开始授权：target=%q 申请 scope=%q", targetID, strings.Join(auth.requestedScopesList(), " "))
 	p := &accountLogin{auth: auth, accountID: targetID, url: authorize}
-	embedded := b.embeddedLoginReady(targetID)
+	embedded := b.embeddedLoginReady()
 	p.embedded = embedded
 	// 提示语要在拿 b.mu 之前算：它要按 id 查账号名（见 loginWaitingMessage）。
 	msg := b.loginWaitingMessage(embedded, targetID)
@@ -752,21 +752,20 @@ func (b *accountBook) loginWaitingMessage(embedded bool, targetID string) string
 		return "已在内置浏览器窗口里打开授权页：那个窗口是独立会话，可以直接登录要挂的另一个账号。"
 	}
 	if name != "" {
-		// 内置浏览器起不来的兜底：系统浏览器里可能登着别的账号，提醒一句。
-		return "内置浏览器不可用，已在系统浏览器打开授权页：请确认里面登录的是「" +
-			name + "」，同意后会自动跳回。"
+		// 系统浏览器里可能登着别的账号，提醒确认一下。
+		return "已在系统浏览器打开授权页：请确认里面登录的是「" + name + "」，同意后会自动跳回。"
 	}
 	return "已在浏览器打开授权页，同意后会自动跳回。"
 }
 
-// embeddedLoginReady 报告这次授权该不该用内置浏览器：系统 webview 可用、
-// 应用已就绪，并且要么是本机已经有账号（添加账号时不能再借系统浏览器的
-// 登录态），要么是给已有账号重新登录（targetID 非空）。
-func (b *accountBook) embeddedLoginReady(targetID string) bool {
+// embeddedLoginReady 报告这次授权该不该用内置浏览器：系统 webview 可用、应用
+// 已就绪，并且本机已经挂了至少两个账号。账号数不超过 1 时，新增账号、重新
+// 登录与补充授权都直接用系统浏览器。
+func (b *accountBook) embeddedLoginReady() bool {
 	if !b.webview || !b.afterReady {
 		return false
 	}
-	return targetID != "" || b.accountCount() > 0
+	return b.accountCount() > 1
 }
 
 // finishAccountLogin 是一次账号授权的结束（成功或失败）。它从授权协程回到
@@ -1090,10 +1089,14 @@ func (b *accountBook) openWindowNow(id string) {
 		// 打开（见 accounts.go）。
 		return
 	}
+	b.openNewAccountWindow(acc, (*app).openMainWindow)
+}
+
+func (b *accountBook) openNewAccountWindow(acc *account, openMainWindow func(*app)) {
 	app := newAccountApp(b, acc)
 	acc.app = app
+	openMainWindow(app)
 	b.closeGuestWindow()
-	app.openMainWindow()
 	b.redrawPanel()
 }
 
@@ -1255,8 +1258,7 @@ func (b *accountBook) guestWindowClosed(app *app) {
 	}
 }
 
-// closeGuestWindow 关掉未登录窗口：第一个账号的窗口开起来之后它就没用了，
-// 两个窗口并排只会让人以为登录失败。
+// closeGuestWindow 关掉未登录窗口。先创建账号窗口，否则关闭最后一个窗口会触发应用退出。
 func (b *accountBook) closeGuestWindow() {
 	guest := b.guest
 	if guest == nil {

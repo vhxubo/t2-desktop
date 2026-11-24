@@ -624,6 +624,29 @@ func TestNativeNoticeClickOpensTheRightAccount(t *testing.T) {
 	}
 }
 
+func TestFirstAccountWindowOpensBeforeGuestCloses(t *testing.T) {
+	book := testBook(t)
+	guest := newGuestApp(book)
+	book.guest = guest
+	acc := addTestAccount(t, book, "jimmy")
+	book.proxy.rateLimitGate().until = time.Now().Add(time.Minute)
+
+	book.openNewAccountWindow(acc, func(accountApp *app) {
+		if book.guest != guest {
+			t.Fatal("账号面板已关闭时，必须先打开账号窗口，再关闭唯一的访客窗口")
+		}
+		accountApp.autoLoad = false
+		tester := ui.NewTester(accountApp.view, 1080, 720)
+		tester.Frame()
+		if !tester.HasText("jimmy") || !tester.HasText("搜索关键词") {
+			t.Fatalf("首次登录后应打开账号主页面：%q", tester.Texts())
+		}
+	})
+	if book.guest != nil || acc.app == nil {
+		t.Fatal("登录成功后应只保留账号窗口")
+	}
+}
+
 // 一个账号窗口真的能画出来：标题栏带账号名（任务栏、Alt+Tab 靠它区分），
 // 侧边栏底部有「账号」入口，标题栏账号菜单里有「退出登录」。说明这个窗口确实
 // 挂在账号册上，而不是一个没人管的孤立窗口。
@@ -907,28 +930,32 @@ func TestCancelLoginRejectsLateCallback(t *testing.T) {
    添加账号走哪条路：系统浏览器还是内置浏览器
 ------------------------------------------------------------------ */
 
-// 第一个账号用系统浏览器（网页端可能一个账号都没登，直接授权最快）；本机
-// 已经有账号时改用内置浏览器的独立会话，否则系统浏览器会把授权码发给网页里
-// 正登着的那个账号。系统 webview 不在时一律退回系统浏览器。
-func TestEmbeddedLoginIsUsedForAdditionalAccounts(t *testing.T) {
+// 账号数不超过 1 时，新增账号、重新登录与补充授权都走系统浏览器；挂了多个
+// 账号才用内置浏览器的独立会话，省去在网页端退出再登录的麻烦。系统 webview
+// 不在或应用没就绪时一律退回系统浏览器。
+func TestEmbeddedLoginIsUsedOnlyWithSeveralAccounts(t *testing.T) {
 	b := testBook(t)
-	if b.embeddedLoginReady("") {
+	if b.embeddedLoginReady() {
 		t.Fatal("本机没有账号时不该用内置浏览器")
 	}
 	addTestAccount(t, b, "jimmy")
-	b.afterReady = true
-	if b.embeddedLoginReady("") {
-		t.Fatal("系统 webview 不可用时不该用内置浏览器")
-	}
 	b.webview = true
-	if !b.embeddedLoginReady("") {
-		t.Fatal("已经有账号、webview 可用时应改用内置浏览器")
+	b.afterReady = true
+	if b.embeddedLoginReady() {
+		t.Fatal("只有一个账号时也该用系统浏览器")
 	}
-	// 重新登录已有账号也走内置浏览器：系统浏览器里登着的可能是别的账号。
+	addTestAccount(t, b, "luna")
+	if !b.embeddedLoginReady() {
+		t.Fatal("有多个账号、webview 可用时应改用内置浏览器")
+	}
 	b.afterReady = false
-	b.webview = false
-	if b.embeddedLoginReady("jimmy-930a68") {
+	if b.embeddedLoginReady() {
 		t.Fatal("应用没就绪时不该用内置浏览器")
+	}
+	b.afterReady = true
+	b.webview = false
+	if b.embeddedLoginReady() {
+		t.Fatal("系统 webview 不可用时不该用内置浏览器")
 	}
 }
 
@@ -964,13 +991,15 @@ func TestAddAccountOpensSystemBrowserWithNoAccounts(t *testing.T) {
 	t.Cleanup(func() { b.cancelLogin() })
 }
 
-// 内置浏览器窗口起不来（应用没就绪、缺 WebView2 运行时）时要退回系统浏览
-// 器，别把用户卡在一个打不开的空窗口上。
+// 内置浏览器窗口起不来（缺 WebView2 运行时等）时要退回系统浏览器，别把用户
+// 卡在一个打不开的空窗口上。
 func TestEmbeddedLoginFailureFallsBackToSystemBrowser(t *testing.T) {
 	b := testBook(t)
 	addTestAccount(t, b, "jimmy")
+	addTestAccount(t, b, "luna") // 多个账号才会选内置浏览器
 	b.webview = true
-	b.afterReady = false // 没就绪：openLoginWindow 会拒绝，于是退回系统浏览器
+	b.afterReady = true
+	b.openLogin = func(string) error { return fmt.Errorf("没有 WebView2 运行时") }
 	var opened string
 	b.openURL = func(u string) error { opened = u; return nil }
 	b.startAddAccount()
@@ -1079,6 +1108,7 @@ func TestApplySessionKeepsPreviouslyGrantedScopes(t *testing.T) {
 func TestReloginPreservesGrantedScopes(t *testing.T) {
 	b := testBook(t)
 	acc := addTestAccount(t, b, "jimmy")
+	addTestAccount(t, b, "luna") // 多个账号才会走内置浏览器
 	if err := acc.auth.storeToken(tokenData{
 		AccessToken:  "tok-jimmy",
 		RefreshToken: "r-jimmy",
@@ -1111,6 +1141,44 @@ func TestReloginPreservesGrantedScopes(t *testing.T) {
 	}
 	if p := b.pendingLogin(); p == nil || strings.Contains(p.url, "redirect_mode=") {
 		t.Errorf("登记的原始地址不该带 redirect_mode：%v", p)
+	}
+}
+
+// 只有一个账号时重新登录走系统浏览器，但申请范围仍要保留上次开通的 scope。
+func TestSingleAccountReloginUsesSystemBrowser(t *testing.T) {
+	b := testBook(t)
+	acc := addTestAccount(t, b, "jimmy")
+	if err := acc.auth.storeToken(tokenData{
+		AccessToken:  "tok-jimmy",
+		RefreshToken: "r-jimmy",
+		TokenType:    "Bearer",
+		Username:     "jimmy",
+		Scope:        defaultScopes + " write:topic",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	acc.Scopes = acc.auth.scopes()
+	b.webview = true
+	b.afterReady = true
+	var systemURL string
+	b.openURL = func(u string) error { systemURL = u; return nil }
+	b.reloginAccount(acc.ID)
+	t.Cleanup(b.cancelLogin)
+	if systemURL == "" {
+		t.Fatal("没有打开授权页")
+	}
+	if strings.Contains(systemURL, "redirect_mode=") {
+		t.Errorf("系统浏览器的授权地址不该带 redirect_mode：%s", systemURL)
+	}
+	u, err := url.Parse(systemURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope := " " + u.Query().Get("scope") + " "; !strings.Contains(scope, " write:topic ") {
+		t.Errorf("重新登录地址没有保留 write:topic：%q", scope)
+	}
+	if p := b.pendingLogin(); p == nil || p.embedded {
+		t.Fatalf("等待中的授权 = %+v，期望走系统浏览器", p)
 	}
 }
 

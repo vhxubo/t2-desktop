@@ -133,10 +133,8 @@ func TestMomentMissingScopeAsksForWriteTopic(t *testing.T) {
 
 	b := testBook(t)
 	acc := addTestAccount(t, b, "jimmy")
-	b.webview = true
-	b.afterReady = true
 	var authorizeURL string
-	b.openLogin = func(u string) error { authorizeURL = u; return nil }
+	b.openURL = func(u string) error { authorizeURL = u; return nil }
 	a := newAppWithDeps(b.deps(), acc)
 	a.autoLoad = false
 	acc.app = a
@@ -155,7 +153,7 @@ func TestMomentMissingScopeAsksForWriteTopic(t *testing.T) {
 	a.authorizeGate()
 	t.Cleanup(func() { b.cancelLogin(); a.auth.Cancel() })
 	if authorizeURL == "" {
-		t.Fatal("没有打开内置浏览器授权页")
+		t.Fatal("没有打开授权页")
 	}
 	u, err := url.Parse(authorizeURL)
 	if err != nil {
@@ -178,10 +176,8 @@ func TestMomentMissingScopeWithoutRequiredScopeStillAsksWriteTopic(t *testing.T)
 
 	b := testBook(t)
 	acc := addTestAccount(t, b, "jimmy")
-	b.webview = true
-	b.afterReady = true
 	var authorizeURL string
-	b.openLogin = func(u string) error { authorizeURL = u; return nil }
+	b.openURL = func(u string) error { authorizeURL = u; return nil }
 	a := newAppWithDeps(b.deps(), acc)
 	a.autoLoad = false
 	acc.app = a
@@ -200,7 +196,7 @@ func TestMomentMissingScopeWithoutRequiredScopeStillAsksWriteTopic(t *testing.T)
 	a.authorizeGate()
 	t.Cleanup(func() { b.cancelLogin(); a.auth.Cancel() })
 	if authorizeURL == "" {
-		t.Fatal("没有打开内置浏览器授权页")
+		t.Fatal("没有打开授权页")
 	}
 	u, err := url.Parse(authorizeURL)
 	if err != nil {

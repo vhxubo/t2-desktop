@@ -223,15 +223,17 @@ func TestAuthGateDropsCallsOfClosedWindow(t *testing.T) {
 	}
 }
 
-// 多账号下补权限不能借系统浏览器的登录态：账号窗口的「前往授权」要开在
-// 账号册的内置浏览器里（独立会话），并且仍然申请缺失的 scope。
-func TestScopeReauthUsesEmbeddedBrowserForAccountWindow(t *testing.T) {
+// 只有一个账号时补权限直接走系统浏览器：即使 webview 可用也不开内置窗口，
+// 并且仍然申请缺失的 scope。
+func TestScopeReauthUsesSystemBrowserWithSingleAccount(t *testing.T) {
 	b := testBook(t)
 	acc := addTestAccount(t, b, "jimmy")
 	b.webview = true
 	b.afterReady = true
-	var embeddedURL string
-	b.openLogin = func(u string) error { embeddedURL = u; return nil }
+	b.openLogin = func(string) error {
+		t.Error("只有一个账号时不该打开内置浏览器")
+		return nil
+	}
 	var systemURL string
 	b.openURL = func(u string) error { systemURL = u; return nil }
 
@@ -241,8 +243,11 @@ func TestScopeReauthUsesEmbeddedBrowserForAccountWindow(t *testing.T) {
 	a.demandAuthorization(scopeNeed([]string{"write:vote"}))
 	a.authorizeGate()
 
-	if systemURL != "" {
-		t.Errorf("多账号补授权不该打开系统浏览器：%s", systemURL)
+	if systemURL == "" {
+		t.Fatal("没有打开系统浏览器授权页")
+	}
+	if strings.Contains(systemURL, "redirect_mode=") {
+		t.Errorf("系统浏览器的授权地址不该带 redirect_mode：%s", systemURL)
 	}
 	p := b.pendingLogin()
 	if p == nil {
@@ -251,16 +256,13 @@ func TestScopeReauthUsesEmbeddedBrowserForAccountWindow(t *testing.T) {
 	if p.accountID != acc.ID {
 		t.Errorf("等待授权的账号 = %q，期望 %q", p.accountID, acc.ID)
 	}
-	if !p.embedded {
-		t.Error("补授权应走内置浏览器")
+	if p.embedded {
+		t.Error("补授权应走系统浏览器")
 	}
 	if p.auth == a.auth {
 		t.Error("补授权应挂在临时会话上，不能拿窗口里的会话去换别人的令牌")
 	}
-	if embeddedURL == "" {
-		t.Fatal("没有打开内置浏览器授权页")
-	}
-	u, err := url.Parse(embeddedURL)
+	u, err := url.Parse(systemURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,9 +280,9 @@ func TestScopeReauthUsesEmbeddedBrowserForAccountWindow(t *testing.T) {
 	}
 }
 
-// 内置浏览器里补权限成功后，窗口换成新会话并清掉授权状态，但应用不替用户
-// 重跑被中断的操作 —— 与系统浏览器深链走的是同一条完成路径。
-func TestScopeReauthDoesNotReplayAfterEmbeddedLogin(t *testing.T) {
+// 系统浏览器里补权限成功后，窗口换成新会话并清掉授权状态，但应用不替用户
+// 重跑被中断的操作 —— 与内置浏览器授权走的是同一条完成路径。
+func TestScopeReauthDoesNotReplayAfterSystemLogin(t *testing.T) {
 	srv := newTestTokenServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"c":0,"d":{"access_token":"NEW","refresh_token":"R","token_type":"Bearer","expires_in":3600}}`)
 	})
@@ -288,7 +290,7 @@ func TestScopeReauthDoesNotReplayAfterEmbeddedLogin(t *testing.T) {
 	acc := addTestAccount(t, b, "jimmy")
 	b.webview = true
 	b.afterReady = true
-	b.openLogin = func(string) error { return nil }
+	b.openURL = func(string) error { return nil }
 	b.newLoginAuth = func() *AuthManager {
 		m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
 		m.store = &memoryTokenStore{}
@@ -304,8 +306,8 @@ func TestScopeReauthDoesNotReplayAfterEmbeddedLogin(t *testing.T) {
 	a.authorizeGate()
 
 	p := b.pendingLogin()
-	if p == nil || !p.embedded {
-		t.Fatalf("没有在内置浏览器里开始补授权：%+v", p)
+	if p == nil || p.embedded {
+		t.Fatalf("没有在系统浏览器里开始补授权：%+v", p)
 	}
 	u, err := url.Parse(p.url)
 	if err != nil {
