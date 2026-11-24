@@ -178,6 +178,22 @@ func TestLightPrimaryFillUsesBrandColor(t *testing.T) {
 	}
 }
 
+// 原生窗口底色与深色舞台都从 Lobe BgContainer 派生，附属窗口和视频卡片
+// 不再各写一套灰底 / 近黑。
+func TestCustomSurfacesFollowLobeTokens(t *testing.T) {
+	light, dark := lobeCfg.Tokens(false), lobeCfg.Tokens(true)
+	want := "light-dark(" + hexToken(light.BgContainer) + ", " + hexToken(dark.BgContainer) + ")"
+	if lobeWindowBackground != want {
+		t.Errorf("窗口底色 = %q，期望 Lobe BgContainer 派生值 %q", lobeWindowBackground, want)
+	}
+	if lobeStageBackground != dark.BgContainer {
+		t.Errorf("深色舞台底色 = %v，期望 Lobe 深色 BgContainer %v", lobeStageBackground, dark.BgContainer)
+	}
+	if videoCardBG != lobeStageBackground {
+		t.Errorf("视频卡片底色 = %v，期望与深色舞台一致 %v", videoCardBG, lobeStageBackground)
+	}
+}
+
 // 外观三档收进设置窗口的「外观」页，侧边栏不再单独摆三个按钮。点选即切换
 // 并落盘，结果用窗口内 toast 说明。测试从深色系统开始，这样选「浅色」是否
 // 真的覆盖系统外观也能一起验证。

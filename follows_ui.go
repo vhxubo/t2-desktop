@@ -67,7 +67,7 @@ func (a *app) showFollowsWindow(tab int) {
 		MinWidth:          followsWinMinWidth,
 		MinHeight:         followsWinMinHeight,
 		StateKey:          "follows",
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
+		BackgroundColor:   lobeWindowBackground,
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.followsWindowView)),

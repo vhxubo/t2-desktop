@@ -82,7 +82,7 @@ func (a *app) notificationBell(c *ui.Context) {
 				MinWidth(14).Height(14).Padding(0, 3).Radius(999).Center().
 				Border(1, ring).Background(t.Danger).Children(func() {
 				display.Text(c, count, display.TextProps{Strong: true, FontSize: 9, Rows: 1}).
-					TextColor(ui.RGB(255, 255, 255))
+					TextColor(tk.White)
 			})
 		})
 	}
@@ -145,7 +145,7 @@ func (a *app) showNotificationWindow() {
 		MinWidth:          notifWindowMinWidth,
 		MinHeight:         notifWindowMinHeight,
 		StateKey:          "notifications",
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
+		BackgroundColor:   lobeWindowBackground,
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.notificationsWindowView)),

@@ -1,13 +1,14 @@
 package main
 
 import (
-	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
 	"github.com/egoist/mygo/ui/markdown/parser"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 详情页正文里的图片与内置表情都走这里。
@@ -517,32 +518,33 @@ func (a *app) articleVideoEmbed(c *ui.Context, ref mediaRef, title string, pictu
 	card.Children(func() { a.videoCover(c, ref, title, fetchCover) })
 }
 
-// videoCardBG 是视频卡片没有封面时的底色：一块近黑的深色，与预览窗口的
-// 舞台同一套颜色。
-var videoCardBG = ui.Hex("#101012")
+// videoCardBG 是视频卡片没有封面时的底色，与预览窗口共用 Lobe 深色
+// BgContainer，舞台与卡片不会因为写死近黑而各自偏色。
+var videoCardBG = lobeStageBackground
 
 // videoCover 画视频卡片的封面与中央的播放按钮。YouTube 的缩略图能直接由
 // 编号拼出来，走图片缓存下载；哔哩哔哩的封面要另调接口，这里只用来源底色
 // 加编号。title 是卡片上写的名字，fetchCover 为假时连封面也不下载
 // （「默认不加载图片」）。
 func (a *app) videoCover(c *ui.Context, ref mediaRef, title string, fetchCover bool) {
+	tk := lobetheme.TokensOf(c)
 	if fetchCover && ref.ThumbURL != "" {
 		if src := a.articleImage(ref.ThumbURL, imageCacheTemporary); src != nil {
 			ui.Image(c, src).Fill().Fit(ui.Cover).Label(ref.title())
 		}
 	}
 	ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).
-		Background(ui.RGBA(0, 0, 0, 0.38)).Center().Children(func() {
+		Background(tk.BgMask).Center().Children(func() {
 		// 这一列撑满卡片再居中排，标题按卡片宽度决定能否单行放下；不撑满时
 		// 列的宽度会被最窄的按钮收窄，稍长的视频编号就被迫截断。
 		ui.Column(c).FillWidth().Padding(0, 24).Gap(8).AlignItems(ui.Center).Children(func() {
 			play := ui.Box(c).Size(52, 52).Radius(26).
-				Background(ui.RGBA(0, 0, 0, 0.55)).Center()
-			play.Children(func() { ui.Icon(c, playIcon).Size(22, 22).TextColor(ui.Hex("#ffffff")) })
-			ui.Text(c, title).FontSize(12).TextColor(ui.Hex("#ffffff")).
+				Background(tk.BgMask.Alpha(0.55)).Center()
+			play.Children(func() { ui.Icon(c, playIcon).Size(22, 22).TextColor(tk.White) })
+			ui.Text(c, title).FontSize(12).TextColor(tk.White).
 				SingleLine().MaxWidthPercent(100)
 			ui.Text(c, "点开预览 · 在浏览器中播放").FontSize(11).
-				TextColor(ui.RGBA(255, 255, 255, 0.72)).SingleLine()
+				TextColor(tk.White.Alpha(0.72)).SingleLine()
 		})
 	})
 }

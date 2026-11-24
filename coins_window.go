@@ -72,7 +72,7 @@ func (a *app) showCoinWindow() {
 		MinWidth:          coinWinMinWidth,
 		MinHeight:         coinWinMinHeight,
 		StateKey:          "coins",
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
+		BackgroundColor:   lobeWindowBackground,
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、通知窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.coinWindowView)),

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 官网的 Pro 标识不是文字，而是 r2.2libra.com/site/pro.png：黑底四叶风车。
@@ -83,6 +84,7 @@ func (a *app) proMarkBitmap() *ui.Bitmap { return proMarkBitmapOf(a.images) }
 // app 上下文的地方复用同一套画法。
 func proMarkFor(c *ui.Context, size float32, bmp *ui.Bitmap) ui.Element {
 	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	overhang := size * 0.15
 	mark := ui.Box(c).Absolute().Right(-overhang).Bottom(-overhang).
 		Size(size, size).Radius(size / 2).Shrink(0).Clip().
@@ -93,7 +95,7 @@ func proMarkFor(c *ui.Context, size float32, bmp *ui.Bitmap) ui.Element {
 			ui.Image(c, bmp).Fit(ui.Cover).Size(size, size)
 		} else {
 			// 解码失败时给一个实心圆占位，位置和大小至少是对的。
-			ui.Box(c).Fill().Background(ui.RGB(17, 17, 17))
+			ui.Box(c).Fill().Background(tk.TextBase)
 		}
 		// 描边画在不占布局的覆盖层上。若把 Border 放在圆章自身，子元素会从
 		// 边框内侧开始排，图片中心就比圆章中心偏右下半个边框宽；旋转圆章时

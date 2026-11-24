@@ -67,6 +67,38 @@ var identiconCache = struct {
 	items map[identiconKey]*identiconArt
 }{items: map[identiconKey]*identiconArt{}}
 
+// identiconTone 是一组头像配色：淡底来自 Lobe 的 Fill，图形用同色系的
+// Active 实色，保证浅底上的深色图形始终清楚。
+type identiconTone struct {
+	fill, ink ui.Color
+}
+
+// identiconPalette 固定取 Lobe 浅色 token：头像代表用户身份，不能因为
+// 应用切深浅色就换一套图；浅色 token 的淡底叠在 BgContainer 上得到不透明底色。
+var identiconPalette = func() []identiconTone {
+	tk := lobeCfg.Tokens(false)
+	entries := []identiconTone{
+		{tk.RedFillTertiary, tk.RedActive},
+		{tk.OrangeFillTertiary, tk.OrangeActive},
+		{tk.GoldFillTertiary, tk.GoldActive},
+		{tk.GreenFillTertiary, tk.GreenActive},
+		{tk.CyanFillTertiary, tk.CyanActive},
+		{tk.BlueFillTertiary, tk.BlueActive},
+		{tk.PurpleFillTertiary, tk.PurpleActive},
+		{tk.MagentaFillTertiary, tk.MagentaActive},
+	}
+	for i := range entries {
+		entries[i].fill = entries[i].fill.Over(tk.BgContainer)
+	}
+	return entries
+}()
+
+// identiconNeutral 是还没有标识时的中性圆：Lobe 灰色三级填充叠容器底色。
+var identiconNeutral = func() ui.Color {
+	tk := lobeCfg.Tokens(false)
+	return tk.GrayFillTertiary.Over(tk.BgContainer)
+}()
+
 // identiconFor 返回标识在给定边长下的图案。头像在一帧里会被画很多次，
 // 同一个标识与边长只算一次，之后直接取缓存。
 func identiconFor(seed string, size float32) *identiconArt {
@@ -98,18 +130,18 @@ func identiconFor(seed string, size float32) *identiconArt {
 	return art
 }
 
-// buildIdenticon 按标识的 SHA-256 摘要画图案：摘要的前几个字节决定色相与
-// 每格图形，因此完全确定，换机器、换版本都不会变。
+// buildIdenticon 按标识的 SHA-256 摘要画图案：摘要决定 Lobe 配色和每格图形，
+// 因此完全确定，换机器、换版本都不会变。
 func buildIdenticon(seed string, size float32) *identiconArt {
 	if seed == "" {
 		// 还没有标识（昵称没读到）：只画一个中性圆，不编造一张属于
 		// 别人的图案。
-		return &identiconArt{bg: avatarHSL(215, 0.10, 0.74)}
+		return &identiconArt{bg: identiconNeutral}
 	}
 	sum := sha256.Sum256([]byte(seed))
-	hue := float64(sum[0]) * 360 / 255
-	art := &identiconArt{bg: avatarHSL(hue, 0.45, 0.82)}
-	ink := avatarHSL(hue, 0.52, 0.36)
+	tone := identiconPalette[int(sum[0])%len(identiconPalette)]
+	art := &identiconArt{bg: tone.fill}
+	ink := tone.ink
 
 	pad := size * identiconPadding
 	cell := (size - 2*pad) / identiconGrid
@@ -117,20 +149,20 @@ func buildIdenticon(seed string, size float32) *identiconArt {
 	// 底纹：一半的图案在中部铺一块介于底色与图形之间的色块，图形压在
 	// 它上面，图案就有了层次，不会只剩一层剪影。
 	if sum[10]&0x80 != 0 {
-		tone := avatarHSL(hue, 0.5, 0.66)
+		mid := ink.Mix(tone.fill, 0.45)
 		x, y := pad+cell, pad+cell
 		switch sum[10] % 3 {
 		case 0:
 			art.pieces = append(art.pieces, identiconPiece{
-				rect: ui.Rect{X: x, Y: y, W: cell * 2, H: cell * 2}, radius: cell, color: tone,
+				rect: ui.Rect{X: x, Y: y, W: cell * 2, H: cell * 2}, radius: cell, color: mid,
 			})
 		case 1:
 			art.pieces = append(art.pieces, identiconPiece{
-				rect: ui.Rect{X: x, Y: y, W: cell * 2, H: cell * 2}, radius: cell * 0.28, color: tone,
+				rect: ui.Rect{X: x, Y: y, W: cell * 2, H: cell * 2}, radius: cell * 0.28, color: mid,
 			})
 		default:
 			art.pieces = append(art.pieces, identiconPiece{
-				path: identiconDiamond(x+cell, y+cell, cell*1.02), color: tone,
+				path: identiconDiamond(x+cell, y+cell, cell*1.02), color: mid,
 			})
 		}
 	}

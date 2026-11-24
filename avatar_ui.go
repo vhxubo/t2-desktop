@@ -187,7 +187,7 @@ func (a *app) avatarCropStage(c *ui.Context, crop *avatarCropState) {
 		box := crop.cropRect()
 		box.X += r.X
 		box.Y += r.Y
-		mask := ui.RGBA(0, 0, 0, 0.48)
+		mask := tk.BgMask.Alpha(0.48)
 		if top := box.Y - r.Y; top > 0 {
 			p.Fill(ui.Rect{X: r.X, Y: r.Y, W: size, H: top}, mask, 0)
 		}
@@ -207,19 +207,19 @@ func (a *app) avatarCropStage(c *ui.Context, crop *avatarCropState) {
 		for _, gx := range [2]float32{box.X, box.X + box.W} {
 			for _, gy := range [2]float32{box.Y, box.Y + box.H} {
 				h := ui.Rect{X: gx - corner/2, Y: gy - corner/2, W: corner, H: corner}
-				p.Fill(h, ui.RGBA(255, 255, 255, 1), 1)
+				p.Fill(h, tk.White, 1)
 				p.Stroke(h, tk.Primary, 1, 1)
 			}
 		}
 		midX, midY := box.X+box.W/2, box.Y+box.H/2
 		for _, gy := range [2]float32{box.Y, box.Y + box.H} {
 			h := ui.Rect{X: midX - edge/2, Y: gy - 2.5, W: edge, H: 5}
-			p.Fill(h, ui.RGBA(255, 255, 255, 1), 2)
+			p.Fill(h, tk.White, 2)
 			p.Stroke(h, tk.Primary, 2, 1)
 		}
 		for _, gx := range [2]float32{box.X, box.X + box.W} {
 			h := ui.Rect{X: gx - 2.5, Y: midY - edge/2, W: 5, H: edge}
-			p.Fill(h, ui.RGBA(255, 255, 255, 1), 2)
+			p.Fill(h, tk.White, 2)
 			p.Stroke(h, tk.Primary, 2, 1)
 		}
 	})

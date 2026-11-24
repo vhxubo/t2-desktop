@@ -349,8 +349,7 @@ func TestTitleBarWindowButtonsPaintTheirGlyphs(t *testing.T) {
 	}
 }
 
-// Hovering the close button paints the system's red with a white cross; the
-// other two light up with the theme's hover surface instead.
+// 关闭键悬停用 Lobe 错误色铺底、白色叉子；另外两个键只换主题的悬停底色。
 func TestTitleBarButtonHover(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1080, 720)
@@ -360,14 +359,15 @@ func TestTitleBarButtonHover(t *testing.T) {
 	tt.Frame()
 	im := tt.Image()
 	c := im.RGBAAt(int(closeR.X)+3, int(closeR.Y)+3)
-	if c.R != 0xe8 || c.G != 0x11 || c.B != 0x23 {
-		t.Errorf("悬停关闭按钮底色 = #%02x%02x%02x，期望 #e81123", c.R, c.G, c.B)
+	tk := lobeCfg.Tokens(false)
+	if c.R != tk.Error.R || c.G != tk.Error.G || c.B != tk.Error.B {
+		t.Errorf("悬停关闭按钮底色 = #%02x%02x%02x，期望 Lobe Error %s", c.R, c.G, c.B, hexToken(tk.Error))
 	}
 	d := im.RGBAAt(int(closeR.X+closeR.W/2), int(closeR.Y+closeR.H/2))
 	// 叉子应为白色：红底上的白色矢量叉在抗锯齿后，中心像素会略低于纯白
 	// （实测约 #feefef），只要绿、蓝通道明显高于红底（不是把叉画成红色或
 	// 漏画）就说明是白叉，避免被渲染器的抗锯齿细节误伤。
-	if d.R < 0xe0 || d.G < 0xc0 || d.B < 0xc0 {
+	if d.R < tk.White.R-0x10 || d.G < tk.White.G-0x30 || d.B < tk.White.B-0x30 {
 		t.Errorf("悬停时叉子应为白色，实际 #%02x%02x%02x", d.R, d.G, d.B)
 	}
 
@@ -379,7 +379,7 @@ func TestTitleBarButtonHover(t *testing.T) {
 	if c.R == 0xff && c.G == 0xff && c.B == 0xff {
 		t.Error("悬停最大化按钮没有底色")
 	}
-	if c.R > 0xf0 && c.G < 0x40 { // 只有关闭按钮才是红的
+	if c.R == tk.Error.R && c.G == tk.Error.G && c.B == tk.Error.B { // 只有关闭按钮才是红的
 		t.Errorf("最大化按钮悬停变成了红色：%v", c)
 	}
 }

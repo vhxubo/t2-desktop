@@ -62,7 +62,7 @@ func (b *accountBook) showPanelWindow() {
 		MinWidth:          accountsWindowMinW,
 		MinHeight:         accountsWindowMinH,
 		StateKey:          "accounts",
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
+		BackgroundColor:   lobeWindowBackground,
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(b.windowView(b.panelView)),

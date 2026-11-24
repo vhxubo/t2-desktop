@@ -95,7 +95,7 @@ func (a *app) openReplyWindow() {
 		MinWidth:          replyWinMinWidth,
 		MinHeight:         replyWinMinHeight,
 		StateKey:          "reply",
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
+		BackgroundColor:   lobeWindowBackground,
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、发帖窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.replyWindowView)),

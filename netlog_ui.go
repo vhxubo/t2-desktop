@@ -73,7 +73,7 @@ func (a *app) showNetLogWindow() {
 		MinWidth:          netLogWindowMinW,
 		MinHeight:         netLogWindowMinH,
 		StateKey:          "netlog",
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
+		BackgroundColor:   lobeWindowBackground,
 		TitleBarStyle:     mygo.TitleBarHidden, // 与其他窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.netLogWindowView)),

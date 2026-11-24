@@ -94,7 +94,7 @@ func (a *app) showUserCardWindow(username string) {
 		MinWidth:          userCardMinWidth,
 		MinHeight:         userCardMinHeight,
 		StateKey:          "user-card",
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
+		BackgroundColor:   lobeWindowBackground,
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、通知、我的一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.userCardWindowView)),

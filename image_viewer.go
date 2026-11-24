@@ -15,6 +15,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown/parser"
 	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 多图预览窗口
@@ -202,7 +203,7 @@ func (a *app) showViewerWindow() {
 		MinWidth:          imageViewerWindowMinW,
 		MinHeight:         imageViewerWindowMinH,
 		StateKey:          "image-viewer",
-		BackgroundColor:   "#101012",
+		BackgroundColor:   hexToken(lobeStageBackground),
 		TitleBarStyle:     mygo.TitleBarHidden, // 工具条兼作标题栏，见 imageViewerToolbar
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.imageViewerWindowView)),
@@ -237,7 +238,7 @@ func (a *app) redrawViewerWindow() {
 // imageViewerWindowView 是预览窗口的 view：整扇窗口就是预览，顶部工具条兼作
 // 标题栏（可拖动窗口，右侧最小化与关闭），底部一行操作提示。
 func (a *app) imageViewerWindowView(c *ui.Context) {
-	// 预览窗口是一块固定的深色底（黑遮罩 + #101012 窗口底色）。工具条、
+	// 预览窗口是一块固定的深色底（Lobe BgMask 遮罩 + 深色 BgContainer 舞台）。工具条、
 	// 底栏和图标必须跟着这块底走深色 token：照搬应用的浅色主题会把工具条
 	// 翻成一条浅色横幅，图标也跟着变成深色，和深色舞台上的大图格格不入。
 	// 这里锁定 Lobe 的深色主题（仍出自 lobeCfg，Lobe 组件照常能取到匹配的
@@ -245,7 +246,7 @@ func (a *app) imageViewerWindowView(c *ui.Context) {
 	// 深色配色。主题要在读根背景之前定好，见 theme.go 的 applyTheme 约定。
 	c.SetTheme(homeTheme(true))
 	a.srv = c.Services()
-	c.Root().Background(ui.Hex("#101012"))
+	c.Root().Background(lobeStageBackground)
 	defer a.drainToasts(c, a.claimsToasts(toastViewer))
 	a.imageViewer(c)
 }
@@ -509,6 +510,7 @@ func viewerIndexOf(items []articlePicture, key string) int {
 //   - Esc 交给底层的 OverlayShortcut，关掉这扇预览窗口。
 func (a *app) imageViewer(c *ui.Context) {
 	a.viewerTick()
+	tk := lobetheme.TokensOf(c)
 	v := a.viewer
 	if v == nil || !v.open {
 		return
@@ -559,7 +561,7 @@ func (a *app) imageViewer(c *ui.Context) {
 	v.panX, v.panY = viewerPan(v.panX, v.panY, iw, ih, zoom, lay)
 
 	back := ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).
-		Background(ui.RGBA(0, 0, 0, 0.72)).Role(ui.RoleDialog).Label(imageViewerLabel)
+		Background(tk.BgMask.Alpha(0.72)).Role(ui.RoleDialog).Label(imageViewerLabel)
 	back.Modal()
 	back.Children(func() {
 		// 快捷键层先画，后面的工具条与图片盖在它上面；它透传指针，所以只占
@@ -865,7 +867,7 @@ type viewerButtonTone int
 const (
 	viewerToneAction viewerButtonTone = iota // 翻页、缩放、另存为：亮色图标，悬停品牌蓝
 	viewerToneWindow                         // 最小化：常态弱一档，悬停中性浅底
-	viewerToneClose                          // 关闭：悬停红底白叉，与系统窗口按钮一致
+	viewerToneClose                          // 关闭：悬停 Lobe 错误色红底白叉
 )
 
 // viewerButton 画工具条上的一枚操作图标：常态亮色、悬停给浅底并转成品牌蓝、
@@ -880,7 +882,7 @@ func (a *app) viewerWindowButton(c *ui.Context, icon *ui.SVG, label, tip string,
 	a.viewerIconButton(c, icon, label, tip, false, viewerToneWindow, onClick)
 }
 
-// viewerCloseButton 是「关闭」键：和系统标题栏一样，悬停时红底白叉。
+// viewerCloseButton 是「关闭」键：和标题栏关闭键一样，悬停时红底白叉。
 func (a *app) viewerCloseButton(c *ui.Context, icon *ui.SVG, label, tip string, onClick func()) {
 	a.viewerIconButton(c, icon, label, tip, false, viewerToneClose, onClick)
 }
@@ -889,6 +891,7 @@ func (a *app) viewerCloseButton(c *ui.Context, icon *ui.SVG, label, tip string, 
 // 状态分别给，保证常态、悬停、禁用、窗口控制与关闭各有可辨的颜色。
 func (a *app) viewerIconButton(c *ui.Context, icon *ui.SVG, label, tip string, disabled bool, tone viewerButtonTone, onClick func()) {
 	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	b := ui.Box(c).Size(imageViewerButton, imageViewerButton).Radius(8).Shrink(0).Center().
 		Background(ui.Transparent)
 	hovered := b.Hovered()
@@ -897,7 +900,7 @@ func (a *app) viewerIconButton(c *ui.Context, icon *ui.SVG, label, tip string, d
 	case disabled:
 		b.Disabled(true)
 	case closeHover:
-		b.Background(ui.Hex("#e81123")) // 关闭：红底白叉，与系统窗口按钮一致
+		b.Background(tk.Error) // 关闭：Lobe 错误色红底白叉，与标题栏一致
 	case hovered:
 		b.Background(t.SurfaceHover)
 	}
@@ -906,7 +909,7 @@ func (a *app) viewerIconButton(c *ui.Context, icon *ui.SVG, label, tip string, d
 	case disabled:
 		ink = t.TextMuted.Alpha(0.45)
 	case closeHover:
-		ink = ui.Hex("#ffffff")
+		ink = tk.White
 	case tone == viewerToneWindow:
 		ink = t.TextMuted
 		if hovered {

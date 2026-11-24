@@ -65,7 +65,7 @@ func (a *app) showSearchWindow() {
 		MinWidth:          searchWinMinWidth,
 		MinHeight:         searchWinMinHeight,
 		StateKey:          "search",
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
+		BackgroundColor:   lobeWindowBackground,
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.searchWindowView)),

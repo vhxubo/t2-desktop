@@ -183,6 +183,19 @@ var lobeCfg = func() *lobetheme.Config {
 	return cfg
 }()
 
+// hexToken 把不透明的 Lobe token 转成 mygo 窗口选项接受的 #rrggbb 字符串。
+func hexToken(c ui.Color) string { return fmt.Sprintf("#%02x%02x%02x", c.R, c.G, c.B) }
+
+// lobeWindowBackground 是原生窗口在自绘之前铺的底色，直接取自 Lobe 的
+// BgContainer。附属窗口不再另写一套深灰，深浅外观都和自绘页面同底。
+var lobeWindowBackground = "light-dark(" +
+	hexToken(lobeCfg.Tokens(false).BgContainer) + ", " +
+	hexToken(lobeCfg.Tokens(true).BgContainer) + ")"
+
+// lobeStageBackground 是图片预览窗口与视频卡片共用的深色舞台，取自锁定
+// 深色主题后的 Lobe BgContainer。
+var lobeStageBackground = lobeCfg.Tokens(true).BgContainer
+
 // homeTheme 返回当前帧的 Lobe 主题。深浅由外观模式决定，主题实例直接取自
 // lobeCfg，这样 Lobe 组件能用 TokensOf(c) 取到匹配的深浅 token。
 func homeTheme(dark bool) *ui.Theme {

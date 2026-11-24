@@ -191,7 +191,7 @@ func (a *app) createDetailWindow(h *detailWindow) {
 		MinWidth:          detailWinMinWidth,
 		MinHeight:         detailWinMinHeight,
 		StateKey:          fmt.Sprintf("detail-%d", h.id),
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
+		BackgroundColor:   lobeWindowBackground,
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(func(c *ui.Context) { a.detailWindowView(h, c) })),

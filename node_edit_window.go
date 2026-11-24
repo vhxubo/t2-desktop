@@ -58,7 +58,7 @@ func (a *app) openNodeEditWindow(st *nodeEditState) {
 		MinWidth:          nodeEditMinWidth,
 		MinHeight:         nodeEditMinHeight,
 		StateKey:          "topic-node",
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
+		BackgroundColor:   lobeWindowBackground,
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.nodeEditWindowView)),

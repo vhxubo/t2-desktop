@@ -63,7 +63,7 @@ func (a *app) showAboutWindow() {
 		MinWidth:          aboutWindowMinW,
 		MinHeight:         aboutWindowMinH,
 		StateKey:          "about",
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
+		BackgroundColor:   lobeWindowBackground,
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、设置窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.aboutWindowView)),

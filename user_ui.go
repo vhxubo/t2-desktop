@@ -109,8 +109,8 @@ func (a *app) userTag(c *ui.Context, u userTagSpec) ui.Element {
 			if tk.Dark {
 				alpha1, alpha2 = 0.06, 0.03
 			}
-			identity.Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, alpha1)).
-				Shadow(0, 2, 4, 0, ui.RGBA(0, 0, 0, alpha2))
+			identity.Shadow(0, 1, 2, 0, tk.Shadow.Alpha(alpha1)).
+				Shadow(0, 2, 4, 0, tk.Shadow.Alpha(alpha2))
 		}
 		identity.Children(func() {
 			a.avatarWithPro(c, u.Name, a.avatarBitmap(u.Avatar), avatar, u.Pro)
@@ -200,30 +200,6 @@ func avatarInitials(name string) string {
 		return string(first)
 	}
 	return string([]rune{first, last})
-}
-
-// avatarHSL 把 HSL（h 度、s/l 0–1）换成 RGB。头像图案的底色与图形都用它
-// 从色相算出来，见 identicon.go。
-func avatarHSL(h, s, l float64) ui.Color {
-	c := (1 - math.Abs(2*l-1)) * s
-	x := c * (1 - math.Abs(math.Mod(h/60, 2)-1))
-	m := l - c/2
-	var r, g, b float64
-	switch {
-	case h < 60:
-		r, g = c, x
-	case h < 120:
-		r, g = x, c
-	case h < 180:
-		g, b = c, x
-	case h < 240:
-		g, b = x, c
-	case h < 300:
-		r, b = x, c
-	default:
-		r, b = c, x
-	}
-	return ui.RGB(uint8((r+m)*255), uint8((g+m)*255), uint8((b+m)*255))
 }
 
 // normalizeAvatarURL 把服务端可能给出的相对头像地址补成绝对地址：协议相对

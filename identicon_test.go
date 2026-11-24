@@ -91,8 +91,35 @@ func TestIdenticonWithoutSeed(t *testing.T) {
 	}
 }
 
-// 图案的色相由标识决定，但明度分层是固定的：浅底上压一层深色图形，深色
-// 主题下也看得清；中间调的底纹只作层次，不参与这条要求。
+// 头像配色直接来自 Lobe token：淡底是对应 Fill 叠容器底色，图形用 Active
+// 实色；固定取浅色 token，保证切换应用外观不会换掉用户的图案。
+func TestIdenticonUsesLobeTokens(t *testing.T) {
+	tk := lobeCfg.Tokens(false)
+	want := []identiconTone{
+		{tk.RedFillTertiary.Over(tk.BgContainer), tk.RedActive},
+		{tk.OrangeFillTertiary.Over(tk.BgContainer), tk.OrangeActive},
+		{tk.GoldFillTertiary.Over(tk.BgContainer), tk.GoldActive},
+		{tk.GreenFillTertiary.Over(tk.BgContainer), tk.GreenActive},
+		{tk.CyanFillTertiary.Over(tk.BgContainer), tk.CyanActive},
+		{tk.BlueFillTertiary.Over(tk.BgContainer), tk.BlueActive},
+		{tk.PurpleFillTertiary.Over(tk.BgContainer), tk.PurpleActive},
+		{tk.MagentaFillTertiary.Over(tk.BgContainer), tk.MagentaActive},
+	}
+	if len(identiconPalette) != len(want) {
+		t.Fatalf("头像 palette 有 %d 组，期望 %d 组", len(identiconPalette), len(want))
+	}
+	for i := range want {
+		if identiconPalette[i] != want[i] {
+			t.Errorf("第 %d 组头像配色 = %+v，期望 %+v", i, identiconPalette[i], want[i])
+		}
+	}
+	if got := identiconNeutral; got != tk.GrayFillTertiary.Over(tk.BgContainer) {
+		t.Errorf("空标识的中性圆 = %v，期望 Lobe 灰色三级填充", got)
+	}
+}
+
+// 图案的 Lobe 配色由标识决定，但明度分层是固定的：淡底上压一层深色图形，
+// 切换应用深浅色也不会换图；中间调的底纹只作层次，不参与这条要求。
 func TestIdenticonContrast(t *testing.T) {
 	for _, name := range []string{"jimmy", "alice", "bob", "carol", "dave", "erin"} {
 		art := identiconFor(name, 32)

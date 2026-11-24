@@ -799,14 +799,15 @@ func TestImageViewerToolbarIconColorsAreDistinguished(t *testing.T) {
 		t.Errorf("最小化悬停底色成了红色：#%02x%02x%02x", c.R, c.G, c.B)
 	}
 
-	// 关闭悬停：系统红底 + 白叉，与标题栏窗口按钮一致。
+	// 关闭悬停：Lobe 错误色红底 + 白叉，与标题栏关闭键一致。
 	close := viewerRect(t, vt, imageViewerClose)
 	vt.Move(close.X+close.W/2, close.Y+close.H/2)
 	vt.Frame()
 	im = vt.Image()
 	c = im.RGBAAt(int(close.X)+3, int(close.Y)+3)
-	if c.R != 0xe8 || c.G != 0x11 || c.B != 0x23 {
-		t.Errorf("关闭悬停底色 = #%02x%02x%02x，期望 #e81123", c.R, c.G, c.B)
+	tk := lobeCfg.Tokens(true) // 预览窗口锁定深色主题
+	if c.R != tk.Error.R || c.G != tk.Error.G || c.B != tk.Error.B {
+		t.Errorf("关闭悬停底色 = #%02x%02x%02x，期望 Lobe Error %s", c.R, c.G, c.B, hexToken(tk.Error))
 	}
 	if got := viewerMaxLum(im, close); got < 220 {
 		t.Errorf("关闭悬停时叉子应为白色，最亮像素只有 %.0f", got)

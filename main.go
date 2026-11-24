@@ -2194,6 +2194,7 @@ const (
 // 标题栏「显示不正常」的来源。
 func titleBarButton(c *ui.Context, g titleGlyph, label string, onClick func()) {
 	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	// 显式给高度：按钮本体只设了宽度，过去靠父行的 AlignItems(Stretch) 撑出
 	// 高度。详情窗口把这几个按钮套在一层居中、没定高的 Row 里，没有可撑的
 	// 父级，Box 就塌成 0 高，点了没反应。把高度写进按钮自己，谁都能直接用。
@@ -2201,8 +2202,8 @@ func titleBarButton(c *ui.Context, g titleGlyph, label string, onClick func()) {
 	ink := t.Text
 	if b.Hovered() {
 		if g == titleClose {
-			b.Background(ui.Hex("#e81123")) // 关闭：红底白叉，与系统一致
-			ink = ui.Hex("#ffffff")
+			b.Background(tk.Error) // 关闭：Lobe 错误色红底白叉
+			ink = tk.White
 		} else {
 			b.Background(t.SurfaceHover)
 		}

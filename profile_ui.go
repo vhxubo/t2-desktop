@@ -104,7 +104,7 @@ func (a *app) showProfileWindow() {
 		MinWidth:          profileWinMinWidth,
 		MinHeight:         profileWinMinHeight,
 		StateKey:          "profile",
-		BackgroundColor:   "light-dark(#ffffff, #18181b)",
+		BackgroundColor:   lobeWindowBackground,
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、通知窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.profileWindowView)),
@@ -296,7 +296,7 @@ func (a *app) profileMenuPandoraRow(c *ui.Context) {
 		if a.pandoraReady() {
 			ui.Box(c).Height(14).Padding(0, 4).Radius(999).Center().
 				Background(tk.Error).Children(func() {
-				ui.Text(c, "可抽").FontSize(9).Bold().SingleLine().TextColor(ui.Hex("#ffffff"))
+				ui.Text(c, "可抽").FontSize(9).Bold().SingleLine().TextColor(tk.White)
 			})
 		}
 	}, func() { a.showPandora() })
