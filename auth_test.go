@@ -15,6 +15,15 @@ import (
 	"time"
 )
 
+// 配置目录统一用应用显示名，和新版本的设置、账号等数据放在同一处；
+// 老版本遗留的 2libra-native-reader 目录不再读取。
+func TestConfigDirUsesAppName(t *testing.T) {
+	t.Setenv("TWOLIBRA_CONFIG_DIR", "")
+	if got, want := filepath.Base(configDir()), "T2 Desktop"; got != want {
+		t.Fatalf("配置目录名 = %q，期望 %q", got, want)
+	}
+}
+
 // newTestTokenServer 是一个只处理令牌端点的测试服务器；其余接口一律 401，
 // 用来把请求送进「刷新 + 重试」这条路径。/oauth/* 与 /v1/me/summary 供
 // 身份与连通性检查使用。

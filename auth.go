@@ -82,7 +82,7 @@ func configDir() string {
 	if err != nil {
 		base = os.TempDir()
 	}
-	return filepath.Join(base, "2libra-native-reader")
+	return filepath.Join(base, "T2 Desktop")
 }
 
 func readJSONFile(path string, dst any) error {

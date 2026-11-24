@@ -180,8 +180,8 @@ go tool mygo build -upload    # 构建并上传到对应 release
 ```
 
 - 产物输出到 `build/`。
-- Windows 安装包由 `packaging/installer.nsh` 钩子扩展（安装包需要 UAC 提权，
-  应用本身以普通用户运行）。
+- Windows 安装包由 `packaging/installer.nsh` 钩子扩展。安装和启动均使用普通用户权限，
+  不要以管理员身份运行，以免影响截图等桌面快捷键工具。
 - macOS 需在 `mygo.json` 配置 `macos.signingIdentity` / `macos.notarize` 才能
   通过 Gatekeeper。
 
