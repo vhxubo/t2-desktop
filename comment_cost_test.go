@@ -720,19 +720,29 @@ func TestCommentCostActivityToggle(t *testing.T) {
 	if err := tt.Click("走个面 +20%"); err != nil {
 		t.Fatalf("点走个面失败：%v（%q）", err, tt.Texts())
 	}
-	tt.Frame()
 	waitFor(t, func() bool {
-		return a.commentCost.busyID == "" && a.commentCost.equipped["b-act"]
-	}, "佩戴走个面")
+		tt.Frame()
+		return tt.HasText("已更新佩戴状态")
+	}, "没有显示佩戴结果")
+	if !a.commentCost.equipped["b-act"] {
+		t.Fatal("走个面没有佩戴成功")
+	}
 
-	tt.Frame()
+	tt.Move(0, 0)
+	tt.Advance(6 * time.Second)
+	if tt.HasText("已更新佩戴状态") {
+		t.Fatal("佩戴提示没有退场")
+	}
 	if err := tt.Click("走个面 +20%（佩戴中）"); err != nil {
 		t.Fatalf("再点一次没能摘下：%v（%q）", err, tt.Texts())
 	}
-	tt.Frame()
 	waitFor(t, func() bool {
-		return a.commentCost.busyID == "" && !a.commentCost.equipped["b-act"]
-	}, "摘下走个面")
+		tt.Frame()
+		return tt.HasText("已更新佩戴状态")
+	}, "没有显示摘下结果")
+	if a.commentCost.equipped["b-act"] {
+		t.Fatal("走个面没有摘下成功")
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(methods) != 2 || methods[0] != http.MethodPost || methods[1] != http.MethodDelete {
