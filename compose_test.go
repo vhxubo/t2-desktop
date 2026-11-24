@@ -914,8 +914,8 @@ func TestComposeWindowLayout(t *testing.T) {
 		"节点", "选填",
 		"标题", "正文", "发布设置", "匿名发帖",
 		"加粗", "斜体", "删除线", "代码", "引用", "代码块", "列表", "编号", "链接", "图片", "分割线",
-		"编辑", "预览", "附加组件", "已添加 0 / 7 项",
-		"投票", "评分", "竞猜", "兑换码 / 红包", "金币池", "可见性（谁可以看）",
+		"编辑", "预览", "附加组件", "已添加 0 / 8 项",
+		"工作内容", "投票", "评分", "竞猜", "兑换码 / 红包", "金币池", "可见性（谁可以看）",
 		"发布", "Ctrl+Enter 发布",
 	} {
 		if !tt.HasText(want) {
@@ -1042,7 +1042,7 @@ func TestComposeModuleDialogAddRemove(t *testing.T) {
 	if err := tt.Click("投票"); err != nil {
 		t.Fatal(err)
 	}
-	if !st.moduleOpen || st.moduleIndex != 0 {
+	if !st.moduleOpen || st.moduleIndex != 1 {
 		t.Fatalf("没有打开投票弹窗：%+v", st)
 	}
 	tt.Frame()
@@ -1053,7 +1053,7 @@ func TestComposeModuleDialogAddRemove(t *testing.T) {
 		t.Errorf("添加后状态不对：voteOpen=%v moduleOpen=%v", st.voteOpen, st.moduleOpen)
 	}
 	tt.Frame()
-	if !tt.HasText("已添加 1 / 7 项") {
+	if !tt.HasText("已添加 1 / 8 项") {
 		t.Errorf("侧栏没有显示已添加的组件：%q", tt.Texts())
 	}
 	if !tt.HasText("已添加投票") {
@@ -1110,7 +1110,7 @@ func TestComposeRestrictedDialog(t *testing.T) {
 		t.Errorf("添加后状态不对：restrictedOpen=%v moduleOpen=%v", st.restrictedOpen, st.moduleOpen)
 	}
 	tt.Frame()
-	if !tt.HasText("已添加 1 / 7 项") {
+	if !tt.HasText("已添加 1 / 8 项") {
 		t.Errorf("侧栏没有计入隐藏内容：%q", tt.Texts())
 	}
 }

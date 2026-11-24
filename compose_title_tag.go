@@ -145,3 +145,123 @@ func composeWithReviewPrefix(title, target string, score int) string {
 	title = composeStripReviewPrefix(title)
 	return "《" + target + "》点评：" + strconv.Itoa(score) + " 分｜" + title
 }
+
+/* ------------------------------------------------------------------
+   工作内容前缀（求职 / 招人啦）
+---------------------------------------------------------------- */
+
+// 节点类型与工作类型的机器取值：节点 slug 照 data/2libra-dict.json，工作类型
+// 照网页端发帖页。下拉框存这些取值，前缀生成时再换成中文片段。
+const (
+	jobNodeHunting  = "job-hunting"
+	jobNodeRecruit  = "recruiting"
+	jobTypeFullTime = "full-time"
+	jobTypePartTime = "part-time"
+)
+
+// composeJobPrefixRE 只认由「求职 / 招人啦」开头的工作前缀，且后面必须紧跟 /
+// 或 】。与网页端 `^【(?:求职|招人啦)[^】]*】` 相比刻意收窄：作者自己写的
+// 【求职者】不能被一次点击吞掉（与上面 es() 的保守处理同一理由）。
+var composeJobPrefixRE = regexp.MustCompile(`^【(?:求职|招人啦)(?:/[^】]*)?】`)
+
+// composeJobPrefix 把工作表单元拼成标题前缀：「【」+ 已填片段用 / 连接 +「】」。
+// 片段顺序固定：节点类型、工作类型、职位、薪资、远程。一项都没填时返回空串，
+// 弹窗预览据此显示「填写后生成前缀」。
+func composeJobPrefix(st *composeState) string {
+	if st == nil {
+		return ""
+	}
+	parts := make([]string, 0, 5)
+	switch st.jobNode {
+	case jobNodeHunting:
+		parts = append(parts, "求职")
+	case "":
+	default:
+		parts = append(parts, "招人啦")
+	}
+	switch st.jobType {
+	case jobTypeFullTime:
+		parts = append(parts, "全职")
+	case "":
+	default:
+		parts = append(parts, "兼职")
+	}
+	if p := strings.TrimSpace(st.jobPosition); p != "" {
+		parts = append(parts, p)
+	}
+	if p := strings.TrimSpace(st.jobSalary); p != "" {
+		parts = append(parts, p)
+	}
+	if st.jobRemote {
+		parts = append(parts, "远程")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "【" + strings.Join(parts, "/") + "】"
+}
+
+// leadingBracketBlock 拆出标题开头的一个【】或 [] 块，返回块与剩余部分。
+func leadingBracketBlock(title string) (string, string) {
+	if strings.HasPrefix(title, "【") {
+		if end := strings.Index(title, "】"); end >= 0 {
+			end += len("】")
+			return title[:end], title[end:]
+		}
+	}
+	if strings.HasPrefix(title, "[") {
+		if end := strings.Index(title, "]"); end >= 0 {
+			end += len("]")
+			return title[:end], title[end:]
+		}
+	}
+	return "", title
+}
+
+// stripLeadingJobBlocks 跳过开头连续的【】/[] 块，删掉其中匹配 isJob 的块。
+// 之所以要跳过其它块：加投票等系统标签时 composeSetTitleTag 会把工作前缀当成
+// 用户自定义块挪到系统标签后面，只查开头就剥不掉，再拼一次就会叠加两个前缀。
+func stripLeadingJobBlocks(title string, isJob func(string) bool) string {
+	var kept strings.Builder
+	for {
+		block, rest := leadingBracketBlock(title)
+		if block == "" {
+			break
+		}
+		title = rest
+		if isJob(block) {
+			continue
+		}
+		kept.WriteString(block)
+	}
+	return kept.String() + title
+}
+
+// composeStripJobPrefix 循环剥掉标题上所有工作前缀，点评前缀原样保留。
+func composeStripJobPrefix(title string) string {
+	review, rest := composeTakeReviewPrefixes(title)
+	rest = stripLeadingJobBlocks(rest, func(block string) bool {
+		return composeJobPrefixRE.MatchString(block)
+	})
+	return review + rest
+}
+
+// composeApplyJobTitle 是所有标题变更的统一出口：先拿走点评前缀，再剥掉旧的
+// 工作前缀，开着工作内容时把新前缀放回最前面。
+// 顺序：工作前缀 → 点评前缀 → 系统标签块 → 正文。
+// 除了通用正则，还按当前表单精确剥一次：只填了职位 / 薪资 / 远程时前缀不以
+// 「求职 / 招人啦」开头，正则认不出来，但当前生成的那块必须能撤掉。
+func composeApplyJobTitle(st *composeState) string {
+	if st == nil {
+		return ""
+	}
+	review, rest := composeTakeReviewPrefixes(st.title)
+	prefix := composeJobPrefix(st)
+	rest = stripLeadingJobBlocks(rest, func(block string) bool {
+		return composeJobPrefixRE.MatchString(block) || (prefix != "" && block == prefix)
+	})
+	if !st.jobOpen || prefix == "" {
+		return review + rest
+	}
+	return prefix + review + rest
+}

@@ -68,6 +68,7 @@ func draftTargetFrom(rt replyTarget) draftTarget {
 // composeDraftModules 是发帖表单右侧栏那些附加组件。每个块只在它自己的开关
 // 打开时写入，未知字段一律忽略（与 API 解码同一套容错口径）。
 type composeDraftModules struct {
+	Job        *composeDraftJob        `json:"job,omitempty"`
 	Vote       *composeDraftVote       `json:"vote,omitempty"`
 	Score      *composeDraftScore      `json:"score,omitempty"`
 	Bet        *composeDraftBet        `json:"bet,omitempty"`
@@ -75,6 +76,16 @@ type composeDraftModules struct {
 	Pool       *composeDraftPool       `json:"pool,omitempty"`
 	Guard      *composeDraftGuard      `json:"guard,omitempty"`
 	Restricted *composeDraftRestricted `json:"restricted,omitempty"`
+}
+
+// composeDraftJob 是工作内容的六个字段；开关打开时才写进 modules。
+type composeDraftJob struct {
+	Node     string `json:"node,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Position string `json:"position,omitempty"`
+	Salary   string `json:"salary,omitempty"`
+	Remote   bool   `json:"remote,omitempty"`
+	Contact  string `json:"contact,omitempty"`
 }
 
 type composeDraftVote struct {
@@ -470,6 +481,17 @@ func (st *composeState) draftFingerprint() uint64 {
 	x.str(st.nodeID)
 	x.b(st.anonymous)
 
+	if st.jobOpen {
+		x.b(true)
+		x.str(st.jobNode)
+		x.str(st.jobType)
+		x.str(st.jobPosition)
+		x.str(st.jobSalary)
+		x.b(st.jobRemote)
+		x.str(st.jobContact)
+	} else {
+		x.b(false)
+	}
 	if st.voteOpen {
 		x.b(true)
 		x.i(st.voteTypeIndex)
@@ -575,6 +597,13 @@ func (st *composeState) draftEntry() draftEntry {
 	}
 	mods := &composeDraftModules{}
 	has := false
+	if st.jobOpen {
+		has = true
+		mods.Job = &composeDraftJob{
+			Node: st.jobNode, Type: st.jobType, Position: st.jobPosition,
+			Salary: st.jobSalary, Remote: st.jobRemote, Contact: st.jobContact,
+		}
+	}
 	if st.voteOpen {
 		has = true
 		mods.Vote = &composeDraftVote{
@@ -646,6 +675,12 @@ func (a *app) applyComposeDraft(st *composeState, e draftEntry) {
 	st.key, st.keySig = "", ""
 	st.okTitle, st.okShortID, st.okURL, st.okPending = "", "", "", false
 	if m := e.Modules; m != nil {
+		if v := m.Job; v != nil {
+			st.jobOpen = true
+			st.jobNode, st.jobType = v.Node, v.Type
+			st.jobPosition, st.jobSalary = v.Position, v.Salary
+			st.jobRemote, st.jobContact = v.Remote, v.Contact
+		}
 		if v := m.Vote; v != nil {
 			st.voteOpen = true
 			st.voteTypeIndex, st.voteTitle, st.voteOptions = v.TypeIndex, v.Title, append([]string(nil), v.Options...)
@@ -689,6 +724,11 @@ func (a *app) applyComposeDraft(st *composeState, e draftEntry) {
 			st.restrictedDurationMonths, st.restrictedAuctionTopN, st.restrictedAuctionDeadline =
 				v.DurationMonths, v.AuctionTopN, v.AuctionDeadline
 		}
+	}
+	// 旧草稿没有 job 字段时标题原样保留；新草稿恢复后统一重建一次前缀，
+	// 补齐旧标题里缺的部分、把重复叠加的收成一个。
+	if m := e.Modules; m != nil && m.Job != nil {
+		st.title = composeApplyJobTitle(st)
 	}
 	st.draftID = e.ID
 	st.draftFP, st.draftSavedFP = st.draftFingerprint(), st.draftFingerprint()

@@ -727,11 +727,29 @@ type composeModuleSpec struct {
 	review bool
 	flag   func(*composeState) *bool
 	body   func(*app, *ui.Context, *composeState)
+	// onOpen 在点侧栏那一行时先跑（工作内容按当前节点预选节点类型）；
+	// validate 在点「完成」时先跑，返回非空串就 toast 且不启用这一块。
+	onOpen   func(*composeState)
+	validate func(*composeState) string
+	// okText 非空时覆盖确认按钮文案（工作内容首次添加也写「完成」）。
+	okText string
 }
 
 // composeModuleSpecs 是发帖接口支持的全部可选块，顺序就是侧栏里的顺序。
 // 默认一个都不启用：没点「添加此组件」的块，一个字段都不会进请求体。
 var composeModuleSpecs = []composeModuleSpec{
+	// 工作内容排在投票之前：它常与求职 / 招人啦节点绑定，且前缀要始终在最前。
+	{name: "工作内容", hint: "求职或招人，在标题前加工作信息。",
+		flag:   func(st *composeState) *bool { return &st.jobOpen },
+		body:   func(a *app, c *ui.Context, st *composeState) { a.composeJob(c, st) },
+		onOpen: composePresetJobNode,
+		okText: "完成",
+		validate: func(st *composeState) string {
+			if !composeJobFilled(st) {
+				return "未填写内容"
+			}
+			return ""
+		}},
 	{name: "投票", hint: "给帖子加一个单选或多选投票。", tag: "投票",
 		flag: func(st *composeState) *bool { return &st.voteOpen },
 		body: func(a *app, c *ui.Context, st *composeState) { a.composeVote(c, st) }},
@@ -768,6 +786,9 @@ func composeApplyModuleTitle(st *composeState, m composeModuleSpec, on bool) {
 			st.title = composeWithReviewPrefix(st.title, target, int(st.scoreValue))
 		}
 	}
+	// 所有标题变更（增删组件、全部移除、匿名撤块）都收敛到这一个出口：
+	// 系统标签挪过前缀位置后，由它把工作前缀重新放回最前面。
+	st.title = composeApplyJobTitle(st)
 }
 
 // enabledModuleCount 是侧栏底部那行汇总用的数量。
@@ -852,6 +873,9 @@ func (a *app) composeSidebar(c *ui.Context, st *composeState) {
 						setup.Label(m.name).Tooltip(m.hint)
 						if setup.Clicked() {
 							st.moduleIndex = index
+							if m.onOpen != nil {
+								m.onOpen(st)
+							}
 							st.moduleOpen = true
 						}
 						if on {
@@ -905,6 +929,9 @@ func (a *app) composeModuleDialog(c *ui.Context, st *composeState) {
 	if on {
 		label = "完成"
 	}
+	if m.okText != "" {
+		label = m.okText
+	}
 	// 标题栏、✕ 关闭、取消/确认按钮与「内容可滚动、页脚常驻」都由 Lobe 的
 	// Modal 提供，和主页、详情页用的是同一套 token 与动画。这里只画这块
 	// 组件自己的字段和启用状态；确认返回 true 时再落账并关窗。
@@ -933,6 +960,13 @@ func (a *app) composeModuleDialog(c *ui.Context, st *composeState) {
 		})
 	})
 	if ok {
+		if m.validate != nil {
+			if msg := m.validate(st); msg != "" {
+				// 留着弹窗和原来的开关状态，让用户填完再点「完成」。
+				a.toast(toastCompose, msg)
+				return
+			}
+		}
 		if !on {
 			*m.flag(st) = true
 			a.toast(toastCompose, "已添加"+m.name)
@@ -942,6 +976,104 @@ func (a *app) composeModuleDialog(c *ui.Context, st *composeState) {
 		composeApplyModuleTitle(st, m, true)
 		st.moduleOpen = false
 	}
+}
+
+// 工作内容的下拉选项。Value 存机器取值（节点 slug / 网页端工作类型），Label
+// 才是界面文案；「不填」用空串，表示这一片段不进前缀。
+var composeJobNodeLabels = []struct{ Value, Label string }{
+	{"", "不填"},
+	{jobNodeHunting, "求职"},
+	{jobNodeRecruit, "招人啦"},
+}
+
+var composeJobTypeLabels = []struct{ Value, Label string }{
+	{"", "不填"},
+	{jobTypeFullTime, "全职"},
+	{jobTypePartTime, "兼职"},
+}
+
+// composeJobFilled 判断六个字段是否至少填了一项。远程是布尔值，勾上就算填了。
+func composeJobFilled(st *composeState) bool {
+	if st == nil {
+		return false
+	}
+	return st.jobNode != "" || st.jobType != "" || st.jobRemote ||
+		strings.TrimSpace(st.jobPosition) != "" || strings.TrimSpace(st.jobSalary) != "" ||
+		strings.TrimSpace(st.jobContact) != ""
+}
+
+// composePresetJobNode 打开工作内容弹窗时按当前节点预选节点类型。只预选，
+// 不改 node_id，用户仍可在弹窗里改；已经有值时不覆盖。
+func composePresetJobNode(st *composeState) {
+	if st == nil || st.jobNode != "" {
+		return
+	}
+	if node := st.selectedNode(); node != nil {
+		switch node.Slug {
+		case jobNodeHunting, jobNodeRecruit:
+			st.jobNode = node.Slug
+		}
+	}
+}
+
+// composeJob 是「工作内容」弹窗：节点类型、工作类型、职位、薪资、远程与联系
+// 方式。预览行实时显示将要生成的前缀；联系方式只走文档的 contact 字段。
+func (a *app) composeJob(c *ui.Context, st *composeState) {
+	tk := lobetheme.TokensOf(c)
+	ui.Column(c).FillWidth().Gap(8).Children(func() {
+		display.Text(c, "适合发在求职、招人啦节点；标题会自动加【…】前缀。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 2})
+		ui.Row(c).FillWidth().Gap(10).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+				display.Text(c, "节点类型：", display.TextProps{FontSize: 12, Rows: 1})
+				opts := make([]field.SelectOption, 0, len(composeJobNodeLabels))
+				for _, o := range composeJobNodeLabels {
+					opts = append(opts, field.SelectOption{Value: o.Value, Label: o.Label})
+				}
+				composeInputRow(c, func() ui.Element {
+					return lobeSelect(c, &st.jobNode, field.SelectProps{Options: opts})
+				}).Label("节点类型")
+			})
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+				display.Text(c, "工作类型：", display.TextProps{FontSize: 12, Rows: 1})
+				opts := make([]field.SelectOption, 0, len(composeJobTypeLabels))
+				for _, o := range composeJobTypeLabels {
+					opts = append(opts, field.SelectOption{Value: o.Value, Label: o.Label})
+				}
+				composeInputRow(c, func() ui.Element {
+					return lobeSelect(c, &st.jobType, field.SelectProps{Options: opts})
+				}).Label("工作类型")
+			})
+		})
+		ui.Row(c).FillWidth().Gap(10).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+				display.Text(c, "职位：", display.TextProps{FontSize: 12, Rows: 1})
+				composeInput(c, &st.jobPosition, field.InputProps{
+					Placeholder: "例：后端工程师",
+				}).Label("职位").MaxLength(composeJobPositionMax)
+			})
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+				display.Text(c, "薪资：", display.TextProps{FontSize: 12, Rows: 1})
+				composeInput(c, &st.jobSalary, field.InputProps{
+					Placeholder: "例：25k-35k",
+				}).Label("薪资").MaxLength(composeJobSalaryMax)
+			})
+		})
+		choice.Checkbox(c, &st.jobRemote, "支持远程", choice.CheckboxProps{}).Label("支持远程")
+		ui.Column(c).FillWidth().Gap(4).Children(func() {
+			display.Text(c, "联系方式：", display.TextProps{FontSize: 12, Rows: 1})
+			composeInput(c, &st.jobContact, field.InputProps{
+				Placeholder: "微信 / 邮箱 / 链接",
+			}).Label("联系方式").MaxLength(composeJobContactMax)
+		})
+		preview := composeJobPrefix(st)
+		if preview == "" {
+			preview = "填写后生成前缀"
+		}
+		ui.Text(c, preview).Font("monospace").FontSize(11).TextColor(tk.TextSecondary)
+		display.Text(c, "联系方式按文档的 contact 字段提交，不写进正文。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
+	})
 }
 
 // composeOptionList 是所有「可以有多个选项」的地方共用的编辑区。操作行放在

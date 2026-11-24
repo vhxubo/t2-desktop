@@ -61,6 +61,12 @@ const (
 	composeGuardLevelHi = 100
 	composeGuardAttrHi  = 10
 
+	// 工作内容（求职 / 招人啦）的填写上限。职位与薪资由输入框卡住，
+	// 联系方式按文档的 contact 字段提交（≤500 字）。
+	composeJobPositionMax = 50
+	composeJobSalaryMax   = 50
+	composeJobContactMax  = 500
+
 	// 隐藏内容：枚举与校验范围照官网发帖页（站点 JS chunk）。正文上限沿用
 	// 普通正文的 20000 字，避免客户端发出服务端必然拒绝的超长内容。
 	composeRestrictedContentMax   = 20000
@@ -288,6 +294,17 @@ type composeState struct {
 	// moduleIndex 指向当前打开的那一块（见 compose_ui.go 的组件表）。
 	moduleOpen  bool
 	moduleIndex int
+
+	// 工作内容（求职 / 招人啦）。只属于帖子模式；节点类型与工作类型存机器
+	// 取值（见 composeJobNodeLabels / composeJobTypeLabels），前缀由
+	// composeApplyJobTitle 拼到标题最前面，联系方式走文档的 contact 字段。
+	jobOpen     bool
+	jobNode     string
+	jobType     string
+	jobPosition string
+	jobSalary   string
+	jobRemote   bool
+	jobContact  string
 
 	// 投票块。voteChecked 与 voteOptions 等长，是行首勾选框的状态；
 	// voteBatch* 是「批量添加」内联录入区的展开状态与一次粘贴的多行文本。
@@ -703,6 +720,15 @@ func (st *composeState) payload() (map[string]any, error) {
 	}
 	if st.anonymous {
 		p["is_anonymous"] = true
+	}
+	if st.jobOpen {
+		// 联系方式按文档的 contact 字段提交，不追加到正文（见 job-content-plan）。
+		if n := utf8.RuneCountInString(st.jobContact); n > composeJobContactMax {
+			return nil, fmt.Errorf("联系方式最多 %d 字", composeJobContactMax)
+		}
+		if st.jobContact != "" {
+			p["contact"] = st.jobContact
+		}
 	}
 
 	if st.voteOpen {
