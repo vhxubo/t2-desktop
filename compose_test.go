@@ -976,6 +976,60 @@ func TestComposeWindowLayout(t *testing.T) {
 	openModule("竞猜", "竞猜标题", "设置截止时间")
 }
 
+// 评分块改用 lobeui 的 Rate：10 颗星，点最后一颗给满分 10 分。
+func TestComposeScoreUsesTenStarRate(t *testing.T) {
+	a := testApp(t)
+	st := composeReady(a)
+	st.scoreTarget = "沙丘2"
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 1100)
+	tt.Frame()
+	if err := tt.Click("评分"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+
+	info, ok := tt.AccessByRole(ui.RoleSlider, "分值（满分 10 分）")
+	if !ok {
+		t.Fatalf("评分弹窗里没有星级控件：%q", tt.Texts())
+	}
+	// 点最右边一颗星就是满分：只有 10 颗星时才会得到 10。
+	tt.ClickAt(info.Bounds.X+info.Bounds.W-2, info.Bounds.Y+info.Bounds.H/2)
+	tt.Frame()
+	if st.scoreValue != 10 {
+		t.Errorf("点最后一颗星后分值 = %v，期望 10", st.scoreValue)
+	}
+	if !tt.HasText("10 / 10") {
+		t.Errorf("没有显示当前分值：%q", tt.Texts())
+	}
+	// End 键同样停在满分，Home 回到 0。
+	tt.Key(0, ui.KeyHome)
+	tt.Frame()
+	if st.scoreValue != 0 {
+		t.Errorf("Home 后分值 = %v，期望 0", st.scoreValue)
+	}
+	if !tt.HasText("0 / 10") {
+		t.Errorf("分数没跟着星级更新：%q", tt.Texts())
+	}
+	tt.Key(0, ui.KeyEnd)
+	tt.Frame()
+	if st.scoreValue != 10 {
+		t.Errorf("End 后分值 = %v，期望 10", st.scoreValue)
+	}
+	if err := tt.Click("添加此组件"); err != nil {
+		t.Fatal(err)
+	}
+	if !st.scoreOpen || st.title != "《沙丘2》点评：10 分｜" {
+		t.Errorf("完成评分后状态不对：open=%v title=%q", st.scoreOpen, st.title)
+	}
+	s, err := st.scorePayload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s["score"] != 10 {
+		t.Errorf("评分请求体的分值 = %v，期望 10", s["score"])
+	}
+}
+
 // 附加组件在右侧栏点开弹窗里编辑：添加后随帖发送、侧栏显示已添加、结果用
 // 窗口内 toast 报告。移除不用再进弹窗：侧栏行尾直接点，只是关掉开关，
 // 填过的内容仍留在草稿里。

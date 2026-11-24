@@ -1098,7 +1098,7 @@ func (a *app) composeVote(c *ui.Context, st *composeState) {
 	})
 }
 
-// composeScore 是评分块：对象名、0～100 的分值与可选理由。
+// composeScore 是评分块：对象名、满分 10 分的星级评分与可选理由。
 func (a *app) composeScore(c *ui.Context, st *composeState) {
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		ui.Column(c).FillWidth().Gap(4).Children(func() {
@@ -1107,23 +1107,24 @@ func (a *app) composeScore(c *ui.Context, st *composeState) {
 				Placeholder: fmt.Sprintf("最多 %d 字", composeScoreTargetMax),
 			}).Label("评分对象")
 		})
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.End).Children(func() {
-			ui.Column(c).Width(160).Gap(4).Children(func() {
-				display.Text(c, "分值", display.TextProps{
-					Type: display.TextSecondary, FontSize: 12, Rows: 1,
-				})
-				composeNumber(c, &st.scoreValue, field.InputNumberProps{
-					Min: 0, Max: 100, Step: 1,
-				}).Label("分值（0～100）")
+		ui.Column(c).FillWidth().Gap(4).Children(func() {
+			display.Text(c, "分值", display.TextProps{
+				Type: display.TextSecondary, FontSize: 12, Rows: 1,
 			})
-			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-				display.Text(c, "理由", display.TextProps{
-					Type: display.TextSecondary, FontSize: 12, Rows: 1,
+			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+				choice.Rate(c, &st.scoreValue, choice.RateProps{Count: 10}).Label("分值（满分 10 分）")
+				display.Text(c, fmt.Sprintf("%g / 10", st.scoreValue), display.TextProps{
+					Strong: true, FontSize: 13, Rows: 1,
 				})
-				composeInput(c, &st.scoreComment, field.InputProps{
-					Placeholder: "可选",
-				}).Label("评分理由").MaxLength(composeScoreCommentMax)
 			})
+		})
+		ui.Column(c).FillWidth().Gap(4).Children(func() {
+			display.Text(c, "理由", display.TextProps{
+				Type: display.TextSecondary, FontSize: 12, Rows: 1,
+			})
+			composeInput(c, &st.scoreComment, field.InputProps{
+				Placeholder: "可选",
+			}).Label("评分理由").MaxLength(composeScoreCommentMax)
 		})
 	})
 }
