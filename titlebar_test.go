@@ -24,6 +24,12 @@ func lum(im *image.RGBA, x, y int) float64 {
 
 func darkAt(im *image.RGBA, x, y int) bool { return lum(im, x, y) < 160 }
 
+// lightLum 是浅色页面底色的亮度：取自 Lobe 的 BgLayout，不写死纯白。
+func lightLum() float64 {
+	c := lobeCfg.Tokens(false).BgLayout
+	return 0.299*float64(c.R) + 0.587*float64(c.G) + 0.114*float64(c.B)
+}
+
 // titleRect fails the test unless the labeled element sits where the title
 // bar puts it: at the top edge, exactly titleBarHeight tall.
 func titleRect(t *testing.T, tt *ui.Tester, label string) ui.Rect {
@@ -61,9 +67,9 @@ func TestCollapseToggleInTitleBarWithoutSidebarHeader(t *testing.T) {
 }
 
 // The title bar is drawn by the view, so it must take the page's colors: the
-// whole app is the white home theme, and a bar painted with the stock light
-// theme's grey surface showed as a grey band across a pure white page.
-func TestTitleBarSharesTheWhitePageTheme(t *testing.T) {
+// whole app uses the Lobe light theme, and a bar painted with the stock light
+// theme's grey surface showed as a grey band across the page.
+func TestTitleBarSharesTheLightPageTheme(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
@@ -76,8 +82,8 @@ func TestTitleBarSharesTheWhitePageTheme(t *testing.T) {
 		{700, titleBarHeight - 1},
 		{700, titleBarHeight + 4}, // 分隔线下的页面
 	} {
-		if got := lum(im, p[0], p[1]); got < 250 {
-			t.Errorf("(%d,%d) 的亮度 %.0f，标题栏与页面应同为白色", p[0], p[1], got)
+		if got := lum(im, p[0], p[1]); got < lightLum()-1 {
+			t.Errorf("(%d,%d) 的亮度 %.0f，标题栏与页面应同为浅色底色", p[0], p[1], got)
 		}
 	}
 	// 底边是一条分隔线，而不是把灰带和页面隔开的白线。
@@ -104,7 +110,7 @@ func TestTitleBarFollowsDarkSystemByDefault(t *testing.T) {
 	}
 }
 
-// 固定浅色时不再跟随系统：深色系统下仍保持白色标题栏与页面，用户手动
+// 固定浅色时不再跟随系统：深色系统下仍保持浅色标题栏与页面，用户手动
 // 选定的外观不会被系统设置覆盖。
 func TestTitleBarKeepsForcedLightUnderDarkSystem(t *testing.T) {
 	a := testApp(t)
@@ -117,8 +123,8 @@ func TestTitleBarKeepsForcedLightUnderDarkSystem(t *testing.T) {
 		tt.Frame()
 		im := tt.Image()
 		for _, y := range []int{titleBarHeight / 2, titleBarHeight + 10} {
-			if got := lum(im, 700, y); got < 250 {
-				t.Errorf("固定浅色时 %s 页 y=%d 亮度 %.0f，应仍为白色", page, y, got)
+			if got := lum(im, 700, y); got < lightLum()-1 {
+				t.Errorf("固定浅色时 %s 页 y=%d 亮度 %.0f，应仍为浅色底色", page, y, got)
 			}
 		}
 	}
@@ -418,7 +424,7 @@ func TestTitleBarShowsAccountAfterLogin(t *testing.T) {
 	if tt.HasText("已登录") {
 		t.Errorf("标题栏不应再显示「已登录」：%q", tt.Texts())
 	}
-	// 头像在图片加载完成前用姓名首字母，仍是一个可命名的头像控件。
+	// 头像在图片加载完成前画按用户名生成的图案，仍是一个可命名的头像控件。
 	if _, ok := tt.Find("jimmy"); !ok {
 		t.Errorf("标题栏没有头像控件：%q", tt.Texts())
 	}

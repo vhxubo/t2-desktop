@@ -829,9 +829,10 @@ func TestComposeFabPaintsAboveList(t *testing.T) {
 	if inside.R == inside.G && inside.G == inside.B {
 		t.Errorf("FAB 没有画在列表之上（中心是灰白色 %v）", inside)
 	}
-	// 按钮左侧紧挨着的仍是页面底色（浅色主题为纯白）。
-	if out := img.RGBAAt(int(r.X)-6, cy); out.R != 255 || out.G != 255 || out.B != 255 {
-		t.Errorf("FAB 左边缘之外的像素 = %v，期望页面底色", out)
+	// 按钮左侧紧挨着的仍是页面底色，取 Lobe 的 BgLayout，不假定纯白。
+	page := lobeCfg.Tokens(false).BgLayout
+	if out := img.RGBAAt(int(r.X)-6, cy); out.R != page.R || out.G != page.G || out.B != page.B {
+		t.Errorf("FAB 左边缘之外的像素 = %v，期望页面底色 %v", out, page)
 	}
 }
 

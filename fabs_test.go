@@ -173,13 +173,14 @@ func TestHomeFabsAreCircular(t *testing.T) {
 	if fab.W != fabPrimary || fab.H != fabPrimary {
 		t.Fatalf("发帖 FAB 尺寸不对：%+v", fab)
 	}
-	// 整圆：四角应是页面底色（浅色主题纯白），横向最宽处才是强调色。
+	// 整圆：四角应是页面底色（取 Lobe 的 BgLayout），横向最宽处才是强调色。
 	left, top := int(fab.X), int(fab.Y)
 	right, bottom := int(fab.X+fab.W)-1, int(fab.Y+fab.H)-1
 	cy := int(fab.Y + fab.H/2)
+	page := lobeCfg.Tokens(false).BgLayout
 	for _, p := range [][2]int{{left + 1, top + 1}, {right - 1, top + 1}, {left + 1, bottom - 1}, {right - 1, bottom - 1}} {
-		if cl := img.RGBAAt(p[0], p[1]); cl.R != 255 || cl.G != 255 || cl.B != 255 {
-			t.Errorf("发帖 FAB 角落 (%d,%d) 应是页面底色，实际 %v", p[0], p[1], cl)
+		if cl := img.RGBAAt(p[0], p[1]); cl.R != page.R || cl.G != page.G || cl.B != page.B {
+			t.Errorf("发帖 FAB 角落 (%d,%d) 应是页面底色 %v，实际 %v", p[0], p[1], page, cl)
 		}
 	}
 	if cl := img.RGBAAt(left+1, cy); cl.R != 0x1D || cl.G != 0x4E || cl.B != 0xD8 {
