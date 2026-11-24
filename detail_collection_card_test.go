@@ -256,7 +256,7 @@ func TestCollectionBrowseStampsContextOnOpen(t *testing.T) {
 	a.autoLoad = false
 	a.profile = newProfileState()
 	a.profile.tab = profileTabContent
-	a.profile.contentKind = profileContentCollections
+	a.profile.contentKind = profileContentCollection
 	b := newCollectionBrowse(collectionItem{ID: "c1", Name: "甲合集"}, "", toastProfile)
 	b.list.loaded = true
 	b.list.items = []Item{{Key: "T1", ShortID: "T1", Title: "合集里的一篇"}}

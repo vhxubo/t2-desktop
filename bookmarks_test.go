@@ -203,8 +203,8 @@ func TestProfileBookmarkRemove(t *testing.T) {
 	st.loaded = true
 	st.items = []Item{{Key: "c1", CommentID: "c1", Title: "书签里的评论"}}
 	st.total = 1
-	a.profile.tab = profileTabContent
-	a.profile.contentKind = profileContentBookmarks
+	a.profile.tab = profileTabAssets
+	a.profile.assetKind = profileAssetBookmarks
 	a.detail = &detailState{replyList: []replyItem{{ID: "c1", Bookmarked: true, BookmarkKnown: true}}}
 
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)

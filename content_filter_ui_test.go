@@ -147,19 +147,23 @@ func TestProfileFilterTabChipsAndSave(t *testing.T) {
 	a.client.HTTP = srv.Client()
 	a.contentFilter.filter = newContentFilter(contentFilterDTO{})
 	a.contentFilter.draft = cloneFilterDTO(contentFilterDTO{})
-	a.profile.tab = profileTabFilter
-	a.profile.tabSeen = profileTabFilter // 别让这一帧再触发一次强制 GET
+	a.profile.tab = profileTabSettings
+	a.profile.settingsKind = profileSettingsFilter
+	a.profile.tabSeen = profileTabSettings
+	a.profile.settingsSeen = profileSettingsFilter // 别让这一帧再触发一次强制 GET
 
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
 	for _, want := range []string{
-		"内容屏蔽",
-		"与网页端「设置 → 内容屏蔽」是同一份名单；对方改名后需要重新添加。",
+		"屏蔽设置",
 		"屏蔽用户（0/50）", "屏蔽节点（0/50）", "屏蔽关键词（0/50）",
 	} {
 		if !tt.HasText(want) {
 			t.Errorf("管理页缺少文案 %q：%q", want, tt.Texts())
 		}
+	}
+	if tt.HasText("同一份名单") {
+		t.Errorf("屏蔽设置不应展示顶部说明小字：%q", tt.Texts())
 	}
 
 	if err := tt.Click("输入用户名"); err != nil {
@@ -194,24 +198,6 @@ func TestProfileFilterTabChipsAndSave(t *testing.T) {
 	waitFor(t, func() bool { return puts.Load() == 1 && !a.contentFilter.saving }, "保存没有发出 PUT")
 	if len(a.contentFilter.filter.raw.BlockedUsers) != 1 || a.contentFilter.filter.raw.BlockedUsers[0] != "alice" {
 		t.Errorf("保存后快照没有用响应覆盖：%+v", a.contentFilter.filter.raw)
-	}
-}
-
-func TestProfileMenuFilterEntry(t *testing.T) {
-	a := profileWindowApp(t)
-	a.contentFilter.filter = newContentFilter(contentFilterDTO{
-		BlockedUsers: []string{"alice"}, BlockedNodes: []string{"职场"}, Keywords: []string{"剧透"},
-	})
-	tt := ui.NewTester(func(c *ui.Context) { a.profileMenuPanel(c) }, 300, 360)
-	tt.Frame()
-	if !tt.HasText("3 项") {
-		t.Fatalf("账号菜单应显示名单条数：%q", tt.Texts())
-	}
-	if err := tt.Click("内容屏蔽"); err != nil {
-		t.Fatalf("点不到内容屏蔽入口：%v（%q）", err, tt.Texts())
-	}
-	if a.profile.tab != profileTabFilter {
-		t.Errorf("应直接落在内容屏蔽标签，实际 %d", a.profile.tab)
 	}
 }
 

@@ -23,7 +23,7 @@ func profileCollectionsApp(t *testing.T, handler http.HandlerFunc) (*app, *httpt
 	a.client.Base = srv.URL + "/api"
 	a.client.HTTP = srv.Client()
 	a.profile.tab = profileTabContent
-	a.profile.contentKind = profileContentCollections
+	a.profile.contentKind = profileContentCollection
 	st := &a.profile.content[profileContentCollections]
 	st.loaded = true
 	st.items = []Item{{Key: "c1", Title: "甲合集", Meta: "3 个帖子"}}

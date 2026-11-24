@@ -13,17 +13,21 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 「我的」窗口的数据层与界面状态。窗口本身在 profile_ui.go：它是独立窗口
+// 「个人中心」窗口的数据层与界面状态。窗口本身在 profile_ui.go：它是独立窗口
 // （和通知、设置一样），入口是标题栏上登录账号的头像。
 //
-// 六个标签页对应这几组端点：
+// 六个一级标签页对应这几组端点：
 //
-//	概览        GET /v1/users/:userName（最近统计与六维属性）
-//	个人简介    GET /v1/users/:userName/about（正文；本人可编辑，见 about_edit.go）
-//	我的内容    GET /v1/users/:userName/topics、/v1/me/favorites、/v1/me/bookmarks、/v1/me/collections
-//	我的回复    GET /v1/users/:userName/replies
-//	徽章        GET /v1/me/badges、/v1/me/badges/equipped；佩戴 / 取消佩戴（见 badges.go）
-//	权限与账号  GET /v1/users/:userName + 令牌里的 scope
+//	概览      GET /v1/users/:userName（最近统计与六维属性）
+//	个人介绍  GET /v1/users/:userName/about（正文；本人可编辑，见 about_edit.go）
+//	内容      GET /v1/users/:userName/topics、/v1/me/collections、/v1/users/:userName/replies
+//	资产      GET /v1/me/favorites、/v1/me/bookmarks
+//	徽章      GET /v1/me/badges、/v1/me/badges/equipped；佩戴 / 取消佩戴（见 badges.go）
+//	设置      GET /v1/users/:userName + 令牌里的 scope；屏蔽名单（见 content_filter.go）
+//
+// 一级「内容」下的二级分段：发布（我的帖子，可按合集筛选）、合集、评论（我
+// 发表过的评论与回复）。一级「资产」下的二级分段：收藏、书签。一级「设置」
+// 下的二级分段：账号与权限、屏蔽设置。
 //
 // 合集除了读，还能在这里改名（PATCH /v1/me/collections/:id）与删除
 // （DELETE /v1/me/collections/:id），点开一个合集看它里面的帖子（见
@@ -32,11 +36,8 @@ import (
 // 金币不在这里：金币页是独立的金币窗口（见 coins_window.go），入口是标题栏
 // 上登录账号左侧的金币数。本窗口不展示余额、签到，也不提供金币相关的入口。
 //
-// 「我的内容」一页里有四个分段：帖子、收藏、书签、合集。这四类原先占着主
-// 窗口的侧边栏，现在只在这里出现。
-//
 // 这里的写操作是「徽章」里的佩戴切换（scope interact 或 write:economy，不扣金币）
-// 与「个人简介」的编辑（POST /v1/me/about，每次 500 金币，见 about_edit.go）；
+// 与「个人介绍」的编辑（POST /v1/me/about，每次 500 金币，见 about_edit.go）；
 // 发帖、互动等其它操作仍在各自的窗口或站点完成。
 
 // 弹窗的默认尺寸。它和通知窗口一样用 StateKey 记住位置与大小，这里只是
@@ -47,7 +48,7 @@ const (
 	profileWinMinWidth  = 430
 	profileWinMinHeight = 480
 
-	// profileReplyPageSize 是「我的回复」每页条数：该端点默认 50、上限 50。
+	// profileReplyPageSize 是「评论」分段每页条数：该端点默认 50、上限 50。
 	profileReplyPageSize = 50
 	// profileTopicCollLimit 是按合集名筛选「我的帖子」时每页条数：这条端点
 	// 与用户主题的其它列表一致，默认 50、上限 50。
@@ -57,20 +58,50 @@ const (
 	profileTopicCollAll = "全部合集"
 )
 
-// 弹窗里的标签页。金币页不在这个窗口里，去独立的金币窗口看。
+// 窗口里的一级标签页。金币页不在这个窗口里，去独立的金币窗口看。
 const (
 	profileTabOverview = iota
 	profileTabAbout
 	profileTabContent
-	profileTabReplies
+	profileTabAssets
 	profileTabBadges
-	profileTabAccount
-	profileTabFilter
+	profileTabSettings
+	profileTabCount
 )
 
-var profileTabLabels = []string{"概览", "个人简介", "我的内容", "我的回复", "徽章", "权限与账号", "内容屏蔽"}
+var profileTabLabels = []string{"概览", "个人介绍", "内容", "资产", "徽章", "设置"}
 
-// 「我的内容」里的四个分段。
+// 「内容」下的二级分段：发布 / 合集 / 评论。评论走单独的一份列表状态
+// （我的回复），发布与合集共用 profileContent 里对应的列表。
+const (
+	profileContentPublish = iota
+	profileContentCollection
+	profileContentComments
+	profileContentSectionCount
+)
+
+var profileContentLabels = []string{"发布", "合集", "评论"}
+
+// 「资产」下的二级分段：收藏 / 书签。
+const (
+	profileAssetFavorites = iota
+	profileAssetBookmarks
+	profileAssetSectionCount
+)
+
+var profileAssetLabels = []string{"收藏", "书签"}
+
+// 「设置」下的二级分段：账号与权限 / 屏蔽设置。
+const (
+	profileSettingsAccount = iota
+	profileSettingsFilter
+	profileSettingsSectionCount
+)
+
+var profileSettingsLabels = []string{"账号与权限", "屏蔽设置"}
+
+// 列表状态仍按端点分四份存：发布用帖子那份，合集用它自己那份，资产的两段
+// 用收藏与书签那份。二级分段只是界面上的分组，不该再复制一份数据。
 const (
 	profileContentTopics = iota
 	profileContentFavorites
@@ -79,11 +110,23 @@ const (
 	profileContentCount
 )
 
-// profileContentLabels 是分段按钮上的短标签；spec 里的 Label 是完整说法，
-// 用在错误提示里（「需要登录后才能查看「我的收藏」」）。
-var profileContentLabels = []string{"帖子", "收藏", "书签", "合集"}
+// profileContentStorage 把「内容」的二级分段映射到它真正用的列表状态。
+func profileContentStorage(kind int) int {
+	if kind == profileContentCollection {
+		return profileContentCollections
+	}
+	return profileContentTopics
+}
 
-// profileContentSpecs 是「我的内容」四个分段里三个固定端点。帖子分段要拼
+// profileAssetStorage 把「资产」的二级分段映射到它真正用的列表状态。
+func profileAssetStorage(kind int) int {
+	if kind == profileAssetBookmarks {
+		return profileContentBookmarks
+	}
+	return profileContentFavorites
+}
+
+// profileContentSpecs 是四类列表里三个固定端点。发布分段要拼
 // 当前账号的用户名、还支持按合集名筛选，走 profileTopicsSpec /
 // profileTopicCollSpec，由 profileSpecFor 按当前状态选用。
 var profileContentSpecs = []tabSpec{
@@ -111,7 +154,7 @@ func profileTopicsSpec(name string, page int) tabSpec {
 	}
 }
 
-// profileSpecFor 返回「我的内容」某个分段在给定状态下真正该用的端点。
+// profileSpecFor 返回某份列表在给定状态下真正该用的端点。
 // 帖子一旦应用了合集筛选，就换成 profileTopicCollSpec（由调用方处理），
 // 这里给出的是未筛选的列表端点。
 func (a *app) profileSpecFor(ps *profileState, kind, page int) tabSpec {
@@ -153,7 +196,7 @@ type accountProfile struct {
 	Attributes      []profileAttribute
 	AttributesKnown bool
 
-	// 以下字段「我的」窗口不展示，用户资料卡（user_card.go）要用：
+	// 以下字段「个人中心」窗口不展示，用户资料卡（user_card.go）要用：
 	// ID 是关注端点需要的用户 uuid（用户名只用于展示与链接），Role 是站点
 	// 角色，Badges 是佩戴中的徽章，HasReadme 只说明有没有填写个人简介 ——
 	// 正文要另读 GET /v1/users/:userName/about。
@@ -178,12 +221,14 @@ func (p accountProfile) canUseOfficialHost() bool {
 	return p.IsPro || p.Role == roleGuardian
 }
 
-// profileState 是「我的」窗口的全部界面状态。只有 UI 线程读写；后台请求
+// profileState 是「个人中心」窗口的全部界面状态。只有 UI 线程读写；后台请求
 // 完成后通过 publish 回填，并用每类数据的 seq 丢弃过期结果。
 type profileState struct {
 	tab int
-	// tabSeen 记上一次真正展示过的标签：切进「内容屏蔽」时据此强制刷新名单。
-	tabSeen int
+	// tabSeen 与 settingsSeen 记上一次真正展示过的一级 / 二级标签：切进「屏
+	// 蔽设置」时据此强制刷新名单，避免拿旧基线覆盖网页端的改动。
+	tabSeen      int
+	settingsSeen int
 
 	// 账号资料（用户名 / 昵称 / 用户 ID / 注册时间）
 	infoSeq     uint64
@@ -199,7 +244,7 @@ type profileState struct {
 	avatarErr  string
 	avatarCrop avatarCropState
 
-	// 个人简介：正文在单独的 about 端点（见 user_card.go），切到那个标签页
+	// 个人介绍：正文在单独的 about 端点（见 user_card.go），切到那个标签页
 	// 才拉一次。本人可以编辑，保存一次消耗 500 金币（见 about_edit.go）。
 	aboutSeq     uint64
 	aboutLoading bool
@@ -218,10 +263,12 @@ type profileState struct {
 	// aboutTpl 是编辑框顶部「个人常量 / 展示组件」快捷模板的开合与选区状态。
 	aboutTpl aboutTemplateState
 
-	// 我的内容：帖子 / 收藏 / 书签 / 合集各有一份列表状态，切换分段时保留
-	// 已经拉到的内容，不重新请求。加载走主窗口同一套通用加载（loadSpec）。
-	contentKind int
-	content     [profileContentCount]tabState
+	// 内容 / 资产的二级分段选择与列表状态。四类列表各存一份，切换分段时
+	// 保留已经拉到的内容，不重新请求。加载走主窗口同一套通用加载（loadSpec）。
+	contentKind  int
+	assetKind    int
+	settingsKind int
+	content      [profileContentCount]tabState
 
 	// 帖子分段上方的合集下拉：选项从 GET /v1/me/collections 读，不手输。
 	// collNames 存选项与加载状态（失败退避）；topicColl 是已经生效的合集名
@@ -234,7 +281,7 @@ type profileState struct {
 	topicCollSt    tabState
 	collNames      collNamesState
 
-	// 我的回复
+	// 内容 - 评论：我发表过的评论与回复
 	replySeq     uint64
 	replyLoading bool
 	replyLoaded  bool
@@ -255,11 +302,11 @@ type profileState struct {
 	// badgeBusyID 是正在提交佩戴 / 取消佩戴的徽章 uuid；一次只提交一枚，
 	// 避免连点造成重复扣币。
 	badgeBusyID string
-	// bookmarkBusy 是正在移除的书签评论 id（「我的内容 - 书签」里直接移除，
+	// bookmarkBusy 是正在移除的书签评论 id（「资产 - 书签」里直接移除，
 	// 见 bookmarks.go）；一次只提交一条。
 	bookmarkBusy string
 
-	// 合集（「我的内容 - 合集」）：
+	// 合集（「内容 - 合集」）：
 	//	collBrowse 非空表示点开了一个合集，正在看它里面的帖子；返回时置空。
 	//	collEdit / collDraft 是改名对话框的状态（正在改的合集 id 与输入框内容），
 	//	collDelete 是正在确认删除的合集 id，collBusy 是正在提交改名 / 删除的
@@ -314,11 +361,11 @@ func (st *collNamesState) collNamesDue(now time.Time) bool {
    端点契约
 ---------------------------------------------------------------- */
 
-// profileRepliesSpec 是「我的回复」的端点：公开资料里该用户发布的评论。
+// profileRepliesSpec 是「评论」分段的端点：公开资料里该用户发布的评论。
 // 它需要用户名而不是「我」，因此调用方要先知道当前账号的昵称。
 func profileRepliesSpec(name string, page int) tabSpec {
 	return tabSpec{
-		Label:   "我的回复",
+		Label:   "我的评论与回复",
 		Path:    "/v1/users/" + url.PathEscape(name) + "/replies",
 		Query:   "page=" + strconv.Itoa(page) + "&limit=" + strconv.Itoa(profileReplyPageSize),
 		ListKey: "items",
@@ -534,7 +581,7 @@ func (c *Client) fetchAccountProfile(ctx context.Context, name string) (accountP
 	return decodeAccountProfile(d), nil
 }
 
-// fetchMyProfile 读「我的」窗口的本人资料。它不需要用户名，返回结构与
+// fetchMyProfile 读「个人中心」窗口的本人资料。它不需要用户名，返回结构与
 // GET /v1/users/:username 一致，但会带上 show_setting 这类本人字段；scope
 // profile。失败时调用方可以退回公开资料，页面不至于空着。
 func (c *Client) fetchMyProfile(ctx context.Context) (accountProfile, error) {
@@ -661,20 +708,28 @@ func (a *app) ensureProfileLoaded() {
 			a.loadProfileAbout()
 		}
 	case profileTabContent:
-		st := &ps.content[ps.contentKind]
-		// 「我的帖子」要拼当前账号的用户名；令牌里没有、资料也还没拉到时
-		// 先不发请求，等资料回来后的下一帧再补上，避免拼出 /users//topics。
-		ready := ps.contentKind != profileContentTopics || a.topicCollName(ps) != ""
-		if ready && !st.loaded && !st.loading && !st.authWait {
-			a.loadProfileContent(ps.contentKind, 1)
+		switch ps.contentKind {
+		case profileContentComments:
+			if !ps.replyLoaded && !ps.replyLoading && name != "" {
+				a.loadProfileReplies(name, 1)
+			}
+		default:
+			st := &ps.content[profileContentStorage(ps.contentKind)]
+			// 发布要拼当前账号的用户名；令牌里没有、资料也还没拉到时
+			// 先不发请求，等资料回来后的下一帧再补上，避免拼出 /users//topics。
+			ready := ps.contentKind != profileContentPublish || a.topicCollName(ps) != ""
+			if ready && !st.loaded && !st.loading && !st.authWait {
+				a.loadProfileContent(profileContentStorage(ps.contentKind), 1)
+			}
+			// 发布分段的合集下拉选项：从「我的合集」端点读，失败按退避重试。
+			if ps.contentKind == profileContentPublish {
+				a.ensureProfileCollNames()
+			}
 		}
-		// 帖子分段的合集下拉选项：从「我的合集」端点读，失败按退避重试。
-		if ps.contentKind == profileContentTopics {
-			a.ensureProfileCollNames()
-		}
-	case profileTabReplies:
-		if !ps.replyLoaded && !ps.replyLoading && name != "" {
-			a.loadProfileReplies(name, 1)
+	case profileTabAssets:
+		st := &ps.content[profileAssetStorage(ps.assetKind)]
+		if !st.loaded && !st.loading && !st.authWait {
+			a.loadProfileContent(profileAssetStorage(ps.assetKind), 1)
 		}
 	case profileTabBadges:
 		if !ps.badgeLoaded && !ps.badgeLoading {
@@ -755,7 +810,7 @@ func (a *app) loadProfileInfo(name string) {
 			}
 			ps.user = p
 			ps.infoErr = ""
-			// 「我的」窗口读到的资料最权威：顺手把 Pro 状态与角色写回令牌缓存，
+			// 「个人中心」读到的资料最权威：顺手把 Pro 状态与角色写回令牌缓存，
 			// 图库设置里官方图床的可用性跟着一起更新。
 			if p.Name != "" && p.Name == a.auth.username() {
 				a.auth.setOfficialHostAccess(p.IsPro, p.Role)
@@ -765,7 +820,7 @@ func (a *app) loadProfileInfo(name string) {
 	}()
 }
 
-// loadProfileContent 拉「我的内容」某一分段的第 page 页。它复用主窗口的
+// loadProfileContent 拉某份列表的第 page 页。它复用主窗口的
 // 通用加载：四个分段的 spec 与错误、分页、去重都跟侧边栏列表同一套。
 func (a *app) loadProfileContent(kind, page int) {
 	ps := a.profile
@@ -864,15 +919,16 @@ func (a *app) loadProfileReplies(name string, page int) {
 	}()
 }
 
-// reloadProfile 是窗口里的「刷新」：保留当前标签页与「我的内容」当前分段，
+// reloadProfile 是窗口里的「刷新」：保留当前一级标签与三个二级分段的选择，
 // 其余状态清空后按需重拉。
 func (a *app) reloadProfile() {
 	ps := a.profile
 	if ps == nil {
 		return
 	}
-	tab, content := ps.tab, ps.contentKind
+	tab, content, asset, settings := ps.tab, ps.contentKind, ps.assetKind, ps.settingsKind
 	*a.profile = *newProfileState()
 	a.profile.tab, a.profile.contentKind = tab, content
+	a.profile.assetKind, a.profile.settingsKind = asset, settings
 	a.ensureProfileLoaded()
 }

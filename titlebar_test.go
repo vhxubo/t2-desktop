@@ -7,10 +7,10 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// openAccountMenu 点标题栏「我的」打开账号菜单气泡，并跑一帧让气泡画出来。
+// openAccountMenu 点标题栏「个人中心」打开账号菜单气泡，并跑一帧让气泡画出来。
 func openAccountMenu(t *testing.T, tt *ui.Tester) {
 	t.Helper()
-	if err := tt.Click("我的"); err != nil {
+	if err := tt.Click("个人中心"); err != nil {
 		t.Fatalf("点账号菜单失败：%v", err)
 	}
 	tt.Frame()
@@ -422,8 +422,8 @@ func TestTitleBarShowsAccountAfterLogin(t *testing.T) {
 	if _, ok := tt.Find("jimmy"); !ok {
 		t.Errorf("标题栏没有头像控件：%q", tt.Texts())
 	}
-	// 头像可点，打开「我的」窗口。
-	if _, ok := tt.Find("我的"); !ok {
+	// 头像可点，打开「个人中心」窗口。
+	if _, ok := tt.Find("个人中心"); !ok {
 		t.Errorf("标题栏头像没有可访问名：%q", tt.Texts())
 	}
 }
@@ -439,7 +439,7 @@ func TestTitleBarAccountTagScalesWithBar(t *testing.T) {
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
 
-	tag, ok := tt.Find("我的")
+	tag, ok := tt.Find("个人中心")
 	if !ok {
 		t.Fatalf("找不到账号标签：%q", tt.Texts())
 	}

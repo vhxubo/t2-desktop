@@ -187,7 +187,7 @@ func TestProfileCollDropdownFitsMinWidth(t *testing.T) {
 	a.profile.collNames.triedAt = time.Now() // 不触发真实请求
 	tt := ui.NewTester(a.profileWindowView, profileWinMinWidth, profileWinMinHeight)
 	tt.Frame()
-	if err := tt.Click("我的内容"); err != nil {
+	if err := tt.Click("内容"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()

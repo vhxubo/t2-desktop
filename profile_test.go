@@ -184,14 +184,19 @@ func TestProfileWindowView(t *testing.T) {
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
 	for _, want := range []string{
-		"我的", "吉米",
+		"个人中心", "吉米", "Lv.7",
 		"用户 ID: #123456", "注册 2024-02-01",
-		"概览", "我的内容", "我的回复", "权限与账号",
+		"概览", "个人介绍", "内容", "资产", "徽章", "设置",
 		"最近统计", "粉丝", "关注", "主页访问", "等级",
-		"授权管理", "查看当前权限",
 	} {
 		if !tt.HasText(want) {
-			t.Errorf("「我的」窗口缺少文案 %q：%q", want, tt.Texts())
+			t.Errorf("「个人中心」窗口缺少文案 %q：%q", want, tt.Texts())
+		}
+	}
+	// 概览底部不再放授权说明与「查看当前权限」，授权入口收在「权限与账号」页。
+	for _, gone := range []string{"授权管理", "查看当前权限"} {
+		if tt.HasText(gone) {
+			t.Errorf("概览不该再展示 %q：%q", gone, tt.Texts())
 		}
 	}
 	// 窗口自带标题栏按钮。
@@ -213,7 +218,37 @@ func TestProfileWindowView(t *testing.T) {
 	}
 }
 
-// 加入「个人简介」后仍有六个标签页，最窄窗口下也不能溢出。
+// 资料头里的等级紧跟昵称，和昵称同一行并留出这一行的 Gap 间距。只渲染资料头：
+// 窗口标题栏上的昵称与头像占位也会带同一份文字，单独画才找得到昵称那一行。
+func TestProfileLevelFollowsNickname(t *testing.T) {
+	a := profileWindowApp(t)
+	// 头像占位只取前两个字符「JI」，昵称因此是唯一的一处文字。
+	a.profile.user.DisplayName = "Jimmy测试"
+	tt := ui.NewTester(func(c *ui.Context) { a.profileHeader(c, a.profile) }, profileWindowWidth, 120)
+	tt.Frame()
+	name, ok := tt.Find("Jimmy测试")
+	if !ok {
+		t.Fatalf("找不到昵称：%q", tt.Texts())
+	}
+	level, ok := tt.Find("Lv.7")
+	if !ok {
+		t.Fatalf("找不到等级：%q", tt.Texts())
+	}
+	t.Logf("昵称 %+v，等级 %+v", name, level)
+	if level.X <= name.X {
+		t.Errorf("等级该在昵称后面：昵称 %+v，等级 %+v", name, level)
+	}
+	gap := level.X - (name.X + name.W)
+	if gap <= 0 || gap > 16 {
+		t.Errorf("昵称与等级的横向间距只有 %.0f，期望同行且留出这行的 gap", gap)
+	}
+	dy := level.Y - name.Y
+	if dy < -12 || dy > 12 {
+		t.Errorf("等级与昵称不在同一行：昵称 y=%.0f，等级 y=%.0f", name.Y, level.Y)
+	}
+}
+
+// 六个一级标签在最窄窗口下也不能溢出。
 func TestProfileTabsFitMinWidth(t *testing.T) {
 	a := profileWindowApp(t)
 	tt := ui.NewTester(a.profileWindowView, profileWinMinWidth, profileWinMinHeight)
@@ -272,16 +307,22 @@ func TestProfileHasNoCoinEntries(t *testing.T) {
 	}
 }
 
-// 「我的内容」一页里有四个分段：帖子 / 收藏 / 书签 / 合集，切到哪段显示
-// 哪段的内容。这四类原先占着侧边栏，现在都收进这里。
+// 「内容」下有发布 / 合集 / 评论三段，「资产」下有收藏 / 书签两段。四类列表
+// 原先占着「我的内容」的分段，现在按自产输出与内容收集分到两个一级页里。
 func TestProfileContentSegments(t *testing.T) {
 	if len(profileContentSpecs) != profileContentCount ||
-		len(profileContentLabels) != profileContentCount ||
 		len(profileContentUnits) != profileContentCount ||
-		len(profileContentEmpty) != profileContentCount {
-		t.Fatalf("「我的内容」的分段表长度不一致：specs=%d labels=%d units=%d empty=%d",
-			len(profileContentSpecs), len(profileContentLabels),
-			len(profileContentUnits), len(profileContentEmpty))
+		len(profileContentEmpty) != profileContentCount ||
+		len(profileContentEmptyIcons) != profileContentCount {
+		t.Fatalf("列表状态表长度不一致：specs=%d units=%d empty=%d icons=%d",
+			len(profileContentSpecs), len(profileContentUnits),
+			len(profileContentEmpty), len(profileContentEmptyIcons))
+	}
+	if len(profileContentLabels) != profileContentSectionCount ||
+		len(profileAssetLabels) != profileAssetSectionCount ||
+		len(profileSettingsLabels) != profileSettingsSectionCount {
+		t.Fatalf("二级分段表长度不一致：内容=%d 资产=%d 设置=%d",
+			len(profileContentLabels), len(profileAssetLabels), len(profileSettingsLabels))
 	}
 	a := profileWindowApp(t)
 	ps := a.profile
@@ -299,74 +340,299 @@ func TestProfileContentSegments(t *testing.T) {
 
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
-	if err := tt.Click("我的内容"); err != nil {
+	if err := tt.Click("内容"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if !tt.HasText("第一篇帖子") {
-		t.Errorf("默认分段应是帖子：%q", tt.Texts())
+		t.Errorf("默认分段应是发布：%q", tt.Texts())
 	}
-	// 四个分段都要待在窗口宽度之内，不能挤到窗口外面。
-	for _, label := range append(append([]string{}, profileContentLabels...), "刷新") {
-		r, ok := tt.Find(label)
-		if !ok {
-			t.Fatalf("「我的内容」缺少 %q：%q", label, tt.Texts())
+	// 每个一级页的二级分段都要待在窗口宽度之内，不能挤到窗口外面。
+	for _, tc := range []struct {
+		section string
+		labels  []string
+	}{
+		{"内容", profileContentLabels[:]},
+		{"资产", profileAssetLabels[:]},
+		{"设置", profileSettingsLabels[:]},
+	} {
+		if err := tt.Click(tc.section); err != nil {
+			t.Fatalf("切到 %s 失败：%v", tc.section, err)
 		}
-		if r.X+r.W > profileWindowWidth {
-			t.Errorf("%q 的 x=%.0f 宽 %.0f，超出 %d 宽的窗口",
-				label, r.X, r.W, profileWindowWidth)
+		tt.Frame()
+		for _, label := range tc.labels {
+			r, ok := tt.Find(label)
+			if !ok {
+				t.Fatalf("%s 页缺少二级分段 %q：%q", tc.section, label, tt.Texts())
+			}
+			if r.X+r.W > profileWindowWidth {
+				t.Errorf("%s - %s 超出窗口：x=%.0f 宽 %.0f", tc.section, label, r.X, r.W)
+			}
 		}
 	}
 
-	for _, c := range []struct{ segment, want string }{
-		{"收藏", "收藏的帖子"},
-		{"书签", "书签里的评论"},
-		{"合集", "我的收藏夹"},
+	for _, c := range []struct{ section, segment, want string }{
+		{"内容", "合集", "我的收藏夹"},
+		{"内容", "评论", "我的一条回复"},
+		{"资产", "收藏", "收藏的帖子"},
+		{"资产", "书签", "书签里的评论"},
 	} {
+		if err := tt.Click(c.section); err != nil {
+			t.Fatalf("切到 %s 失败：%v", c.section, err)
+		}
+		tt.Frame()
 		if err := tt.Click(c.segment); err != nil {
-			t.Fatalf("切到 %s 失败：%v", c.segment, err)
+			t.Fatalf("切到 %s - %s 失败：%v", c.section, c.segment, err)
 		}
 		tt.Frame()
 		if !tt.HasText(c.want) {
-			t.Errorf("%s 分段里看不到 %q：%q", c.segment, c.want, tt.Texts())
+			t.Errorf("%s - %s 里看不到 %q：%q", c.section, c.segment, c.want, tt.Texts())
 		}
 	}
 }
 
-// 四个标签页都能切，各自显示自己的内容。
+// 「发布」分段、合集筛选与列表是三层关键部分，彼此留出 Lobe 的纵向
+// 间距：分段选中线不该连到下拉框，首行帖子也不该顶着筛选控件。
+func TestProfileContentGaps(t *testing.T) {
+	a := profileWindowApp(t)
+	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
+	tt.Frame()
+	if err := tt.Click("内容"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+
+	filter, ok := tt.Find("按合集名筛选帖子")
+	if !ok {
+		t.Fatalf("找不到合集筛选控件：%q", tt.Texts())
+	}
+	first, ok := tt.Find("第一篇帖子")
+	if !ok {
+		t.Fatalf("找不到第一篇帖子：%q", tt.Texts())
+	}
+	gap := first.Y - (filter.Y + filter.H)
+	t.Logf("筛选控件底 y=%.0f，首行帖子顶 y=%.0f，间距 %.0f", filter.Y+filter.H, first.Y, gap)
+	if gap < 12 {
+		t.Errorf("合集筛选与帖子列表之间的间距只有 %.0f，期望至少 12", gap)
+	}
+}
+
+/* ------------------------------------------------------------------
+   二级分段的滚动
+---------------------------------------------------------------- */
+
+// assertProfileTabScrolls 用长列表断言某个二级分段能滚动：首屏只看见头部，
+// 滚到底才看见尾巴。根节点若只给百分比宽度，列表会按全部内容撑高，行画到
+// 窗口外面，滚轮也跟着失效。ScrollArea 会把屏外节点裁成 0 高，ui.List 则
+// 根本不画它们，所以这里按可见矩形判断，而不是按有没有这个 label。
+func assertProfileTabScrolls(t *testing.T, a *app, head, tail string) {
+	t.Helper()
+	visible := func(text string, r ui.Rect, ok bool) bool {
+		return ok && r.H > 0 && r.Y >= 0 && r.Y < float32(profileWindowHeight)
+	}
+	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
+	tt.Frame()
+	if r, ok := tt.Find(head); !visible(head, r, ok) {
+		t.Fatalf("首屏没画出列表头部 %q：%q", head, tt.Texts())
+	}
+	if r, ok := tt.Find(tail); visible(tail, r, ok) {
+		t.Fatalf("没滚动就画出了列表末尾 %q（%v）：%q", tail, r, tt.Texts())
+	}
+	tt.Scroll(260, 400, 0, 8000)
+	tt.Frame()
+	if r, ok := tt.Find(tail); !visible(tail, r, ok) {
+		t.Fatalf("滚动后没画出列表末尾 %q（%v）：%q", tail, r, tt.Texts())
+	}
+	if r, ok := tt.Find(head); visible(head, r, ok) {
+		t.Errorf("滚到底后头部 %q 还在视野里：%q", head, tt.Texts())
+	}
+}
+
+// 内容、资产与设置下的二级分段都要在窗口内滚动，长列表不能把后面的行画到
+// 窗口外面。
+func TestProfileSecondaryTabsScroll(t *testing.T) {
+	t.Run("发布", func(t *testing.T) {
+		a := profileWindowApp(t)
+		a.profile.tab = profileTabContent
+		st := &a.profile.content[profileContentTopics]
+		st.items = nil
+		for i := 0; i < 40; i++ {
+			st.items = append(st.items, Item{Key: fmt.Sprintf("T%02d", i),
+				ShortID: fmt.Sprintf("T%02d", i), Title: fmt.Sprintf("帖子第 %02d 项", i)})
+		}
+		assertProfileTabScrolls(t, a, "帖子第 00 项", "帖子第 39 项")
+	})
+	t.Run("合集", func(t *testing.T) {
+		a := profileWindowApp(t)
+		a.profile.tab = profileTabContent
+		a.profile.contentKind = profileContentCollection
+		st := &a.profile.content[profileContentCollections]
+		st.items = nil
+		for i := 0; i < 40; i++ {
+			st.items = append(st.items, Item{Key: fmt.Sprintf("C%02d", i),
+				Title: fmt.Sprintf("合集第 %02d 项", i)})
+		}
+		assertProfileTabScrolls(t, a, "合集第 00 项", "合集第 39 项")
+	})
+	t.Run("评论", func(t *testing.T) {
+		a := profileWindowApp(t)
+		a.profile.tab = profileTabContent
+		a.profile.contentKind = profileContentComments
+		a.profile.replies = nil
+		for i := 0; i < 40; i++ {
+			a.profile.replies = append(a.profile.replies, Item{Key: fmt.Sprintf("R%02d", i),
+				ShortID: "T1", Title: fmt.Sprintf("回复第 %02d 项", i)})
+		}
+		assertProfileTabScrolls(t, a, "回复第 00 项", "回复第 39 项")
+	})
+	t.Run("收藏", func(t *testing.T) {
+		a := profileWindowApp(t)
+		a.profile.tab = profileTabAssets
+		st := &a.profile.content[profileContentFavorites]
+		st.items = nil
+		for i := 0; i < 40; i++ {
+			st.items = append(st.items, Item{Key: fmt.Sprintf("F%02d", i),
+				ShortID: fmt.Sprintf("T%02d", i), Title: fmt.Sprintf("收藏第 %02d 项", i)})
+		}
+		assertProfileTabScrolls(t, a, "收藏第 00 项", "收藏第 39 项")
+	})
+	t.Run("书签", func(t *testing.T) {
+		a := profileWindowApp(t)
+		a.profile.tab = profileTabAssets
+		a.profile.assetKind = profileAssetBookmarks
+		st := &a.profile.content[profileContentBookmarks]
+		st.items = nil
+		for i := 0; i < 40; i++ {
+			st.items = append(st.items, Item{Key: fmt.Sprintf("B%02d", i),
+				ShortID: "T1", CommentID: fmt.Sprintf("B%02d", i),
+				Title: fmt.Sprintf("书签第 %02d 项", i)})
+		}
+		assertProfileTabScrolls(t, a, "书签第 00 项", "书签第 39 项")
+	})
+	t.Run("账号与权限", func(t *testing.T) {
+		a := profileWindowApp(t)
+		a.profile.tab = profileTabSettings
+		scopes := make([]string, 40)
+		for i := range scopes {
+			scopes[i] = fmt.Sprintf("scope%02d", i)
+		}
+		if err := a.auth.storeToken(tokenData{
+			AccessToken: "tok", TokenType: "Bearer", Username: "jimmy",
+			Scope: strings.Join(scopes, " "),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		assertProfileTabScrolls(t, a, "scope00", "scope39")
+	})
+}
+
+// 进入评论只拉第一页：列表有固定可视高度后，AtEnd 要等真正滚到底才成立。
+// 根节点若被内容撑高，首帧就当成已经到底，一帧一帧把后续所有页全拉一遍。
+func TestProfileCommentsLoadsFirstPageOnly(t *testing.T) {
+	var mu sync.Mutex
+	pages := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/users/jimmy/replies" {
+			http.NotFound(w, r)
+			return
+		}
+		p := r.URL.Query().Get("page")
+		mu.Lock()
+		pages[p]++
+		mu.Unlock()
+		items := make([]string, 0, 50)
+		for i := 0; i < 50; i++ {
+			items = append(items, fmt.Sprintf(
+				`{"id":"r%s-%d","content":"回复 %s-%d","post":{"short_id":"T1","title":"帖子"}}`, p, i, p, i))
+		}
+		fmt.Fprintf(w, `{"c":0,"d":{"items":[%s],"total":250,"page":%s,"limit":50,"total_pages":5}}`,
+			strings.Join(items, ","), p)
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	a.client.Base = srv.URL + "/api"
+	a.autoLoad = true
+	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer", Username: "jimmy"}); err != nil {
+		t.Fatal(err)
+	}
+	a.profile.tab = profileTabContent
+	a.profile.contentKind = profileContentComments
+	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
+	tt.Frame()
+	waitProfile(t, "评论第一页", func() bool { return a.profile.replyLoaded })
+	for i := 0; i < 6; i++ {
+		tt.Frame()
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for p := 2; p <= 5; p++ {
+		if n := pages[fmt.Sprintf("%d", p)]; n != 0 {
+			t.Errorf("没滚到底就拉了第 %d 页 %d 次：%v", p, n, pages)
+		}
+	}
+}
+
+// 一级标签与它们的二级分段都能切，各自显示自己的内容。
 func TestProfileTabs(t *testing.T) {
 	a := profileWindowApp(t)
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
 
-	if err := tt.Click("我的内容"); err != nil {
+	if err := tt.Click("内容"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	for _, want := range []string{"共 2 篇", "第一篇帖子", "第二篇帖子", "帖子", "收藏", "书签", "合集"} {
+	for _, want := range []string{"共 2 篇", "第一篇帖子", "第二篇帖子", "发布", "合集", "评论"} {
 		if !tt.HasText(want) {
-			t.Errorf("我的内容页缺少 %q：%q", want, tt.Texts())
+			t.Errorf("内容页缺少 %q：%q", want, tt.Texts())
 		}
 	}
 
-	if err := tt.Click("我的回复"); err != nil {
+	// 评论分段就是原来的「我的回复」，评论与回复都列在这里。它和另外两段
+	// 共用同一个二级分段条，直接画在选中的分段下面，不再跳进独立页面。
+	if err := tt.Click("评论"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	for _, want := range []string{"共 2 条", "我的一条回复", "《第一篇帖子》"} {
+	for _, want := range []string{"发布", "合集", "评论", "共 2 条", "我的一条回复", "《第一篇帖子》"} {
 		if !tt.HasText(want) {
-			t.Errorf("我的回复页缺少 %q：%q", want, tt.Texts())
+			t.Errorf("评论分段缺少 %q：%q", want, tt.Texts())
 		}
 	}
+	tab, ok := tt.Find("评论")
+	if !ok {
+		t.Fatalf("评论分段里看不到二级分段条：%q", tt.Texts())
+	}
+	reply, ok := tt.Find("我的一条回复")
+	if !ok {
+		t.Fatalf("评论分段里看不到评论：%q", tt.Texts())
+	}
+	if reply.Y <= tab.Y {
+		t.Errorf("评论该画在选中的二级 tab 下面：tab %+v，评论 %+v", tab, reply)
+	}
+	// 回到发布：分段条一直在，不需要先退出内容页。
+	if err := tt.Click("发布"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("第一篇帖子") {
+		t.Errorf("从评论切回发布没回到帖子列表：%q", tt.Texts())
+	}
 
-	// 权限与账号：令牌里的 scope 原样列出。
-	if err := tt.Click("权限与账号"); err != nil {
+	// 设置 - 账号与权限：令牌里的 scope 原样列出。
+	if err := tt.Click("设置"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("账号与权限"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	for _, want := range []string{"授权范围", "read:me", "读取我的内容", "read:economy"} {
 		if !tt.HasText(want) {
-			t.Errorf("权限与账号页缺少 %q：%q", want, tt.Texts())
+			t.Errorf("账号与权限页缺少 %q：%q", want, tt.Texts())
 		}
 	}
 }
@@ -391,7 +657,7 @@ func TestProfileAccountTabWithoutScope(t *testing.T) {
 	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer", Username: "jimmy"}); err != nil {
 		t.Fatal(err)
 	}
-	a.profile.tab = profileTabAccount
+	a.profile.tab = profileTabSettings
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
 	if !tt.HasText("令牌里没有 scope 信息") {
@@ -423,7 +689,8 @@ func TestProfileTopicOpensDetail(t *testing.T) {
 // 点回复行同样回到正文，并带上评论 id 用于定位楼层。
 func TestProfileReplyOpensDetailWithComment(t *testing.T) {
 	a := profileWindowApp(t)
-	a.profile.tab = profileTabReplies
+	a.profile.tab = profileTabContent
+	a.profile.contentKind = profileContentComments
 	a.setProfileWindowShown(true)
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
@@ -449,8 +716,8 @@ func TestHeaderAvatarOpensProfile(t *testing.T) {
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
 
-	if _, ok := tt.Find("我的"); !ok {
-		t.Fatalf("标题栏的头像没有可访问名「我的」：%q", tt.Texts())
+	if _, ok := tt.Find("个人中心"); !ok {
+		t.Fatalf("标题栏的头像没有可访问名「个人中心」：%q", tt.Texts())
 	}
 	// 头像与昵称都还在，点昵称也等同于点这个账号标识，只开合气泡。
 	if _, ok := tt.Find("jimmy"); !ok {
@@ -473,12 +740,12 @@ func TestHeaderAvatarOpensProfile(t *testing.T) {
 	// 标题栏锚点不同，点它不会误触锚点。
 	profileOpened := 0
 	a.onProfileOpen = func() { profileOpened++ }
-	if err := tt.Click("打开我的窗口"); err != nil {
-		t.Fatalf("点账号菜单里的「我的」失败：%v", err)
+	if err := tt.Click("打开个人中心窗口"); err != nil {
+		t.Fatalf("点账号菜单里的「个人中心」失败：%v", err)
 	}
 	tt.Frame()
 	if profileOpened != 1 {
-		t.Errorf("点「我的」入口没有触发打开：%d 次", profileOpened)
+		t.Errorf("点「个人中心」入口没有触发打开：%d 次", profileOpened)
 	}
 	if a.profileMenuOpen {
 		t.Error("点入口后账号菜单应收起")
@@ -496,7 +763,7 @@ func TestAccountMenuRoutesToFourPages(t *testing.T) {
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
 	openAccountMenu(t, tt)
-	for _, want := range []string{"签到", "金币", "潘多拉", "我的"} {
+	for _, want := range []string{"签到", "金币", "潘多拉", "个人中心"} {
 		if !tt.HasText(want) {
 			t.Errorf("账号菜单缺少 %q：%q", want, tt.Texts())
 		}
@@ -540,12 +807,12 @@ func TestAccountMenuRoutesToFourPages(t *testing.T) {
 
 	a.onProfileOpen = func() { calls++ }
 	openAccountMenu(t, tt)
-	if err := tt.Click("打开我的窗口"); err != nil {
-		t.Fatalf("点「我的」入口失败：%v", err)
+	if err := tt.Click("打开个人中心窗口"); err != nil {
+		t.Fatalf("点「个人中心」入口失败：%v", err)
 	}
 	tt.Frame()
 	if calls != 4 || a.profileMenuOpen {
-		t.Errorf("点「我的」应打开窗口并收起气泡：calls=%d, open=%v", calls, a.profileMenuOpen)
+		t.Errorf("点「个人中心」应打开窗口并收起气泡：calls=%d, open=%v", calls, a.profileMenuOpen)
 	}
 }
 
@@ -703,6 +970,51 @@ func TestProfileRepliesPaging(t *testing.T) {
 	}
 	if !a.profile.replyNoMore {
 		t.Error("最后一页之后没有标记到底")
+	}
+}
+
+// 「我的回复」滚到底自动续拉：列表底部不再有「加载更多」按钮，看到末尾就
+// 直接拉下一页；失败仍停在底栏等手动重试。
+func TestProfileRepliesAutoLoadOnScroll(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/users/jimmy/replies" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Query().Get("page") == "2" {
+			fmt.Fprint(w, `{"c":0,"d":{"items":[
+				{"id":"r2","content":"第二页的新回复","post":{"short_id":"T2","title":"帖子二"}}
+			],"total":2,"page":2,"limit":50,"total_pages":2}}`)
+			return
+		}
+		fmt.Fprint(w, `{"c":0,"d":{"items":[
+			{"id":"r1","content":"第一页的回复","post":{"short_id":"T1","title":"帖子一"}}
+		],"total":2,"page":1,"limit":50,"total_pages":2}}`)
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	a.client.Base = srv.URL + "/api"
+	a.autoLoad = true
+	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer", Username: "jimmy"}); err != nil {
+		t.Fatal(err)
+	}
+	a.profile.tab = profileTabContent
+	a.profile.contentKind = profileContentComments
+	a.loadProfileReplies("jimmy", 1)
+	waitProfile(t, "第一页回复", func() bool { return a.profile.replyLoaded })
+
+	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
+	tt.Frame()
+	waitProfile(t, "滚到底自动续拉", func() bool {
+		return a.profile.replyPage == 2 && !a.profile.replyLoading
+	})
+	tt.Frame()
+	if !tt.HasText("第二页的新回复") {
+		t.Errorf("没有自动续拉出第二页：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("加载更多"); ok {
+		t.Errorf("回复列表底部不该再有「加载更多」按钮：%q", tt.Texts())
 	}
 }
 

@@ -27,7 +27,7 @@ func accountWindowCases() []accountWindowCase {
 			func(a *app) func(*ui.Context) { return a.notificationsWindowView }},
 		{"设置", settingsWindowWidth, settingsWindowHeight, nil,
 			func(a *app) func(*ui.Context) { return a.settingsWindowView }},
-		{"我的", profileWindowWidth, profileWindowHeight, nil,
+		{"个人中心", profileWindowWidth, profileWindowHeight, nil,
 			func(a *app) func(*ui.Context) { return a.profileWindowView }},
 		{"发帖", composeWindowWidth, composeWindowHeight, func(a *app) { composeReady(a) },
 			func(a *app) func(*ui.Context) { return a.composeWindowView }},

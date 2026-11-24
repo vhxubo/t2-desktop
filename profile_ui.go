@@ -20,13 +20,13 @@ import (
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 「我的」窗口：点击标题栏上登录账号的头像打开。它和通知、设置一样是独立
-// 窗口，而不是主窗口里的一层遮罩——四块内容（概览、我的内容、回复、权限）
-// 都要滚动和分页，塞进主窗口的弹窗里只会互相挤。
+// 「个人中心」窗口：点击标题栏上登录账号的头像打开。它和通知、设置一样是独立
+// 窗口，而不是主窗口里的一层遮罩——概览、内容、资产等页面都要滚动和分页，
+// 塞进主窗口的弹窗里只会互相挤。
 //
-// 整套界面走 Lobe UI：标题栏、资料头与四个标签页统一用 Token 配色和 Lobe
-// 组件（nav.Tabs、display.Avatar、popupSurface / popupRow 等），与账号面板、
-// 设置窗口是同一套设计语言。区块与列表行不画圆角与整圈描边。文案与动作不变。
+// 整套界面走 Lobe UI：标题栏、资料头与一级标签统一用 Token 配色和 Lobe
+// 组件（TabsBase、nav.Tabs、display.Avatar、popupSurface / popupRow 等），与
+// 账号面板、设置窗口是同一套设计语言。区块与列表行不画圆角与整圈描边。
 //
 // 数据、状态与请求在 profile.go；这里只负责窗口的开关与界面。
 
@@ -37,11 +37,11 @@ import (
 // profileTabIcons 与 profileTabLabels 一一对应：图标只是标签前的装饰，文案仍
 // 是读屏与点击测试命中的无障碍名。
 var profileTabIcons = []*ui.SVG{
-	lucide.ChartNoAxesColumn(), lucide.FileText(), lucide.FolderClosed(),
-	lucide.MessageCircle(), lucide.Award(), lucide.ShieldCheck(), lucide.EyeOff(),
+	lucide.ChartNoAxesColumn(), lucide.FileText(), lucide.Layers3(),
+	lucide.Wallet(), lucide.Award(), lucide.Settings2(),
 }
 
-// showProfile 是「我的」窗口的全局入口：任何窗口、任何 goroutine 都能调用。
+// showProfile 是「个人中心」窗口的全局入口：任何窗口、任何 goroutine 都能调用。
 // 它把工作挪到主线程；窗口已经开着就只把它带到前台，不会开出第二个。
 func (a *app) showProfile() {
 	if a.onProfileOpen != nil {
@@ -50,8 +50,8 @@ func (a *app) showProfile() {
 	a.publish(a.showProfileWindow)
 }
 
-// showProfileTab 打开「我的」窗口并直接落在指定标签。空状态里的「管理屏蔽
-// 名单」和账号菜单里的「内容屏蔽」都走这里。
+// showProfileTab 打开「个人中心」窗口并直接落在指定一级标签。徽章墙、合集
+// 这些命令走这里；设置页还要指定二级分段时用 showProfileSettings。
 func (a *app) showProfileTab(tab int) {
 	if a.profile == nil {
 		a.profile = newProfileState()
@@ -60,11 +60,22 @@ func (a *app) showProfileTab(tab int) {
 	a.showProfile()
 }
 
+// showProfileSettings 打开「设置」页并落到指定的二级分段。信息流空状态里的
+// 「管理屏蔽名单」和命令中心的内容屏蔽入口都走这里。
+func (a *app) showProfileSettings(kind int) {
+	if a.profile == nil {
+		a.profile = newProfileState()
+	}
+	a.profile.tab = profileTabSettings
+	a.profile.settingsKind = kind
+	a.showProfile()
+}
+
 // showProfileWindow 在主线程上真正打开窗口。打开时先按需拉一次资料与余额，
 // 首帧里看到的就是当前账号，而不是空壳再闪一下。
 func (a *app) showProfileWindow() {
 	if !a.auth.loggedIn() {
-		a.requestLogin("登录 2Libra 后才能查看「我的」。")
+		a.requestLogin("登录 2Libra 后才能查看「个人中心」。")
 		return
 	}
 	if a.profile == nil {
@@ -87,7 +98,7 @@ func (a *app) showProfileWindow() {
 		return
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:             a.subWindowTitle("我的"),
+		Title:             a.subWindowTitle("个人中心"),
 		Width:             profileWindowWidth,
 		Height:            profileWindowHeight,
 		MinWidth:          profileWinMinWidth,
@@ -144,7 +155,7 @@ func (a *app) redrawProfileWindow() {
 }
 
 // profileTag 是标题栏右侧的账号标识：头像 + 昵称。它只作账号菜单的锚点，
-// 点一下弹出气泡，签到、金币、潘多拉、「我的」与退出登录都收在气泡里。只显示
+// 点一下弹出气泡，签到、金币、潘多拉、个人中心与退出登录都收在气泡里。只显示
 // 昵称，不再写「已登录」：头像和昵称本身就说明身份，那几个字只会挤占标题栏宽度。
 // 昵称还没读到时只画头像，仍然是账号菜单的入口。
 func (a *app) profileTag(c *ui.Context, name string) {
@@ -156,7 +167,7 @@ func (a *app) profileTag(c *ui.Context, name string) {
 	tag.Children(func() {
 		a.profileTagIdentity(c, name)
 	})
-	tag.Label("我的").Tooltip("打开账号菜单：签到、金币、潘多拉、「我的」与退出登录")
+	tag.Label("个人中心").Tooltip("打开账号菜单：签到、金币、潘多拉、个人中心与退出登录")
 	// Lobe 的 Popover 点锚点开合、点窗外与 Esc 关闭；气泡挂在账号标识下方。
 	// 锚点本身不再挂 OnClick：点它只开合气泡，进哪个页面在气泡里选。
 	// Popover 没有打开回调，但它在构建期就翻转 open：对比构建前后的值即可
@@ -183,7 +194,7 @@ func (a *app) profileTagIdentity(c *ui.Context, name string) {
 	ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 		if name == "" {
 			// 昵称还没读到（身份接口慢或失败）：仍然给一个可点的头像位，
-			// 账号菜单自己会带进「我的」窗口，不至于没有入口。
+			// 账号菜单自己会带进「个人中心」窗口，不至于没有入口。
 			a.avatarHost(c, size, pro, func() ui.Element {
 				return display.Avatar(c, "", display.AvatarProps{
 					Size: size, Shape: display.AvatarCircle,
@@ -199,7 +210,7 @@ func (a *app) profileTagIdentity(c *ui.Context, name string) {
 	})
 }
 
-// profileMenuPanel 是账号菜单气泡的内容：签到、金币、潘多拉与「我的」四个
+// profileMenuPanel 是账号菜单气泡的内容：签到、金币、潘多拉与个人中心四个
 // 入口，末尾用一条分隔线隔开退出登录。金币行带余额，签到行带今日状态，潘多拉
 // 行沿用动态名字与「可抽」角标；点任一行都先收起气泡再进对应页面。
 func (a *app) profileMenuPanel(c *ui.Context) {
@@ -207,7 +218,6 @@ func (a *app) profileMenuPanel(c *ui.Context) {
 		a.profileMenuSignRow(c)
 		a.profileMenuCoinsRow(c)
 		a.profileMenuPandoraRow(c)
-		a.profileMenuFilterRow(c)
 		a.profileMenuMineRow(c)
 		layout.Divider(c, layout.DividerProps{})
 		a.profileMenuLogoutRow(c)
@@ -296,11 +306,11 @@ func (a *app) profileMenuPandoraRow(c *ui.Context) {
 	}, func() { a.showPandora() })
 }
 
-// profileMenuMineRow 是账号菜单的「我的」入口：点开「我的」窗口。
+// profileMenuMineRow 是账号菜单的「个人中心」入口：点开「个人中心」窗口。
 func (a *app) profileMenuMineRow(c *ui.Context) {
-	// 可见文案与标题栏锚点一样是「我的」，无障碍名另给一个唯一的，读屏与
+	// 可见文案与标题栏锚点一样是「个人中心」，无障碍名另给一个唯一的，读屏与
 	// 点击测试才分得清锚点和气泡里的入口。
-	a.profileMenuRow(c, lucide.UserRound(), "我的", "打开我的窗口", "打开「我的」窗口", nil, func() {
+	a.profileMenuRow(c, lucide.UserRound(), "个人中心", "打开个人中心窗口", "打开「个人中心」窗口", nil, func() {
 		a.showProfile()
 	})
 }
@@ -318,7 +328,7 @@ func (a *app) profileMenuLogoutRow(c *ui.Context) {
    窗口界面
 ---------------------------------------------------------------- */
 
-// profileWindowView 是「我的」窗口的 view。窗口自带标题栏与窗口按钮，因此
+// profileWindowView 是「个人中心」窗口的 view。窗口自带标题栏与窗口按钮，因此
 // 这里不需要遮罩，也不占主窗口的位置。
 func (a *app) profileWindowView(c *ui.Context) {
 	a.applyTheme(c)
@@ -343,7 +353,7 @@ func (a *app) profileWindowView(c *ui.Context) {
 			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10).Gap(8).
 				AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, lucide.UserRound()).Size(16, 16).TextColor(tk.Primary)
-				display.Text(c, "我的", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
+				display.Text(c, "个人中心", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
 				if name := a.profileTitleName(ps); name != "" {
 					display.Text(c, name, display.TextProps{
 						Type: display.TextSecondary, FontSize: 11, Rows: 1,
@@ -358,18 +368,16 @@ func (a *app) profileWindowView(c *ui.Context) {
 			})
 			titleBarButton(c, titleClose, "关闭", a.closeProfileWindow)
 		})
-		layout.Divider(c, layout.DividerProps{})
 
 		a.profileHeader(c, ps)
-		layout.Divider(c, layout.DividerProps{})
 
-		// 七个标签在最窄窗口里一行放不下，用可换行的 TabsBase 自己画：点击
-		// 与键盘选择由基础组件负责，选中态是主色文字 + 底边线。切换时只换
-		// 正文，窗口还是这一扇；各页的滚动与分页状态都留在 profileState。
+		// 六个一级标签用可换行的 TabsBase 自己画：点击与键盘选择由基础组件
+		// 负责，选中态是主色文字 + 底边线。切换时只换正文，窗口还是这一扇；
+		// 各页的滚动与分页状态都留在 profileState。
 		ui.Row(c).FillWidth().Padding(4, 12).Children(func() {
 			c.Key("profile-tabs")
 			sel := ps.tab
-			tabs := ui.TabsBase(c, &sel, len(profileTabLabels))
+			tabs := ui.TabsBase(c, &sel, profileTabCount)
 			tabs.List.Row().Wrap().FillWidth().Gap(2).AlignItems(ui.Center).Children(func() {
 				for i, label := range profileTabLabels {
 					tab := tabs.Tab(i).Gap(4).AlignItems(ui.Center).
@@ -395,32 +403,29 @@ func (a *app) profileWindowView(c *ui.Context) {
 				ps.tab = sel
 			}
 		})
-		// 切进「内容屏蔽」就强制 GET 一次：网页端可能改过名单，进入时看到的
-		// 必须是最新一份，保存时才是整份替换而不是拿旧基线覆盖别人的改动。
-		if ps.tabSeen != ps.tab {
-			ps.tabSeen = ps.tab
-			if ps.tab == profileTabFilter {
+		// 切进「屏蔽设置」就强制 GET 一次：网页端可能改过名单，进入时看到
+		// 的必须是最新一份，保存时才是整份替换而不是拿旧基线覆盖别人的改动。
+		if ps.tabSeen != ps.tab || ps.settingsSeen != ps.settingsKind {
+			ps.tabSeen, ps.settingsSeen = ps.tab, ps.settingsKind
+			if ps.tab == profileTabSettings && ps.settingsKind == profileSettingsFilter {
 				a.ensureContentFilter(true)
 			}
 		}
-		layout.Divider(c, layout.DividerProps{})
 
 		// 每页给一个独立的 key，避免不同页复用彼此的输入框 / 分段控件状态。
-		c.Key(fmt.Sprintf("profile-page-%d", ps.tab))
+		c.Key(fmt.Sprintf("profile-page-%d-%d-%d-%d", ps.tab, ps.contentKind, ps.assetKind, ps.settingsKind))
 		ui.Column(c).Grow(1).MinHeight(0).Padding(12, 16).Children(func() {
 			switch ps.tab {
 			case profileTabAbout:
 				a.profileAboutBody(c, ps)
 			case profileTabContent:
 				a.profileContentBody(c, ps)
-			case profileTabReplies:
-				a.profileRepliesBody(c, ps)
+			case profileTabAssets:
+				a.profileAssetsBody(c, ps)
 			case profileTabBadges:
 				a.profileBadgesBody(c, ps)
-			case profileTabAccount:
-				a.profileAccountBody(c, ps)
-			case profileTabFilter:
-				a.profileFilterBody(c, ps)
+			case profileTabSettings:
+				a.profileSettingsBody(c, ps)
 			default:
 				a.profileOverviewBody(c, ps)
 			}
@@ -478,8 +483,18 @@ func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 			})
 		})
 		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
+			// 昵称、等级与佩戴徽章同处一行，按这一行的 Gap 留白。等级紧跟
+			// 昵称，和用户资料卡的资料头是同一个位置；概览里的等级统计块
+			// 仍然保留，资料没读到时不画一个假的 Lv.0。
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				display.Text(c, title, display.TextProps{Strong: true, FontSize: 16, Rows: 1})
+				if ps.infoLoaded && u.Level > 0 {
+					lv := ui.Box(c).Padding(2, 6).Radius(999).Background(tk.PrimaryBg).Center()
+					lv.Children(func() {
+						ui.Text(c, fmt.Sprintf("Lv.%d", u.Level)).FontSize(10).Bold().
+							SingleLine().TextColor(tk.Primary)
+					})
+				}
 				// 本人资料头也展示佩戴中的徽章；数据来自已经拉到的
 				// GET /v1/users/:name，切换徽章后由 syncProfileEquippedBadges
 				// 就地更新，不在这里额外请求。
@@ -501,7 +516,7 @@ func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 }
 
 /* ------------------------------------------------------------------
-   Tab 1：概览
+   概览：用户数据看板
 ---------------------------------------------------------------- */
 
 func (a *app) profileOverviewBody(c *ui.Context, ps *profileState) {
@@ -510,7 +525,6 @@ func (a *app) profileOverviewBody(c *ui.Context, ps *profileState) {
 		ui.Column(c).FillWidth().Gap(14).Children(func() {
 			a.profileStatsSection(c, ps)
 			a.profileAttributesSection(c, ps)
-			a.profileAuthEntry(c, ps)
 		})
 	})
 	list.Grow(1).MinHeight(0)
@@ -561,7 +575,7 @@ func profileStatChip(c *ui.Context, label, value string, onClick func()) {
 		if b.Hovered() {
 			b.Background(tk.FillTertiary)
 		}
-		b.Label(label).Tooltip("查看" + label + "名单")
+		b.Label(label)
 		b.OnClick(onClick)
 	}
 	b.Children(func() {
@@ -574,21 +588,11 @@ func profileStatChip(c *ui.Context, label, value string, onClick func()) {
 	})
 }
 
-// profileAuthEntry 是概览页底部的授权管理快速入口：一段说明 + 一个出口。
-func (a *app) profileAuthEntry(c *ui.Context, ps *profileState) {
-	settingsSection(c, "授权管理", func() {
-		display.Text(c, "本应用通过 2Libra OAuth 读取你的账号，只能用你授予的权限范围；"+
-			"随时可以在站点后台撤销，撤销后本应用的接口调用会立即失效。",
-			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 3})
-		a.smallAction(c, "查看当前权限", false, func() { ps.tab = profileTabAccount })
-	})
-}
-
 /* ------------------------------------------------------------------
-   Tab 2：个人简介
+   个人介绍：个人自述
 ---------------------------------------------------------------- */
 
-// profileAboutBody 是「我的 - 个人简介」页：正文、公开状态与编辑入口和
+// profileAboutBody 是「个人介绍」页：正文、公开状态与编辑入口和
 // 用户资料卡共用 aboutBody，本人且正文已读到时右上角出现「编辑介绍」。
 func (a *app) profileAboutBody(c *ui.Context, ps *profileState) {
 	a.aboutBody(c, aboutViewState{
@@ -599,10 +603,10 @@ func (a *app) profileAboutBody(c *ui.Context, ps *profileState) {
 }
 
 /* ------------------------------------------------------------------
-   Tab 3：我的内容（帖子 / 收藏 / 书签 / 合集）
+   内容（发布 / 合集 / 评论）与资产（收藏 / 书签）
 ---------------------------------------------------------------- */
 
-// profileContentUnits 是「共 N <单位>」里的单位，与四个分段一一对应。
+// profileContentUnits 是「共 N <单位>」里的单位，与四份列表状态一一对应。
 var profileContentUnits = []string{"篇", "条", "条", "个"}
 
 // profileContentEmpty 是各分段没有内容时的两行说明。
@@ -654,57 +658,63 @@ func (a *app) profileTopicCollRow(c *ui.Context, ps *profileState) {
 	})
 }
 
-func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
-	kind := ps.contentKind
-	if kind < 0 || kind >= profileContentCount {
-		kind, ps.contentKind = profileContentTopics, profileContentTopics
+// profileListTabs 画「内容 / 资产」页的二级分段行。选中变化在构建时写回 sel，
+// trailing 随后拿到新的分段：右侧的计数与刷新因此总跟着当前选中的那一段。
+func (a *app) profileListTabs(c *ui.Context, key string, labels []string, sel *int, trailing func(int)) {
+	kind := *sel
+	if kind < 0 || kind >= len(labels) {
+		kind, *sel = 0, 0
 	}
-
-	// 点开一个合集时整块换成它里面的帖子，「返回合集列表」再回到这一页的分段。
-	if kind == profileContentCollections && ps.collBrowse != nil {
-		a.collectionTopicsBody(c, ps.collBrowse, a.openProfileItem, func() {
-			ps.collBrowse = nil
-		})
-		return
-	}
-
-	// 分段切换用 Lobe 的 nav.Tabs。每段各有一份列表状态，已经拉过的保留着，
-	// 来回切换不会重新请求。
-	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-		c.Key("profile-content-tabs")
-		items := make([]nav.TabItem, 0, profileContentCount)
-		for _, label := range profileContentLabels {
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		c.Key(key)
+		items := make([]nav.TabItem, 0, len(labels))
+		for _, label := range labels {
 			items = append(items, nav.TabItem{Label: label})
 		}
-		sel := kind
-		nav.Tabs(c, &sel, nav.TabsProps{
+		selected := kind
+		nav.Tabs(c, &selected, nav.TabsProps{
 			Items:   items,
 			Variant: nav.TabsRounded,
 			Size:    lobetheme.Small,
 		}, nil)
-		if sel != kind && sel >= 0 && sel < profileContentCount {
-			kind, ps.contentKind = sel, sel
+		if selected != kind && selected >= 0 && selected < len(labels) {
+			kind, *sel = selected, selected
 		}
 		ui.Spacer(c).Grow(1)
-		st, _ := a.profileActiveContent(ps, kind)
-		if st.loaded {
-			display.Text(c, fmt.Sprintf("共 %d %s", profileContentTotal(st), profileContentUnits[kind]),
-				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
+		if trailing != nil {
+			trailing(kind)
 		}
-		a.smallRefreshButton(c, st.loading, func() { a.reloadProfileActiveContent(kind) })
 	})
+}
 
-	// 合集下拉常驻在「帖子」分段上方；筛选生效时下面整段换成筛选结果。
-	if kind == profileContentTopics {
+// profileListTrailing 画分段行右侧的计数与刷新，stored 指向真正存数据的列表。
+func (a *app) profileListTrailing(c *ui.Context, ps *profileState, stored int) {
+	st, _ := a.profileActiveContent(ps, stored)
+	if st == nil {
+		return
+	}
+	if st.loaded {
+		display.Text(c, fmt.Sprintf("共 %d %s", profileContentTotal(st), profileContentUnits[stored]),
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
+	}
+	a.smallRefreshButton(c, st.loading, func() { a.reloadProfileActiveContent(stored) })
+}
+
+// profileListItems 画分段下方的正文：合集筛选、加载状态、行列表与续拉。
+func (a *app) profileListItems(c *ui.Context, ps *profileState, stored int) {
+	st, spec := a.profileActiveContent(ps, stored)
+	if st == nil {
+		return
+	}
+	// 合集下拉常驻在「发布」分段上方；筛选生效时下面整段换成筛选结果。
+	if stored == profileContentTopics {
 		a.profileTopicCollRow(c, ps)
 	}
-
-	st, spec := a.profileActiveContent(ps, kind)
 	switch {
 	case st.loading && len(st.items) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
 			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Large})
-			display.Text(c, "正在加载"+profileContentLabels[kind]+"…",
+			display.Text(c, "正在加载"+spec.Label+"…",
 				display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 1})
 		})
 		return
@@ -716,21 +726,21 @@ func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
 				SubTitle: st.err,
 				Extra: func() {
 					if action.Button(c, "重试", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
-						a.loadProfileActiveContent(kind, 1)
+						a.loadProfileActiveContent(stored, 1)
 					}
 				},
 			})
 		})
 		return
 	case len(st.items) == 0:
-		empty := profileContentEmpty[kind]
+		empty := profileContentEmpty[stored]
 		// 筛选后的空状态要说清是「这个合集里没有」，别让人以为是没发过帖。
-		if kind == profileContentTopics && ps.topicColl != "" {
+		if stored == profileContentTopics && ps.topicColl != "" {
 			empty = [2]string{"这个合集里没有帖子。", "换一个合集，或者选「全部合集」。"}
 		}
 		ui.Column(c).Grow(1).MinHeight(0).Center().Children(func() {
 			display.Empty(c, display.EmptyProps{
-				Icon:        profileContentEmptyIcons[kind],
+				Icon:        profileContentEmptyIcons[stored],
 				Title:       empty[0],
 				Description: empty[1],
 			})
@@ -745,12 +755,102 @@ func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
 		}
 		return i
 	}
-	ui.List(c, &st.list, len(items), func(i int) {
-		a.profileContentRow(c, kind, items[i])
-	}).Grow(1).MinHeight(0).Gap(8)
-	if spec.Paging == pagingPages {
-		a.profileMoreContentWith(c, kind, st, a.loadProfileActiveContent)
+	// 列表与底部的续拉行同属内容区，行距按 Lobe 列表的 8 给。
+	ui.Column(c).Grow(1).MinHeight(0).Gap(8).Children(func() {
+		ui.List(c, &st.list, len(items), func(i int) {
+			a.profileContentRow(c, stored, items[i])
+		}).Grow(1).MinHeight(0).Gap(8)
+		if spec.Paging == pagingPages {
+			a.profileMoreContentWith(c, stored, st, a.loadProfileActiveContent)
+		}
+	})
+}
+
+// profileListBody 画一个带二级分段与列表正文的页。sel 指向要写的二级分段，
+// storage 把它映射到真正存数据的列表下标；「内容」与「资产」共用这一套画法。
+// trailing / body 非空时替换分段行右侧信息与正文（评论有自己的列表状态）。
+func (a *app) profileListBody(c *ui.Context, ps *profileState,
+	sel *int, labels []string, key string, storage func(int) int, collBrowse bool,
+	trailing func(int), body func()) {
+	kind := *sel
+	if kind < 0 || kind >= len(labels) {
+		kind, *sel = 0, 0
 	}
+	stored := storage(kind)
+
+	// 点开一个合集时整块换成它里面的帖子，「返回合集列表」再回到这一页的分段。
+	if collBrowse && stored == profileContentCollections && ps.collBrowse != nil {
+		a.collectionTopicsBody(c, ps.collBrowse, a.openProfileItem, func() {
+			ps.collBrowse = nil
+		})
+		return
+	}
+
+	// 分段与正文是两层关键部分，各留一段 Lobe 的呼吸间距；原先紧贴在一起，
+	// 分段的下边线看着像连到了下拉框，列表首行也顶着筛选控件。根节点必须拿到
+	// 固定的可视高度（Grow + MinHeight(0)）：只写 FillWidth 的话，列表会按全部
+	// 内容撑高，后面的行画到窗口外面，滚轮也跟着失效。
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Gap(12).Children(func() {
+		a.profileListTabs(c, key, labels, sel, func(kind int) {
+			if trailing != nil {
+				trailing(kind)
+				return
+			}
+			a.profileListTrailing(c, ps, storage(kind))
+		})
+		stored := storage(*sel)
+		if body != nil {
+			body()
+			return
+		}
+		a.profileListItems(c, ps, stored)
+	})
+}
+
+// profileContentBody 是「内容」页：发布、合集与评论共用同一个二级分段条。
+// 评论有自己独立的列表与排序，但和另外两段一样直接画在选中的分段下面，不再
+// 跳进单独的「评论与回复」页面——那样分段条会消失，回不去另外两段。
+func (a *app) profileContentBody(c *ui.Context, ps *profileState) {
+	a.profileListBody(c, ps, &ps.contentKind, profileContentLabels[:],
+		"profile-content-tabs", profileContentStorage, true,
+		func(kind int) {
+			if kind == profileContentComments {
+				a.profileReplyTrailing(c, ps)
+				return
+			}
+			a.profileListTrailing(c, ps, profileContentStorage(kind))
+		},
+		func() {
+			if ps.contentKind == profileContentComments {
+				a.profileRepliesBody(c, ps)
+				return
+			}
+			a.profileListItems(c, ps, profileContentStorage(ps.contentKind))
+		})
+}
+
+// profileReplyTrailing 画「评论」分段右侧的计数与刷新：评论有独立的回复状态，
+// 不在 profileContent 那份列表里。
+func (a *app) profileReplyTrailing(c *ui.Context, ps *profileState) {
+	if ps.replyLoaded {
+		display.Text(c, fmt.Sprintf("共 %d 条", ps.replyTotal),
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
+	}
+	a.smallRefreshButton(c, ps.replyLoading, func() {
+		if name := a.auth.username(); name != "" {
+			a.loadProfileReplies(name, 1)
+		} else {
+			// 用户名还没读到时先重读账号资料，下一次帧里再补上评论请求。
+			a.reloadProfile()
+		}
+	})
+}
+
+// profileAssetsBody 是「资产」页：收藏与书签。两段都走通用列表，只是数据
+// 分别来自 /v1/me/favorites 与 /v1/me/bookmarks。
+func (a *app) profileAssetsBody(c *ui.Context, ps *profileState) {
+	a.profileListBody(c, ps, &ps.assetKind, profileAssetLabels[:],
+		"profile-asset-tabs", profileAssetStorage, false, nil, nil)
 }
 
 // profileContentTotal 是「共 N」的数字：优先用服务端给的总数，没给时退回
@@ -779,7 +879,7 @@ func (a *app) profileContentRow(c *ui.Context, kind int, it Item) {
 	}
 }
 
-// profileBookmarkRow 是「我的内容 - 书签」的一行：整行打开评论，右侧一枚
+// profileBookmarkRow 是「资产 - 书签」的一行：整行打开评论，右侧一枚
 // 移除按钮。
 func (a *app) profileBookmarkRow(c *ui.Context, it Item) {
 	busy := a.profile != nil && a.profile.bookmarkBusy == it.CommentID
@@ -805,9 +905,9 @@ func (a *app) profileBookmarkRow(c *ui.Context, it Item) {
 	})
 }
 
-// profileCollectionRow 是「我的内容 - 合集」的一行：整行点开合集里的帖子，
-// 右侧两枚图标按钮分别改名与删除。合集在站点上只有创建者能改，而这一页
-// 本来就只有「我的」，所以不需要再判断归属。
+// profileCollectionRow 是「内容 - 合集」的一行：整行点开合集里的帖子，
+// 右侧两枚图标按钮分别改名与删除。合集在站点上只有创建者能改，这里列的
+// 本来就是当前账号创建的，所以不需要再判断归属。
 func (a *app) profileCollectionRow(c *ui.Context, it Item) {
 	ps := a.profile
 	if ps == nil {
@@ -878,25 +978,13 @@ func (a *app) profileMoreContentWith(c *ui.Context, kind int, st *tabState, load
 }
 
 /* ------------------------------------------------------------------
-   Tab 4：我的回复
+   内容 - 评论：我发表过的评论与回复
 ---------------------------------------------------------------- */
 
+// profileRepliesBody 只画评论分段选中的正文：二级分段条与右侧的计数、刷新由
+// profileListBody / profileReplyTrailing 提供，这里不再自己占一行标题。
 func (a *app) profileRepliesBody(c *ui.Context, ps *profileState) {
 	name := a.auth.username()
-	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-		display.Text(c, "我的回复", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
-		if ps.replyLoaded {
-			display.Text(c, fmt.Sprintf("共 %d 条", ps.replyTotal),
-				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
-		}
-		ui.Spacer(c).Grow(1)
-		a.smallRefreshButton(c, ps.replyLoading, func() {
-			if name != "" {
-				a.loadProfileReplies(name, 1)
-			}
-		})
-	})
-
 	if name == "" {
 		ui.Column(c).Grow(1).MinHeight(0).Center().Children(func() {
 			display.Empty(c, display.EmptyProps{
@@ -950,39 +1038,15 @@ func (a *app) profileRepliesBody(c *ui.Context, ps *profileState) {
 	ui.List(c, &ps.replyList, len(items), func(i int) {
 		a.profileReplyRow(c, items[i])
 	}).Grow(1).MinHeight(0).Gap(8)
-	a.profileMoreReplies(c, ps, name)
-}
-
-// profileMoreReplies 是回复列表底部的续拉行：还有下一页时给按钮，续拉失败
-// 时给出原因并可重试，已有内容保持不动。
-func (a *app) profileMoreReplies(c *ui.Context, ps *profileState, name string) {
-	tk := lobetheme.TokensOf(c)
-	switch {
-	case ps.replyMoreErr != "":
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			display.Text(c, "加载更多失败："+ps.replyMoreErr, display.TextProps{
-				Type: display.TextDanger, FontSize: 11, Rows: 2,
-			}).Grow(1)
-			a.smallAction(c, "重试", false, func() { a.loadProfileReplies(name, ps.replyPage) })
-		})
-	case ps.replyLoading:
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			lobeSpin(c, feedback.SpinProps{Size: lobetheme.Small})
-			display.Text(c, "正在加载更多…", display.TextProps{
-				Type: display.TextSecondary, FontSize: 11, Rows: 1,
-			})
-		})
-	case !ps.replyNoMore:
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			b := action.Button(c, "加载更多", action.ButtonProps{
-				Size: lobetheme.Small, Variant: action.Default,
-			})
-			b.TextColor(tk.Primary)
-			if b.Clicked() {
-				a.loadProfileReplies(name, ps.replyPage+1)
-			}
-			ui.Spacer(c).Grow(1)
-		})
+	// 续拉状态沿用信息流的扁平底栏：只有加载中与失败才出现，不画分割线，
+	// 也没有「加载更多」按钮——滚到底自动拉下一页。失败后停在这里等重试，
+	// 避免每次重建都再发一次注定失败的请求。
+	a.loadMoreFooter(c, ps.replyMoreErr, ps.replyLoading, func() {
+		a.loadProfileReplies(name, ps.replyPage)
+	})
+	if a.autoLoad && ps.replyLoaded && !ps.replyLoading && ps.replyMoreErr == "" &&
+		!ps.replyNoMore && len(ps.replies) > 0 && ps.replyList.AtEnd() {
+		a.loadProfileReplies(name, ps.replyPage+1)
 	}
 }
 
@@ -1012,12 +1076,10 @@ func (a *app) profileReplyRow(c *ui.Context, it Item) {
 	})
 	row.Label(it.Title)
 	if it.ShortID != "" {
-		row.Tooltip("打开原帖并定位这条回复")
 		if row.Clicked() {
 			a.openProfileDetail(it)
 		}
 	} else if it.URL != "" {
-		row.Tooltip("在浏览器里打开")
 		if row.Clicked() {
 			a.openExternal(it.URL)
 		}
@@ -1025,8 +1087,42 @@ func (a *app) profileReplyRow(c *ui.Context, it Item) {
 }
 
 /* ------------------------------------------------------------------
-   Tab 5：权限与账号
+   Tab 6：设置（账号与权限 / 屏蔽设置）
 ---------------------------------------------------------------- */
+
+// profileSettingsBody 是「设置」页的二级分段。账号与权限、屏蔽设置各自沿用
+// 原来的页面，切换只换正文；进入屏蔽设置时的名单强制刷新由窗口统一处理。
+func (a *app) profileSettingsBody(c *ui.Context, ps *profileState) {
+	kind := ps.settingsKind
+	if kind < 0 || kind >= profileSettingsSectionCount {
+		kind, ps.settingsKind = profileSettingsAccount, profileSettingsAccount
+	}
+	ui.Column(c).Fill().Children(func() {
+		ui.Row(c).FillWidth().Padding(0, 0, 8, 0).Children(func() {
+			c.Key("profile-settings-tabs")
+			items := make([]nav.TabItem, 0, profileSettingsSectionCount)
+			for _, label := range profileSettingsLabels {
+				items = append(items, nav.TabItem{Label: label})
+			}
+			sel := kind
+			nav.Tabs(c, &sel, nav.TabsProps{
+				Items:   items,
+				Variant: nav.TabsRounded,
+				Size:    lobetheme.Small,
+			}, nil)
+			if sel != kind && sel >= 0 && sel < profileSettingsSectionCount {
+				kind, ps.settingsKind = sel, sel
+			}
+		})
+		ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
+			if kind == profileSettingsFilter {
+				a.profileFilterBody(c, ps)
+			} else {
+				a.profileAccountBody(c, ps)
+			}
+		})
+	})
+}
 
 func (a *app) profileAccountBody(c *ui.Context, ps *profileState) {
 	u := ps.user
@@ -1040,7 +1136,6 @@ func (a *app) profileAccountBody(c *ui.Context, ps *profileState) {
 				a.profileAccountRow(c, "粉丝 / 关注",
 					profileFollowText(ps.infoLoaded, u.Followers, u.Following))
 			})
-			layout.Divider(c, layout.DividerProps{})
 
 			settingsSection(c, "授权范围", func() {
 				scopes := a.auth.scopes()
@@ -1061,7 +1156,6 @@ func (a *app) profileAccountBody(c *ui.Context, ps *profileState) {
 					}
 				}
 			})
-			layout.Divider(c, layout.DividerProps{})
 
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				logout := action.Button(c, "退出登录", action.ButtonProps{
@@ -1130,7 +1224,7 @@ func profileFollowText(known bool, followers, following int) string {
    打开正文与切换主窗口
 ---------------------------------------------------------------- */
 
-// openProfileItem 是「我的」窗口里列表行的打开动作：站内帖子 / 评论回主窗口
+// openProfileItem 是「个人中心」窗口里列表行的打开动作：站内帖子 / 评论回主窗口
 // 正文（本窗口留着，读完还能接着看），其余交给系统浏览器。
 func (a *app) openProfileItem(it Item) {
 	switch {
@@ -1141,8 +1235,8 @@ func (a *app) openProfileItem(it Item) {
 	}
 }
 
-// openProfileDetail 从「我的」窗口打开一篇帖子或一条回复：把主窗口带到前台并
-// 换到详情页，「我的」窗口本身留着不关 —— 读完后还能回到原来的标签页。
+// openProfileDetail 从「个人中心」窗口打开一篇帖子或一条回复：把主窗口带到前台并
+// 换到详情页，「个人中心」窗口本身留着不关 —— 读完后还能回到原来的标签页。
 // 评论行会带上 CommentID，正文里据此定位楼层。
 func (a *app) openProfileDetail(it Item) {
 	if it.ShortID == "" {
@@ -1158,7 +1252,7 @@ func (a *app) openProfileDetail(it Item) {
    合集：打开内容、改名、删除
 --------------------------------------------------------------- */
 
-// openProfileCollection 在「我的内容 - 合集」里点开一个合集：整块换成它里面
+// openProfileCollection 在「内容 - 合集」里点开一个合集：整块换成它里面
 // 的帖子（collection_browse.go），返回时再回到合集列表。
 func (a *app) openProfileCollection(it Item) {
 	ps := a.profile

@@ -11,7 +11,6 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"github.com/lobehub/lobe-mygo/pkg/field"
 	"github.com/lobehub/lobe-mygo/pkg/layout"
-	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
@@ -58,10 +57,6 @@ func contentFilterEncodedBytes(d contentFilterDTO) int {
 func (a *app) profileFilterBody(c *ui.Context, ps *profileState) {
 	list := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
 		ui.Column(c).FillWidth().Gap(14).Children(func() {
-			// 改名失效与两端同源这两件事不写用户不会知道，顶部说明是必要的。
-			display.Text(c, "与网页端「设置 → 内容屏蔽」是同一份名单；对方改名后需要重新添加。",
-				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
-
 			s := a.contentFilter
 			if !a.auth.loggedIn() {
 				display.Text(c, "登录后管理屏蔽名单", display.TextProps{
@@ -249,17 +244,6 @@ func (a *app) resetFilterDraft() {
 	s.dirty = false
 	s.saveErr = ""
 	s.fieldErrs = [3]string{}
-}
-
-// profileMenuFilterRow 是账号菜单里的「内容屏蔽」直达入口：右侧只在有名单
-// 时显示总数，没有就不占位。
-func (a *app) profileMenuFilterRow(c *ui.Context) {
-	tk := lobetheme.TokensOf(c)
-	a.profileMenuRow(c, lucide.EyeOff(), "内容屏蔽", "内容屏蔽", "管理屏蔽的用户、节点与关键词", func() {
-		if n := a.filterCount(); n > 0 {
-			ui.Text(c, fmt.Sprintf("%d 项", n)).FontSize(11).TextColor(tk.TextSecondary)
-		}
-	}, func() { a.showProfileTab(profileTabFilter) })
 }
 
 // userCardBlockButton 画资料头右侧的「屏蔽 / 已屏蔽」按钮，紧跟关注按钮。

@@ -388,14 +388,6 @@ func (a *app) filterKeywordHit(text string) (string, bool) {
 	return r.Value, ok
 }
 
-func (a *app) filterCount() int {
-	f := a.filterSnapshot()
-	if f == nil {
-		return 0
-	}
-	return len(f.raw.BlockedUsers) + len(f.raw.BlockedNodes) + len(f.raw.Keywords)
-}
-
 func (a *app) commentBlocked(author, content string, deleted bool) (blockReason, bool) {
 	return a.filterSnapshot().matchComment(author, content, deleted)
 }

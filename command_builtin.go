@@ -74,8 +74,8 @@ func (a *app) registerBuiltinCommands() {
 		Run: func() { a.showFollows(0) },
 	})
 	add(commandDef{
-		ID: "profile", Title: "我的", Category: commandCategoryAccount,
-		Hint: "打开个人资料窗口", Keywords: "me wode profile",
+		ID: "profile", Title: "个人中心", Category: commandCategoryAccount,
+		Hint: "打开个人中心", Keywords: "me wode profile center",
 		Icon: lucide.UserRound(), DefaultShortcut: cmdShiftKey(ui.KeyP), Run: a.showProfile,
 	})
 	add(commandDef{
@@ -90,14 +90,14 @@ func (a *app) registerBuiltinCommands() {
 			if a.profile == nil {
 				a.profile = newProfileState()
 			}
-			a.profile.contentKind = profileContentCollections
+			a.profile.contentKind = profileContentCollection
 			a.showProfileTab(profileTabContent)
 		},
 	})
 	add(commandDef{
 		ID: "contentFilter", Title: "内容屏蔽", Category: commandCategoryAccount,
 		Hint: "管理不想看到的内容", Keywords: "filter pingbi block shield",
-		Icon: lucide.EyeOff(), Run: func() { a.showProfileTab(profileTabFilter) },
+		Icon: lucide.EyeOff(), Run: func() { a.showProfileSettings(profileSettingsFilter) },
 	})
 	add(commandDef{
 		ID: "coins", Title: "金币", Category: commandCategoryAccount,

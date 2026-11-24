@@ -91,8 +91,8 @@ func TestSidebarTimelineBelongsToBrowse(t *testing.T) {
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 
-	if _, ok := tt.Find("我的"); ok {
-		t.Errorf("侧边栏不该再有「我的」分组：%q", tt.Texts())
+	if _, ok := tt.Find("个人中心"); ok {
+		t.Errorf("侧边栏不该再有「个人中心」入口：%q", tt.Texts())
 	}
 	timeline, ok := tt.Find("动态")
 	if !ok {

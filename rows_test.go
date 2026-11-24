@@ -126,8 +126,8 @@ func TestRowHidesMissingAuthor(t *testing.T) {
 		t.Fatalf("没有作者的评论行不该编一个作者：%+v", bookmark.Extra)
 	}
 	b := profileWindowApp(t)
-	b.profile.tab = profileTabContent
-	b.profile.contentKind = profileContentBookmarks
+	b.profile.tab = profileTabAssets
+	b.profile.assetKind = profileAssetBookmarks
 	st := &b.profile.content[profileContentBookmarks]
 	st.loaded, st.items = true, []Item{bookmark}
 	bt := ui.NewTester(b.profileWindowView, profileWindowWidth, profileWindowHeight)

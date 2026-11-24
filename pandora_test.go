@@ -518,7 +518,7 @@ func TestPandoraTitleBarEntry(t *testing.T) {
 	a := pandoraTestApp(t, false)
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
-	if _, ok := tt.Find("我的"); !ok {
+	if _, ok := tt.Find("个人中心"); !ok {
 		t.Fatalf("登录后标题栏没有账号菜单：%q", tt.Texts())
 	}
 	opened := 0

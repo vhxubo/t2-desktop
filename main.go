@@ -2387,7 +2387,7 @@ func (a *app) body(c *ui.Context) {
 						Description: "当前列表的条目都在你的屏蔽名单里。",
 						Action: func() {
 							if action.Button(c, "管理屏蔽名单", action.ButtonProps{}).Clicked() {
-								a.showProfileTab(profileTabFilter)
+								a.showProfileSettings(profileSettingsFilter)
 							}
 						},
 					})
