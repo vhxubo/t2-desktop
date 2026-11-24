@@ -3280,14 +3280,17 @@ func (a *app) replyFieldActions(c *ui.Context, d *detailState, detailPage bool) 
 		// 独立写评论窗口不在这里禁，空草稿的弱化按钮仍可点（submitReply 的
 		// 空判断兜着）。
 		sendDisabled := d.posting || (detailPage && empty)
+		// 两种形态用同一份内边距：PrimaryButton 默认上下更厚，打字瞬间
+		// 按钮会长高 4px，把展开态的发送栏和整条输入栏一起顶上去。
+		const sendPadY, sendPadX float32 = 4, 6
 		send := ui.Button(c, "").
 			Background(ui.Transparent).
 			Border(0, t.Border).
-			Padding(4, 6).
+			Padding(sendPadY, sendPadX).
 			Radius(8)
 		ink := t.TextMuted
 		if !empty {
-			send = ui.PrimaryButton(c, "").Radius(8)
+			send = ui.PrimaryButton(c, "").Radius(8).Padding(sendPadY, sendPadX)
 			ink = t.AccentText
 		}
 		if send.Hovered() && !sendDisabled {

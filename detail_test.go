@@ -1463,6 +1463,52 @@ func TestReplyComposerSendIsQuietUntilTyped(t *testing.T) {
 	}
 }
 
+// 打第一个字时发送按钮从弱化图标换成实心按钮，两种形态必须占同一份高度；
+// 否则展开态底部发送栏被顶高，整条输入栏和上面的评论跟着上下跳。
+func TestReplyComposerSendKeepsHeightWhileTyping(t *testing.T) {
+	check := func(t *testing.T, expanded bool) {
+		t.Helper()
+		a := detailAppWithReplies(t)
+		tt := ui.NewTester(a.view, 1100, 760)
+		tt.Frame()
+		if expanded {
+			if err := tt.Click("写评论"); err != nil {
+				t.Fatalf("展开评论输入框失败：%v", err)
+			}
+			tt.Frame()
+		}
+		rects := func(tag string) (ui.Rect, ui.Rect) {
+			t.Helper()
+			send, ok := tt.Find("发送")
+			if !ok {
+				t.Fatalf("%s：找不到发送按钮", tag)
+			}
+			bar, ok := tt.Find("评论输入栏")
+			if !ok {
+				t.Fatalf("%s：找不到评论输入栏", tag)
+			}
+			return send, bar
+		}
+		emptySend, emptyBar := rects("空草稿")
+		a.detail.draft = "有内容了"
+		tt.Frame()
+		typedSend, typedBar := rects("有草稿")
+		state := "折叠态"
+		if expanded {
+			state = "展开态"
+		}
+		if emptySend.H != typedSend.H {
+			t.Errorf("%s：输入前后发送按钮高度不一致：%.1f -> %.1f", state, emptySend.H, typedSend.H)
+		}
+		// 折叠态有草稿本就会展开，只有已经展开时输入栏高度才该纹丝不动。
+		if expanded && emptyBar.H != typedBar.H {
+			t.Errorf("%s：输入前后输入栏高度不一致：%.1f -> %.1f", state, emptyBar.H, typedBar.H)
+		}
+	}
+	t.Run("collapsed", func(t *testing.T) { check(t, false) })
+	t.Run("expanded", func(t *testing.T) { check(t, true) })
+}
+
 // 详情页草稿为空时发送按钮禁用：折叠态只是写评论的入口，展开态也没有内容
 // 可发，点了都不该弹「评论内容不能为空」。有草稿后按钮恢复可点；独立写评论
 // 窗口不受影响，空草稿的弱化按钮仍可点。
