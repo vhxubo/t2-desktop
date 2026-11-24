@@ -10,7 +10,6 @@ git init -q -b main
 git config user.name '测试'
 git config user.email fixture@example.invalid
 git config core.autocrlf false
-git config core.hooksPath .githooks
 mkdir -p .githooks scripts
 cp "$root/.githooks/pre-push" .githooks/
 chmod +x .githooks/pre-push
@@ -35,8 +34,7 @@ failing=$(git rev-parse HEAD)
 printf 'pass\n' > result
 
 run_hook() {
-  printf '%s\n' "$@" > push-input
-  git hook run --to-stdin=push-input pre-push -- origin fixture 2>&1
+  printf '%s\n' "$@" | .githooks/pre-push origin fixture 2>&1
 }
 
 expect_failure() {

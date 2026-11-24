@@ -203,6 +203,28 @@ gofmt -l .                      # 不应输出任何文件
 `Image` 断言布局与像素。toast 只在构建期发出，断言前要 `tt.Frame()` 让窗口领走
 队列里的提示，再用 `tt.HasText(...)` / `tt.Advance(...)` 验证文案与自动消失。
 
+### Windows 实机截图
+
+在已解锁的 Windows 桌面上，使用同一 Windows 用户先登录 T2 Desktop，再从仓库根目录运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\capture-windows.ps1
+```
+
+脚本复用已运行的窗口，或自动启动本机安装的程序，不读取或复制登录令牌。多账号时用
+`-Account '昵称'` 选定主窗口；便携版用 `-ExePath 'D:\Apps\t2-desktop.exe'` 指定程序。
+PNG 和 `manifest.json` 默认直接写到仓库的 `docs/images`，不受运行目录影响。
+同名文件会更新，未重新捕获的旧 PNG 会保留；以本次 `manifest.json` 为准。
+可用 `-OutputDirectory` 改位置。运行时不要同时操作应用，也不要把截图当作界面开发依据。
+
+脚本遍历主导航、设置、通知、搜索、个人中心、关注与粉丝、金币、编辑器等常用界面。
+正文、评论、用户资料和媒体预览依赖真实数据；可用 `-TopicTitle '标题前缀'` 选择首页帖子。
+没有数据、权限不足或安装版尚无对应入口时，清单会记录跳过原因；`-Strict` 让任何跳过都返回失败。
+难以安全触发的状态可先手动打开，再用 `-CurrentWindowsOnly` 捕获当前窗口而不自动导航。
+
+脚本不提交发帖、评论、交易或设置变更；应用仍会照常运行自己的启动任务，并可能记录帖子浏览和命令使用。
+截图可能包含账号、通知、草稿、余额或网络日志等隐私信息，分享前请检查并脱敏，不要提交到仓库。
+
 ### 约定
 
 - **提交信息只用英文**，遵循 Conventional Commits（`feat` / `fix` / `refactor` /
