@@ -123,7 +123,7 @@ func TestUserCardFollowScopeErrorOpensAuthorization(t *testing.T) {
 
 	tt := ui.NewTester(a.userCardWindowView, userCardWindowWidth, userCardWindowHeight)
 	tt.Frame()
-	if err := tt.Click("关注他"); err != nil {
+	if err := tt.Click("关注ta"); err != nil {
 		t.Fatalf("点击关注失败：%v", err)
 	}
 	waitAuthGate(t, a)
@@ -132,7 +132,7 @@ func TestUserCardFollowScopeErrorOpensAuthorization(t *testing.T) {
 	}
 }
 
-// 未登录点击资料卡上的「关注他」进入全局授权弹窗，由用户自己重新点关注。
+// 未登录点击资料卡上的「关注ta」进入全局授权弹窗，由用户自己重新点关注。
 func TestUserCardFollowAnonymousRequestsLogin(t *testing.T) {
 	a := testApp(t)
 	a.userCard = newUserCardState("jimmy")
@@ -140,7 +140,7 @@ func TestUserCardFollowAnonymousRequestsLogin(t *testing.T) {
 
 	tt := ui.NewTester(a.userCardWindowView, userCardWindowWidth, userCardWindowHeight)
 	tt.Frame()
-	if err := tt.Click("关注他"); err != nil {
+	if err := tt.Click("关注ta"); err != nil {
 		t.Fatalf("点击关注失败：%v", err)
 	}
 	if !a.authGate.open {

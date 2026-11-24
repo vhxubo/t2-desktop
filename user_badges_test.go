@@ -74,7 +74,7 @@ func TestFetchUserBadges(t *testing.T) {
 	}
 }
 
-// 切到「他的徽章」后真正拉两条端点，并把佩戴状态合并回徽章墙。
+// 切到「ta的徽章」后真正拉两条端点，并把佩戴状态合并回徽章墙。
 func TestUserCardLoadsBadges(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -107,7 +107,7 @@ func TestUserCardLoadsBadges(t *testing.T) {
 	}
 }
 
-// 「他的徽章」标签页：只读卡片显示名字、等级 / 持有比例、说明与获得日期，
+// 「ta的徽章」标签页：只读卡片显示名字、等级 / 持有比例、说明与获得日期，
 // 佩戴中的标出来，但没有佩戴按钮。
 func TestUserCardBadgesBody(t *testing.T) {
 	a := userCardTestApp(t)
@@ -127,7 +127,7 @@ func TestUserCardBadgesBody(t *testing.T) {
 	tt := ui.NewTester(a.userCardWindowView, userCardWindowWidth, userCardWindowHeight)
 	tt.Frame()
 	for _, want := range []string{
-		"他的徽章", "共 1 枚 · 佩戴中 1 枚", "早起鸟", "佩戴中",
+		"ta的徽章", "共 1 枚 · 佩戴中 1 枚", "早起鸟", "佩戴中",
 		"Lv.2 · 12.30% 的用户拥有", "连续早起签到的社区徽章", "获得 2026-01-01",
 	} {
 		if !tt.HasText(want) {
@@ -163,12 +163,12 @@ func TestUserCardBadgesStates(t *testing.T) {
 	}
 }
 
-// 五个标签页都能点到；切到「他的徽章」后状态里的 tab 要跟着走。
+// 五个标签页都能点到；切到「ta的徽章」后状态里的 tab 要跟着走。
 func TestUserCardBadgeTabClick(t *testing.T) {
 	a := userCardTestApp(t)
 	tt := ui.NewTester(a.userCardWindowView, userCardWindowWidth, userCardWindowHeight)
 	tt.Frame()
-	// 五个页签都要留在窗口里：新增的「他的徽章」不能把「他的合集」挤出去。
+	// 五个页签都要留在窗口里：新增的「ta的徽章」不能把「ta的合集」挤出去。
 	for _, label := range userCardTabLabels {
 		r, ok := tt.Find(label)
 		if !ok {
@@ -178,8 +178,8 @@ func TestUserCardBadgeTabClick(t *testing.T) {
 			t.Errorf("页签 %q 超出窗口：x=%.0f 宽=%.0f", label, r.X, r.W)
 		}
 	}
-	if err := tt.Click("他的徽章"); err != nil {
-		t.Fatalf("点「他的徽章」失败：%v", err)
+	if err := tt.Click("ta的徽章"); err != nil {
+		t.Fatalf("点「ta的徽章」失败：%v", err)
 	}
 	if a.userCard.tab != userCardTabBadges {
 		t.Errorf("点击后 tab = %d，期望徽章页 %d", a.userCard.tab, userCardTabBadges)

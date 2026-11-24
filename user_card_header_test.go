@@ -44,7 +44,7 @@ func TestUserCardHeaderIsCompact(t *testing.T) {
 	}
 
 	// 关注按钮与昵称在资料头同一行，不再自己占一行。
-	follow, ok := tt.Find("关注他")
+	follow, ok := tt.Find("关注ta")
 	if !ok {
 		t.Fatalf("资料头没有关注按钮：%q", tt.Texts())
 	}
@@ -97,7 +97,7 @@ func TestUserCardHeaderWithoutFollowKeepsDensity(t *testing.T) {
 	tt := ui.NewTester(a.userCardWindowView, userCardWindowWidth, userCardWindowHeight)
 	tt.Frame()
 
-	if tt.HasText("关注他") || tt.HasText("已关注") {
+	if tt.HasText("关注ta") || tt.HasText("已关注") {
 		t.Fatalf("自己的资料卡不该出现关注按钮：%q", tt.Texts())
 	}
 	if !tt.HasText("爱丽丝") {
@@ -125,7 +125,7 @@ func TestUserCardHeaderNarrowWindow(t *testing.T) {
 	tt := ui.NewTester(a.userCardWindowView, userCardMinWidth, userCardMinHeight)
 	tt.Frame()
 
-	follow, ok := tt.Find("关注他")
+	follow, ok := tt.Find("关注ta")
 	if !ok {
 		t.Fatalf("窄窗口下没有关注按钮：%q", tt.Texts())
 	}

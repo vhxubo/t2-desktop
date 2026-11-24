@@ -232,7 +232,7 @@ func TestProfileCollectionBrowseTopics(t *testing.T) {
 	}
 }
 
-// 资料卡的「他的合集」分段：按文档路径读公开合集，点开一项就换成合集里的
+// 资料卡的「ta的合集」分段：按文档路径读公开合集，点开一项就换成合集里的
 // 帖子，返回时回到合集列表。
 func TestUserCardCollectionsTab(t *testing.T) {
 	var mu sync.Mutex
@@ -245,7 +245,7 @@ func TestUserCardCollectionsTab(t *testing.T) {
 		case r.URL.Path == "/api/v1/users/alice/collections":
 			_, _ = fmt.Fprint(w, envelopeJSON(`[{"id":"c9","name":"爱丽丝的合集","topic_count":4}]`))
 		case r.URL.Path == "/api/v1/collections/c9/topics":
-			_, _ = fmt.Fprint(w, envelopeJSON(`{"items":[{"short_id":"T9","title":"她的帖子"}]}`))
+			_, _ = fmt.Fprint(w, envelopeJSON(`{"items":[{"short_id":"T9","title":"ta的帖子"}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -270,7 +270,7 @@ func TestUserCardCollectionsTab(t *testing.T) {
 	cs := a.userCard
 	tt := ui.NewTester(a.userCardWindowView, userCardWindowWidth, userCardWindowHeight)
 	tt.Frame()
-	for _, want := range []string{"他的合集", "爱丽丝的合集", "4 个帖子"} {
+	for _, want := range []string{"ta的合集", "爱丽丝的合集", "4 个帖子"} {
 		if !tt.HasText(want) {
 			t.Errorf("资料卡缺少 %q：%q", want, tt.Texts())
 		}
@@ -281,7 +281,7 @@ func TestUserCardCollectionsTab(t *testing.T) {
 		return cs.collBrowse != nil && cs.collBrowse.list.loaded
 	}, "合集里的帖子没有加载出来")
 	tt.Frame()
-	for _, want := range []string{"合集 · 爱丽丝的合集", "by @alice", "她的帖子"} {
+	for _, want := range []string{"合集 · 爱丽丝的合集", "by @alice", "ta的帖子"} {
 		if !tt.HasText(want) {
 			t.Errorf("合集浏览视图缺少 %q：%q", want, tt.Texts())
 		}

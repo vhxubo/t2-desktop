@@ -55,7 +55,7 @@ const (
 
 // 资料卡里的标签页。第一个是个人介绍（GET /v1/users/:name/about 的正文），
 // 接着两个是列表（各自对应一个端点），然后是站点六项属性的雷达图（数据
-// 来自 about 响应里的 achievement_count）、这个人的徽章墙，最后是他的公开
+// 来自 about 响应里的 achievement_count）、这个人的徽章墙，最后是ta的公开
 // 合集（点开一个就换成合集里的帖子，见 collection_browse.go）。
 const (
 	userCardTabAbout = iota
@@ -66,7 +66,7 @@ const (
 	userCardTabCollections
 )
 
-var userCardTabLabels = []string{"个人简介", "他发布的主题", "他的最新回复", "属性雷达", "他的徽章", "他的合集"}
+var userCardTabLabels = []string{"个人简介", "ta发布的主题", "ta的最新回复", "属性雷达", "ta的徽章", "ta的合集"}
 
 // userCardListKind 区分资料卡里的三个列表：它们只有端点和行渲染不同。
 type userCardListKind int
@@ -270,7 +270,7 @@ var aboutPlaceholder = regexp.MustCompile(`\{\{([A-Za-z0-9_]+)\}\}`)
 
 // expandAboutStats 把 {{KEY}} 换成统计值。键不区分大小写：正文写
 // {{COINS}}，响应里的 achievement_count 是 coins。表里没有的占位符原样
-// 保留 —— 宁可让用户看到一个占位符，也不把他写的内容悄悄删掉。
+// 保留 —— 宁可让用户看到一个占位符，也不把ta写的内容悄悄删掉。
 func expandAboutStats(src string, stats map[string]string) string {
 	if src == "" || len(stats) == 0 {
 		return src
@@ -380,9 +380,9 @@ type userCardState struct {
 	topicCollDraft string
 	topicCollSt    userCardList
 	collNames      collNamesState
-	// collections 是这个人的公开合集；只有切到「他的合集」才拉一次。
+	// collections 是这个人的公开合集；只有切到「ta的合集」才拉一次。
 	collections userCardList
-	// badges 是这个人的完整徽章墙；只有切到「他的徽章」才拉。
+	// badges 是这个人的完整徽章墙；只有切到「ta的徽章」才拉。
 	badges userCardBadges
 	// collBrowse 非空表示点开了其中一个合集，正在看它里面的帖子。
 	collBrowse *collectionBrowse
@@ -886,7 +886,7 @@ func (a *app) toggleUserCardFollow(follow bool) {
 		func() bool { return a.userCard == cs })
 }
 
-// userCardFollowing 报告关注按钮该显示「已关注」还是「关注他」。只认属于
+// userCardFollowing 报告关注按钮该显示「已关注」还是「关注ta」。只认属于
 // 当前登录账号的状态：换账号后、新状态回来之前按未关注展示。
 func (a *app) userCardFollowing() bool {
 	cs := a.userCard

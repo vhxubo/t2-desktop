@@ -204,7 +204,7 @@ type accountProfile struct {
 	Role      string
 	Badges    []badgeInfo
 	HasReadme bool
-	// IsFollowing 表示当前登录用户是否已关注他；FollowKnown 说明响应里到底
+	// IsFollowing 表示当前登录用户是否已关注ta；FollowKnown 说明响应里到底
 	// 带没带这个字段 —— 匿名响应不带，不能当成「未关注」。
 	IsFollowing bool
 	FollowKnown bool

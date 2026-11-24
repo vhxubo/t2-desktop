@@ -104,7 +104,7 @@ type topicDetail struct {
 	CollectionNext *collectionNeighbor
 	// AccessGuard* 是可见性门槛（登录 / 等级 / 属性）。读接口的稳定字段表里
 	// 没有它，但线上详情会带；GuardKnown 区分「确实不限制」与「响应没有这个
-	// 字段」：编辑窗口在后者只能让作者重新选，不能替他清掉已有门槛。
+	// 字段」：编辑窗口在后者只能让作者重新选，不能替ta清掉已有门槛。
 	GuardType      string
 	GuardLevel     int
 	GuardAttr      string

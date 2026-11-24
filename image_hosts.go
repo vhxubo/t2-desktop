@@ -258,7 +258,7 @@ func defaultImageHostConfig() imageHostConfig {
 var retiredImageHostIDs = map[string]bool{"0x0": true, "uguu": true}
 
 // normalizeImageHosts 把磁盘上读回的配置补全成当前版本认识的样子：
-// 内置项按 ID 补齐（用户改过的内置项保留他的修改），自定义项原样保留，
+// 内置项按 ID 补齐（用户改过的内置项保留ta的修改），自定义项原样保留，
 // 上限与激活项都夹到合法范围。损坏的缓存不该让编辑器拿不到任何图床。
 func normalizeImageHosts(cfg imageHostConfig) imageHostConfig {
 	defaults := defaultImageHostConfig()

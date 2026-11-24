@@ -48,7 +48,7 @@ func TestAboutWindowShowsAppIcon(t *testing.T) {
 }
 
 // 开发者信息精简成四个蓝色可点击短文字，横向并排且不展示具体链接；致谢
-// 名单里的 Jimmy 是一枚显眼的胶囊按钮，点一下打开他的 2Libra 主页。
+// 名单里的 Jimmy 是一枚显眼的胶囊按钮，点一下打开ta的 2Libra 主页。
 func TestAboutWindowHasCompactLinksAndThanks(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.aboutWindowView, aboutWindowWidth, aboutWindowHeight)

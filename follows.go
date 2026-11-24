@@ -44,7 +44,7 @@ var followsTabLabels = [followsKindCount]string{"我关注的人", "关注我的
 // followsEmptyText 是名单为空时的两行说明。
 var followsEmptyText = [followsKindCount][2]string{
 	{"还没有关注任何人。", "在用户资料卡上点「关注」，这里就会出现。"},
-	{"还没有人关注你。", "别人关注你之后，这里会列出他们。"},
+	{"还没有人关注你。", "别人关注你之后，这里会列出ta们。"},
 }
 
 // followUser 是一行名单。FollowKnown 区分「服务端说不关注」和「响应里没有

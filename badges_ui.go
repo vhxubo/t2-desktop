@@ -288,10 +288,10 @@ func (a *app) profileBadgeIcon(c *ui.Context, b badgeWallEntry, size float32) {
 }
 
 /* ------------------------------------------------------------------
-   资料卡·他的徽章
+   资料卡·ta的徽章
 --------------------------------------------------------------- */
 
-// userCardBadgesBody 是资料卡的「他的徽章」标签页：顶部是数量与刷新，下面是
+// userCardBadgesBody 是资料卡的「ta的徽章」标签页：顶部是数量与刷新，下面是
 // 两列只读徽章卡片。这里不能佩戴别人的徽章，所以卡片上没有按钮；佩戴状态由
 // /badges/equipped 标出来，加载失败时仍展示徽章墙本身。
 func (a *app) userCardBadgesBody(c *ui.Context, cs *userCardState) {
@@ -300,7 +300,7 @@ func (a *app) userCardBadgesBody(c *ui.Context, cs *userCardState) {
 	total, equipped := profileBadgeCounts(st.entries)
 
 	ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "他的徽章").FontSize(13).Bold()
+		ui.Text(c, "ta的徽章").FontSize(13).Bold()
 		if st.loaded {
 			ui.Textf(c, "共 %d 枚 · 佩戴中 %d 枚", total, equipped).
 				FontSize(11).TextColor(t.TextMuted)
@@ -313,7 +313,7 @@ func (a *app) userCardBadgesBody(c *ui.Context, cs *userCardState) {
 	case st.loading && len(st.entries) == 0:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
 			lobeSpin(c, feedback.SpinProps{CustomSize: 24})
-			ui.Text(c, "正在读取他的徽章…").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "正在读取ta的徽章…").FontSize(12).TextColor(t.TextMuted)
 		})
 		return
 	case st.err != "":
@@ -328,7 +328,7 @@ func (a *app) userCardBadgesBody(c *ui.Context, cs *userCardState) {
 	case !st.loaded:
 		ui.Column(c).Grow(1).MinHeight(0).Center().Gap(8).Children(func() {
 			lobeSpin(c, feedback.SpinProps{CustomSize: 24})
-			ui.Text(c, "正在读取他的徽章…").FontSize(12).TextColor(t.TextMuted)
+			ui.Text(c, "正在读取ta的徽章…").FontSize(12).TextColor(t.TextMuted)
 		})
 		return
 	case len(st.entries) == 0:

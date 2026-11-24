@@ -19,7 +19,7 @@ import (
 //	GET /v1/collections/:collectionId/topics  合集内的帖子
 //
 // 合集列表本身留在原来的窗口里（「我的 - 我的内容 - 合集」或用户资料卡的
-// 「他的合集」分段），点开一个合集时就地换成它的帖子，右上角给一个「返回」。
+// 「ta的合集」分段），点开一个合集时就地换成它的帖子，右上角给一个「返回」。
 // 两个窗口共用这一份状态与画法，各自把浏览状态挂在自己的 state 上
 // （profileState.collBrowse / userCardState.collBrowse），互不影响。
 
@@ -305,7 +305,7 @@ func (a *app) ensureDetailCollectionNav(d *detailState) {
 	}()
 }
 
-// openDetailCollectionBrowse 打开发帖人的资料卡，落在「他的合集」并直接进入
+// openDetailCollectionBrowse 打开发帖人的资料卡，落在「ta的合集」并直接进入
 // 这篇帖子所在的合集。合集是作者组织的，别人的合集不该跑到「我的」窗口里看。
 func (a *app) openDetailCollectionBrowse(d *detailState) {
 	id, name, known := d.collectionContext()

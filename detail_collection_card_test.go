@@ -12,7 +12,7 @@ import (
 )
 
 // 详情页正文末尾的当前合集卡片：条数来自合集内帖子列表，「查看全部」打开发帖人
-// 资料卡的「他的合集」浏览视图，「上一篇」在同一合集里打开前一条帖子。
+// 资料卡的「ta的合集」浏览视图，「上一篇」在同一合集里打开前一条帖子。
 func TestDetailCurrentCollectionCard(t *testing.T) {
 	var mu sync.Mutex
 	var calls []string
@@ -73,7 +73,7 @@ func TestDetailCurrentCollectionCard(t *testing.T) {
 		t.Fatalf("「查看全部」没有打开发帖人的合集浏览视图：%+v", a.userCard)
 	}
 	if a.userCard.tab != userCardTabCollections || a.userCard.username != d.topic.Author {
-		t.Errorf("没有定位到发帖人的「他的合集」：tab=%d user=%q",
+		t.Errorf("没有定位到发帖人的「ta的合集」：tab=%d user=%q",
 			a.userCard.tab, a.userCard.username)
 	}
 	cardTT := ui.NewTester(a.userCardWindowView, userCardWindowWidth, userCardWindowHeight)
