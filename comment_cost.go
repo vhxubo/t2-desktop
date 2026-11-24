@@ -883,6 +883,9 @@ func (a *app) setCommentCostBadge(badge badgeWallEntry, equip bool, key string) 
 			}
 			a.noteBadgeEquipped(badge.BadgeID, equip)
 			a.syncProfileBadgeState(badge.BadgeID, equip)
+			// 状态栏切完徽章，「我的」徽章列表与本人资料头的展示也重新读一次，
+			// 避免两处还停留在切换前的状态。
+			a.refreshBadgesAfterToggle(actor)
 			if message == "" {
 				if equip {
 					message = "已佩戴「" + name + "」"

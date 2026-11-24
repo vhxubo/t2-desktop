@@ -654,12 +654,16 @@ func TestCommentCostBarRenders(t *testing.T) {
 // 用窗口内 toast 报告。
 func TestCommentCostBarSwitchesBadge(t *testing.T) {
 	var mu sync.Mutex
-	var methods, paths, keys []string
+	var methods, paths, keys, gets []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		methods = append(methods, r.Method)
-		paths = append(paths, r.URL.Path)
-		keys = append(keys, r.Header.Get("Idempotency-Key"))
+		if strings.HasSuffix(r.URL.Path, "/equip") {
+			methods = append(methods, r.Method)
+			paths = append(paths, r.URL.Path)
+			keys = append(keys, r.Header.Get("Idempotency-Key"))
+		} else if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/me") {
+			gets = append(gets, r.URL.Path)
+		}
 		mu.Unlock()
 		if got := r.Header.Get("Authorization"); got != "Bearer tok" {
 			t.Errorf("佩戴请求没有带令牌：%q", got)
@@ -670,6 +674,10 @@ func TestCommentCostBarSwitchesBadge(t *testing.T) {
 
 	a, tt := commentCostApp(t)
 	a.client.Base = srv.URL + "/api"
+	// 重新读本人资料要用用户名，带上它才能验证资料头也跟着刷新。
+	if err := a.auth.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer", Username: "jimmy"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := tt.Click("前排打手 8 金币"); err != nil {
 		t.Fatalf("点切换按钮失败：%v（%q）", err, tt.Texts())
 	}
@@ -691,6 +699,16 @@ func TestCommentCostBarSwitchesBadge(t *testing.T) {
 	if gotKeys[0] == "" {
 		t.Error("佩戴请求没有带幂等键")
 	}
+	// 状态栏佩戴成功后要重新读徽章列表与本人资料，两处的展示一起跟上。
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		seen := map[string]bool{}
+		for _, p := range gets {
+			seen[p] = true
+		}
+		return seen["/api/v1/me/badges"] && seen["/api/v1/me/badges/equipped"] && seen["/api/v1/me"]
+	}, "刷新徽章列表与资料头")
 
 	tt.Frame()
 	if !tt.HasText("已佩戴「前排打手」") {
@@ -708,9 +726,11 @@ func TestCommentCostActivityToggle(t *testing.T) {
 	var mu sync.Mutex
 	var methods []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		methods = append(methods, r.Method)
-		mu.Unlock()
+		if strings.HasSuffix(r.URL.Path, "/equip") {
+			mu.Lock()
+			methods = append(methods, r.Method)
+			mu.Unlock()
+		}
 		fmt.Fprint(w, envelopeJSON(`{"message":"已更新佩戴状态"}`))
 	}))
 	defer srv.Close()

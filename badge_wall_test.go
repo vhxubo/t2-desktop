@@ -403,10 +403,56 @@ func TestProfileBadgeStates(t *testing.T) {
 	}
 }
 
+// badgeToggleFixture 记下佩戴状态与重新读回的请求。佩戴成功后应用会再读一次
+// 徽章列表与本人资料，测试据此确认两处都刷新了。
+type badgeToggleFixture struct {
+	mu       sync.Mutex
+	equipped bool
+	gets     []string
+}
+
 // badgeToggleApp 造一个已经打开徽章页的应用，和一份可按方法回应的服务器。
-func badgeToggleApp(t *testing.T, handler func(w http.ResponseWriter, r *http.Request)) (*app, *ui.Tester) {
+// 重新读回用到的三个 GET 由这里按当前佩戴状态回应，写请求仍交给 handler。
+func badgeToggleApp(t *testing.T, handler func(w http.ResponseWriter, r *http.Request)) (*app, *ui.Tester, *badgeToggleFixture) {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(handler))
+	fx := &badgeToggleFixture{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me/badges":
+			fx.mu.Lock()
+			fx.gets = append(fx.gets, r.URL.Path)
+			fx.mu.Unlock()
+			fmt.Fprint(w, envelopeJSON(`[{"id":"ub1","badge_id":"b1","badge":{"id":"b1","name":"全勤","icon_url":"https://r2.2libra.com/badge/svg/year_streak.svg"}}]`))
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me/badges/equipped":
+			fx.mu.Lock()
+			fx.gets = append(fx.gets, r.URL.Path)
+			on := fx.equipped
+			fx.mu.Unlock()
+			if on {
+				fmt.Fprint(w, envelopeJSON(`[{"badge_id":"b1"}]`))
+			} else {
+				fmt.Fprint(w, envelopeJSON(`[]`))
+			}
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me":
+			fx.mu.Lock()
+			fx.gets = append(fx.gets, r.URL.Path)
+			on := fx.equipped
+			fx.mu.Unlock()
+			badges := "[]"
+			if on {
+				badges = `[{"badge":{"name":"全勤","code":"year_streak","icon_url":"https://r2.2libra.com/badge/svg/year_streak.svg"}}]`
+			}
+			fmt.Fprint(w, envelopeJSON(`{"username":"jimmy","equipped_badges":`+badges+`}`))
+			return
+		case r.Method == http.MethodPost || r.Method == http.MethodDelete:
+			fx.mu.Lock()
+			fx.equipped = r.Method == http.MethodPost
+			fx.mu.Unlock()
+		}
+		handler(w, r)
+	}))
 	t.Cleanup(srv.Close)
 
 	a := profileWindowApp(t)
@@ -422,7 +468,7 @@ func badgeToggleApp(t *testing.T, handler func(w http.ResponseWriter, r *http.Re
 	}}
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
 	tt.Frame()
-	return a, tt
+	return a, tt, fx
 }
 
 // 点「佩戴」发 POST、成功后更新本地状态与资料头并用服务器文案报 toast；
@@ -430,7 +476,7 @@ func badgeToggleApp(t *testing.T, handler func(w http.ResponseWriter, r *http.Re
 func TestProfileBadgeToggle(t *testing.T) {
 	var mu sync.Mutex
 	var methods, keys []string
-	a, tt := badgeToggleApp(t, func(w http.ResponseWriter, r *http.Request) {
+	a, tt, fx := badgeToggleApp(t, func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		methods = append(methods, r.Method)
 		keys = append(keys, r.Header.Get("Idempotency-Key"))
@@ -441,6 +487,16 @@ func TestProfileBadgeToggle(t *testing.T) {
 		}
 		fmt.Fprint(w, envelopeJSON(`{"message":"佩戴成功"}`))
 	})
+	hasGet := func(path string) bool {
+		fx.mu.Lock()
+		defer fx.mu.Unlock()
+		for _, p := range fx.gets {
+			if p == path {
+				return true
+			}
+		}
+		return false
+	}
 
 	if err := tt.Click("佩戴「全勤」"); err != nil {
 		t.Fatal(err)
@@ -452,6 +508,11 @@ func TestProfileBadgeToggle(t *testing.T) {
 	if len(a.profile.user.Badges) != 1 || a.profile.user.Badges[0].Name != "全勤" {
 		t.Errorf("资料头的佩戴徽章没有跟着切换：%+v", a.profile.user.Badges)
 	}
+	// 佩戴成功后要重新读徽章列表与本人资料，两处的展示都以服务端为准。
+	waitProfile(t, "刷新徽章列表与资料头", func() bool {
+		return hasGet("/api/v1/me/badges") && hasGet("/api/v1/me/badges/equipped") &&
+			hasGet("/api/v1/me")
+	})
 	// 提示可能在请求完成的那一帧里已经被窗口领走，所以看界面而不是队列：
 	// 「我的」窗口只认领发给自己的 toast，能在它里面看到就说明目标窗口对。
 	tt.Frame()
@@ -485,7 +546,7 @@ func TestProfileBadgeEquipNoAutoReplayAfterAuth(t *testing.T) {
 	var mu sync.Mutex
 	var keys []string
 	attempt := 0
-	a, tt := badgeToggleApp(t, func(w http.ResponseWriter, r *http.Request) {
+	a, tt, _ := badgeToggleApp(t, func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		keys = append(keys, r.Header.Get("Idempotency-Key"))
 		attempt++
@@ -520,7 +581,7 @@ func TestProfileBadgeEquipNoAutoReplayAfterAuth(t *testing.T) {
 
 // 服务端拒绝时状态保持原样，失败原因用 toast 报告在「我的」窗口里。
 func TestProfileBadgeEquipFailure(t *testing.T) {
-	a, tt := badgeToggleApp(t, func(w http.ResponseWriter, r *http.Request) {
+	a, tt, _ := badgeToggleApp(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"c":500,"code":"internal_error","m":"服务器打盹了","d":null,"t":1730000000000}`)
 	})
 	if err := tt.Click("佩戴「全勤」"); err != nil {

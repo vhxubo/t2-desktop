@@ -327,6 +327,17 @@ func (a *app) reloadProfileBadges() {
 	a.loadProfileBadges()
 }
 
+// refreshBadgesAfterToggle 在一次佩戴 / 取消佩戴成功后重新读回数据。本地只改了
+// Equipped 标记；徽章列表与资料头的徽章展示（图、天气 / 状态）都以服务端为准，
+// 重新读一次才能把两处和真正的佩戴状态对齐。actor 是发起这次操作的账号名，
+// 请求期间换过账号就不该拿新数据覆盖别人的资料。
+func (a *app) refreshBadgesAfterToggle(actor string) {
+	a.loadProfileBadges()
+	if actor != "" {
+		a.loadProfileInfo(actor)
+	}
+}
+
 // prefetchBadgeIcons 预取徽章墙的大图。徽章图属于长期缓存：同一枚徽章反复
 // 佩戴不会换图，下载一次就留在本机。
 func (a *app) prefetchBadgeIcons(badges []badgeWallEntry) {
@@ -397,6 +408,8 @@ func (a *app) toggleProfileBadge(badgeID, name string, equip bool, key string) {
 			// 评论框的状态栏读的是同一份佩戴状态：这里切换完要立刻跟上，
 			// 否则评论框上方还显示着上一枚徽章的费用。
 			a.noteBadgeEquipped(badgeID, equip)
+			// 佩戴状态以服务端为准：重新读徽章列表与本人资料，两处的展示一起跟上。
+			a.refreshBadgesAfterToggle(actor)
 			if message == "" {
 				if name == "" {
 					message = "徽章佩戴状态已更新"
