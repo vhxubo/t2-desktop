@@ -338,7 +338,7 @@ func TestDetailAvatarFollowUsesAuthorID(t *testing.T) {
 	}
 }
 
-// 屏蔽入口复用内容屏蔽名单：点一次把作者加进去，再点一次移出来。
+// 屏蔽入口复用内容屏蔽名单，并把服务端返回的名单写入缓存。
 func TestDetailAvatarBlockTogglesFilter(t *testing.T) {
 	var puts atomic.Int32
 	srv := echoFilterServer(t, &puts)
@@ -346,8 +346,11 @@ func TestDetailAvatarBlockTogglesFilter(t *testing.T) {
 
 	a, tt := avatarMenuTestApp(t)
 	a.client.Base = srv.URL
+	a.client.HTTP = srv.Client()
 	a.auth.token = &tokenData{AccessToken: "tok", Username: "me"}
 	a.contentFilter.filter = newContentFilter(contentFilterDTO{})
+	a.contentFilter.synced = true
+	cacheKey := a.contentFilterCacheKey()
 	tt.Frame()
 	if !strings.Contains(strings.Join(tt.Texts(), " "), "dannyng") {
 		t.Fatalf("评论作者没有画出来：%q", tt.Texts())
@@ -359,10 +362,12 @@ func TestDetailAvatarBlockTogglesFilter(t *testing.T) {
 	if err := tt.Click(detailAvatarBlockLabel); err != nil {
 		t.Fatalf("点屏蔽失败：%v（%q）", err, tt.Texts())
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for puts.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitFor(t, func() bool {
+		var saved contentFilterCache
+		_, ok := a.kv.get(cacheKey, &saved)
+		users := saved.DTO.BlockedUsers
+		return ok && len(users) == 1 && users[0] == "dannyng"
+	}, "屏蔽名单没有保存到缓存")
 	if puts.Load() != 1 {
 		t.Errorf("屏蔽名单写了 %d 次，期望 1 次", puts.Load())
 	}
