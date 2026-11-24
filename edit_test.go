@@ -652,7 +652,10 @@ func TestPostscriptWindowAppends(t *testing.T) {
 	if err := tt.Click("发布附言"); err != nil {
 		t.Fatalf("点不到发布附言：%v", err)
 	}
-	waitFor(t, func() bool { return a.edit == nil }, "附言请求没有完成")
+	waitFor(t, func() bool { return queuedToast(a, "附言已追加") }, "没有报告附言结果")
+	if a.edit != nil {
+		t.Error("附言发布后没有关闭编辑窗口")
+	}
 
 	calls, _, key, body := rec.snapshot()
 	if len(calls) != 1 || calls[0] != "POST /api/v1/topics/a1b2/postscript" {
@@ -669,9 +672,6 @@ func TestPostscriptWindowAppends(t *testing.T) {
 	}
 	if got := a.detail.topic.Postscripts[0].Content; got != "补充：这件事有后续" {
 		t.Errorf("附言内容 = %q", got)
-	}
-	if !queuedToast(a, "附言已追加") {
-		t.Error("没有报告附言结果")
 	}
 }
 
