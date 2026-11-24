@@ -3446,6 +3446,9 @@ func (a *app) submitReply() {
 					a.handleAuthErrorFor(a.replyAuthTarget(), err)
 					a.replyToast(friendlyError(err))
 				}
+				// 发送失败（网络抖动、超时）后马上把草稿落盘：这段时间里用户
+				// 可能关窗或进程被动结束，不能只等 800ms 防抖，否则草稿会丢。
+				a.flushDrafts()
 				if a.onReplyPosted != nil {
 					a.onReplyPosted(replyItem{}, err)
 				}

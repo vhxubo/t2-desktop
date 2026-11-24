@@ -1615,6 +1615,9 @@ func (a *app) submitCompose() {
 			if err != nil {
 				a.handleAuthErrorWithScopesFor(toastCompose, err, []string{"write:topic"})
 				st.err = friendlyError(err)
+				// 网络失败后马上落盘：用户可能关窗或进程被动结束，
+				// 别让刚写好的正文只留在内存里。
+				a.flushDrafts()
 				if a.onPostPublished != nil {
 					a.onPostPublished(createdTopic{}, err)
 				}
@@ -1688,9 +1691,12 @@ func (a *app) submitMoment() {
 			st.momentBusy = false
 			if err != nil {
 				if a.handleAuthErrorWithScopesFor(toastCompose, err, []string{"write:topic"}) {
+					// 授权弹窗会接手中断的操作，但正文仍要留在本机。
+					a.flushDrafts()
 					return
 				}
 				st.momentErr = friendlyError(err)
+				a.flushDrafts()
 				if a.onPostPublished != nil {
 					a.onPostPublished(createdTopic{}, err)
 				}
