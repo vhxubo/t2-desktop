@@ -97,7 +97,7 @@ func (a *app) showProfileWindow() {
 		a.setProfileWindowShown(true)
 		return
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle("个人中心"),
 		Width:             profileWindowWidth,
 		Height:            profileWindowHeight,
@@ -108,7 +108,7 @@ func (a *app) showProfileWindow() {
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、通知窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.profileWindowView)),
-	})
+	}, toastProfile)
 	a.profileWin = win
 	win.OnShow(func() { a.setProfileWindowShown(true) })
 	win.OnHide(func() { a.setProfileWindowShown(false) })
@@ -624,7 +624,7 @@ func (a *app) profileTopicCollRow(c *ui.Context, ps *profileState) {
 	names = append(names, st.names...)
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Grow(1).MinWidth(0).Children(func() {
-			filter := field.Select(c, &ps.topicCollDraft, field.SelectProps{
+			filter := lobeSelect(c, &ps.topicCollDraft, field.SelectProps{
 				Options:     selectOptions(names),
 				Size:        lobetheme.Small,
 				Placeholder: "选择合集筛选帖子",

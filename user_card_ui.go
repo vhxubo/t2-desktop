@@ -26,12 +26,12 @@ import (
 //	┌────────────────────────────────────────────┐
 //	│  (人) 用户资料                  – 关闭      │ 32 DIP 标题栏
 //	│  ────────────────────────────────────────  │
-//	│  (头像)  昵称 [Lv.13] [PRO] [徽章]  [关注他] │
+//	│  (头像)  昵称 [Lv.13] [PRO] [徽章]  [关注ta] │
 //	│          @username · 注册 2024-05-01 · 512 天│
 //	│  ────────────────────────────────────────  │
 //	│  主题数 | 回复数 | 粉丝 | 关注               │
 //	│  ────────────────────────────────────────  │
-//	│  [个人简介] [他发布的主题] [他的最新回复] …     │
+//	│  [个人简介] [ta发布的主题] [ta的最新回复] …     │
 //	│  （个人简介单独占一个标签页，正文在块内滚动）   │
 //	│  · 标题 ……………                      2 天前  │
 //	└────────────────────────────────────────────┘
@@ -87,7 +87,7 @@ func (a *app) showUserCardWindow(username string) {
 		a.setUserCardWindowShown(true)
 		return
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle("用户资料"),
 		Width:             userCardWindowWidth,
 		Height:            userCardWindowHeight,
@@ -98,7 +98,7 @@ func (a *app) showUserCardWindow(username string) {
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、通知、我的一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.userCardWindowView)),
-	})
+	}, toastUserCard)
 	a.userCardWin = win
 	win.OnShow(func() { a.setUserCardWindowShown(true) })
 	win.OnHide(func() { a.setUserCardWindowShown(false) })
@@ -312,7 +312,7 @@ func userCardTag(c *ui.Context, label string, color display.TagColor) {
 	})
 }
 
-// userCardFollowButton 画关注按钮：未关注是主按钮「关注他」，已关注是低
+// userCardFollowButton 画关注按钮：未关注是主按钮「关注ta」，已关注是低
 // 强调的描边按钮「已关注」，点一下切换。自己的资料卡不显示。它画在资料头
 // 的右侧，与昵称同一行。按钮走 Lobe 的 action.Button，文案与 tooltip 不变。
 func (a *app) userCardFollowButton(c *ui.Context, cs *userCardState) {
@@ -320,7 +320,7 @@ func (a *app) userCardFollowButton(c *ui.Context, cs *userCardState) {
 		return
 	}
 	following := a.userCardFollowing()
-	label := "关注他"
+	label := "关注ta"
 	variant := action.Primary
 	if following {
 		label = "已关注"
@@ -461,7 +461,7 @@ func userCardStat(c *ui.Context, label, value string) {
 	})
 }
 
-// userCardCollectionsBody 是「他的合集」分段：平时是公开合集列表，点开一个
+// userCardCollectionsBody 是「ta的合集」分段：平时是公开合集列表，点开一个
 // 合集就地换成它里面的帖子，左上角的「返回」回到列表。
 func (a *app) userCardCollectionsBody(c *ui.Context, cs *userCardState) {
 	if cs.collBrowse != nil {
@@ -473,7 +473,7 @@ func (a *app) userCardCollectionsBody(c *ui.Context, cs *userCardState) {
 	a.userCardListBody(c, cs, userCardCollections)
 }
 
-// userCardTopicCollRow 是「他发布的主题」上方的合集下拉。选项从
+// userCardTopicCollRow 是「ta发布的主题」上方的合集下拉。选项从
 // GET /v1/users/:name/collections 读，不让人手输合集名；选中即按那个名字
 // 筛主题，走 /v1/users/:name/topics?collection=，选回「全部合集」立刻回到
 // 未筛选列表且不再发请求。
@@ -484,7 +484,7 @@ func (a *app) userCardTopicCollRow(c *ui.Context, cs *userCardState) {
 	names = append(names, st.names...)
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Grow(1).MinWidth(0).Children(func() {
-			filter := field.Select(c, &cs.topicCollDraft, field.SelectProps{
+			filter := lobeSelect(c, &cs.topicCollDraft, field.SelectProps{
 				Options:     selectOptions(names),
 				Size:        lobetheme.Small,
 				Placeholder: "选择合集筛选帖子",
@@ -665,7 +665,7 @@ func (a *app) userCardRow(c *ui.Context, it Item, kind userCardListKind) {
 	}
 }
 
-// openUserCardCollection 在资料卡的「他的合集」里点开一个合集：就地换成它里面
+// openUserCardCollection 在资料卡的「ta的合集」里点开一个合集：就地换成它里面
 // 的帖子，返回时回到合集列表。这里记下主人昵称，浏览视图里会写「by @昵称」。
 func (a *app) openUserCardCollection(it Item) {
 	cs := a.userCard

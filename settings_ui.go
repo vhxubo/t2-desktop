@@ -81,7 +81,7 @@ func (a *app) showSettingsWindow() {
 	// 重新开窗口时回到第一页；已经开着的窗口只带到前台，保留用户当前所在页。
 	a.settingsTab = settingsTabGeneral
 	a.resetConfirmOpen = false
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle("设置"),
 		Width:             settingsWindowWidth,
 		Height:            settingsWindowHeight,
@@ -92,7 +92,7 @@ func (a *app) showSettingsWindow() {
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、通知窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.settingsWindowView)),
-	})
+	}, toastSettings)
 	a.settingsWin = win
 	win.OnClosed(func() {
 		a.settingsWin = nil
@@ -344,7 +344,7 @@ func (a *app) updateSettingsSection(c *ui.Context) {
 		}
 		var sel ui.Element
 		settingsField(c, "下载加速", func() ui.Element {
-			sel = field.Select(c, &mirror, field.SelectProps{
+			sel = lobeSelect(c, &mirror, field.SelectProps{
 				Options: updateMirrorSelectOptions(), Size: lobetheme.Small,
 			})
 			sel.Label("下载加速").Tooltip("仅作用于检查更新与更新包下载").Width(220)

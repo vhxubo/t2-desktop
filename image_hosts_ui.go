@@ -77,7 +77,7 @@ func (a *app) imageHostActivePicker(c *ui.Context) {
 				display.TextProps{Type: display.TextDanger, FontSize: 12, Rows: 1})
 			return
 		}
-		if field.Select(c, &a.hostActiveLabel, field.SelectProps{
+		if lobeSelect(c, &a.hostActiveLabel, field.SelectProps{
 			Options: selectOptions(names), Size: lobetheme.Small,
 		}).Label("当前使用的图库").Changed() {
 			a.setActiveHostByLabel(a.hostActiveLabel)
@@ -103,7 +103,7 @@ func (a *app) imageHostEditor(c *ui.Context) {
 		return
 	}
 	if settingsField(c, "要编辑的图库", func() ui.Element {
-		return field.Select(c, &a.hostEditLabel, field.SelectProps{
+		return lobeSelect(c, &a.hostEditLabel, field.SelectProps{
 			Options: selectOptions(all), Size: lobetheme.Small,
 		}).Label("要编辑的图库")
 	}).Changed() {

@@ -145,7 +145,7 @@ func (a *app) openComposeWindow() {
 		win.Invalidate()
 		return
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle(composeWindowTitle(a.compose.mode)),
 		Width:             composeWindowWidth,
 		Height:            composeWindowHeight,
@@ -156,7 +156,7 @@ func (a *app) openComposeWindow() {
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、通知窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.composeWindowView)),
-	})
+	}, toastCompose)
 	a.composeWin = win
 	win.OnClosed(func() {
 		a.composeWin = nil
@@ -1306,7 +1306,7 @@ func (a *app) composeGuard(c *ui.Context, st *composeState) {
 				options = append(options, field.SelectOption{Value: l, Label: l})
 			}
 			composeInputRow(c, func() ui.Element {
-				return field.Select(c, &st.guardChoice, field.SelectProps{Options: options})
+				return lobeSelect(c, &st.guardChoice, field.SelectProps{Options: options})
 			}).Label("可见范围")
 		})
 		switch guardFromLabel(st.guardChoice) {
@@ -1330,7 +1330,7 @@ func (a *app) composeGuard(c *ui.Context, st *composeState) {
 						attrs = append(attrs, field.SelectOption{Value: at.Value, Label: at.Label})
 					}
 					composeInputRow(c, func() ui.Element {
-						return field.Select(c, &st.guardAttr, field.SelectProps{Options: attrs})
+						return lobeSelect(c, &st.guardAttr, field.SelectProps{Options: attrs})
 					}).Label("D20 属性")
 				})
 				ui.Column(c).Width(160).Gap(4).Children(func() {
@@ -1361,7 +1361,7 @@ func (a *app) composeRestricted(c *ui.Context, st *composeState) {
 				options = append(options, field.SelectOption{Value: l, Label: l})
 			}
 			composeInputRow(c, func() ui.Element {
-				return field.Select(c, &st.restrictedAccessChoice, field.SelectProps{Options: options})
+				return lobeSelect(c, &st.restrictedAccessChoice, field.SelectProps{Options: options})
 			}).Label("解锁方式")
 		})
 		ui.Column(c).FillWidth().Gap(4).Children(func() {
@@ -1384,7 +1384,7 @@ func (a *app) composeRestricted(c *ui.Context, st *composeState) {
 						attrs = append(attrs, field.SelectOption{Value: at.Value, Label: at.Label})
 					}
 					composeInputRow(c, func() ui.Element {
-						return field.Select(c, &st.restrictedD20Attr, field.SelectProps{Options: attrs})
+						return lobeSelect(c, &st.restrictedD20Attr, field.SelectProps{Options: attrs})
 					}).Label("D20 属性")
 				})
 				ui.Column(c).Width(150).Gap(4).Children(func() {

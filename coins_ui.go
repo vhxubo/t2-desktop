@@ -376,7 +376,7 @@ func (a *app) coinHistoryReasonRow(c *ui.Context, cs *coinState) {
 		display.Text(c, "类型", display.TextProps{
 			Type: display.TextSecondary, FontSize: 11, Rows: 1,
 		})
-		filter := field.Select(c, &cs.historyReason, field.SelectProps{
+		filter := lobeSelect(c, &cs.historyReason, field.SelectProps{
 			Options: selectOptions(coinReasonOptions), Size: lobetheme.Small,
 		})
 		filter.Label("金币类型").Tooltip("只看某一类金币变动").Width(150)
