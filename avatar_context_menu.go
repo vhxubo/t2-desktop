@@ -11,15 +11,17 @@ import (
 )
 
 // 详情页作者 / 评论的「头像 + 昵称」上的右键菜单。菜单就地弹出，左键仍然
-// 走 userTag 原来的「打开资料卡」。顺序固定：@名字、分割线、关注、屏蔽。
-// 关注 / 屏蔽两项按当前状态换文案：已关注「取消关注」、未关注「关注ta」，
-// 已屏蔽「移除屏蔽」、未屏蔽「屏蔽ta」（见 avatar_context_menu_test.go）。
+// 走 userTag 原来的「打开资料卡」。顺序固定：@名字、分割线、只看 ta 的回复、
+// 关注、屏蔽。关注 / 屏蔽两项按当前状态换文案：已关注「取消关注」、未关注
+// 「关注ta」，已屏蔽「移除屏蔽」、未屏蔽「屏蔽ta」（见 avatar_context_menu_test.go）。
 
 const (
 	detailAvatarAtKey     = "at"
+	detailAvatarFilterKey = "filter"
 	detailAvatarFollowKey = "follow"
 	detailAvatarBlockKey  = "block"
 
+	detailAvatarFilterLabel   = "只看 ta 的回复"
 	detailAvatarFollowLabel   = "关注ta"
 	detailAvatarUnfollowLabel = "取消关注"
 	detailAvatarBlockLabel    = "屏蔽ta"
@@ -178,6 +180,11 @@ func (a *app) detailAvatarMenu(c *ui.Context, identity ui.Element, d *detailStat
 		},
 		{Divider: true},
 		{
+			Key: detailAvatarFilterKey, Label: detailAvatarFilterLabel,
+			// 看自己的回复没有意义；匿名 / 缺身份的评论也不做过滤。
+			Disabled: a.isMine(name) || (name == "" && userID == ""),
+		},
+		{
 			Key: detailAvatarFollowKey, Label: followLabel,
 			Disabled: self || userID == "",
 		},
@@ -200,6 +207,11 @@ func (a *app) detailAvatarMenu(c *ui.Context, identity ui.Element, d *detailStat
 		}
 		a.insertMention(d, mentionAt(name))
 		d.focusComposer = true
+	case detailAvatarFilterKey:
+		if a.isMine(name) || (name == "" && userID == "") {
+			return
+		}
+		setAuthorFilter(d, name, userID, false)
 	case detailAvatarFollowKey:
 		a.detailAvatarToggleFollow(d, name, userID, !following)
 	case detailAvatarBlockKey:

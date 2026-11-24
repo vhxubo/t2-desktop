@@ -82,7 +82,16 @@ type detailState struct {
 	stayID      string
 	display     []replyItem
 	hiddenCount map[string]int
-	list        ui.ListState
+	// 评论区按作者过滤的临时视角：只作用于 display，不落盘、不改 replyList。
+	// authorFilter 空串表示不过滤；authorFilterID 有值时优先按 id 比对；
+	// authorFilterIsOP 标出入口是不是「只看楼主」，决定文案与匿名帖处理；
+	// authorFilterName 是展示用昵称；filterAutoPages 记已为过滤自动续拉的页数。
+	authorFilter     string
+	authorFilterID   string
+	authorFilterIsOP bool
+	authorFilterName string
+	filterAutoPages  int
+	list             ui.ListState
 	// base64Open 记着评论里哪些 Base64 片段已经被点开成解码态。键是「评论
 	// id | 片段序号 | 编码串」（见 base64RevealKey），所以同一条评论里的多个
 	// 片段互不串扰；它只在这一次浏览里有效，不落盘也不进后台。
@@ -588,6 +597,8 @@ func (a *app) loadDetail(d *detailState, it Item) {
 // openDetailInline 是老的内联路径：主窗口页面切成 detail，保留 20 层返回栈。
 // 无头测试、以及已经没有任何原生窗口时的兜底走这里。
 func (a *app) openDetailInline(it Item) {
+	// 过滤是「这篇帖子的临时视角」：换帖子、关详情时清空，不随账号落盘。
+	clearAuthorFilter(a.detail)
 	// 换帖子就把独立写评论窗口收起来：它绑的是上一份 detailState 的草稿，
 	// 留着会让人以为写的是刚打开的这一篇。
 	a.closeReplyWindow()
@@ -625,12 +636,16 @@ func (a *app) closeDetail() {
 	// 离开评论区前把浏览状态（视图、停留位置、折叠、新评论基线）落盘，下次
 	// 回到同一篇时沿用。inline 跳转（压栈）和真正回到列表都会走到这里。
 	if a.detail != nil {
+		// 过滤后的行号不能写进浏览记忆：退出时先回到原列表再落盘。
+		clearAuthorFilter(a.detail)
 		a.stopDetailNodeWatch(a.detail)
 		a.saveReplyView(a.detail)
 	}
 	if n := len(a.detailStack); n > 0 {
 		a.detail = a.detailStack[n-1]
 		a.detailStack = a.detailStack[:n-1]
+		// 重新进入一篇帖子时过滤不保留（切走时就该清掉，这里兜一层）。
+		clearAuthorFilter(a.detail)
 		// 返回的这一页可能还在等 AI 分配节点：重新开始轮询（离开时停掉了）。
 		a.watchPendingNode(a.detail)
 		// 退回上一篇同样是「进入详情」：双栏重新展开，收起状态不跨页面保留。
@@ -860,6 +875,8 @@ func (a *app) refreshReplies() {
 	d.replyErr = ""
 	d.replyMoreErr = ""
 	d.replyNoMore = false
+	// 刷新保留过滤（只是重拉第一页），续拉预算从头算。
+	d.filterAutoPages = 0
 	if d.replyLoading || !a.autoLoad {
 		return
 	}
@@ -1947,7 +1964,8 @@ func (a *app) topicSourceFooter(c *ui.Context, d *detailState) {
 // 只在未点击输入框的折叠态出现：进入编辑态、或右侧评论栏收起时整组不画，
 // 输入框照旧平铺在正文底部，只是此刻没有评论区可操作。
 func (a *app) replyComposerToolBar(c *ui.Context, d *detailState) {
-	items := make([]action.ActionGroupItem, 0, 3)
+	tk := lobetheme.TokensOf(c)
+	items := make([]action.ActionGroupItem, 0, 4)
 	// 列表在 replyPane 里按 display 构建；这里从同一份 list 状态读可视行号，
 	// 决定要不要给回顶留位。没有评论时 first 保持 -1。
 	first := -1
@@ -1959,6 +1977,16 @@ func (a *app) replyComposerToolBar(c *ui.Context, d *detailState) {
 			Key: "top", Icon: lucide.ArrowUp(), Label: "评论回到顶部",
 		})
 	}
+	// 只看楼主：过滤态再点一次取消。匿名帖没有楼主，入口直接禁用。
+	filterLabel := "只看楼主"
+	if d.authorFilter != "" {
+		filterLabel = "取消" + authorFilterLabel(d)
+	}
+	filterDisabled := d.replyLoading || len(d.replyList) == 0 ||
+		d.topic == nil || isAnonymousTopic(d)
+	items = append(items, action.ActionGroupItem{
+		Key: "filter", Icon: lucide.Filter(), Label: filterLabel, Disabled: filterDisabled,
+	})
 	// 图标表示将要切到的视图，点一下在楼层 / 扁平时间序间切换。
 	viewIcon, viewLabel := flatViewIcon, "切到扁平时间序"
 	if d.flat {
@@ -1970,32 +1998,48 @@ func (a *app) replyComposerToolBar(c *ui.Context, d *detailState) {
 	items = append(items, action.ActionGroupItem{
 		Key: "refresh", Icon: lucide.RefreshCw(), Label: "刷新评论", Disabled: d.replyLoading,
 	})
-	if key := action.ActionIconGroup(c, action.ActionIconGroupProps{
-		Items: items, Size: lobetheme.Small, Vertical: false,
-		Variant: action.GroupOutlined,
-	}); key != "" {
-		switch key {
-		case "top":
-			d.list.ScrollTo(0, ui.Start)
-		case "view":
-			d.flat = !d.flat
-			d.replyList = nil
-			d.replyLoaded = false
-			d.replyNoMore = false
-			d.replyMoreErr = ""
-			// 换了视图重新找一次被定位的评论：楼层/扁平的分页位置不同。
-			d.focusPending = d.focusID != ""
-			d.focusTries = 0
-			d.focusMiss = false
-			a.loadReplies(1)
-			// 视图偏好按账号立即落盘：换一篇帖子打开也沿用（见 reply_view.go）。
-			a.saveReplyViewMode(d.flat)
-		case "refresh":
-			if !d.replyLoading {
-				a.refreshReplies()
+	// ActionIconGroup 没有逐项激活态；过滤时在整组左侧画一条主色竖条，和
+	// 发帖侧栏「已添加」用的是同一套语言。不额外加 Tooltip，按钮的无障碍名
+	// 由 Item 的 Label 给出。
+	ui.Row(c).AlignItems(ui.Center).Gap(4).Children(func() {
+		if d.authorFilter != "" {
+			ui.Box(c).Size(3, 18).Radius(2).Background(tk.Primary)
+		}
+		if key := action.ActionIconGroup(c, action.ActionIconGroupProps{
+			Items: items, Size: lobetheme.Small, Vertical: false,
+			Variant: action.GroupOutlined,
+		}); key != "" {
+			switch key {
+			case "top":
+				d.list.ScrollTo(0, ui.Start)
+			case "filter":
+				if d.authorFilter != "" {
+					clearAuthorFilter(d)
+				} else {
+					setAuthorFilter(d, "", "", true)
+				}
+			case "view":
+				d.flat = !d.flat
+				d.replyList = nil
+				d.replyLoaded = false
+				d.replyNoMore = false
+				d.replyMoreErr = ""
+				// 换了视图重新找一次被定位的评论：楼层/扁平的分页位置不同。
+				d.focusPending = d.focusID != ""
+				d.focusTries = 0
+				d.focusMiss = false
+				a.loadReplies(1)
+				// 视图偏好按账号立即落盘：换一篇帖子打开也沿用（见 reply_view.go）。
+				a.saveReplyViewMode(d.flat)
+				// 过滤继续生效，但换视图重新拉第一页，续拉预算从头算。
+				d.filterAutoPages = 0
+			case "refresh":
+				if !d.replyLoading {
+					a.refreshReplies()
+				}
 			}
 		}
-	}
+	})
 }
 
 func (a *app) replyPane(c *ui.Context, d *detailState) {
@@ -2013,6 +2057,9 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 	// 顶部铺到输入栏，底部不再留一条空白。评论区收起时 replyPane 不画，
 	// 输入框平铺到正文底部，但那组评论操作也不再出现；编辑态同样收起。
 	ui.Column(c).Grow(1).FillWidth().MinHeight(0).Children(func() {
+		// display 是所有列表行数与滚动定位的唯一依据：先过滤作者再折叠，
+		// 空列表 / 有列表都要走同一份结果。
+		d.rebuildDisplay()
 		first := -1 // 没有评论列表时没有可视行号，通知已读判断据此跳过
 		switch {
 		case d.replyLoading && len(d.replyList) == 0:
@@ -2036,11 +2083,9 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 				}
 				ui.Text(c, "暂无评论").FontSize(tk.FontSize).TextColor(tk.TextDescription)
 			})
+		case d.authorFilter != "" && len(d.display) == 0:
+			a.replyFilterEmpty(c, d)
 		default:
-			// display 是剔除折叠隐藏行后的显示列表；rebuildDisplay 在折叠为空时
-			// 直接复用 replyList，索引与现有行为一致。所有滚动定位、列表行数都
-			// 基于它。
-			d.rebuildDisplay()
 			rows := d.display
 			// 评论树连线：display 是前序摊平的树，下一行比第 l 层深就说明该层
 			// 竖线还要往下画。给每行算好各层的延续状态，replyRow 据此画导轨。
@@ -2080,6 +2125,14 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 				// 从通知点进来时，目标评论真的出现在屏幕上才把那条消息标为已读。
 				a.markNotificationSeen(d, first, last)
 			}
+			// 过滤态在列表上方显示命中条数：N 是当前已加载里的命中数，
+			// 不是全帖命中数（服务端没有作者筛选参数）。
+			if d.authorFilter != "" {
+				ui.Row(c).Padding(4, 12, 2, 12).Children(func() {
+					ui.Text(c, fmt.Sprintf("%s · %d 条", authorFilterLabel(d), len(rows))).
+						FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
+				})
+			}
 			// MyGo 的 ui.List 是虚拟化滚动区：只构建可视行，长帖也不会一次
 			// 排完所有评论；Grow(1) + MinHeight(0) 让它吃满卡片中间，输入栏
 			// 始终固定在卡片底部。
@@ -2095,9 +2148,8 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 			// 无限滚动：滚到底且还有下一页时自动加载更多，移除原来的页码与上下页按钮。
 			// 与首页 / 通知列表保持一致：AtEnd 触发、replyNoMore 兜底停止；
 			// 续拉失败后停在底部提示上，等用户点「重试」，不再自动重发。
-			if replyCanLoadMore(d) && d.replyMoreErr == "" && d.list.AtEnd() {
-				a.loadReplies(d.replyPage + 1)
-			}
+			// 过滤态另有 10 页预算，用完改画「继续加载」。
+			a.replyMoreControl(c, d, d.list.AtEnd())
 		}
 	})
 	a.replyComposer(c, d)
@@ -2141,6 +2193,129 @@ func replyCanLoadMore(d *detailState) bool {
 		return false
 	}
 	return d.replyTotalPages == 0 || d.replyPage < d.replyTotalPages
+}
+
+// replyMoreControl 是评论区底部的续拉控制。atEnd 由列表给出（空态没有列表，
+// 调用方直接传 true）。不过滤时沿用原来的无限滚动；过滤时为了找命中评论自动
+// 续拉，但最多 replyFilterAutoMaxPages 页，之后改为手点「继续加载」。
+func (a *app) replyMoreControl(c *ui.Context, d *detailState, atEnd bool) {
+	if d == nil || !atEnd || !replyCanLoadMore(d) || d.replyMoreErr != "" {
+		return
+	}
+	if d.authorFilter == "" {
+		a.loadReplies(d.replyPage + 1)
+		return
+	}
+	if filterCanAutoLoad(d) {
+		if a.autoLoad {
+			d.filterAutoPages++
+			a.loadReplies(d.replyPage + 1)
+		}
+		return
+	}
+	label := "继续加载"
+	if d.replyTotalPages > d.replyPage {
+		label += fmt.Sprintf("（还有 %d 页）", d.replyTotalPages-d.replyPage)
+	}
+	ui.Row(c).FillWidth().Padding(8, 12).AlignItems(ui.Center).Children(func() {
+		if action.Button(c, label, action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+			// 手动续拉重置预算：用户明确要继续找，就再给一轮自动续拉。
+			d.filterAutoPages = 0
+			a.loadReplies(d.replyPage + 1)
+		}
+	})
+}
+
+// replyFilterEmpty 是过滤后已加载范围内 0 条命中的空态。副文案只在还能续拉
+// 时出现，避免告诉用户「翻页」其实已经到底；底部仍保留续拉与失败重试入口。
+func (a *app) replyFilterEmpty(c *ui.Context, d *detailState) {
+	tk := lobetheme.TokensOf(c)
+	ui.Column(c).Grow(1).Center().Gap(8).Padding(16).Children(func() {
+		title := "ta 还没有回复"
+		if d.authorFilterIsOP {
+			title = "楼主还没有回复"
+		}
+		ui.Text(c, title).FontSize(tk.FontSizeLG).Bold().TextColor(tk.TextHeading)
+		if replyCanLoadMore(d) {
+			ui.Textf(c, "已加载 %d 条评论，可能还没到 ta 的楼层。", len(d.replyList)).
+				FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
+		}
+		if action.Button(c, "查看全部", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+			clearAuthorFilter(d)
+		}
+	})
+	a.loadMoreFooter(c, d.replyMoreErr, d.replyLoading, func() {
+		a.loadReplies(d.replyPage)
+	})
+	a.replyMoreControl(c, d, true)
+}
+
+// 过滤态下为找命中评论自动续拉的页数上限。超过后停下，改由用户点「继续加载」，
+// 避免为了看楼主一句话把整帖都拉完。
+const replyFilterAutoMaxPages = 10
+
+// isAnonymousTopic 报告这篇帖子的作者是不是「匿名」：匿名帖没有「楼主」可看，
+// 只看楼主入口要禁用。
+func isAnonymousTopic(d *detailState) bool {
+	return d != nil && d.topic != nil && d.topic.Author == anonymousAuthor
+}
+
+// filterCanAutoLoad 报告过滤态下是否还能自动续拉。不过滤时不受这个预算约束。
+func filterCanAutoLoad(d *detailState) bool {
+	return d == nil || d.authorFilter == "" || d.filterAutoPages < replyFilterAutoMaxPages
+}
+
+// authorFilterLabel 是过滤入口在工具条上的无障碍名：「只看楼主」或「只看 ta」。
+func authorFilterLabel(d *detailState) string {
+	if d == nil {
+		return ""
+	}
+	if d.authorFilterIsOP {
+		return "只看楼主"
+	}
+	return "只看 " + d.authorFilterName
+}
+
+// setAuthorFilter 开启（或切换）按作者过滤，并立刻重建显示列表、回到顶部。
+// isOP 为真时取当前帖子的作者；匿名帖没有楼主，入口不会走到这里。
+func setAuthorFilter(d *detailState, name, id string, isOP bool) {
+	if d == nil {
+		return
+	}
+	if isOP {
+		if d.topic == nil || isAnonymousTopic(d) || d.topic.Author == "" {
+			return
+		}
+		name, id = d.topic.Author, d.topic.AuthorID
+	}
+	if name == "" && id == "" {
+		return
+	}
+	d.authorFilter = name
+	if d.authorFilter == "" {
+		d.authorFilter = id
+	}
+	d.authorFilterID = id
+	d.authorFilterIsOP = isOP
+	d.authorFilterName = name
+	if d.authorFilterName == "" {
+		d.authorFilterName = id
+	}
+	d.filterAutoPages = 0
+	d.rebuildDisplay()
+	d.list.ScrollTo(0, ui.Start)
+}
+
+// clearAuthorFilter 退出过滤，display 回到原来的评论树与折叠状态。
+func clearAuthorFilter(d *detailState) {
+	if d == nil || d.authorFilter == "" {
+		return
+	}
+	d.authorFilter, d.authorFilterID = "", ""
+	d.authorFilterIsOP, d.authorFilterName = false, ""
+	d.filterAutoPages = 0
+	d.rebuildDisplay()
+	d.list.ScrollTo(0, ui.Start)
 }
 
 // isTopicAuthor 报告这条评论是不是楼主的回复。带作者 id 时按 id 比对，否则
@@ -2333,7 +2508,9 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Height(22).Children(func() {
 			// 带楼中楼的评论可以折叠 / 展开：收起后只留这条本身，子回复
 			// 藏起来（见 rebuildDisplay）。折叠入口只在有子树时出现。
-			if r.HasChildren && a.detail != nil {
+			// 过滤态是平铺视角，折叠集合不生效（rebuildDisplay 已跳过），
+			// 因此也不画折叠入口，免得点下去像有反应却什么都没收起。
+			if r.HasChildren && a.detail != nil && a.detail.authorFilter == "" {
 				collapsed := a.detail.collapsed[r.ID]
 				fold := ui.Button(c, "").
 					Background(ui.Transparent).Border(0, t.Border).

@@ -264,6 +264,8 @@ func (a *app) disposeDetailState(d *detailState) {
 	// 状态马上就 dead，之后没有帧尾能替它算指纹，先同步落盘。
 	a.flushDrafts()
 	a.stopDetailNodeWatch(d)
+	// 过滤态的行号不写进浏览记忆：关窗先退出过滤再落盘。
+	clearAuthorFilter(d)
 	a.saveReplyView(d)
 	if d.composerDetached && a.replyWinFor == d {
 		a.closeReplyWindow()

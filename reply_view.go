@@ -153,12 +153,45 @@ func (a *app) saveReplyView(d *detailState) {
 	}
 }
 
-// rebuildDisplay 根据折叠集合重新计算评论的显示列表 display，并填好
-// hiddenCount（每个折叠父被收起的后代条数）。collapsed 为空时 display 直接
-// 复用 replyList 的切片头，逐个元素一致，不改动任何索引，现有行为完全不变。
+// filterReplies 按当前作者过滤评论，只改返回副本的 Depth，不动 replyList。
+// 不过滤时原样返回，保持「collapsed 为空就复用切片头」的既有行为；过滤态
+// 强制平铺（Depth=0，保留楼层号与顺序），退出过滤后原树的 Depth 原样恢复。
+func (d *detailState) filterReplies(list []replyItem) []replyItem {
+	if d.authorFilter == "" {
+		return list
+	}
+	out := make([]replyItem, 0, len(list))
+	for _, r := range list {
+		if !d.matchesAuthorFilter(r) {
+			continue
+		}
+		shown := r
+		shown.Depth = 0
+		out = append(out, shown)
+	}
+	return out
+}
+
+// matchesAuthorFilter 报告一条评论是否命中作者过滤：id 优先，对方缺 id
+// 时退回昵称（与 isTopicAuthor 同口径）；匿名帖的「匿名」不算楼主。
+func (d *detailState) matchesAuthorFilter(r replyItem) bool {
+	if r.Author == anonymousAuthor && d.authorFilterIsOP {
+		return false
+	}
+	if d.authorFilterID != "" && r.AuthorID != "" {
+		return r.AuthorID == d.authorFilterID
+	}
+	return d.authorFilter != "" && r.Author == d.authorFilter
+}
+
+// rebuildDisplay 先按作者过滤，再根据折叠集合重新计算评论的显示列表
+// display，并填好 hiddenCount（每个折叠父被收起的后代条数）。过滤后是平铺
+// 视角，折叠集合不再适用（所有行都是 Depth=0），直接以过滤结果为准。
+// collapsed 为空时 display 直接复用切片头，逐个元素一致，不动索引。
 func (d *detailState) rebuildDisplay() {
-	if len(d.collapsed) == 0 {
-		d.display = d.replyList
+	source := d.filterReplies(d.replyList)
+	if len(d.collapsed) == 0 || d.authorFilter != "" {
+		d.display = source
 		d.hiddenCount = nil
 		return
 	}
@@ -169,7 +202,7 @@ func (d *detailState) rebuildDisplay() {
 	stack := make([]stackEntry, 0, 8)
 	disp := make([]replyItem, 0, len(d.replyList))
 	hidden := make(map[string]int)
-	for _, r := range d.replyList {
+	for _, r := range source {
 		for len(stack) > 0 && r.Depth <= stack[len(stack)-1].depth {
 			stack = stack[:len(stack)-1]
 		}
