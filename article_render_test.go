@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -198,6 +199,23 @@ func waitForMarker(t *testing.T, tt *ui.Tester, what string) {
 	}
 }
 
+func waitForImageWorkers(t *testing.T, cache *imageCache) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		cache.jobMu.Lock()
+		idle := cache.workers == 0 && len(cache.jobsHi) == 0 && len(cache.jobsLo) == 0
+		cache.jobMu.Unlock()
+		if idle {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("图片缓存后台任务没有及时完成")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func pictureApp(t *testing.T, content string) *app {
 	t.Helper()
 	// 原图远宽于正文栏，验证会按栏宽等比缩小而不是撑破布局。
@@ -210,6 +228,7 @@ func pictureApp(t *testing.T, content string) *app {
 
 	content = strings.ReplaceAll(content, "PIC", srv.URL+"/pic.png")
 	a := testApp(t)
+	t.Cleanup(func() { waitForImageWorkers(t, a.images) })
 	a.openDetail(Item{ShortID: "IMAGE001", URL: "https://2libra.com/post/work/IMAGE001"})
 	a.detail.topic = &topicDetail{
 		ShortID: "IMAGE001", Title: "图片渲染", Author: "jimmy",
@@ -248,6 +267,7 @@ func TestArticleMixedParagraphImageRenders(t *testing.T) {
 func loadingDetailApp(t *testing.T, srv *httptest.Server, picURL string) *app {
 	t.Helper()
 	a := testApp(t)
+	t.Cleanup(func() { waitForImageWorkers(t, a.images) })
 	a.openDetail(Item{ShortID: "LOAD001", URL: "https://2libra.com/post/work/LOAD001"})
 	a.detail.topic = &topicDetail{
 		ShortID: "LOAD001", Title: "图片加载", Author: "jimmy",
@@ -270,6 +290,8 @@ func hasImageSpinner(tt *ui.Tester) bool {
 // 图片还在下载时占位要显示转圈和中文说明，图片到位后进度一起退场。
 func TestArticlePictureShowsLoadingWhileDownloading(t *testing.T) {
 	release := make(chan struct{})
+	releaseResponse := sync.OnceFunc(func() { close(release) })
+	defer releaseResponse()
 	started := make(chan struct{}, 1)
 	pixels := solidPNG(t, 2000, 1000, marker)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -303,7 +325,7 @@ func TestArticlePictureShowsLoadingWhileDownloading(t *testing.T) {
 		t.Errorf("图片还没返回就画了出来：%d 个绿色像素", n)
 	}
 
-	close(release)
+	releaseResponse()
 	waitForMarker(t, tt, "加载完成后的配图")
 	tt.Frame()
 	if tt.HasText(imageLoadingText) {
