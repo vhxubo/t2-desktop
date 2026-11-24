@@ -213,6 +213,40 @@ func TestScoresCategoryDropdownNoOverflow(t *testing.T) {
 	}
 }
 
+// 弹层贴着窗口下缘时只剩一点空间，分类列表必须收进跟着弹层收缩的滚动层，
+// 不能把可见选项画到窗口外。上一版滚动层套在 Column 里，弹层被压矮后它仍按
+// 256 的高度铺开，选项会溢出窗口。
+func TestScoresCategoryDropdownShrinksToWindow(t *testing.T) {
+	st := newScoresState()
+	cats := make([]string, 40)
+	for i := range cats {
+		cats[i] = fmt.Sprintf("分类%02d", i)
+	}
+	st.categories, st.categoriesLoaded, st.loaded = cats, true, true
+
+	const winH = 320
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Padding(140, 20).Children(func() {
+			scoreCategorySelect(c, &st.category, &st.categoryActive, scoreCategoryOptions(st)).
+				Label("评分分类").Width(150)
+		})
+	}, 460, winH)
+	tt.Frame()
+	if err := tt.Click("评分分类"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	for _, cat := range cats {
+		r, ok := tt.Find(cat)
+		if !ok || r.W == 0 {
+			continue // 滚动裁掉的项不在可视区里
+		}
+		if r.Y < 0 || r.Y+r.H > winH-4 {
+			t.Errorf("分类 %q 画到窗口外：%+v", cat, r)
+		}
+	}
+}
+
 // 主窗口最小宽度下筛选条排得下：标签不被压缩成「评…」，刷新也没被挤到下一行。
 func TestScoresFiltersFitMainMinWidth(t *testing.T) {
 	a := testApp(t)

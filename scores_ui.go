@@ -380,30 +380,31 @@ func scoreCategorySelect(c *ui.Context, selected *string, active *int, options [
 	})
 
 	lobeoverlay.Popover(c, tr, open, lobeoverlay.PopoverProps{Placement: lobeoverlay.Bottom}, func() {
-		ui.Column(c).Width(max(200, tr.Bounds().W-24)).Children(func() {
-			ui.Scroll(c).MaxHeight(256).Children(func() {
-				for i, o := range options {
-					item := ui.Row(c.Key(o.Value)).Disabled(o.Disabled).Padding(6, 12).MinHeight(32).
-						Gap(8).AlignItems(ui.Center).Radius(tk.BorderRadiusSM).
-						AlignSelf(ui.Stretch).FontSize(14).TextColor(tk.Text)
-					if i == *active || item.Hovered() {
-						item.Background(tk.FillTertiary).Cursor(ui.CursorPointer)
-					} else if !o.Disabled {
-						item.Cursor(ui.CursorPointer)
-					}
-					item.Children(func() {
-						ui.Text(c, o.Label).Grow(1).SingleLine()
-						if o.Value == *selected {
-							ui.Icon(c, lucide.Check()).FontSize(14).TextColor(tk.Primary).
-								Margin(0, 0, 0, 8)
-						}
-					})
-					if item.Clicked() && !o.Disabled {
-						*selected = o.Value
-						*open = false
-					}
+		// 滚动层直接做弹层的子节点：外面再套普通 Column 时，它的最小高度等于
+		// 内容高度，mygo 压低弹层后不会收缩，选项仍会溢出到窗口外。滚动层没有
+		// 这个下限，Shrink 让它跟着弹层缩短，超出的选项在里面滚动。
+		ui.Scroll(c).Width(max(200, tr.Bounds().W-24)).MaxHeight(256).Shrink(1).Children(func() {
+			for i, o := range options {
+				item := ui.Row(c.Key(o.Value)).Disabled(o.Disabled).Padding(6, 12).MinHeight(32).
+					Gap(8).AlignItems(ui.Center).Radius(tk.BorderRadiusSM).
+					AlignSelf(ui.Stretch).FontSize(14).TextColor(tk.Text)
+				if i == *active || item.Hovered() {
+					item.Background(tk.FillTertiary).Cursor(ui.CursorPointer)
+				} else if !o.Disabled {
+					item.Cursor(ui.CursorPointer)
 				}
-			})
+				item.Children(func() {
+					ui.Text(c, o.Label).Grow(1).SingleLine()
+					if o.Value == *selected {
+						ui.Icon(c, lucide.Check()).FontSize(14).TextColor(tk.Primary).
+							Margin(0, 0, 0, 8)
+					}
+				})
+				if item.Clicked() && !o.Disabled {
+					*selected = o.Value
+					*open = false
+				}
+			}
 		})
 	})
 	return tr
