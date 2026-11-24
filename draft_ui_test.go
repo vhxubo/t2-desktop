@@ -158,6 +158,55 @@ func TestDraftsRowOpensCompose(t *testing.T) {
 	}
 }
 
+// 草稿行的删除按钮悬停才出现：鼠标从行上移到按钮时浮层必须还在，
+// 否则点击落不到按钮上，单条草稿就删不掉。
+func TestDraftsRowDeleteOne(t *testing.T) {
+	a := testDraftsApp(t)
+	a.compose = newComposeState()
+	a.compose.title = "要删掉的草稿"
+	a.flushDrafts()
+	id := a.compose.draftID
+	a.compose = newComposeState()
+	a.compose.title = "留下的草稿"
+	a.flushDrafts()
+	a.compose = nil
+	a.showDrafts()
+
+	tt := ui.NewTester(a.view, 1200, 900)
+	tt.Frame()
+	row, ok := tt.Find("打开草稿：要删掉的草稿")
+	if !ok {
+		t.Fatalf("草稿行没画出来：%q", tt.Texts())
+	}
+	tt.Move(row.X+row.W/2, row.Y+row.H/2)
+	tt.Frame()
+	del, ok := tt.Find("删除草稿")
+	if !ok {
+		t.Fatalf("悬停后没有删除按钮：%q", tt.Texts())
+	}
+	// 指针移到浮层按钮上，浮层不能消失，这是单条删除能否点中的关键。
+	tt.Move(del.X+del.W/2, del.Y+del.H/2)
+	tt.Frame()
+	if _, ok := tt.Find("删除草稿"); !ok {
+		t.Fatalf("移到删除按钮上后浮层消失：%q", tt.Texts())
+	}
+	if err := tt.Click("删除草稿"); err != nil {
+		t.Fatalf("点删除失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+
+	rows := a.drafts.rows()
+	if len(rows) != 1 || rows[0].Title != "留下的草稿" {
+		t.Fatalf("只该删掉指定的一条：%+v", rows)
+	}
+	if _, ok := a.drafts.find(id); ok {
+		t.Error("删掉的草稿还在 store 里")
+	}
+	if a.compose != nil && a.compose.title != "" {
+		t.Error("点删除不该顺带打开草稿")
+	}
+}
+
 func TestDraftsRowReusesOpenDetailWindow(t *testing.T) {
 	a := testDraftsApp(t)
 	d := &detailState{shortID: "abc123", draft: "旧内容"}

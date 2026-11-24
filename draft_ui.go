@@ -118,6 +118,8 @@ func (a *app) draftGroup(c *ui.Context, title string, rows []draftEntry, list *u
 
 // draftRow 画一条草稿。行表面复用 feedRowSurface，右侧「打开 / 复制 / 删除」
 // 在悬停时才出现（与 display.ListItem.Actions 同一套行为），删除用错误色。
+// 悬停判定放在外层 Box 上：若拿可点的行本身判 hover，鼠标一移到浮层按钮上
+// 行就失去 hover、浮层随即消失，删除按钮根本点不到。
 func (a *app) draftRow(c *ui.Context, e draftEntry) {
 	tk := lobetheme.TokensOf(c)
 	w, _ := c.Size()
@@ -138,66 +140,71 @@ func (a *app) draftRow(c *ui.Context, e draftEntry) {
 	}
 
 	ui.Column(c).FillWidth().Children(func() {
-		row := feedRowSurface(c).Padding(10, 12)
-		row.Label("打开草稿：" + headline)
-		row.Children(func() {
-			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, icon).Size(16, 16).TextColor(tk.TextSecondary).Shrink(0)
-				ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-					ui.Text(c, headline).FontSize(tk.FontSizeLG).Bold().
-						MaxLines(1).TextColor(tk.Text)
-					if preview != "" {
-						lines := 2
-						if narrow {
-							lines = 1
+		// 用一层不可点的 Box 包住整行：浮层按钮在上面时，行本身不再是
+		// hover 目标，拿它判 hover 会让浮层在点击瞬间消失（见函数注释）。
+		cell := ui.Box(c).AlignSelf(ui.Stretch)
+		cell.Children(func() {
+			row := feedRowSurface(c).Padding(10, 12)
+			row.Label("打开草稿：" + headline)
+			row.Children(func() {
+				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+					ui.Icon(c, icon).Size(16, 16).TextColor(tk.TextSecondary).Shrink(0)
+					ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+						ui.Text(c, headline).FontSize(tk.FontSizeLG).Bold().
+							MaxLines(1).TextColor(tk.Text)
+						if preview != "" {
+							lines := 2
+							if narrow {
+								lines = 1
+							}
+							ui.Text(c, preview).FontSize(tk.FontSizeSM).MaxLines(lines).
+								TextColor(tk.TextSecondary)
 						}
-						ui.Text(c, preview).FontSize(tk.FontSizeSM).MaxLines(lines).
-							TextColor(tk.TextSecondary)
-					}
-					ui.Text(c, meta).FontSize(tk.FontSizeSM).Font(sidebarFont).
-						MaxLines(1).TextColor(tk.TextDescription)
-				})
-				// 给右侧动作留出位置，文字不会被浮在上面的按钮压住。
-				ui.Box(c).Width(180).Shrink(0)
-			})
-		})
-		if row.Clicked() {
-			a.restoreDraft(e)
-		}
-		if row.Hovered() {
-			ui.Row(c).Absolute().Right(12).Top(0).Bottom(0).
-				Gap(4).AlignItems(ui.Center).Children(func() {
-				if narrow {
-					open := action.ActionIcon(c, lucide.SquarePen(), action.ActionIconProps{
-						BlockSize: 28, GlyphSize: 14, Title: "打开",
+						ui.Text(c, meta).FontSize(tk.FontSizeSM).Font(sidebarFont).
+							MaxLines(1).TextColor(tk.TextDescription)
 					})
-					if open.Clicked() {
+					// 给右侧动作留出位置，文字不会被浮在上面的按钮压住。
+					ui.Box(c).Width(180).Shrink(0)
+				})
+			})
+			if row.Clicked() {
+				a.restoreDraft(e)
+			}
+			if cell.Hovered() || cell.FocusWithin() {
+				ui.Row(c).Absolute().Right(12).Top(0).Bottom(0).
+					Gap(4).AlignItems(ui.Center).Children(func() {
+					if narrow {
+						open := action.ActionIcon(c, lucide.SquarePen(), action.ActionIconProps{
+							BlockSize: 28, GlyphSize: 14, Title: "打开",
+						})
+						if open.Clicked() {
+							a.restoreDraft(e)
+						}
+					} else if action.Button(c, "打开", action.ButtonProps{
+						Size: lobetheme.Small, Variant: action.Text,
+					}).Clicked() {
 						a.restoreDraft(e)
 					}
-				} else if action.Button(c, "打开", action.ButtonProps{
-					Size: lobetheme.Small, Variant: action.Text,
-				}).Clicked() {
-					a.restoreDraft(e)
-				}
-				if e.Kind == draftKindReply {
-					copyBtn := action.ActionIcon(c, lucide.Copy(), action.ActionIconProps{
-						BlockSize: 28, GlyphSize: 14, Title: "复制正文",
+					if e.Kind == draftKindReply {
+						copyBtn := action.ActionIcon(c, lucide.Copy(), action.ActionIconProps{
+							BlockSize: 28, GlyphSize: 14, Title: "复制正文",
+						})
+						if copyBtn.Clicked() {
+							a.copyToClipboard(c, e.Text, toastMain, "已复制草稿正文")
+						}
+					}
+					del := action.ActionIcon(c, lucide.Trash2(), action.ActionIconProps{
+						BlockSize: 28, GlyphSize: 14, Title: "删除草稿", Danger: true,
 					})
-					if copyBtn.Clicked() {
-						a.copyToClipboard(c, e.Text, toastMain, "已复制草稿正文")
+					if del.Clicked() {
+						a.deleteDraft(e.ID)
+						if a.win != nil {
+							a.win.Invalidate()
+						}
 					}
-				}
-				del := action.ActionIcon(c, lucide.Trash2(), action.ActionIconProps{
-					BlockSize: 28, GlyphSize: 14, Title: "删除草稿", Danger: true,
 				})
-				if del.Clicked() {
-					a.deleteDraft(e.ID)
-					if a.win != nil {
-						a.win.Invalidate()
-					}
-				}
-			})
-		}
+			}
+		})
 	})
 }
 
