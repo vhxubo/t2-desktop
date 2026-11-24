@@ -259,13 +259,15 @@ type app struct {
 	readingList   ui.ListState
 	// later 是当前账号的稍后再看（见 watch_later.go），laterFor 是它所属的
 	// 作用域；watchLaterPrefs 决定打开后移除还是保留。laterTab 是页面里的
-	// 分段（0 稍后再看 / 1 浏览历史），laterList 是列表状态。页面见
-	// watch_later_ui.go，和首页、草稿箱一样内嵌在主窗口，都只在主线程读写。
+	// 分段（0 稍后再看 / 1 浏览历史），lastLaterTab 用来接住分段切换并复位
+	// 两个列表的滚动位置，laterList 是列表状态。页面见 watch_later_ui.go，
+	// 和首页、草稿箱一样内嵌在主窗口，都只在主线程读写。
 	later           []watchLaterRecord
 	laterFor        string
 	laterLoaded     bool
 	laterList       ui.ListState
 	laterTab        int
+	lastLaterTab    int
 	watchLaterPrefs *watchLaterPrefsStore
 	// readAt / commentReadAt 是当前账号在本机读过的帖子与评论（id → 首次打开
 	// 时间），列表据此把读过的行置灰（见 post_read.go）。两者和阅读记录一样

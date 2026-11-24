@@ -194,6 +194,35 @@ func TestWatchLaterPageRendersAndRemovesOnOpen(t *testing.T) {
 	}
 }
 
+// 稍后再看页的分段和评分榜排序条用同一套 Segmented：点「浏览历史」能切段，
+// 列表随之换成阅读记录。分段绑定持久状态，切换由 lastLaterTab 接住并复位滚动。
+func TestWatchLaterTabSwitchWithSegmented(t *testing.T) {
+	a := testApp(t)
+	a.addWatchLater(Item{ShortID: "P1", Title: "稍后要读的帖子"}, nil)
+	a.recordReading(Item{ShortID: "R1", Title: "浏览过的帖子"}, nil)
+	a.showWatchLater()
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if !tt.HasText("稍后要读的帖子") {
+		t.Fatalf("初始段没渲染：%q", tt.Texts())
+	}
+
+	if err := tt.Click("浏览历史"); err != nil {
+		t.Fatalf("切换分段失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if a.laterTab != 1 {
+		t.Fatalf("点浏览历史后 laterTab=%d，期望 1", a.laterTab)
+	}
+	if a.lastLaterTab != 1 {
+		t.Errorf("lastLaterTab 没跟上分段：%d", a.lastLaterTab)
+	}
+	if !tt.HasText("浏览过的帖子") || tt.HasText("稍后要读的帖子") {
+		t.Errorf("分段切换后列表没换：%q", tt.Texts())
+	}
+}
+
 // 保留模式下页面区分已读与未读：未读带「未读」标签，读过的带「已读」且
 // 标题置灰。
 func TestWatchLaterPageMarksRead(t *testing.T) {

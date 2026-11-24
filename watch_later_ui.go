@@ -7,7 +7,6 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
-	"github.com/lobehub/lobe-mygo/pkg/nav"
 	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
@@ -83,24 +82,22 @@ func (a *app) watchLaterPage(c *ui.Context) {
 	})
 }
 
-// watchLaterTabBar 是页头下方的一行：方形下划线 tab 切两段，右侧是当前段
-// 的条数与清空入口。tab 样式与设置、详情页一致（TabsSquare + Small），
-// 左右留白收进 feedInset，和列表同一列宽。清空只清当前账号，不碰服务端
-// 的收藏 / 书签。
+// watchLaterTabBar 是页头下方的一行：分段控件切两段，右侧是当前段的条数与
+// 清空入口。分段和评分榜的排序条同一套（action.Segmented + Small），换成
+// 胶囊轨道与滑动指示块，不再是方形下划线 tab。左右留白收进 feedInset，
+// 和列表同一列宽。清空只清当前账号，不碰服务端的收藏 / 书签。
 func (a *app) watchLaterTabBar(c *ui.Context) {
 	tk := lobetheme.TokensOf(c)
 	ui.Row(c).FillWidth().Shrink(0).Padding(0, feedInset(c), 8, feedInset(c)).
 		Gap(8).AlignItems(ui.Center).Children(func() {
 		c.Key("watch-later-tabs")
-		sel := a.laterTab
-		// 和设置 / 详情页的 tab 同一套：方形下划线 + Small，不用胶囊默认效果。
-		nav.Tabs(c, &sel, nav.TabsProps{
-			Items:   []nav.TabItem{{Label: "稍后再看"}, {Label: "浏览历史"}},
-			Variant: nav.TabsSquare,
-			Size:    lobetheme.Small,
-		}, nil)
-		if sel != a.laterTab && sel >= 0 && sel < 2 {
-			a.laterTab = sel
+		// 和评分榜排序条同一套：Small 胶囊分段，绑定持久状态，切换由下面的
+		// lastLaterTab 比对接住，顺手把两个列表滚回顶部。
+		action.Segmented(c, &a.laterTab, []string{"稍后再看", "浏览历史"}, action.SegmentedProps{
+			Size: lobetheme.Small,
+		})
+		if a.laterTab != a.lastLaterTab {
+			a.lastLaterTab = a.laterTab
 			a.laterList.ScrollTo(0, ui.Start)
 			a.readingList.ScrollTo(0, ui.Start)
 		}
