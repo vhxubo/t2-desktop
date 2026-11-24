@@ -19,7 +19,8 @@ func trayLabels(menu *mygo.Menu) []string {
 	return out
 }
 
-// trayItem 按 id 取托盘菜单里的一项，取不到就报出整份菜单，方便定位。
+// trayItem 按 id 取托盘菜单里的一项（含二级菜单），取不到就报出整份菜单，
+// 方便定位。
 func trayItem(t *testing.T, menu *mygo.Menu, id string) *mygo.MenuItem {
 	t.Helper()
 	it := menu.ItemByID(id)
@@ -27,6 +28,18 @@ func trayItem(t *testing.T, menu *mygo.Menu, id string) *mygo.MenuItem {
 		t.Fatalf("托盘菜单里没有 %q：%q", id, trayLabels(menu))
 	}
 	return it
+}
+
+// traySubLabels 是一个账号二级菜单的文案，分隔线记为空串。
+func traySubLabels(item *mygo.MenuItem) []string {
+	if item == nil || item.Submenu == nil {
+		return nil
+	}
+	var out []string
+	for _, child := range item.Submenu {
+		out = append(out, child.Label)
+	}
+	return out
 }
 
 // 一个账号都没有时托盘顶部是「未登录」，紧接着是登录与注册两个入口；
@@ -92,7 +105,12 @@ func TestTrayMenuItemsCarryIcons(t *testing.T) {
 	b := testBook(t)
 	addTestAccount(t, b, "jimmy")
 	menu := b.trayMenu()
-	ids := []string{trayAccountIDPrefix + b.accountsView()[0].ID, trayAccountsID, trayCloseAllID, trayQuitID}
+	id := b.accountsView()[0].ID
+	ids := []string{
+		trayAccountIDPrefix + id, trayOpenIDPrefix + id, trayPostIDPrefix + id,
+		trayMomentIDPrefix + id, trayLogoutIDPrefix + id,
+		trayAccountsID, trayCloseAllID, trayQuitID,
+	}
 	for _, id := range ids {
 		if it := trayItem(t, menu, id); it.Icon == nil {
 			t.Errorf("托盘菜单项 %q 没有图标", id)
@@ -126,16 +144,69 @@ func TestTrayMenuListsEveryAccountWithUnread(t *testing.T) {
 	}
 }
 
-// 点账号那一行就是打开它的窗口：窗口是懒建的（测试里没有主循环，建不出来），
-// 但「最近用过的账号」要立刻记下，托盘左键与启动时的前台窗口都读它。
+// 二级菜单里的「打开窗口」就是打开这个账号的窗口：窗口是懒建的（测试里没有
+// 主循环，建不出来），但「最近用过的账号」要立刻记下，托盘左键与启动时的前台
+// 窗口都读它。多账号时点另一个账号的子项也不会串到前一个账号上。
 func TestTrayAccountEntryRemembersTheAccount(t *testing.T) {
 	b := testBook(t)
 	jimmy := addTestAccount(t, b, "jimmy")
 	amy := addTestAccount(t, b, "amy")
-	it := trayItem(t, b.trayMenu(), trayAccountIDPrefix+jimmy.ID)
+	menu := b.trayMenu()
+	if got := traySubLabels(trayItem(t, menu, trayAccountIDPrefix+jimmy.ID)); !reflect.DeepEqual(got,
+		[]string{"打开窗口", "发帖", "发动态", "", "退出登录"}) {
+		t.Fatalf("账号二级菜单是 %q", got)
+	}
+	it := trayItem(t, menu, trayOpenIDPrefix+jimmy.ID)
 	it.Click(it, nil)
 	if got := b.activeAccountID(); got != jimmy.ID {
 		t.Fatalf("点过 %q 之后最近使用的账号是 %q", amy.ID, got)
+	}
+}
+
+// 每个账号各带一份二级菜单，发帖 / 发动态打开发帖窗口的对应模式，退出登录
+// 只退出这一行所属的账号；未登录时没有二级菜单。
+func TestTrayAccountSubmenuActionsTargetTheirAccount(t *testing.T) {
+	b := testBook(t)
+	jimmy := addTestAccount(t, b, "jimmy")
+	amy := addTestAccount(t, b, "amy")
+	menu := b.trayMenu()
+
+	// 给两个账号各挂一份界面状态：headless 下发帖窗口不会真建出来，但模式会
+	// 写进各自的 compose，足以看出动作落到了哪个账号。
+	jimmyApp := &app{auth: jimmy.auth, book: b, accountID: jimmy.ID}
+	amyApp := &app{auth: amy.auth, book: b, accountID: amy.ID}
+	jimmy.app, amy.app = jimmyApp, amyApp
+
+	post := trayItem(t, menu, trayPostIDPrefix+amy.ID)
+	post.Click(post, nil)
+	if jimmyApp.compose != nil {
+		t.Error("点 amy 的「发帖」不该动 jimmy 的发帖窗口")
+	}
+	if amyApp.compose == nil || amyApp.compose.mode != composeModePost {
+		t.Fatalf("amy 的发帖模式 = %+v，期望帖子模式", amyApp.compose)
+	}
+
+	moment := trayItem(t, menu, trayMomentIDPrefix+jimmy.ID)
+	moment.Click(moment, nil)
+	if amyApp.compose == nil || amyApp.compose.mode != composeModePost {
+		t.Fatalf("点 jimmy 的「发动态」改了 amy 的模式：%+v", amyApp.compose)
+	}
+	if jimmyApp.compose == nil || jimmyApp.compose.mode != composeModeMoment {
+		t.Fatalf("jimmy 的发动态模式 = %+v，期望动态模式", jimmyApp.compose)
+	}
+
+	logout := trayItem(t, menu, trayLogoutIDPrefix+amy.ID)
+	logout.Click(logout, nil)
+	if got := b.accountsView(); len(got) != 1 || got[0].ID != jimmy.ID {
+		t.Fatalf("退出 amy 之后账号列表 = %v，期望只剩 jimmy", got)
+	}
+	if jimmyApp.compose == nil {
+		t.Error("退出别的账号不该丢掉 jimmy 的发帖窗口")
+	}
+
+	empty := testBook(t).trayMenu()
+	if it := empty.ItemByID(trayAccountIDPrefix + "none"); it == nil || it.Submenu != nil {
+		t.Error("未登录的状态行不该带二级菜单")
 	}
 }
 

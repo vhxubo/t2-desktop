@@ -7,12 +7,14 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
 )
 
 // 系统托盘：Windows 是任务栏通知区域，macOS 是菜单栏。左键点图标把最近用过
 // 的账号窗口带回前台；没有账号时回到未登录的主页面（账号面板在右键菜单里）。
 // 右键弹出菜单，列出挂着的每个账号（带未读数）、账号管理入口、关闭全部
-// （收进托盘，应用继续在后台跑）与退出。
+// （收进托盘，应用继续在后台跑）与退出。登录后每个账号行展开二级菜单：
+// 打开窗口、发帖、发动态、退出登录；点开那一行不再直接回到窗口。
 //
 // 托盘是进程级资源：多账号共用这一个图标，菜单每次右键现建一份，账号列表、
 // 未读数因此不会落后于应用内的状态；菜单挂着时左键也会弹出菜单，所以弹出后
@@ -29,11 +31,16 @@ const (
 	trayToolTip = "T2 Desktop"
 
 	trayAccountIDPrefix = "tray-account-"
-	trayAccountsID      = "tray-accounts"
-	trayCloseAllID      = "tray-close-all"
-	trayLoginID         = "tray-login"
-	traySignupID        = "tray-signup"
-	trayQuitID          = "tray-quit"
+	// 账号二级菜单各项的 id 前缀：后接账号 id，菜单关闭前就能定位到具体账号。
+	trayOpenIDPrefix   = "tray-open-"
+	trayPostIDPrefix   = "tray-post-"
+	trayMomentIDPrefix = "tray-moment-"
+	trayLogoutIDPrefix = "tray-logout-"
+	trayAccountsID     = "tray-accounts"
+	trayCloseAllID     = "tray-close-all"
+	trayLoginID        = "tray-login"
+	traySignupID       = "tray-signup"
+	trayQuitID         = "tray-quit"
 )
 
 // trayMenuIcons 是托盘菜单各项的图标：把现有的 *ui.SVG 渲染成菜单图标。全部
@@ -44,6 +51,10 @@ var (
 	traySignupMI   *mygo.MenuIcon
 	trayAccountsMI *mygo.MenuIcon
 	trayAccountMI  *mygo.MenuIcon
+	trayOpenMI     *mygo.MenuIcon
+	trayPostMI     *mygo.MenuIcon
+	trayMomentMI   *mygo.MenuIcon
+	trayLogoutMI   *mygo.MenuIcon
 	trayCloseAllMI *mygo.MenuIcon
 	trayQuitMI     *mygo.MenuIcon
 )
@@ -60,6 +71,10 @@ func init() {
 	traySignupMI = makeMI(signupIcon)
 	trayAccountsMI = makeMI(accountsIcon)
 	trayAccountMI = makeMI(profileIcon)
+	trayOpenMI = makeMI(lucide.AppWindow())
+	trayPostMI = makeMI(lucide.SquarePen())
+	trayMomentMI = makeMI(lucide.PenLine())
+	trayLogoutMI = makeMI(lucide.LogOut())
 	trayCloseAllMI = makeMI(collapseIcon)
 	trayQuitMI = makeMI(closeIcon)
 }
@@ -147,7 +162,8 @@ func (b *accountBook) destroyTray() {
 	tray.Destroy()
 }
 
-// trayMenu 建右键菜单：每个账号一行（带未读数），然后是账号管理与退出。
+// trayMenu 建右键菜单：每个账号一行（带未读数）并带自己的二级菜单，然后是
+// 账号管理与退出。未登录时只有状态、登录与注册，没有二级菜单。
 func (b *accountBook) trayMenu() *mygo.Menu {
 	accounts := b.accountsView()
 	var items []*mygo.MenuItem
@@ -178,10 +194,10 @@ func (b *accountBook) trayMenu() *mygo.Menu {
 				label += fmt.Sprintf("（%d 条未读）", acc.Unread)
 			}
 			items = append(items, &mygo.MenuItem{
-				ID:    trayAccountIDPrefix + id,
-				Label: label,
-				Icon:  trayAccountMI,
-				Click: func(*mygo.MenuItem, *mygo.Window) { b.raiseAccountWindow(id) },
+				ID:      trayAccountIDPrefix + id,
+				Label:   label,
+				Icon:    trayAccountMI,
+				Submenu: b.trayAccountSubmenu(id),
 			})
 		}
 	}
@@ -208,4 +224,37 @@ func (b *accountBook) trayMenu() *mygo.Menu {
 		},
 	)
 	return mygo.NewMenu(items)
+}
+
+// trayAccountSubmenu 是一个账号的二级菜单：打开窗口、发帖、发动态、分隔线、
+// 退出登录。各项都绑住账号 id，多账号时不会串到别的会话上；菜单建在右键弹
+// 出时，所以读到的始终是当下挂着的账号。
+func (b *accountBook) trayAccountSubmenu(id string) []*mygo.MenuItem {
+	return []*mygo.MenuItem{
+		{
+			ID:    trayOpenIDPrefix + id,
+			Label: "打开窗口",
+			Icon:  trayOpenMI,
+			Click: func(*mygo.MenuItem, *mygo.Window) { b.raiseAccountWindow(id) },
+		},
+		{
+			ID:    trayPostIDPrefix + id,
+			Label: "发帖",
+			Icon:  trayPostMI,
+			Click: func(*mygo.MenuItem, *mygo.Window) { b.openAccountCompose(id, false) },
+		},
+		{
+			ID:    trayMomentIDPrefix + id,
+			Label: "发动态",
+			Icon:  trayMomentMI,
+			Click: func(*mygo.MenuItem, *mygo.Window) { b.openAccountCompose(id, true) },
+		},
+		mygo.Separator(),
+		{
+			ID:    trayLogoutIDPrefix + id,
+			Label: "退出登录",
+			Icon:  trayLogoutMI,
+			Click: func(*mygo.MenuItem, *mygo.Window) { b.logoutAccount(id) },
+		},
+	}
 }
