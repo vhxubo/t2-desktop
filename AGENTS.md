@@ -242,7 +242,8 @@ a pure white page.
 
 其中构建、格式、静态检查、回归测试、占位标记已由
 `.github/workflows/release.yml` 的 `release-gate` 作业在推送 tag 时自动拦截；
-该作业不过就不进入多平台构建，见 `RELEASE.md`。
+同一套三平台回归也在 PR 和 `main` 推送时运行。启用本地 `pre-push` 后，推送前
+会检查实际待推送的提交。安装方式见 `RELEASE.md`。
 
 ### 1. 构建与运行必须正常
 
@@ -308,20 +309,19 @@ a pure white page.
 代理可独立完成「本地准备」，但**触发 CI 公开发版的远程推送必须由人工执行**——
 推 tag 即触发构建并对外发布，不是代理该替人做的决定。
 
-1. **本地先过发布门禁**：在本地跑与 `release-gate` 一致的命令，全绿才继续——
-   `CGO_ENABLED=0 go build ./...`、`gofmt -l .` 无输出、
-   `go tool mygo vet .`、`CGO_ENABLED=0 go test ./...`、且无
-   `TODO`/`FIXME`/`panic("not implemented")` 占位。门禁不过先修，不进下一步。
+1. **本地先过发布门禁**：在仓库根目录运行 `bash scripts/check.sh`，执行与
+   `release-gate` 共用的构建、格式、静态检查、占位扫描和回归测试。门禁不过先修。
 2. **改版本号**：`mygo.json` 的 `version` 递增（如 `0.2.0` → `0.3.0`）；预发布带
    `-beta.1` 之类的后缀（只发 prerelease，不占 `latest`）。
 3. **写更新日志**：把 `CHANGELOG.md` 顶部「未发布」小节改成 `## <version>`，并
-   在其上新开一个空的「未发布」占位（lead-in 文案保留）。
+   在其上新开一个空的「未发布」占位（lead-in 文案保留）。运行
+   `bash scripts/release-metadata.sh v<version>` 校验版本与发布说明。
 4. **本地提交**：英文信息 `chore: release vX.Y.Z`（见上方「提交信息」硬规则）。
 5. **本地打 tag**：`git tag v<version>`，tag 必须与 `mygo.json` 的 `version` 完全
    相等（含预发布后缀），否则 release 工作流会在校验步 `exit 1`。
 6. **推远程交由人工**：代理**不**自动 `git push`。由人在本地确认后执行
-   `git push origin main && git push origin v<version>`，推送 tag 即触发 CI：
-   `release-gate` 门禁 → 多平台构建并签名更新包 → 自动发布为 `latest`
+   `git push --atomic origin main refs/tags/v<version>`，推送 tag 即触发 CI：
+   `release-gate` 门禁 → 多平台构建并签名更新包 → 汇总校验产物 → 自动发布为 `latest`
    （带预发布后缀则只发 prerelease）。仓库须为 Public，且配置了
    `MYGO_UPDATER_PRIVATE_KEY` secret，否则构建作业会报错退出。
 

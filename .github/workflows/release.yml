@@ -1,105 +1,50 @@
 name: Release
 
-# 推送 tag 即发布：tag 必须与 mygo.json 的 version 一致（例如 v0.1.0）。
-# 每个平台在自己的 runner 上并行构建，签名更新包，并上传到同一个 draft
-# release；全部平台成功后再自动发布，应用里的「检查更新」读取的就是它。
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write # 创建 draft release，并向其中上传构建产物
+  contents: read
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  # MyGo 不需要 cgo；关掉它也能让构建结果与 go.mod 无关地保持可复现。
   CGO_ENABLED: "0"
 
 jobs:
-  draft-release:
+  metadata:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v7
-      - name: 校验 tag 与 mygo.json 的版本
-        id: version
-        run: |
-          set -euo pipefail
-          version="$(jq -r .version mygo.json)"
-          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "tag $GITHUB_REF_NAME 与 mygo.json 的 version $version 不一致；先改版本再打 tag。" >&2
-            exit 1
-          fi
-          # 预发布版本（带 -beta.1 之类的后缀）只发布成 prerelease，不占用
-          # latest，普通用户不会被提示升级到它。
-          case "$version" in
-            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
-            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
-          esac
-      - name: 创建 draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
-        run: |
-          set -euo pipefail
-          flags=()
-          if [ "$PRERELEASE" = "true" ]; then
-            flags+=(--prerelease)
-          fi
-          # 重跑工作流时沿用已有的 draft，只替换里面的文件。
-          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --draft --verify-tag --title "$GITHUB_REF_NAME" --generate-notes "${flags[@]}"
-          fi
-
-  # 发版硬性门禁：对应 AGENTS.md「发版要求」。任一检查不达标即让工作流失败，
-  # 不会进入多平台构建，避免带着残缺或隐患的代码上线。
-  release-gate:
-    needs: draft-release
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
-          cache: true
-      - name: 构建验证
-        run: go build ./...
-      - name: 格式检查（gofmt 无输出）
+          persist-credentials: false
+      - name: 校验版本、发布说明和签名配置
+        id: version
+        env:
+          HAS_SIGNING_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY != '' }}
         run: |
-          set -euo pipefail
-          out="$(gofmt -l .)"
-          if [ -n "$out" ]; then
-            echo "以下文件未格式化，需 gofmt -w 处理：" >&2
-            echo "$out" >&2
+          bash scripts/release-metadata.sh "$GITHUB_REF_NAME" >/dev/null
+          if [[ "$HAS_SIGNING_KEY" != true ]]; then
+            echo '缺少 MYGO_UPDATER_PRIVATE_KEY secret。' >&2
             exit 1
           fi
-      - name: 静态检查
-        run: go tool mygo vet .
-      - name: 禁止未完成的占位标记
-        run: |
-          set -euo pipefail
-          # 发版不允许残留 TODO/FIXME/XXX/HACK 注释与 panic("not implemented") 占位。
-          if grep -rniE "//\s*(TODO|FIXME|XXX|HACK)|panic\(\s*\"(not implemented|unimplemented|TODO)\"" \
-                --include="*.go" .; then
-            echo "发现未完成的占位标记（见上方），发版前必须清理。" >&2
-            exit 1
-          fi
-      - name: 安装中文字体（UI 像素测试需要 CJK 字形）
-        # ubuntu-latest 默认不带中文字体：帖子标题等中文在标题栏外的像素断言
-        # 会因此留白，导致已读置灰等依赖文字着色的测试误判。装上后中文才能
-        # 真正落盘成像素，渲染结果与 Windows/macOS 一致。
-        run: sudo apt-get update && sudo apt-get install -y fonts-wqy-zenhei
-      - name: 回归测试
-        run: go test ./...
+          case "${GITHUB_REF_NAME%%+*}" in
+            *-*) echo 'prerelease=true' >> "$GITHUB_OUTPUT" ;;
+            *)   echo 'prerelease=false' >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  release-gate:
+    needs: metadata
+    uses: ./.github/workflows/regression.yml
 
   build:
-    needs: [draft-release, release-gate]
+    needs: release-gate
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -107,49 +52,78 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS 的 dmg 只能在 macOS runner 上制作；Apple Silicon 与 Intel
-          # 各出一份，各自带自己的更新清单。没有配置 Developer ID 时是 ad hoc
-          # 签名，别的 Mac 首次打开会被 Gatekeeper 拦下；在 mygo.json 里设置
-          # macos.signingIdentity / macos.notarize 后即自动签名并公证。
           - { name: macOS, os: macos-latest, platform: "darwin/arm64,darwin/amd64" }
-          # Windows 的 exe 与安装包可以在 Ubuntu 上交叉编译，NSIS 从 apt 装。
           - { name: Windows, os: ubuntu-latest, platform: "windows/amd64,windows/arm64" }
           - { name: Linux, os: ubuntu-latest, platform: "linux/amd64,linux/arm64" }
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
-      - name: 检查更新签名密钥
-        env:
-          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
-        run: |
-          if [ -z "$MYGO_UPDATER_PRIVATE_KEY" ]; then
-            echo "缺少 MYGO_UPDATER_PRIVATE_KEY secret：填入 mygo keygen 生成的 mygo-update.key 内容。" >&2
-            exit 1
-          fi
-      - name: 安装 NSIS（Windows 安装包）
+      - name: 安装 NSIS
         if: matrix.name == 'Windows'
         run: sudo apt-get update && sudo apt-get install -y nsis
-      - name: 构建并上传
+      - name: 构建并签名更新包
         env:
-          GH_TOKEN: ${{ github.token }}
           MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
-        run: go tool mygo build -platform "${{ matrix.platform }}" -upload
+        run: go tool mygo build -platform "${{ matrix.platform }}" -o build/release
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.name }}
+          path: |
+            build/release/SHA256SUMS
+            build/release/*/update-*.json
+            build/release/*/*-setup-*.exe
+            build/release/*/*.dmg
+            build/release/*/*.deb
+            build/release/*/*.rpm
+            build/release/*/*.tar.gz
+            build/release/*/*.delta
+            build/release/*/install.sh
+            build/release/*/install.ps1
+          if-no-files-found: error
+          overwrite: true
+          compression-level: 0
 
   publish:
-    needs: build
+    needs: [metadata, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
-      - name: 发布 release
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: artifacts
+      - name: 校验并汇总产物
+        run: bash scripts/collect-release-assets.sh artifacts release-assets "$GITHUB_REF_NAME"
+      - name: 上传到草稿并发布
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ needs.metadata.outputs.prerelease }}
         run: |
           set -euo pipefail
-          case "$GITHUB_REF_NAME" in
-            *-*) gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-                   --draft=false --prerelease ;;
-            *)   gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-                   --draft=false ;;
-          esac
+          notes="$RUNNER_TEMP/release-notes.md"
+          bash scripts/release-metadata.sh "$GITHUB_REF_NAME" > "$notes"
+          flags=(--latest)
+          if [[ "$PRERELEASE" == true ]]; then flags=(--prerelease --latest=false); fi
+
+          if draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft'); then
+            if [[ "$draft" != true ]]; then
+              echo '该版本已发布，不覆盖现有发行包。' >&2
+              exit 1
+            fi
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$notes"
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "$GITHUB_REF_NAME" \
+              --notes-file "$notes" "${flags[@]}"
+          fi
+          gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false "${flags[@]}"

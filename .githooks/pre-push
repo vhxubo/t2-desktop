@@ -1,0 +1,40 @@
+#!/bin/sh
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+snapshot=
+cleanup() {
+  if [ -n "$snapshot" ]; then
+    git -C "$root" worktree remove --force "$snapshot" || rmdir "$snapshot"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+checked=' '
+while read -r local_ref local_oid remote_ref remote_oid; do
+  case "$local_ref" in '(delete)') continue ;; esac
+  case "$remote_ref" in
+    refs/heads/*) tag= ;;
+    refs/tags/v*) tag=${remote_ref#refs/tags/} ;;
+    *) continue ;;
+  esac
+  commit=$(git rev-parse --verify "$local_oid^{commit}")
+  case "$checked" in
+    *" $commit "*) test_commit=false ;;
+    *) test_commit=true ;;
+  esac
+  if [ -z "$tag" ] && [ "$test_commit" = false ]; then continue; fi
+
+  snapshot=$(mktemp -d "${TMPDIR:-/tmp}/t2-pre-push.XXXXXXXX")
+  git -C "$root" worktree add --quiet --detach "$snapshot" "$commit" </dev/null
+  printf '校验即将推送的 %s（%s）\n' "$remote_ref" "$commit"
+  (
+    cd "$snapshot"
+    if [ -n "$tag" ]; then bash "$root/scripts/release-metadata.sh" "$tag" >/dev/null; fi
+    if [ "$test_commit" = true ]; then bash "$root/scripts/check.sh"; fi
+  ) </dev/null
+  cleanup
+  snapshot=
+  checked="$checked$commit "
+done

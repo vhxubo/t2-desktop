@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export CGO_ENABLED=0
+
+unformatted=$(git ls-files -z -- '*.go' | xargs -0 gofmt -l)
+if [[ -n "$unformatted" ]]; then
+  printf '以下文件需要 gofmt：\n%s\n' "$unformatted" >&2
+  exit 1
+fi
+
+if git grep -inE '//[[:space:]]*(TODO|FIXME|XXX|HACK)|panic\([[:space:]]*"(not implemented|unimplemented|TODO)"' -- '*.go'; then
+  echo '请清理 Go 代码中的未完成标记。' >&2
+  exit 1
+else
+  status=$?
+  if [[ "$status" != 1 ]]; then exit "$status"; fi
+fi
+
+go build ./...
+go tool mygo vet .
+go test -count=1 -shuffle=on -timeout=15m ./...

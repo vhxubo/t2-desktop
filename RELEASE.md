@@ -5,18 +5,17 @@
 已基本接好。本文件只讲**手动操作步骤**与注意事项，CI 的细节见
 `.github/workflows/release.yml`。
 
-## 机制概览（已经就绪，无需再写）
+## 机制概览
 
 - `mygo.json` 的 `updates.github` 指向本仓库，`publicKey` 为更新包验签公钥。
 - `CHANGELOG.md` 的 `## <version>` 小节会被 `mygo build` 写进每个平台的更新清单，
   应用内的更新窗口据此展示发布说明。
-- `.github/workflows/release.yml`：推送 tag 即触发 → 建草稿 Release →
-  **`release-gate` 门禁**（见下）→ 多平台构建（win / mac / linux）并**签名更新包**
-  → 上传到草稿 → 全部成功后自动发布。
-- `release-gate` 在构建前跑，强制满足 `AGENTS.md` 的「发版要求」：
-  `go build ./...` 通过、`gofmt -l .` 无输出、`go tool mygo vet .` 干净、
-  `go test ./...` 全绿、且无 `TODO`/`FIXME`/`panic("not implemented")` 占位标记。
-  任一不过就中止发版，不进入多平台构建。
+- PR、`main` 的推送和发布 tag 都在 Linux、Windows、macOS 上运行同一套回归检查：构建、
+  格式、静态检查、占位标记和全量 Go 测试。Go 测试禁用结果缓存并打乱顺序，失败时可用日志里的
+  seed 重跑（例如 `go test -count=1 -shuffle=123 ./...`）。
+- 推送发布 tag 后先校验版本、更新日志与签名配置。通过三平台回归后才构建签名包；各平台
+  上传 Actions 产物，最后一个作业校验六份更新清单、核对文件校验和并生成统一的 `SHA256SUMS`，
+  然后上传到草稿并发布。已发布的同名版本不会被覆盖。
 - `main.go` 已 `mygo.Use(updatenative.Plugin)`；设置窗口的「检查更新」按钮调用
   `updater.CheckForUpdates()`，且应用每天后台自动检查一次 GitHub Release。
 
@@ -49,18 +48,30 @@ token**。私有仓库会返回 404，普通用户点「检查更新」永远显
 私钥只存在于本地 `.gotmp/` 且被 gitignore。**本机损坏即永久丢失**，届时所有已装
 应用的后续更新都会失效。请将其存入密码管理器或异地备份。
 
+### 4. 启用本地推送前检查（每个克隆一次）
+
+安装仓库所需的 Go 版本（见 `go.mod`）、Bash 和 `jq`。Windows 使用 Git Bash；Linux
+的 UI 像素测试需要系统中文字体，例如 `fonts-wqy-zenhei`。在仓库根目录执行：
+
+```sh
+git config --local core.hooksPath .githooks
+```
+
+如果已设置自定义 `core.hooksPath`，先把本仓库的 `pre-push` 接入已有钩子，不要直接覆盖配置。
+启用后，分支和 `v*` tag 推送前会在临时 worktree 测试**实际要推送的提交**；未提交的本地改动
+不会掩盖失败，tag 还会额外核对版本和更新日志。同次推送中，同一提交只跑一次全量测试。
+本地 hook 未开启或被跳过时，远端 CI 仍会检查；建议在 GitHub 将 `main` 的三平台回归检查设为合并必需项。
+
 ## 每次发布步骤
 
 1. 改 `mygo.json` 的 `"version"`，例如 `"0.1.0"` → `"0.2.0"`。
 2. 在 `CHANGELOG.md` 顶部新增 `## 0.2.0` 小节（这同时是 GitHub Release 说明与应用
    内更新窗口的展示内容）。
-3. 提交并推送到 `main`。**提交信息必须用英文**（见 `AGENTS.md`）：
-   `chore: release v0.2.0` 之类。
+3. 在仓库根目录运行 `bash scripts/check.sh` 和 `bash scripts/release-metadata.sh v0.2.0`，
+   通过后才提交。**提交信息必须用英文**，如 `chore: release v0.2.0`。
 4. 打 tag，必须严格等于 `v` + version：`git tag v0.2.0`。
-5. 推送 tag：`git push origin v0.2.0`。
-
-推送 tag 后工作流自动运行：校验 tag 与 `mygo.json` 版本一致 → 各平台构建并签名 →
-上传到草稿 Release → 全部成功后自动发布为 `latest`。
+5. 由人工确认后推送：`git push --atomic origin main refs/tags/v0.2.0`。如已启用 hook，
+   测试失败时分支和 tag 都不会更新。推送 tag 会触发公开发布。
 
 ## 预发布（灰度）
 
@@ -79,9 +90,9 @@ token**。私有仓库会返回 404，普通用户点「检查更新」永远显
 
 ## 排错
 
-- **工作流在 build 阶段失败，提示缺少 `MYGO_UPDATER_PRIVATE_KEY`**：按上文第 1 步
+- **工作流提示缺少 `MYGO_UPDATER_PRIVATE_KEY`**：按上文第 1 步
   把私钥内容填进仓库 Actions secret。
-- **`tag vX.Y.Z 与 mygo.json 的 version 不一致`**：tag 必须是 `v` 紧跟
+- **tag 与 `mygo.json` 的版本不一致**：tag 必须是 `v` 紧跟
   `mygo.json` 里的 version 字符串，二者需完全相等（含预发布后缀）。
 - **已发版但应用检查更新看不到**：确认仓库为 Public；确认发布后该 Release 是
   `latest`（prerelease 不会成为 latest）；确认 `mygo.json` 的 `updates.github`
