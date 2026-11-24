@@ -3222,6 +3222,10 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				if !d.replyCollapsed {
 					reserve += replyComposerToolReserve
 				}
+				// 手动收起但草稿还在时，清空按钮也浮在这一行，正文再让一段。
+				if d.draft != "" {
+					reserve += replyClearReserve
+				}
 			}
 			area.Padding(pad, padX+reserve, pad, padX)
 			// @ 候选面板在插入符处展开，没有工具栏入口（见 mentions_ui.go）。
@@ -3292,6 +3296,8 @@ const (
 	replyStatsReserve     float32 = 112
 	// replySendCostReserve 是发送按钮上多出「N 金币」后正文额外让出的宽度。
 	replySendCostReserve float32 = 36
+	// replyClearReserve 是折叠态草稿非空时给「清空」按钮多留的宽度。
+	replyClearReserve float32 = 48
 )
 
 // replyComposerStats 画折叠评论框右下角的两枚计数：评论数与浏览数。它们取代了
@@ -3410,9 +3416,19 @@ func (a *app) replyTextArea(c *ui.Context, d *detailState, host replySurface, mo
 	return area
 }
 
+// clearReplyDraft 清空评论草稿。正在回复的目标留着（它有独立的「取消」入口），
+// @ 与短码候选一起收掉，焦点还给输入框，清空后接着写。
+func (a *app) clearReplyDraft(c *ui.Context, d *detailState) {
+	d.draft = ""
+	d.mdEditor.pendingSel = composeSelection{}
+	d.mentions.reset()
+	d.emojiShortcodes.reset()
+	d.composerField.Focus(c)
+}
+
 // replyFieldActions 画输入框右下角那一个动作：未登录时是「登录后评论」，
 // 登录后是发送按钮。两个动作都只显示图标，文字说明交由 Tooltip（Label 仍
-// 保留文字作无障碍名与点击测试的命中名）。
+// 保留文字作无障碍名与点击测试的命中名）。草稿非空时前面多一枚「清空」。
 //
 // 它返回一个 Row，由调用方决定摆在哪里：页面里浮在评论框右下角（见
 // replyInput），独立写评论窗口里放在页脚、和账号标签并排（见
@@ -3434,6 +3450,17 @@ func (a *app) replyFieldActions(c *ui.Context, d *detailState, detailPage bool) 
 	row.Children(func() {
 		if d.posting {
 			lobeSpin(c, feedback.SpinProps{CustomSize: 16})
+		}
+		// 有草稿才给清空入口：页面评论框与独立写评论窗口共用这一行，
+		// 两处都能一键清掉正文，接着在原处写。KeepFocus 让点击时不丢光标，
+		// 空草稿后按钮随之消失。
+		if d.draft != "" {
+			clear := action.Button(c, "清空", action.ButtonProps{
+				Size: lobetheme.Small, Variant: action.Text,
+			}).Label("清空").KeepFocus().Disabled(d.posting)
+			if clear.Clicked() {
+				a.clearReplyDraft(c, d)
+			}
 		}
 		if !a.auth.loggedIn() {
 			login := ui.Button(c, "").
