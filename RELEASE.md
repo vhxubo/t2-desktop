@@ -66,11 +66,10 @@ git config --local core.hooksPath .githooks
 
 ## 每次发布步骤
 
-1. 改 `mygo.json` 的 `"version"`，例如 `"0.1.0"` → `"0.2.0"`。
-2. 在 `CHANGELOG.md` 顶部新增 `## 0.2.0` 小节（这同时是 GitHub Release 说明与应用
-   内更新窗口的展示内容）。
-3. 在仓库根目录运行 `bash scripts/check.sh` 和 `bash scripts/release-metadata.sh v0.2.0`，
-   通过后才提交。**提交信息必须用英文**，如 `chore: release v0.2.0`。
+1. 改 `mygo.json` 的 `"version"`，例如递增至 `"0.2.0"`。
+2. 把 `CHANGELOG.md` 的「未发布」小节改为 `## 0.2.0`，在其上新开一个空的「未发布」小节，
+   保留文件开头的导语。版本小节同时用于 GitHub Release 与应用内更新窗口。
+3. 通过 [CHECKS.md](CHECKS.md#发版前) 的发布门禁后再提交。**提交信息必须用英文**，如 `chore: release v0.2.0`。
 4. 打 tag，必须严格等于 `v` + version：`git tag v0.2.0`。
 5. 由人工确认后推送：`git push --atomic origin main refs/tags/v0.2.0`。如已启用 hook，
    测试失败时分支和 tag 都不会更新。推送 tag 会触发公开发布。

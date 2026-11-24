@@ -232,10 +232,10 @@ PNG 和 `manifest.json` 默认直接写到仓库的 `docs/images`，不受运行
 - 应用状态里**不要保存** `ui.Element` 或 `*ui.Context`；后台结果通过
   `Window.Update` / `app.publish` 回到 UI 线程。
 - 新端点的落地顺序：按文档声明路径与解码 → `httptest` 加测试 → 最后画界面。
-- 涉及 2Libra API 的新能力，先读 `AGENTS.md` 里的文档分册对照表；路径、参数名、
+- 涉及 2Libra API 的新能力，先读 [开放 API v1](https://r2.2libra.com/openapi/v1/index.md) 对应分册；路径、参数名、
   字段名原样照抄，未知字段必须忽略（v1 承诺只增字段）。
 
-更完整的代理约定见 [`AGENTS.md`](./AGENTS.md)。
+代理约定见 [AGENTS.md](AGENTS.md)，验证要求见 [CHECKS.md](CHECKS.md)。
 
 ---
 
