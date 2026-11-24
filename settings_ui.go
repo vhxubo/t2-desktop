@@ -156,8 +156,13 @@ func (a *app) settingsWindowView(c *ui.Context) {
 	c.Root().Background(tk.BgLayout)
 	// 保存代理、清理缓存的结果以 toast 显示在这个窗口里。
 	defer a.drainToasts(c, a.claimsToasts(toastSettings))
-	// Esc 直接关掉设置窗口，和系统偏好设置的直觉一致。
-	c.OnShortcut(0, ui.KeyEscape, a.closeSettingsWindow)
+	c.OnShortcut(0, ui.KeyEscape, func() {
+		if a.settingsTab == settingsTabShortcuts && a.shortcutRecordingID != "" {
+			a.stopShortcutRecording()
+			return
+		}
+		a.closeSettingsWindow()
+	})
 
 	ui.Column(c).Fill().Children(func() {
 		// 自绘标题栏：拖动窗口、右上角是最小化与关闭。图标换成 Lucide 的

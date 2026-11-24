@@ -104,6 +104,9 @@ func TestShortcutSettingsRejectsConflictAndCancels(t *testing.T) {
 	if a.shortcutRecordingID != "" {
 		t.Error("Esc 没有取消录制")
 	}
+	if _, ok := tt.Find("快捷键录制框"); ok {
+		t.Error("Esc 取消后录制框没有消失")
+	}
 	if raw, ok := a.commands.prefs.binding("post"); ok {
 		t.Errorf("Esc 取消后不该改动键位：%q", raw)
 	}
