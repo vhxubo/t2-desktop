@@ -32,7 +32,7 @@ func (a *app) fabStack(c *ui.Context, buttons ...func(*ui.Context)) {
 	if len(buttons) == 0 {
 		return
 	}
-	ui.Column(c).Absolute().Right(fabRight).Bottom(fabBottom).
+	ui.Column(c.Key("list-fabs")).Absolute().Right(fabRight).Bottom(fabBottom).
 		Gap(fabGap).AlignItems(ui.End).Children(func() {
 		for _, draw := range buttons {
 			draw(c)
@@ -45,6 +45,7 @@ func (a *app) fabStack(c *ui.Context, buttons ...func(*ui.Context)) {
 // 图标（见 listFabs）。label 是可访问名，tip 是悬停说明；loading 时禁用按钮
 // 并在图标位转圈，请求还在路上，连点不该重复发。
 func (a *app) fabButton(c *ui.Context, icon *ui.SVG, label, tip string, loading bool, onClick func()) {
+	c.Key(label)
 	if loading {
 		// 请求在路上：按钮退成 Lobe ActionIcon 的禁用态——尺寸不变、同样圆，
 		// 只把图标位换成转圈，连点不会重复发。
@@ -85,7 +86,9 @@ func (a *app) listFabs(c *ui.Context) {
 	buttons = append(buttons, func(c *ui.Context) {
 		a.fabButton(c, lucide.MessageCircle(), "发动态", "写一条短动态（最多 500 字）", false, a.showMomentCompose)
 	})
-	buttons = append(buttons, a.composeFab)
+	buttons = append(buttons, func(c *ui.Context) {
+		a.composeFab(c.Key("发帖"))
+	})
 	a.fabStack(c, buttons...)
 }
 

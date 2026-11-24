@@ -76,6 +76,36 @@ func TestListFabsRenderRefreshAndBackTop(t *testing.T) {
 	}
 }
 
+func TestListFabKeepsFocusWhileScrolling(t *testing.T) {
+	a := testApp(t)
+	st := a.tabs[0]
+	st.items = fabListItems(30)
+	st.loaded = true
+	st.noMore = true
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	fab, ok := tt.Find("发帖")
+	if !ok {
+		t.Fatal("找不到发帖按钮")
+	}
+	x, y := fab.X+fab.W/2, fab.Y+fab.H/2
+	tt.Press(x, y)
+	if !tt.Focused("发帖") {
+		t.Fatal("发帖按钮没有取得焦点")
+	}
+
+	for _, delta := range []float32{900, -900, 900} {
+		tt.Scroll(500, 400, 0, delta)
+		tt.Frame()
+		if _, visible := tt.Find("返回顶部"); visible != (delta > 0) {
+			t.Fatalf("滚动 %g 后返回顶部按钮的显示状态不对", delta)
+		}
+		if !tt.Focused("发帖") {
+			t.Fatalf("滚动 %g 后发帖按钮丢失焦点", delta)
+		}
+	}
+}
+
 // 评论区操作组已经嵌到输入栏发送按钮右侧，不再悬在列表上；列表滚到底时
 // 最后一条评论的「回复」图标不该被它压住。
 func TestDetailCommentToolbarDoesNotCoverLastReply(t *testing.T) {
