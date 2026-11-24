@@ -80,6 +80,7 @@ func (a *app) showSettingsWindow() {
 	a.reloadImageHostSettings()
 	// 重新开窗口时回到第一页；已经开着的窗口只带到前台，保留用户当前所在页。
 	a.settingsTab = settingsTabGeneral
+	a.resetConfirmOpen = false
 	win := mygo.NewWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle("设置"),
 		Width:             settingsWindowWidth,
@@ -221,6 +222,7 @@ func (a *app) settingsWindowView(c *ui.Context) {
 					a.appearanceSettingsSection(c)
 					a.windowSettingsSection(c)
 					a.updateSettingsSection(c)
+					a.resetSettingsSection(c)
 				}
 			})
 		})

@@ -170,6 +170,8 @@ type app struct {
 	// settingsTab 是设置窗口当前显示的分类。原来五块内容全堆在一个滚动区，
 	// 页面长到要滚很久；分栏后每页只画一块，切换分类不丢已填的草稿。
 	settingsTab int
+	// resetConfirmOpen 是「一键重置所有设置」二次确认气泡的开合。
+	resetConfirmOpen bool
 	// commands 是这个窗口的命令注册表。定义随窗口注册（Run 闭包要绑到本
 	// 窗口），绑定 / 收藏 / 最近使用的偏好来自进程级共享的 commands.json。
 	commands *commandRegistry
@@ -711,10 +713,8 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 	// HTTP 出口的全局授权拦截：任何 insufficient_scope 都会回到这里登记弹窗，
 	// 不需要每个调用点自己接。必须在 a 建好之后再挂，回调要引用它。
 	a.client.onAuthError = a.handleGlobalAuthError
-	// 设置窗口的关键词草稿从已保存偏好起手；无头测试直接渲染设置页时也一致。
-	a.notifyKeywordDraft = a.notifPrefs().keywordText()
-	a.notifyQuietFromDraft = a.notifPrefs().quietFromText()
-	a.notifyQuietToDraft = a.notifPrefs().quietToText()
+	// 设置窗口的关键词 / 时段草稿从已保存偏好起手；无头测试直接渲染设置页时也一致。
+	a.syncNotifyDrafts()
 	if acc != nil {
 		a.accountID = acc.ID
 	}

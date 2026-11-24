@@ -50,6 +50,12 @@ func (s *imagePrefsStore) save() error {
 	return nil
 }
 
+// Reset 恢复默认图片偏好：自动加载配图、动图自动播放。
+func (s *imagePrefsStore) Reset() error {
+	s.lazy, s.animate = false, true
+	return s.save()
+}
+
 // lazyLoad 报告是否「默认不加载图片」。
 func (s *imagePrefsStore) lazyLoad() bool { return s != nil && s.lazy }
 

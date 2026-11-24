@@ -110,6 +110,9 @@ func (s *closeModeStore) Save(mode int) error {
 	return nil
 }
 
+// Reset 恢复默认关闭行为（每次询问）并落盘。
+func (s *closeModeStore) Reset() error { return s.Save(closeAsk) }
+
 // hideOnClose 报告现在关主窗口该不该直接收进托盘。托盘不可用（创建失败或
 // 平台不支持）时不能收：那样窗口会藏起来，留下一个既没有图标也点不回来的
 // 进程，所以退回关闭窗口。正在退出时也不能拦：那会把一次真正的退出变成隐藏。

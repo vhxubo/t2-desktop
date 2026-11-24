@@ -49,6 +49,12 @@ func (s *commentCostPrefsStore) save() error {
 	return nil
 }
 
+// Reset 恢复默认评论费用开关：状态栏开、发送按钮上的金币数关。
+func (s *commentCostPrefsStore) Reset() error {
+	s.showBar, s.showOnSend = true, false
+	return s.save()
+}
+
 func (s *commentCostPrefsStore) visible() bool { return s.showBar }
 func (s *commentCostPrefsStore) onSend() bool  { return s.showOnSend }
 

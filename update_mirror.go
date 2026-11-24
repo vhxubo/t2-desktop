@@ -126,6 +126,9 @@ func (s *updateMirrorStore) set(m string) error {
 	return nil
 }
 
+// Reset 恢复默认下载加速入口：不使用镜像，走网络代理直连 GitHub。
+func (s *updateMirrorStore) Reset() error { return s.set("") }
+
 // applyUpdateMirror 按 mirror 的取值挂上或撤下自定义更新源。SetSource(nil) 恢复
 // mygo 默认的 feed 读取；传镜像时换成 mirrorSource。任何 goroutine 可调。
 func applyUpdateMirror(m string) {

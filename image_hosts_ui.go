@@ -390,12 +390,17 @@ func (a *app) removeImageHost(id string) {
 	}
 }
 
-func (a *app) resetImageHosts() {
+// restoreImageHosts 把图库配置写回内置默认并落盘，不弹提示；调用方决定怎么报告结果。
+func (a *app) restoreImageHosts() error {
 	a.hosts = defaultImageHostConfig()
 	a.hostActiveLabel = a.hostLabelByID(a.hosts.Active)
 	a.hostEditLabel = ""
 	a.hostMaxFor = ""
-	if err := a.saveImageHosts(); err != nil {
+	return a.saveImageHosts()
+}
+
+func (a *app) resetImageHosts() {
+	if err := a.restoreImageHosts(); err != nil {
 		a.toast(toastSettings, err.Error())
 		return
 	}

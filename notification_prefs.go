@@ -163,6 +163,26 @@ func (s *notificationPrefsStore) save() error {
 	return nil
 }
 
+// Reset 恢复默认通知偏好：各类提醒全开、不过滤、每次最多 3 条、免打扰关闭。
+// 默认值与 newNotificationPrefsStore 一致；不动 now（测试里的固定时钟）。
+func (s *notificationPrefsStore) Reset() error {
+	s.enabled, s.sound, s.badge, s.stream = true, true, true, true
+	s.muted = map[string]bool{}
+	s.keyword, s.blacklist = "", false
+	s.maxBurst = 3
+	s.quietEnabled = false
+	s.quietFrom, s.quietTo = "22:00", "08:00"
+	return s.save()
+}
+
+// syncNotifyDrafts 把设置窗口的三个输入框草稿同步为已保存的偏好。
+func (a *app) syncNotifyDrafts() {
+	p := a.notifPrefs()
+	a.notifyKeywordDraft = p.keywordText()
+	a.notifyQuietFromDraft = p.quietFromText()
+	a.notifyQuietToDraft = p.quietToText()
+}
+
 func (s *notificationPrefsStore) notificationEnabled() bool { return s.enabled }
 func (s *notificationPrefsStore) soundEnabled() bool        { return s.sound }
 func (s *notificationPrefsStore) badgeEnabled() bool        { return s.badge }

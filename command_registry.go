@@ -448,6 +448,20 @@ func (p *commandPrefs) resetAllBindings() error {
 	return nil
 }
 
+// resetAll 把命令偏好整份恢复为默认值：键位、收藏与最近使用全部清空。
+// 一键重置设置用的是这一份；快捷键页的「全部恢复默认」只清键位（resetAllBindings）。
+func (p *commandPrefs) resetAll() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	old := p.cfg
+	p.cfg = commandPrefsConfig{Bindings: map[string]string{}}
+	if err := p.save(); err != nil {
+		p.cfg = old
+		return fmt.Errorf("恢复默认设置失败：%w", err)
+	}
+	return nil
+}
+
 // toggleFavorite 切换收藏，返回切换后是否收藏。
 func (p *commandPrefs) toggleFavorite(id string) (bool, error) {
 	p.mu.Lock()

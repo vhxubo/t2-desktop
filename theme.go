@@ -95,6 +95,9 @@ func (m *themeManager) Save(mode int) error {
 	return nil
 }
 
+// Reset 恢复默认外观（跟随系统）并落盘。
+func (m *themeManager) Reset() error { return m.Save(themeFollowSystem) }
+
 // theme 返回本帧要用的主题。systemDark 来自 c.Theme().Dark：每帧建树前
 // 主题会从系统外观重置，所以这个值就是当前系统的深浅色。
 func (m *themeManager) theme(systemDark bool) *ui.Theme {

@@ -44,6 +44,12 @@ func (s *watchLaterPrefsStore) save() error {
 	return nil
 }
 
+// Reset 恢复默认阅读行为：打开后从稍后再看移除。
+func (s *watchLaterPrefsStore) Reset() error {
+	s.keep = false
+	return s.save()
+}
+
 func (s *watchLaterPrefsStore) keepAfterOpen() bool { return s.keep }
 
 // setKeepAfterOpen 切换「打开后保留」。关掉时调用方要把已有的已读标记清掉：

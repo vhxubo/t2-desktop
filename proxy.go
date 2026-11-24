@@ -299,6 +299,12 @@ func (p *proxyManager) Save(cfg proxyConfig) error {
 	return nil
 }
 
+// Reset 恢复默认代理（跟随系统）。Save 已经重新探测系统代理并断开旧连接，
+// 所以重置后新请求立即按默认规则走。
+func (p *proxyManager) Reset() error {
+	return p.Save(proxyConfig{Mode: proxyFollowSystem})
+}
+
 // resolveProxy 把配置变成 Proxy 函数和一句给人看的状态说明。
 func resolveProxy(cfg proxyConfig) (func(*url.URL) (*url.URL, error), string) {
 	switch cfg.Mode {
