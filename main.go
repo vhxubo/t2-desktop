@@ -329,6 +329,9 @@ type app struct {
 	// updateMirror 是更新包下载加速入口的选择（见 update_mirror.go）：默认
 	// 不选、走「网络代理」里配置的代理。进程级共享，只在本窗口的界面里读。
 	updateMirror *updateMirrorStore
+	// updateChannel 是「接收测试版」的选择（见 update_channel.go）：默认只收
+	// 正式版。进程级共享，设置窗口据此画开关。
+	updateChannel *updateChannelStore
 	// autoSignPrefs 是「打开应用时自动签到」的开关，进程级共享。
 	autoSignPrefs *autoSignPrefsStore
 	// autoSignStarted 保证本窗口只尝试一次自动签到；窗口关掉重开不会重复。
@@ -611,6 +614,8 @@ type appDeps struct {
 	imagePrefs *imagePrefsStore
 	// updateMirror 是更新包下载加速入口的选择，进程级一份（见 update_mirror.go）。
 	updateMirror *updateMirrorStore
+	// updateChannel 是「接收测试版」的选择，进程级一份（见 update_channel.go）。
+	updateChannel *updateChannelStore
 	// notificationPrefs 是通知偏好，进程级一份（见 notification_prefs.go）。
 	notificationPrefs *notificationPrefsStore
 	// autoSignPrefs 是「打开应用时自动签到」的开关，进程级一份（见
@@ -640,6 +645,7 @@ func newAppDeps(dir string) appDeps {
 		watchLaterPrefs:   newWatchLaterPrefsStore(dir),
 		imagePrefs:        newImagePrefsStore(dir),
 		updateMirror:      newUpdateMirrorStore(dir),
+		updateChannel:     newUpdateChannelStore(dir),
 		autoSignPrefs:     newAutoSignPrefsStore(dir),
 		commands:          newCommandPrefs(dir),
 	}
@@ -660,6 +666,7 @@ func (b *accountBook) deps() appDeps {
 		watchLaterPrefs:   b.watchLaterPrefs,
 		imagePrefs:        b.imagePrefs,
 		updateMirror:      b.updateMirror,
+		updateChannel:     b.updateChannel,
 		autoSignPrefs:     b.autoSignPrefs,
 		commands:          b.commands,
 		book:              b,
@@ -713,6 +720,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 		watchLaterPrefs:   d.watchLaterPrefs,
 		imagePrefs:        d.imagePrefs,
 		updateMirror:      d.updateMirror,
+		updateChannel:     d.updateChannel,
 		autoSignPrefs:     d.autoSignPrefs,
 		commands:          newCommandRegistry(d.commands),
 		draftDir:          d.dir,
@@ -2913,6 +2921,9 @@ func main() {
 	// 下载加速入口：设置里选了镜像时，检查更新与更新包下载都经它转发；
 	// 默认不选，走上面接好的代理规则。
 	applyUpdateMirror(b.updateMirror.current())
+	// 更新通道：设置里打开了「接收测试版」时，检查更新也提供 prerelease。
+	// mygo 的开关启动时是关的，必须在更新插件第一次检查之前按保存的选择设置。
+	applyUpdateChannel(b.updateChannel.prerelease())
 	// 自动更新：更新包来自 github.com/vhxubo/t2-desktop 的 release，由
 	// mygo build 用 mygo.json 里 updates.publicKey 对应的私钥签名。native
 	// 更新窗口不需要 WebView，与本应用的原生 UI 一致：启动后检查一次，之后

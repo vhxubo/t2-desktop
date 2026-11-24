@@ -278,7 +278,8 @@ PNG 和 `manifest.json` 默认直接写到仓库的 `docs/images`，不受运行
   的发布流水线：每个平台在各自 runner 上并行构建、签名更新包，上传到同一个
   draft release，全部成功后才自动发布。
 - tag **必须**与 `mygo.json` 里的 `version` 一致（预发布版本带 `-beta.1` 之类
-  后缀，只发成 prerelease，不占用 `latest`）。
+  后缀，只发成 prerelease，不占用 `latest`）。prerelease 只推给在设置「更新」
+  里打开「接收测试版」的用户；默认仍只接收正式版。
 - 构建需要仓库 secret `MYGO_UPDATER_PRIVATE_KEY`（`mygo keygen` 生成的
   `mygo-update.key` 内容），用于签名更新包，与应用 `mygo.json` 里的
   `updates.publicKey` 配对。

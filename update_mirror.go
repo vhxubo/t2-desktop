@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -49,11 +50,28 @@ const updateMirrorNoChoice = "不使用（走代理）"
 var (
 	updateFeedBase = "https://github.com"
 	updateFeedRepo = "vhxubo/t2-desktop"
+	// updateAPIBase / updateTagPrefix 复刻 mygo 解析 prerelease feed 用到的两个
+	// 常量（internal/update 的 GitHubAPI 与 mygo build 默认的 tagPrefix "v"）。
+	// 只有「接收测试版 + 选了下载加速」这一条路要用：镜像只会转发 github.com
+	// 上的文件，找不到「版本最高的 release」，得先用 GitHub API 自己算一次 tag。
+	// 测试把 updateAPIBase 换成 httptest 地址（与 updateFeedBase 同一套做法）。
+	updateAPIBase   = "https://api.github.com"
+	updateTagPrefix = "v"
 )
 
 func updateFeedURL() string {
+	return updateFeedURLAt("")
+}
+
+// updateFeedURLAt 拼出某个 tag 的 manifest 地址；tag 为空时是 latest release，
+// 与 mygo build 注入的 feed 一致。
+func updateFeedURLAt(tag string) string {
 	name := "update-" + runtime.GOOS + "-" + runtime.GOARCH + ".json"
-	return updateFeedBase + "/" + updateFeedRepo + "/releases/latest/download/" + url.PathEscape(name)
+	if tag == "" {
+		return updateFeedBase + "/" + updateFeedRepo + "/releases/latest/download/" + url.PathEscape(name)
+	}
+	return updateFeedBase + "/" + updateFeedRepo + "/releases/download/" +
+		url.PathEscape(tag) + "/" + url.PathEscape(name)
 }
 
 // normalizeUpdateMirror 归一化用户选择的镜像：允许带上 https:// 前缀与结尾
@@ -143,19 +161,144 @@ func applyUpdateMirror(m string) {
 // mirrorSource 是选中镜像后的更新源：manifest 与更新包都经镜像转发。它实现
 // mygo 的 UpdateSource 接口，由 applyUpdateMirror 通过 SetSource 挂到更新器上。
 //
-// 本仓库不启用 prerelease（没有调 SetPrereleases 的地方），Manifest 的 pre 恒
-// 为 false；latest feed 也没有 {version} 占位符，mygo 默认链路对它原样返回，
-// 所以这里直取 latest feed 即可，不需要复刻 prerelease 的 GitHub API 解析。
+// 正式版通道直取 latest feed；「接收测试版」打开时，mygo 默认链路会经 GitHub
+// API 找版本最高的 release，而镜像只转发 github.com 上的文件，所以这里按同样
+// 的规则自己算一次 tag（updateHighestTag），再取那个 tag 的 manifest 经镜像
+// 下载。API 请求走配置的代理、不经镜像：镜像服务不代理 api.github.com。
 type mirrorSource struct {
 	mirror string
 }
 
 func (s mirrorSource) Manifest(ctx context.Context, pre bool) (io.ReadCloser, error) {
-	return updateGet(ctx, mirrorURL(s.mirror, updateFeedURL()))
+	feed := updateFeedURL()
+	if pre {
+		tag, err := updateHighestTag(ctx)
+		if err != nil {
+			return nil, err
+		}
+		feed = updateFeedURLAt(tag)
+	}
+	return updateGet(ctx, mirrorURL(s.mirror, feed))
 }
 
 func (s mirrorSource) Open(ctx context.Context, raw string) (io.ReadCloser, error) {
 	return updateGet(ctx, mirrorURL(s.mirror, raw))
+}
+
+// updateRelease 只取挑版本要用的三个字段。
+type updateRelease struct {
+	TagName    string `json:"tag_name"`
+	Draft      bool   `json:"draft"`
+	Prerelease bool   `json:"prerelease"`
+}
+
+// 与 mygo internal/update 的 releasesPerPage / maxReleasePages 相同。
+const (
+	updateReleasesPerPage = 100
+	updateMaxReleasePages = 10
+)
+
+// updateHighestTag 返回仓库里版本最高、未标记 draft 的 release tag，规则复刻
+// mygo 的 highestTagged：只看 tag 前缀 "v"、版本号以数字开头的 release，读到
+// 出现一个正式版就停（GitHub 按创建时间倒序列出 release，排在最新正式版之后
+// 的都当更旧处理）。未认证的 GitHub API 限每小时 60 次，检查更新一天一次、
+// 手动点也远到不了。
+func updateHighestTag(ctx context.Context) (string, error) {
+	best, bestVersion := "", ""
+	for page := 1; page <= updateMaxReleasePages; page++ {
+		raw := updateAPIBase + "/repos/" + updateFeedRepo + "/releases?per_page=" +
+			strconv.Itoa(updateReleasesPerPage) + "&page=" + strconv.Itoa(page)
+		body, err := updateGet(ctx, raw)
+		if err != nil {
+			return "", err
+		}
+		var releases []updateRelease
+		err = func() error {
+			defer body.Close()
+			// 一页 release 带着说明文字也不至于这么大。
+			return json.NewDecoder(io.LimitReader(body, 64<<20)).Decode(&releases)
+		}()
+		if err != nil {
+			return "", fmt.Errorf("读取 %s 的 release 列表失败：%w", updateFeedRepo, err)
+		}
+		stable := false
+		for _, r := range releases {
+			v, ok := strings.CutPrefix(r.TagName, updateTagPrefix)
+			if r.Draft || !ok || v == "" || v[0] < '0' || v[0] > '9' {
+				continue
+			}
+			stable = stable || !r.Prerelease
+			if best == "" || compareUpdateVersions(v, bestVersion) > 0 {
+				best, bestVersion = r.TagName, v
+			}
+		}
+		if stable || len(releases) < updateReleasesPerPage {
+			break
+		}
+	}
+	if best == "" {
+		return "", fmt.Errorf("%s 还没有发布过可用的 release", updateFeedRepo)
+	}
+	return best, nil
+}
+
+// compareUpdateVersions 复刻 mygo internal/update 的 Compare：按语义化版本比
+// 较，数字按数值比，预发布版本排在同号正式版之前。升级 mygo 时对照重核。
+func compareUpdateVersions(a, b string) int {
+	a, b = strings.TrimPrefix(a, "v"), strings.TrimPrefix(b, "v")
+	a, _, _ = strings.Cut(a, "+")
+	b, _, _ = strings.Cut(b, "+")
+	ar, apre, _ := strings.Cut(a, "-")
+	br, bpre, _ := strings.Cut(b, "-")
+	if c := compareVersionFields(ar, br); c != 0 {
+		return c
+	}
+	switch {
+	case apre == bpre:
+		return 0
+	case apre == "":
+		return 1
+	case bpre == "":
+		return -1
+	}
+	return compareVersionFields(apre, bpre)
+}
+
+func compareVersionFields(a, b string) int {
+	af, bf := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(af) || i < len(bf); i++ {
+		var x, y string
+		if i < len(af) {
+			x = af[i]
+		}
+		if i < len(bf) {
+			y = bf[i]
+		}
+		xn, xerr := strconv.Atoi(x)
+		yn, yerr := strconv.Atoi(y)
+		switch {
+		case x == y:
+			continue
+		case x == "":
+			return -1
+		case y == "":
+			return 1
+		case xerr == nil && yerr == nil:
+			if xn < yn {
+				return -1
+			}
+			if xn > yn {
+				return 1
+			}
+		case xerr == nil:
+			return -1 // 数字排在文字之前
+		case yerr == nil:
+			return 1
+		default:
+			return strings.Compare(x, y)
+		}
+	}
+	return 0
 }
 
 /* ------------------------------------------------------------------

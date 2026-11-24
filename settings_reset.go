@@ -79,6 +79,9 @@ func (a *app) resetAllSettings() {
 	if a.updateMirror != nil {
 		fail(a.updateMirror.Reset())
 	}
+	if a.updateChannel != nil {
+		fail(a.updateChannel.Reset())
+	}
 	if a.commentCostPrefs != nil {
 		fail(a.commentCostPrefs.Reset())
 	}
@@ -108,9 +111,10 @@ func (a *app) resetAllSettings() {
 	a.stopShortcutRecording()
 	a.shortcutConflict = ""
 
-	// 运行时状态跟着偏好切换：撤掉更新镜像、重连通知流、清掉默认模式里
-	// 不再有意义的已读标记。
+	// 运行时状态跟着偏好切换：撤掉更新镜像、关回正式版通道、重连通知流、
+	// 清掉默认模式里不再有意义的已读标记。
 	applyUpdateMirror("")
+	applyUpdateChannel(false)
 	a.applyNotificationStreamPref()
 	a.clearWatchLaterReadMarks()
 	a.redrawWatchLaterPage()

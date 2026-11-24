@@ -136,6 +136,39 @@ func TestUpdateMirrorSourceGoesThroughMirrorAndProxy(t *testing.T) {
 	}
 }
 
+// 打开「接收测试版」并选了加速入口时，新增的 GitHub API 请求同样走「网络
+// 代理」里配置的代理；API 不经镜像（镜像只转发 github.com 上的文件）。假代理
+// 不开隧道，只记下 CONNECT 的主机。
+func TestUpdatePrereleaseAPIUsesConfiguredProxy(t *testing.T) {
+	clearProxyEnv(t)
+	var connectHost atomic.Value
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodConnect {
+			connectHost.Store(r.Host)
+			http.Error(w, "tunnel closed", http.StatusForbidden)
+			return
+		}
+		http.Error(w, "unexpected", http.StatusForbidden)
+	}))
+	defer proxySrv.Close()
+
+	p := newProxyManager(t.TempDir())
+	if err := p.Save(proxyConfig{Mode: proxyManual, URL: proxySrv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	installGlobalProxyForTest(t, p)
+	old := updateAPIBase
+	updateAPIBase = "https://api.github.com"
+	t.Cleanup(func() { updateAPIBase = old })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _ = (mirrorSource{mirror: "gh-proxy.com"}).Manifest(ctx, true)
+	if got, _ := connectHost.Load().(string); got != "api.github.com:443" {
+		t.Errorf("测试版的 release 列表没有走配置的代理，代理看到 %q", got)
+	}
+}
+
 // mirrorSource 的 Manifest 拉的是 latest release 的平台 manifest。这里把 feed
 // 基址换成 httptest 地址（updateGet 允许回环 http），断言路径与读回内容。
 func TestUpdateMirrorSourceManifestFeed(t *testing.T) {

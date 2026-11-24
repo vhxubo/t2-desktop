@@ -28,6 +28,9 @@ func TestResetAllSettingsRestoresDefaults(t *testing.T) {
 	if err := a.updateMirror.set("gh-proxy.com"); err != nil {
 		t.Fatal(err)
 	}
+	if err := a.updateChannel.setPrerelease(true); err != nil {
+		t.Fatal(err)
+	}
 	if err := a.commentCostPrefs.setVisible(false); err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +120,9 @@ func TestResetAllSettingsRestoresDefaults(t *testing.T) {
 	if a.updateMirror.current() != "" {
 		t.Errorf("下载加速没有重置：%q", a.updateMirror.current())
 	}
+	if a.updateChannel.prerelease() {
+		t.Error("接收测试版没有重置")
+	}
 	if !a.commentCostPrefs.visible() || a.commentCostPrefs.onSend() {
 		t.Errorf("评论设置没有重置：%v %v", a.commentCostPrefs.visible(), a.commentCostPrefs.onSend())
 	}
@@ -162,6 +168,9 @@ func TestResetAllSettingsRestoresDefaults(t *testing.T) {
 	}
 	if got := newUpdateMirrorStore(dir).current(); got != "" {
 		t.Errorf("update_mirror.json 没有重置：%q", got)
+	}
+	if got := newUpdateChannelStore(dir).prerelease(); got {
+		t.Errorf("update_channel.json 没有重置：%v", got)
 	}
 	if s := newCommentCostPrefsStore(dir); !s.visible() || s.onSend() {
 		t.Errorf("comment-cost.json 没有重置：%v %v", s.visible(), s.onSend())

@@ -333,11 +333,17 @@ func updateMirrorSelectOptions() []field.SelectOption {
 }
 
 // updateSettingsSection 是「更新」一块：应用每天在后台自动检查一次，这里给
-// 想立即确认版本的人一个入口；下载加速入口默认不选，选了镜像后检查更新与
-// 更新包下载都会经它转发，选回首项即清空。
+// 想立即确认版本的人一个入口；「接收测试版」默认关，打开后检查更新也提供
+// GitHub 上的 prerelease；下载加速入口默认不选，选了镜像后检查更新与更新包
+// 下载都会经它转发（测试版同样适用），选回首项即清空。
 func (a *app) updateSettingsSection(c *ui.Context) {
 	settingsSection(c, "更新", func() {
 		settingsDescription(c, "应用每天自动检查一次 GitHub Release；检查更新和下载更新包都会走「网络代理」里设置的代理。GitHub 连不上或下载太慢时可以选一个加速入口，选完立即生效。", 3)
+		if v := settingsCheckbox(c, "接收测试版", a.updateChannel.prerelease()); v != a.updateChannel.prerelease() {
+			a.setUpdatePrereleases(v)
+		}
+		settingsDescription(c, "打开后检查更新也会提供 Beta / Pre-release 版本；"+
+			"测试版可能不稳定，遇到问题关掉即可，下一次正式版发布后照常升级。", 2)
 		mirror := ""
 		if a.updateMirror != nil {
 			mirror = a.updateMirror.current()
@@ -360,6 +366,25 @@ func (a *app) updateSettingsSection(c *ui.Context) {
 			ui.Spacer(c).Grow(1)
 		})
 	})
+}
+
+// setUpdatePrereleases 开关「接收测试版」：立即落盘并接到更新器上，结果用
+// 窗口内 toast 说明。通道是进程级的，publish 让所有窗口下一帧按新状态重建。
+func (a *app) setUpdatePrereleases(on bool) {
+	if a.updateChannel == nil || a.updateChannel.prerelease() == on {
+		return
+	}
+	if err := a.updateChannel.setPrerelease(on); err != nil {
+		a.toast(toastSettings, err.Error())
+		return
+	}
+	applyUpdateChannel(on)
+	if on {
+		a.toast(toastSettings, "检查更新也会提供测试版（Beta）")
+	} else {
+		a.toast(toastSettings, "检查更新只提供正式版")
+	}
+	a.publish(func() {})
 }
 
 // setUpdateMirror 换下载加速入口：立即落盘并接到更新器上，结果用窗口内 toast
