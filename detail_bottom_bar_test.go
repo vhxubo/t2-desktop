@@ -228,6 +228,75 @@ func TestReplyToolsEmbeddedBesideSend(t *testing.T) {
 	}
 }
 
+// 评论区右下角的「跳到最新回复」和回顶对称：停在顶部时出现，点一下滚到
+// 当前已加载的最后一条评论；到底后让位给回顶，回顶后又回来。行号取 display，
+// 折叠的楼中楼不会把目标带偏。
+func TestReplyJumpToLatestButton(t *testing.T) {
+	a := detailAppWithReplies(t)
+	rows := make([]replyItem, 0, 60)
+	for i := 0; i < 60; i++ {
+		rows = append(rows, replyItem{
+			ID: fmt.Sprintf("c%d", i), Author: "u", Floor: i + 1,
+			Content: fmt.Sprintf("第%d条评论", i+1),
+		})
+	}
+	a.detail.replyList = rows
+	a.detail.replyTotal = len(rows)
+	a.detail.replyLoaded = true
+	a.detail.replyNoMore = true // 不触发无限滚动续拉，专注验证跳转本身
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if _, ok := tt.Find("跳到最新回复"); !ok {
+		t.Fatalf("停在顶部应有跳到最新回复：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("评论回到顶部"); ok {
+		t.Fatalf("停在顶部不该有回顶：%q", tt.Texts())
+	}
+	if !tt.HasText("第1条评论") {
+		t.Fatalf("初始应停在评论顶部：%q", tt.Texts())
+	}
+
+	// 停在中间时两枚跳转都在，输入框右侧留白跟着加宽，按钮不压到文字上。
+	a.detail.list.ScrollTo(30, ui.Start)
+	tt.Frame()
+	for _, label := range []string{"评论回到顶部", "跳到最新回复"} {
+		if _, ok := tt.Find(label); !ok {
+			t.Fatalf("停在中间应有 %q：%q", label, tt.Texts())
+		}
+	}
+	area, _ := tt.Find("写评论")
+	send, _ := tt.Find("发送")
+	if gap := (area.X + area.W) - (send.X + send.W); gap > replyComposerToolReserve+replyJumpExtraReserve+8 {
+		t.Errorf("两枚跳转同屏时输入框留白不够：差 %.1f（area=%+v send=%+v）", gap, area, send)
+	}
+
+	if err := tt.Click("跳到最新回复"); err != nil {
+		t.Fatalf("点跳到最新回复失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	if !tt.HasText("第60条评论") {
+		t.Errorf("点跳到最新回复后没滚到最后一条：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("评论回到顶部"); !ok {
+		t.Errorf("到底后应出现回顶：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("跳到最新回复"); ok {
+		t.Errorf("到底后不该再画跳到最新：%q", tt.Texts())
+	}
+
+	if err := tt.Click("评论回到顶部"); err != nil {
+		t.Fatalf("点回顶失败：%v", err)
+	}
+	tt.Frame()
+	if !tt.HasText("第1条评论") {
+		t.Errorf("点回顶后没回到第一条：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("跳到最新回复"); !ok {
+		t.Errorf("回顶后应重新出现跳到最新：%q", tt.Texts())
+	}
+}
+
 // 右侧评论区收起后，输入框照旧平铺在正文底部，但那组评论操作不该跟着过来：
 // 此刻没有评论列表可回顶 / 切换 / 刷新。展开后整组回到发送右侧。
 func TestReplyToolsHiddenWhenReplyCollapsed(t *testing.T) {

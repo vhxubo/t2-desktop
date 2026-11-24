@@ -1310,9 +1310,13 @@ func (a *app) detailToolActions(d *detailState) []detailToolAction {
 const detailToolGroupInset float32 = 14
 
 // replyComposerToolReserve 是评论区操作组嵌到发送按钮右侧后，输入框文字
-// 右侧额外让出的宽度（DIP）。三枚 Small 图标约 78，加上分隔线与间隙留一点
-// 余量；不预留的话最后一个字会钻到图标底下。
-const replyComposerToolReserve float32 = 96
+// 右侧额外让出的宽度（DIP）。四枚 Small 图标连间隙约 114，留一点余量；
+// 不预留的话最后一个字会钻到图标底下。
+const replyComposerToolReserve float32 = 120
+
+// replyJumpExtraReserve 是回顶与「跳到最新回复」同屏时，输入框文字为
+// 第五枚 Small 图标再多让出的宽度。
+const replyJumpExtraReserve float32 = 28
 
 // detailToolBar 把页面操作收成正文区右下角的一列 Lobe ActionIconGroup：竖排、
 // 绝对定位在正文面板内，不占正文高度，也不随正文滚走。作者专属的改帖 / 附言 /
@@ -1957,24 +1961,36 @@ func (a *app) topicSourceFooter(c *ui.Context, d *detailState) {
 	})
 }
 
-// replyComposerToolBar 把评论区自己的操作（回顶 / 视图切换 / 刷新）画在
-// 评论输入框右下角、发送按钮的右侧：回顶只滚评论列表，视图切换只切楼层 /
-// 扁平，刷新只重拉评论第一页。评论滚离顶部才露出回顶，另外两枚一直在。
+// replyJumpButtons 报告评论区工具条里两枚跳转按钮该不该出现。列表按
+// display 构建，可视行号来自同一份 list 状态：滚离顶部才有回顶，还没到
+// 末尾才有「跳到最新回复」。停在中间时两枚一起出现。
+func replyJumpButtons(d *detailState) (top, latest bool) {
+	if d == nil || len(d.display) == 0 {
+		return false, false
+	}
+	first, last := d.list.Visible()
+	return first > 0, last >= 0 && last < len(d.display)-1
+}
+
+// replyComposerToolBar 把评论区自己的操作（回顶 / 跳到最新 / 视图切换 / 刷新）
+// 画在评论输入框右下角、发送按钮的右侧：回顶只滚到第一条评论，跳到最新滚到
+// 当前已加载的最后一条，视图切换只切楼层 / 扁平，刷新只重拉评论第一页。
+// 滚离顶部才露出回顶，没到末尾才露出跳到最新，另外两枚一直在。
 // 不再悬在评论列表上，列表因此不用为它预留一条空带（修复底部空行）。
 // 只在未点击输入框的折叠态出现：进入编辑态、或右侧评论栏收起时整组不画，
 // 输入框照旧平铺在正文底部，只是此刻没有评论区可操作。
 func (a *app) replyComposerToolBar(c *ui.Context, d *detailState) {
 	tk := lobetheme.TokensOf(c)
-	items := make([]action.ActionGroupItem, 0, 4)
-	// 列表在 replyPane 里按 display 构建；这里从同一份 list 状态读可视行号，
-	// 决定要不要给回顶留位。没有评论时 first 保持 -1。
-	first := -1
-	if len(d.replyList) > 0 {
-		first, _ = d.list.Visible()
-	}
-	if first > 0 {
+	items := make([]action.ActionGroupItem, 0, 5)
+	top, latest := replyJumpButtons(d)
+	if top {
 		items = append(items, action.ActionGroupItem{
 			Key: "top", Icon: lucide.ArrowUp(), Label: "评论回到顶部",
+		})
+	}
+	if latest {
+		items = append(items, action.ActionGroupItem{
+			Key: "latest", Icon: lucide.ArrowDown(), Label: "跳到最新回复",
 		})
 	}
 	// 只看楼主：过滤态再点一次取消。匿名帖没有楼主，入口直接禁用。
@@ -2012,6 +2028,8 @@ func (a *app) replyComposerToolBar(c *ui.Context, d *detailState) {
 			switch key {
 			case "top":
 				d.list.ScrollTo(0, ui.Start)
+			case "latest":
+				scrollToLatestReply(d)
 			case "filter":
 				if d.authorFilter != "" {
 					clearAuthorFilter(d)
@@ -2042,6 +2060,16 @@ func (a *app) replyComposerToolBar(c *ui.Context, d *detailState) {
 	})
 }
 
+// scrollToLatestReply 滚到当前已加载评论的最后一条。行号取 display 而不是
+// replyList：折叠的楼中楼与作者过滤都会改变列表行数，定位必须跟显示一致。
+// 这里不碰 focusID——续拉下一页时定位逻辑会按它把视口拽回旧位置。
+func scrollToLatestReply(d *detailState) {
+	if d == nil || len(d.display) == 0 {
+		return
+	}
+	d.list.ScrollTo(len(d.display)-1, ui.End)
+}
+
 func (a *app) replyPane(c *ui.Context, d *detailState) {
 	tk := lobetheme.TokensOf(c)
 	// 输入框从一行展开成多行时，评论区高度被编辑器吃掉一截。列表本身在
@@ -2052,8 +2080,8 @@ func (a *app) replyPane(c *ui.Context, d *detailState) {
 		(replyComposerExpanded(d, d.composerField.Focused(c)) && !d.composerExpanded)
 	d.composerPushPending = false
 	// 评论标题与计数已经挪到评论区底部折叠输入框里、发送按钮左侧（见
-	// replyComposerStats）；视图切换、回顶与刷新嵌在同一行的发送按钮右侧
-	// （见 replyComposerToolBar），跟着评论区一起显隐。列表区因此直接从面板
+	// replyComposerStats）；视图切换、回顶 / 跳到最新与刷新嵌在同一行的发送
+	// 按钮右侧（见 replyComposerToolBar），跟着评论区一起显隐。列表区因此直接从面板
 	// 顶部铺到输入栏，底部不再留一条空白。评论区收起时 replyPane 不画，
 	// 输入框平铺到正文底部，但那组评论操作也不再出现；编辑态同样收起。
 	ui.Column(c).Grow(1).FillWidth().MinHeight(0).Children(func() {
@@ -3221,6 +3249,10 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				// 最后一个字钻到图标底下。右栏收起时那组不画，不用留。
 				if !d.replyCollapsed {
 					reserve += replyComposerToolReserve
+					// 停在评论中间时回顶与跳到最新两枚都在，多让出一枚图标。
+					if top, latest := replyJumpButtons(d); top && latest {
+						reserve += replyJumpExtraReserve
+					}
 				}
 				// 手动收起但草稿还在时，清空按钮也浮在这一行，正文再让一段。
 				if d.draft != "" {

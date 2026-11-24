@@ -1657,7 +1657,7 @@ func TestReplyComposerSendFloatsBottomRight(t *testing.T) {
 		}
 	}
 	// 进入编辑态后评论操作组和计数一起收起，整条输入栏只留给写字与发送。
-	for _, label := range []string{"评论回到顶部", "切到扁平时间序", "切到楼层视图", "刷新评论", "评论数"} {
+	for _, label := range []string{"评论回到顶部", "跳到最新回复", "切到扁平时间序", "切到楼层视图", "刷新评论", "评论数"} {
 		if r, ok := tt.Find(label); ok {
 			t.Errorf("编辑态不该再画 %q：%+v", label, r)
 		}

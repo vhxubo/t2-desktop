@@ -137,7 +137,7 @@ func TestDetailCommentToolbarDoesNotCoverLastReply(t *testing.T) {
 			if !hasReply || n.Bounds.Y > lastReply.Y {
 				lastReply, hasReply = n.Bounds, true
 			}
-		case "评论回到顶部", "切到扁平时间序", "切到楼层视图", "刷新评论":
+		case "评论回到顶部", "跳到最新回复", "切到扁平时间序", "切到楼层视图", "刷新评论":
 			if !hasToolbar || n.Bounds.Y < toolbarTop.Y {
 				toolbarTop, hasToolbar = n.Bounds, true
 			}
