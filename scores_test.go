@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/field"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 const scoreCategoriesJSON = `{"categories":["书籍","人物","动漫","游戏"]}`
@@ -227,8 +229,9 @@ func TestScoresCategoryDropdownShrinksToWindow(t *testing.T) {
 	const winH = 320
 	tt := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Padding(140, 20).Children(func() {
-			scoreCategorySelect(c, &st.category, &st.categoryActive, scoreCategoryOptions(st)).
-				Label("评分分类").Width(150)
+			lobeSelect(c, &st.category, field.SelectProps{
+				Options: scoreCategoryOptions(st), Size: lobetheme.Small,
+			}).Label("评分分类").Width(150)
 		})
 	}, 460, winH)
 	tt.Frame()
