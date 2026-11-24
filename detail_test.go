@@ -699,14 +699,20 @@ func TestDetailReplyStyleByTheme(t *testing.T) {
 	}
 }
 
-// 浅色主题评论区面板是纯白，层级靠引用 / 辅助块的 #F6F8FA 底色分出来。
+// 浅色主题评论区面板是纯白，层级靠引用 / 辅助块的 Lobe 淡灰底色分出来。
 // 三处都要铺这个颜色：Markdown 引用块、行内代码 / 代码块 / 表格（由
-// commentMdOptions 设置）、楼中楼的父评论引用行（见 parentJump）。深色不
-// 写死色值，仍走原来的主题色 / 透明底。
+// commentMdOptions 设置）、楼中楼的父评论引用行（见 parentJump）。底色派生
+// 自 Lobe 的 FillTertiary，深色不写死色值，仍走原来的主题色 / 透明底。
 func TestCommentHelperBlocksLightTheme(t *testing.T) {
 	rgba := func(c ui.Color) [4]uint8 { return [4]uint8{c.R, c.G, c.B, c.A} }
 
-	// 浅色：引用块底色与评论 Markdown 主题里的代码 / 表格底色都是 #F6F8FA。
+	// 辅助块底色取自 Lobe 的 FillTertiary 叠在白色容器上，不再写死色值。
+	tk := lobeCfg.Tokens(false)
+	if got, want := commentHelperBG, tk.FillTertiary.Over(tk.BgContainer); got != want {
+		t.Errorf("辅助块底色 = %v，期望 Lobe FillTertiary 派生色 %v", got, want)
+	}
+
+	// 浅色：引用块底色与评论 Markdown 主题里的代码 / 表格底色都是这份淡灰。
 	a := testApp(t)
 	o := a.commentMdOptionsForDark(false)
 	if got, want := rgba(o.Theme.CodeBackground), rgba(commentHelperBG); got != want {
@@ -736,7 +742,7 @@ func TestCommentHelperBlocksLightTheme(t *testing.T) {
 	}
 }
 
-// 渲染出来的 Markdown 引用块确实铺了 #F6F8FA：在引用文字左侧的 padding
+// 渲染出来的 Markdown 引用块确实铺了 Lobe 派生淡灰：在引用文字左侧的 padding
 // 区域取样，命中的是底色而不是白色评论区面板。
 func TestCommentQuoteBlockRendersHelperBackground(t *testing.T) {
 	a := detailAppWithReplies(t)
@@ -761,7 +767,7 @@ func TestCommentQuoteBlockRendersHelperBackground(t *testing.T) {
 }
 
 // 深色主题不受浅色辅助块配色影响：引用仍走 Markdown 默认画法，不铺
-// #F6F8FA 底色；引用的文字照常渲染出来。
+// 浅色淡灰底色；引用的文字照常渲染出来。
 func TestCommentHelperBlocksDarkThemeUnchanged(t *testing.T) {
 	a := detailAppWithReplies(t)
 	a.theme.mode = themeDark
@@ -777,16 +783,16 @@ func TestCommentHelperBlocksDarkThemeUnchanged(t *testing.T) {
 	if !ok {
 		t.Fatalf("深色主题没有渲染出引用文字：%q", tt.Texts())
 	}
-	// 深色走默认 Markdown 引用画法：只有左侧竖条，没有 #F6F8FA 底色块。
+	// 深色走默认 Markdown 引用画法：只有左侧竖条，没有浅色淡灰底色块。
 	im := tt.Image()
 	got := im.RGBAAt(int(r.X)-8, int(r.Y+r.H/2))
 	want := commentHelperBG
 	if [4]uint8{got.R, got.G, got.B, got.A} == [4]uint8{want.R, want.G, want.B, want.A} {
-		t.Errorf("深色引用块不该铺浅色 #F6F8FA 底色：%v", got)
+		t.Errorf("深色引用块不该铺浅色辅助块底色：%v", got)
 	}
 }
 
-// 楼中楼的父评论引用行在浅色下铺 #F6F8FA：在引用文字上方的内边距取样。
+// 楼中楼的父评论引用行在浅色下铺 Lobe 派生淡灰：在引用文字上方的内边距取样。
 func TestNestedReplyQuoteLineHelperBackground(t *testing.T) {
 	a := detailAppWithReplies(t)
 	a.detail.replyList = []replyItem{
@@ -1792,8 +1798,9 @@ func TestReplyRowMarksTopicAuthorWithOP(t *testing.T) {
 	}
 }
 
-// 平铺的评论行不再画整圈卡片描边：自己的回复用一档淡底 + 行首一段连续竖条
-// 标记，别人的回复保持透明、没有强调色标记。
+// 平铺的评论行不再画整圈卡片描边：自己的回复用一档品牌蓝淡底（Lobe 的
+// PrimaryFillQuaternary）+ 行首一段连续竖条标记，别人的回复保持透明、没有
+// 强调色标记。
 func TestReplyRowHighlightsOwnReply(t *testing.T) {
 	a := detailAppWithReplies(t)
 	a.theme.mode = themeLight
@@ -1838,6 +1845,14 @@ func TestReplyRowHighlightsOwnReply(t *testing.T) {
 	}
 	if colorLum(mine.fill) >= colorLum(other.fill) {
 		t.Errorf("自己的回复底色应比别人更暗：自己 %v / 别人 %v", mine.fill, other.fill)
+	}
+	// 淡底是品牌蓝，不是 Lobe 默认的中性黑：8% 的品牌蓝叠在白底上仍明显
+	// 偏蓝（B 比 R 高一档），别人的透明行则是中性白。
+	if int(mine.fill.B)-int(mine.fill.R) < 8 {
+		t.Errorf("自己的回复底色应偏品牌蓝：%v", mine.fill)
+	}
+	if d := int(other.fill.B) - int(other.fill.R); d > 5 {
+		t.Errorf("别人的回复底色不该带蓝色：%v", other.fill)
 	}
 
 	// 别人的回复保持平铺透明：既没有强调色竖条，也没有虚线 / 实线边框。

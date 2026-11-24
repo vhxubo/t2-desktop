@@ -354,8 +354,8 @@ type app struct {
 	md           *markdown.Options
 	// commentMd 是评论正文的 Markdown 选项：与正文同一套渲染，字号更小
 	// （commentTextStyle），让评论区比正文紧凑一号。浅色主题另有一份
-	// commentMdLight，把引用 / 代码 / 表格这些辅助块铺成 #F6F8FA；两份都
-	// 在启动时建好，渲染时按窗口外观二选一，不复制 Options（它带 sync.Map）。
+	// commentMdLight，把引用 / 代码 / 表格这些辅助块铺成 Lobe 派生的淡灰；
+	// 两份都在启动时建好，渲染时按窗口外观二选一，不复制 Options（它带 sync.Map）。
 	commentMd      *markdown.Options
 	commentMdLight *markdown.Options
 	// bioMd 是资料卡「个人简介」的 Markdown 选项：介绍正文可能带标题、

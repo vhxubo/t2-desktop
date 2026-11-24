@@ -290,13 +290,17 @@ var (
 	pkTeamText = ui.Hex("#1f2937")
 )
 
-// commentHelperBG 是浅色主题评论区里「引用 / 辅助块」的底色：Markdown 引用、
-// 代码与表格、楼中楼的父评论引用行都用它，在白色评论区面板上铺出一层淡灰，
-// 与正文区分。深色主题不写死这个颜色，沿用 Markdown 默认主题与透明底。
-var commentHelperBG = ui.Hex("#F6F8FA")
+// commentHelperBG 是浅色主题评论区里「引用 / 辅助块」的底色：取 Lobe 的
+// FillTertiary（三级填充）叠在白色容器面板上，得到不透明的淡灰。Markdown
+// 引用、代码与表格、楼中楼的父评论引用行都用它，与正文区分。深色主题不
+// 写死这个颜色，沿用 Markdown 默认主题与透明底。
+var commentHelperBG = func() ui.Color {
+	tk := lobeCfg.Tokens(false)
+	return tk.FillTertiary.Over(tk.BgContainer)
+}()
 
 // commentHelperBlockBg 返回一条引用 / 辅助块在当前主题下的底色：浅色用
-// #F6F8FA，深色保持透明（沿用主题原有的淡化处理）。
+// Lobe FillTertiary 派生的淡灰，深色保持透明（沿用主题原有的淡化处理）。
 func commentHelperBlockBg(t *ui.Theme) ui.Color {
 	if t.Dark {
 		return ui.Transparent
@@ -348,7 +352,7 @@ func newMarkdownOptions(a *app, st mdTextStyle, mentions bool) *markdown.Options
 }
 
 // newCommentMarkdownOptions 造评论正文的 Markdown 选项：与正文同一套渲染，
-// 字号更小。light 为真时把引用 / 代码 / 表格这些辅助块统一成 #F6F8FA，并
+// 字号更小。light 为真时把引用 / 代码 / 表格这些辅助块统一成 commentHelperBG，并
 // 接管引用块的画法（见 commentQuoteBlock）；false 时与原来的选项完全一致，
 // 深色主题照旧由 Markdown 默认主题按外观给色。两份都在启动时建好，渲染时
 // 按窗口外观二选一，避免复制带 sync.Map 的 Options。
@@ -374,7 +378,7 @@ func (a *app) newCommentMarkdownOptions(light bool) *markdown.Options {
 }
 
 // commentMdOptions 返回当前窗口外观该用的评论 Markdown 选项：浅色用铺了
-// #F6F8FA 的 commentMdLight，深色用原来的 commentMd。
+// Lobe 派生辅助块底色的 commentMdLight，深色用原来的 commentMd。
 func (a *app) commentMdOptions(c *ui.Context) *markdown.Options {
 	return a.commentMdOptionsForDark(c.Theme().Dark)
 }
@@ -386,7 +390,7 @@ func (a *app) commentMdOptionsForDark(dark bool) *markdown.Options {
 	return a.commentMdLight
 }
 
-// commentQuoteBlock 把评论中的 Markdown 引用块画成 #F6F8FA 底色的阅读块。
+// commentQuoteBlock 把评论中的 Markdown 引用块画成 Lobe 派生淡灰底色的阅读块。
 // 引用内文去掉每行开头的 > 之后用同一份浅色评论选项重新渲染，表情、配图与
 // 嵌套引用因此仍按原样排版（嵌套引用会再走进这个 Block 回调）。o 即那份
 // 浅色选项，复用它自己的图片缓存。
@@ -1132,8 +1136,8 @@ func detailExpandToggle(c *ui.Context, tk *lobetheme.Tokens, atRight, atTop bool
 // detailReplyStyle 返回评论区面板的圆角与底色。
 //
 // 浅色主题去掉圆角，底色直接用 Lobe 的 BgContainer（#ffffff），与正文面板
-// 完全一致——两栏不再靠底色区分，评论区里的引用 / 辅助块改用 #F6F8FA
-// 铺出层次（见 commentHelperBG）。深色主题沿用原来的做法：圆角卡片 + 页面
+// 完全一致——两栏不再靠底色区分，评论区里的引用 / 辅助块改用 Lobe 的
+// FillTertiary 铺出层次（见 commentHelperBG）。深色主题沿用原来的做法：圆角卡片 + 页面
 // 底色混一点文字色得到的深灰。
 func detailReplyStyle(t *ui.Theme, tk *lobetheme.Tokens) (float32, ui.Color) {
 	if t.Dark {
@@ -2452,7 +2456,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 			if a.detail != nil {
 				at = replyIndexByID(a.detail.display, quoteID)
 			}
-			// 浅色主题里引用行铺一层 #F6F8FA，与白色评论区面板区分；文字
+			// 浅色主题里引用行铺一层辅助块淡灰，与白色评论区面板区分；文字
 			// 仍和评论正文左对齐（左右 padding 留 0，见 parentJump）。
 			if at >= 0 {
 				// 父评论还在已加载的列表里：点一下跳过去并高亮它。
@@ -2742,7 +2746,7 @@ func (a *app) parentJump(c *ui.Context, label, parentID string, at int) {
 	// ButtonBase 默认把子元素居中；这条引用是正文的一部分，必须和下面的
 	// 评论正文左对齐。光靠 Column 的拉伸只会让按钮变宽，里面的文字仍然
 	// 居中，所以显式从行首开始排。左侧 padding 留 0，引用文字才不会相对
-	// 评论正文缩进；浅色主题铺一层 #F6F8FA 底色（深色保持透明）。
+	// 评论正文缩进；浅色主题铺一层辅助块淡灰（深色保持透明）。
 	b := ui.ButtonBase(c).Padding(4, 8, 4, 0).Radius(tk.BorderRadius).
 		Background(commentHelperBlockBg(t)).Justify(ui.Start)
 	color := t.TextMuted

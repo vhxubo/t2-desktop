@@ -157,6 +157,13 @@ var lobeCfg = func() *lobetheme.Config {
 	// Lobe 的 Primary 按钮/选中态与自绘 t.Accent 落在同一颜色上。
 	light.Primary, light.PrimaryHover, light.PrimaryActive = ui.Hex("#1D4ED8"), ui.Hex("#1E40AF"), ui.Hex("#1E3A8A")
 	light.PrimaryForeground = ui.Hex("#ffffff")
+	// Lobe 的 PrimaryFill* 默认是黑色半透明，和覆写后的品牌蓝不是一族：
+	// 自己的回复、定位行铺出来的淡底会发灰。按 Lobe 自己的透明度层级把
+	// 这一族换成品牌蓝，浅色下强调色才真正统一（深色沿用默认，不动）。
+	light.PrimaryFill = light.Primary.Alpha(0.36)
+	light.PrimaryFillSecondary = light.Primary.Alpha(0.22)
+	light.PrimaryFillTertiary = light.Primary.Alpha(0.16)
+	light.PrimaryFillQuaternary = light.Primary.Alpha(0.08)
 	dark.Primary, dark.PrimaryHover, dark.PrimaryActive = ui.Hex("#60A5FA"), ui.Hex("#3B82F6"), ui.Hex("#2563EB")
 	dark.PrimaryForeground = ui.Hex(darkInkBackground)
 

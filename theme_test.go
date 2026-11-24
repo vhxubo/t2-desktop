@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // pageLum 取列表页空白处的亮度：x 在侧边栏右侧、y 在标题栏下方，避开设
@@ -150,6 +151,30 @@ func TestTextSelectionUsesBrandColor(t *testing.T) {
 				t.Errorf("拖选后没有画出蓝色高亮：之前 %d，之后 %d", before, after)
 			}
 		})
+	}
+}
+
+// 自己的回复与定位行用的 PrimaryFill* 要和品牌蓝同族：Lobe 默认是黑色
+// 半透明，浅色下铺出发灰的淡底。深色维持 Lobe 默认，不受这次调整影响。
+func TestLightPrimaryFillUsesBrandColor(t *testing.T) {
+	light := lobeCfg.Tokens(false)
+	for _, tc := range []struct {
+		name  string
+		got   ui.Color
+		alpha float32
+	}{
+		{"PrimaryFill", light.PrimaryFill, 0.36},
+		{"PrimaryFillSecondary", light.PrimaryFillSecondary, 0.22},
+		{"PrimaryFillTertiary", light.PrimaryFillTertiary, 0.16},
+		{"PrimaryFillQuaternary", light.PrimaryFillQuaternary, 0.08},
+	} {
+		if want := light.Primary.Alpha(tc.alpha); tc.got != want {
+			t.Errorf("浅色 %s = %v，期望品牌蓝的 %.0f%% 版本 %v", tc.name, tc.got, tc.alpha*100, want)
+		}
+	}
+	dark := lobeCfg.Tokens(true)
+	if got, want := dark.PrimaryFillQuaternary, lobetheme.Dark().PrimaryFillQuaternary; got != want {
+		t.Errorf("深色 PrimaryFillQuaternary = %v，期望保持 Lobe 默认 %v", got, want)
 	}
 }
 
