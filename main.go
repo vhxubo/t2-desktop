@@ -235,6 +235,9 @@ type app struct {
 	navExpanded bool
 	tabs        []*tabState
 	reqSeq      uint64
+	// sidebarRefresh 把侧边栏切换后的重新请求排进防抖 + 节流队列，避免连续
+	// 点击把配额耗在一闪而过的页面上；详见 sidebar_refresh.go。
+	sidebarRefresh sidebarRefreshScheduler
 
 	pageName    string // list / detail / login / drafts / watchlater / scores
 	status      string
@@ -1172,6 +1175,11 @@ func (a *app) ensureLoaded() {
 	if st.loading || st.loaded || st.authWait {
 		return
 	}
+	// 侧边栏切换已经排了重新请求：防抖 / 节流到期前让路，别让每帧兜底
+	// 抢先把这一页的请求发出去，否则连点多个页时防抖形同虚设。
+	if a.sidebarRefresh.hasPending() {
+		return
+	}
 	// 被限流后不要每帧重发：闸门在退避期内会拒绝所有 API 请求，这里连
 	// 失败的本地回调也不必再排一遍，页面上的提示保留第一次的秒数。
 	if a.client != nil && a.client.rateGate().remaining() > 0 {
@@ -1371,11 +1379,14 @@ func (a *app) reclickTab(idx int) {
 	if idx != a.tab {
 		return
 	}
-	a.refreshTab(idx)
+	// 再点当前页也要重新请求对应接口，同样过防抖 + 节流队列。
+	a.scheduleSidebarRefresh(func() { a.refreshTab(idx) })
 }
 
 func (a *app) onAuthChanged(err error) {
 	a.loginPending = false
+	// 换账号 / 登录状态变化时，上一次会话排队的侧边栏刷新不再有意义。
+	a.sidebarRefresh.cancel()
 	// 内容屏蔽名单是账号数据：换账号 / 退出后整体重建，缓存按新作用域重读；
 	// 登录成功则后台拉一次最新名单。
 	a.resetContentFilter()
@@ -1843,7 +1854,9 @@ func sidebarRail(c *ui.Context, items []display.ListItem, active string, onSelec
 }
 
 // selectTab 是导航项一次点击的完整处理：点当前页再刷新一次，点别的页先切
-// 选中、再按登录要求决定弹授权还是直接拉首屏。
+// 选中、再按登录要求决定弹授权还是重新拉首屏。三种入口都会重新请求对应
+// 接口，请求交给 sidebarRefresh 做防抖 + 节流；选中状态本身仍然立即更新，
+// 连续点击时列表数据以最后一次为准。
 //
 // 主页图标是个例外：还挂着节点筛选时点它，不只是刷新当前列表，而是清掉
 // 筛选回到默认列表重新拉首屏。侧边栏自定义节点的高亮读的是同一个筛选，
@@ -1859,7 +1872,9 @@ func (a *app) selectTab(idx int) {
 		a.tab = 0
 		a.navSel = tabID(0)
 		a.pageName = "list"
-		a.setHomeFilter(allNodes())
+		// 筛选与侧边栏高亮立即复位；这一页的重新请求走防抖 + 节流队列。
+		a.applyHomeFilter(allNodes())
+		a.scheduleSidebarRefresh(func() { a.load(0, 1) })
 		if a.tab != a.lastTab {
 			a.lastTab = a.tab
 			a.status = ""
@@ -1875,8 +1890,9 @@ func (a *app) selectTab(idx int) {
 	if spec := tabSpecs[idx]; spec.NeedsAuth && !a.auth.loggedIn() {
 		a.requestLogin("「" + spec.Label + "」需要登录 2Libra 后才能查看。")
 	} else {
-		// 切页只做后台静默刷新：保留这一页已加载的多页与滚动位置。
-		a.refreshTabSilently(idx)
+		// 切页必须重新拉对应接口：已加载的页走后台静默刷新，保留多页
+		// 与滚动位置。请求排进队列，由防抖 + 节流控制频率。
+		a.scheduleSidebarRefresh(func() { a.refreshTabSilently(idx) })
 	}
 	if a.tab != a.lastTab {
 		a.lastTab = a.tab

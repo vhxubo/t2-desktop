@@ -235,8 +235,9 @@ func (a *app) resolveNodeRef(ref nodeRef) nodeRef {
 	return resolved
 }
 
-// setHomeFilter 把筛选应用到首页：清掉旧列表与分页状态、回顶部、立刻拉第 1 页。
-func (a *app) setHomeFilter(f nodeFilter) {
+// applyHomeFilter 只把筛选与分页状态复位，不发请求。侧边栏点主页要立刻清掉
+// 高亮和旧列表，但请求得走防抖 + 节流队列，所以状态与加载拆成两步。
+func (a *app) applyHomeFilter(f nodeFilter) {
 	if a.tab < 0 || a.tab >= len(a.tabs) {
 		return
 	}
@@ -256,6 +257,12 @@ func (a *app) setHomeFilter(f nodeFilter) {
 	st.moreErr = ""
 	st.fold.reset()
 	st.list.ScrollTo(0, ui.Start)
+}
+
+// setHomeFilter 把筛选应用到首页：先复位状态，再立刻拉第 1 页。
+// 节点列表等直接入口走这条；侧边栏点主页走 applyHomeFilter + 排队加载。
+func (a *app) setHomeFilter(f nodeFilter) {
+	a.applyHomeFilter(f)
 	a.load(a.tab, 1)
 }
 

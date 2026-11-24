@@ -26,6 +26,9 @@ func testApp(t *testing.T) *app {
 	dir := t.TempDir()
 	a := newApp(dir)
 	a.autoLoad = false // 测试中不发真实网络请求
+	// 侧边栏刷新是定时器触发的：测试结束时清掉排队中的请求，免得迟到
+	// 的回调在用例返回后才打到已关闭的测试服务器。
+	t.Cleanup(func() { a.sidebarRefresh.cancel() })
 	return a
 }
 
