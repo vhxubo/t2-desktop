@@ -2282,6 +2282,34 @@ func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
 					TextColor(tk.TextDescription).SingleLine().Shrink(0)
 			}
 		})
+		a.guestLoginBanner(c)
+	})
+}
+
+// guestLoginBanner 在未登录的页头里摆一条登录入口：侧边栏默认折叠成图标轨，
+// 底部的「登录 2Libra」只剩一个图标，不点开很难发现。主页面一进来就能看见
+// 这里的「立即登录 / 注册」；登录后、等待授权期间整条收起。
+func (a *app) guestLoginBanner(c *ui.Context) {
+	if a.auth.loggedIn() || a.loginPending ||
+		(a.book != nil && a.book.pendingLogin() != nil) {
+		return
+	}
+	tk := lobetheme.TokensOf(c)
+	ui.Row(c).FillWidth().Shrink(0).Margin(16, 0, 0, 0).
+		Padding(12, 14, 12, 14).Background(tk.FillTertiary).
+		AlignItems(ui.Center).Gap(12).Children(func() {
+		display.Text(c, "登录后可发帖、评论和收通知", display.TextProps{
+			Strong: true, FontSize: 13, Rows: 1,
+		})
+		ui.Spacer(c).Grow(1)
+		if action.Button(c, "立即登录", action.ButtonProps{
+			Size: lobetheme.Small, Variant: action.Primary,
+		}).Clicked() {
+			a.startLogin()
+		}
+		if action.Button(c, "注册", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+			a.openSignup()
+		}
 	})
 }
 

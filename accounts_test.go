@@ -674,6 +674,44 @@ func TestGuestWindowViewBuildsWithBook(t *testing.T) {
 	}
 }
 
+// 未登录主页面顶部要有醒目的登录入口：侧边栏默认折叠，底部那一个图标很难
+// 被发现。点「立即登录」直接进入等待授权，期间入口收起，免得重复发起授权。
+func TestGuestLoginBannerStartsLogin(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	for _, want := range []string{"登录后可发帖、评论和收通知", "立即登录", "注册"} {
+		if !tt.HasText(want) {
+			t.Errorf("未登录主页面缺少 %q：%q", want, tt.Texts())
+		}
+	}
+	t.Cleanup(a.auth.Cancel)
+	if err := tt.Click("立即登录"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.loginPending {
+		t.Fatal("点「立即登录」后没有进入等待授权状态")
+	}
+	tt.Frame()
+	if tt.HasText("登录后可发帖、评论和收通知") {
+		t.Errorf("等待授权期间不该再摆登录入口：%q", tt.Texts())
+	}
+}
+
+// 登录后登录入口整条消失：正文顶部不再占一行。
+func TestGuestLoginBannerHidesAfterLogin(t *testing.T) {
+	a := testApp(t)
+	if err := a.auth.storeToken(tokenData{AccessToken: "tok", Username: "jimmy", TokenType: "Bearer"}); err != nil {
+		t.Fatal(err)
+	}
+	a.onAuthChanged(nil)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if tt.HasText("登录后可发帖、评论和收通知") || tt.HasText("立即登录") {
+		t.Errorf("登录后不该再显示登录入口：%q", tt.Texts())
+	}
+}
+
 // 账号面板：每个账号一行，未读数、登录是否失效与几个动作都在一屏里。
 func TestPanelViewListsAccountsWithUnreadAndActions(t *testing.T) {
 	b := testBook(t)
