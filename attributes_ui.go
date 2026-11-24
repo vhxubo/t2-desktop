@@ -38,9 +38,6 @@ func (a *app) profileAttributesSection(c *ui.Context, ps *profileState) {
 					}
 				})
 			})
-			display.Text(c, fmt.Sprintf("六维属性由服务端计算，单项上限 %d；雷达图按当前值绘制。",
-				profileAttributeMax), display.TextProps{FontSize: 10, Rows: 2}).
-				TextColor(t.TextMuted)
 		case ps.infoLoading:
 			display.Text(c, "正在读取属性…", display.TextProps{FontSize: 11, Rows: 1}).
 				TextColor(t.TextMuted)

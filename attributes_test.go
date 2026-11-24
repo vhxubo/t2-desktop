@@ -127,11 +127,13 @@ func TestProfileAttributesRadarRenders(t *testing.T) {
 
 	for _, want := range []string{
 		"六维属性", "技艺", "勤勉", "魅力", "阅历", "财富", "幸运",
-		"单项上限 10",
 	} {
 		if !tt.HasText(want) {
 			t.Errorf("概览页缺少属性文案 %q：%q", want, tt.Texts())
 		}
+	}
+	if tt.HasText("六维属性由服务端计算") {
+		t.Errorf("概览页不应展示雷达图下的说明小字：%q", tt.Texts())
 	}
 	chart, ok := tt.Find("六维属性雷达图")
 	if !ok {
