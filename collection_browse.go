@@ -397,7 +397,7 @@ func (a *app) collectionNeighborRow(c *ui.Context, d *detailState, next bool) {
 		title = p.ShortID
 	}
 	row := ui.Row(c).FillWidth().Gap(8).Padding(4, 6).Radius(6).
-		AlignItems(ui.Center).Background(ui.Transparent)
+		AlignItems(ui.Center).Background(ui.Transparent).Cursor(ui.CursorPointer)
 	row.Children(func() {
 		ui.Icon(c, icon).Size(14, 14).TextColor(tk.TextSecondary).Shrink(0)
 		ui.Text(c, label).FontSize(tk.FontSizeSM).
