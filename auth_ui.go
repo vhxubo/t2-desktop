@@ -8,12 +8,9 @@ import (
 )
 
 // authDialogFor 是授权弹窗：列表页、详情页、登录回退页与各个附属窗口共用
-// 同一份状态，但只画在当前聚焦的窗口里（见 focusedAuthTarget）。点
-// 「前往授权」打开授权页，授权成功后应用不会重跑被中断的操作——用户需要自己
-// 再点一次刚才的操作。发起窗口已经关掉的那一次在登记时就被丢掉了（见
-// demandAuthorizationFor），不会换一个窗口再弹出来。
+// 同一份状态，只画在当前宿主窗口里。授权成功后用户需要再点一次原操作。
 func (a *app) authDialogFor(c *ui.Context, owner toastTarget) {
-	if !a.authGate.open || !a.authGateShowsIn(owner) {
+	if !a.authGateShowsIn(owner) {
 		return
 	}
 	t := c.Theme()
@@ -53,8 +50,7 @@ func (a *app) authDialogFor(c *ui.Context, owner toastTarget) {
 	}
 }
 
-// authGateShowsIn 报告弹窗该不该画在 owner 窗口里：只画在发起过失败调用的
-// 窗口里，别的窗口一律不画。
+// authGateShowsIn 报告弹窗是否归当前窗口显示。
 func (a *app) authGateShowsIn(owner toastTarget) bool {
-	return a.authGate.open && a.authGate.wants(owner)
+	return a.authGate.open && a.authGate.host == owner
 }

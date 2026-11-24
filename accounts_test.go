@@ -991,6 +991,60 @@ func TestAddAccountOpensSystemBrowserWithNoAccounts(t *testing.T) {
 	t.Cleanup(func() { b.cancelLogin() })
 }
 
+func TestSystemAuthorizationCanReopenAfterBrowserFailure(t *testing.T) {
+	book := testBook(t)
+	var calls []string
+	book.openPanel = func() { calls = append(calls, "panel") }
+	book.openURL = func(raw string) error {
+		calls = append(calls, raw)
+		if len(calls) == 2 {
+			return fmt.Errorf("浏览器启动失败")
+		}
+		return nil
+	}
+	book.startAddAccountScopes([]string{"write:topic"})
+	t.Cleanup(book.cancelLogin)
+	pending := book.pendingLogin()
+	if pending == nil || len(calls) != 2 || calls[0] != "panel" || !strings.Contains(book.loginStatus(), "浏览器启动失败") {
+		t.Fatalf("打开失败后应在前台面板保留授权：%v，%s", calls, book.loginStatus())
+	}
+	tester := ui.NewTester(book.panelView, 460, 520)
+	if err := tester.Click("重开浏览器"); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 3 || calls[1] != calls[2] || book.pendingLogin() != pending {
+		t.Fatal("重开浏览器应复用同一次授权")
+	}
+}
+
+func TestStaleAuthorizationCallbackDoesNotCancelCurrentLogin(t *testing.T) {
+	book := testBook(t)
+	book.startAddAccount()
+	t.Cleanup(book.cancelLogin)
+	pending := book.pendingLogin()
+	if !book.completeCallback(defaultRedirectURI+"?error=access_denied&state=old") ||
+		!strings.Contains(book.loginStatus(), "与当前授权不匹配") || !pending.auth.awaitingLogin() {
+		t.Fatal("过期的拒绝回调不应终止当前授权")
+	}
+}
+
+func TestAuthorizationRetryPreservesRequestedScopes(t *testing.T) {
+	book := testBook(t)
+	book.startAddAccountScopes([]string{"write:topic"})
+	t.Cleanup(book.cancelLogin)
+	first := book.pendingLogin()
+	book.finishAccountLogin(first.auth, fmt.Errorf("授权请求失败"))
+	first.auth.Cancel()
+	tester := ui.NewTester(book.panelView, 460, 520)
+	if err := tester.Click("重试授权"); err != nil {
+		t.Fatal(err)
+	}
+	retry := book.pendingLogin()
+	if retry == nil || retry == first || !strings.Contains(retry.url, "write%3Atopic") {
+		t.Fatal("重试应开启新的授权并保留原权限范围")
+	}
+}
+
 // 内置浏览器窗口起不来（缺 WebView2 运行时等）时要退回系统浏览器，别把用户
 // 卡在一个打不开的空窗口上。
 func TestEmbeddedLoginFailureFallsBackToSystemBrowser(t *testing.T) {

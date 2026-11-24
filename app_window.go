@@ -76,7 +76,7 @@ func (a *app) openMainWindow() {
 			opts.X, opts.Y = x, y
 		}
 	}
-	a.win = mygo.NewWindow(opts)
+	a.win = a.newAppWindow(opts, toastMain)
 	// 首次启动声明只认领一次：几个账号窗口接连打开时也只由第一扇弹。
 	if a.disclaimer.claim() {
 		a.disclaimerOpen = true
@@ -136,6 +136,7 @@ func (a *app) afterMainWindowOpen() {
 // 出口，等这个账号最后一扇窗口关掉再收尾（见 accountWindowClosed）。
 func (a *app) onMainWindowClosed() {
 	a.mainClosed = true
+	a.authGateWindowClosed(toastMain)
 	// 主窗口没了就没有帧尾了；此时别的窗口可能还在，但先落一次盘兜底。
 	a.flushDrafts()
 	a.accountWindowClosed(a.win)

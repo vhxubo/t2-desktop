@@ -284,11 +284,12 @@ func (b *accountBook) useSystemBrowserForLogin() {
 	}
 	b.mu.Unlock()
 	b.closeLoginWindow()
-	if err := b.openURL(p.url); err != nil {
-		b.setLoginMsg("打开浏览器失败：" + err.Error())
-		return
-	}
-	b.redrawPanel()
+	b.postMain(func() {
+		if b.pendingLogin() == p {
+			b.openPanel()
+			b.openSystemAuthorization(p, "")
+		}
+	})
 }
 
 // redrawLoginWindow 让内置浏览器窗口按最新状态重建。

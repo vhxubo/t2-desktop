@@ -278,6 +278,16 @@ func (b *accountBook) panelFooter(c *ui.Context, pending *accountLogin) {
 			return
 		}
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			if failed := b.failedLogin; failed != nil && (failed.accountID == "" || b.account(failed.accountID) != nil) {
+				if action.Button(c, "重试授权", action.ButtonProps{Variant: action.Primary}).Clicked() {
+					if failed.accountID == "" {
+						b.startAddAccountScopes(failed.scopes)
+					} else {
+						b.reauthorizeAccount(failed.accountID, failed.scopes)
+					}
+				}
+				return
+			}
 			if action.Button(c, "添加账号", action.ButtonProps{
 				Variant: action.Primary,
 			}).Clicked() {
@@ -377,6 +387,9 @@ func (b *accountBook) panelPendingLogin(c *ui.Context, pending *accountLogin) {
 			if !b.completeCallback(pending.paste) {
 				b.setLoginMsg("回调链接无法完成这次授权")
 			}
+		}
+		if action.Button(c, "重开浏览器", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+			b.openSystemAuthorization(pending, "")
 		}
 		if action.Button(c, "取消授权", action.ButtonProps{
 			Size: lobetheme.Small, Variant: action.Text,

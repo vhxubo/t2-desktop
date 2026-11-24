@@ -36,6 +36,7 @@ const (
 	toastFollows                          // 关注与粉丝窗口：回关 / 取关
 	toastViewer                           // 图片预览窗口：另存为结果
 	toastNetLog                           // 网络调试窗口：复制请求数据的结果
+	toastAbout                            // 关于窗口
 )
 
 // toastNote 是一条等着显示的提示。
@@ -47,9 +48,8 @@ type toastNote struct {
 // toastWindow 返回提示对应的窗口；主窗口之外的窗口没打开时返回 nil，由
 // mainClaimsToasts 让主窗口接手。只在 UI 线程调用。
 func (a *app) toastWindow(target toastTarget) *mygo.Window {
-	// 详情窗口一个窗口一个动态编号，关掉之后这条提示退回主窗口。
-	if win := a.toastDetailWindow(target); win != nil {
-		return win
+	if target >= toastDetailBase {
+		return a.toastDetailWindow(target)
 	}
 	switch target {
 	case toastNotifications:
@@ -78,6 +78,8 @@ func (a *app) toastWindow(target toastTarget) *mygo.Window {
 		return a.viewerWin
 	case toastNetLog:
 		return a.netLogWin
+	case toastAbout:
+		return a.aboutWin
 	}
 	return a.win
 }

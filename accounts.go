@@ -144,6 +144,11 @@ type accountLogin struct {
 	paste string
 }
 
+type authorizationRetry struct {
+	accountID string
+	scopes    []string
+}
+
 // accountBook 是本机的账号册：共享服务 + 账号列表 + 窗口与托盘的调度。
 type accountBook struct {
 	dir        string
@@ -189,10 +194,11 @@ type accountBook struct {
 	// loginURL 是内置浏览器最近一次提交的地址。站点登录完成后往往停在自己的
 	// 页面上，授权流程不会自己继续：界面据此露出「重新授权」（见
 	// loginLeftAuthorizePage）。
-	loginURL  string
-	guest     *app
-	tray      *mygo.Tray
-	trayReady bool
+	loginURL    string
+	failedLogin *authorizationRetry
+	guest       *app
+	tray        *mygo.Tray
+	trayReady   bool
 	// icons 管应用与托盘图标的深浅切换（见 app_icon.go）。进程级一份，
 	// 只在主线程读写。
 	icons      *iconTheme
@@ -645,7 +651,7 @@ func (b *accountBook) startAddAccount() {
 func (b *accountBook) startAddAccountScopes(scopes []string) {
 	if b.pendingLogin() != nil {
 		b.setLoginMsg("已经有一次授权在进行，请先完成它，或点「取消」。")
-		b.showPanel()
+		b.showPendingAuthorization()
 		return
 	}
 	// 令牌先只放内存：这时还不知道授权回来的是哪个账号，拿不到它的存储键。
@@ -671,7 +677,7 @@ func (b *accountBook) reauthorizeAccount(id string, extraScopes []string) {
 	}
 	if b.pendingLogin() != nil {
 		b.setLoginMsg("已经有一次授权在进行，请先完成或取消它。")
-		b.showPanel()
+		b.showPendingAuthorization()
 		return
 	}
 	b.beginAccountLogin(b.newLoginAuth(), id, extraScopes)
@@ -681,6 +687,7 @@ func (b *accountBook) reauthorizeAccount(id string, extraScopes []string) {
 // 授权地址，然后决定在系统浏览器还是内置浏览器里打开。extraScopes 是补权限
 // 时要追加的 scope。
 func (b *accountBook) beginAccountLogin(auth *AuthManager, targetID string, extraScopes []string) {
+	b.failedLogin = nil
 	auth.setOnChange(func(err error) { b.finishAccountLogin(auth, err) })
 	// 2Libra 的重新授权是替换而不是累加：给已有账号重新登录时必须把上一次
 	// 拿到的 scope 一起申请，否则只申请默认范围就等于把按需开通的
@@ -709,18 +716,26 @@ func (b *accountBook) beginAccountLogin(auth *AuthManager, targetID string, extr
 	b.pending = p
 	b.loginMsg = msg
 	b.mu.Unlock()
-	b.showPanel()
-	if !embedded {
-		if err := b.openURL(authorize); err != nil {
-			b.setLoginMsg("打开浏览器失败：" + err.Error())
-			b.redrawPanel()
+	b.postMain(func() {
+		if b.pendingLogin() == p {
+			b.openAccountAuthorization(p)
+		}
+	})
+}
+
+func (b *accountBook) openAccountAuthorization(p *accountLogin) {
+	b.openPanel()
+	if !p.embedded {
+		if b.accountCount() > 1 {
+			b.openSystemAuthorization(p, "内置浏览器不可用，已改用系统浏览器。")
 			return
 		}
+		b.openSystemAuthorization(p, "")
 		return
 	}
 	// 内置浏览器的 webview 自己拦自定义协议跳转，需要 redirect_mode=app 直跳；
 	// p.url 仍是原始地址，退回系统浏览器或用户手动切换时走落地页默认行为。
-	if err := b.openLogin(embeddedAuthorizeURL(authorize)); err != nil {
+	if err := b.openLogin(embeddedAuthorizeURL(p.url)); err != nil {
 		// 内置浏览器起不来（缺 WebView2 运行时、平台不支持）：收起那个窗口、
 		// 退回系统浏览器 —— 用户至少还有一条能走通的路。
 		b.closeLoginWindow()
@@ -729,14 +744,22 @@ func (b *accountBook) beginAccountLogin(auth *AuthManager, targetID string, extr
 			b.pending.embedded = false
 		}
 		b.mu.Unlock()
-		if err := b.openURL(authorize); err != nil {
-			b.setLoginMsg("内置浏览器与系统浏览器都打不开授权页：" + err.Error())
-			b.redrawPanel()
-			return
-		}
-		b.setLoginMsg(b.loginWaitingMessage(false, targetID))
+		b.openSystemAuthorization(p, "内置浏览器打不开授权页，已改用系统浏览器。")
+		return
 	}
-	b.redrawPanel()
+	raiseAuthWindow(b.loginWin)
+}
+
+func (b *accountBook) openSystemAuthorization(p *accountLogin, fallback string) {
+	if err := b.openURL(p.url); err != nil {
+		b.setLoginMsg("打开系统浏览器失败：" + err.Error())
+		return
+	}
+	msg := b.loginWaitingMessage(false, p.accountID)
+	if fallback != "" {
+		msg = fallback + msg
+	}
+	b.setLoginMsg(msg)
 }
 
 // loginWaitingMessage 是面板上等待授权时的那句话，按授权方式与目标账号分开说。
@@ -784,19 +807,33 @@ func (b *accountBook) finishAccountLogin(auth *AuthManager, err error) {
 		// 内置浏览器窗口的使命就是这次授权：结束就收起。
 		b.closeLoginWindow()
 		if err != nil {
+			b.failedLogin = &authorizationRetry{p.accountID, p.auth.requestedScopesList()}
 			b.setLoginMsg(friendlyError(err))
 			if p.accountID != "" {
 				b.bindSession(b.account(p.accountID))
 				b.failAccountWindowAuth(p, err)
 			}
+			b.showPanel()
 			return
+		}
+		var origin *mygo.Window
+		if target := b.account(p.accountID); target != nil && target.app != nil && target.app.hasPendingAuthorization() {
+			origin = target.app.toastWindow(target.app.authGate.host)
 		}
 		acc, err := b.persistLogin(p)
 		if err != nil {
+			b.failedLogin = &authorizationRetry{p.accountID, p.auth.requestedScopesList()}
 			b.setLoginMsg(err.Error())
+			b.failAccountWindowAuth(p, err)
+			b.showPanel()
 			return
 		}
 		b.noteGrantedScopes(p.auth)
+		if acc.ID == p.accountID && origin != nil && !origin.IsDestroyed() {
+			b.setActive(acc.ID)
+			raiseAuthWindow(origin)
+			return
+		}
 		b.openWindow(acc.ID)
 	})
 }
@@ -867,9 +904,12 @@ func (b *accountBook) noteGrantedScopes(auth *AuthManager) {
 // 绝不把别人的令牌装到它头上。
 func (b *accountBook) persistLogin(p *accountLogin) (*account, error) {
 	name := p.auth.username()
+	if name == "" {
+		return nil, errors.New("无法确认授权账号，请重新授权")
+	}
 	if p.accountID != "" {
 		if target := b.account(p.accountID); target != nil {
-			if target.Username == "" || name == "" || strings.EqualFold(target.Username, name) {
+			if target.Username == "" || strings.EqualFold(target.Username, name) {
 				if err := b.applySession(target, p.auth); err != nil {
 					return nil, err
 				}
@@ -1060,10 +1100,28 @@ func (b *accountBook) completeCallback(raw string) bool {
 	}
 	if err := p.auth.Complete(raw); err != nil {
 		b.setLoginMsg("回调无法完成登录：" + err.Error())
+		if p.embedded {
+			b.loginErr = b.loginStatus()
+			b.redrawLoginWindow()
+		}
 		return true
 	}
 	b.setLoginMsg("已收到回调，正在用授权码换取令牌…")
 	return true
+}
+
+func (b *accountBook) showPendingAuthorization() {
+	pending := b.pendingLogin()
+	b.postMain(func() {
+		if pending == nil || b.pendingLogin() != pending {
+			return
+		}
+		if pending.embedded && b.loginWin != nil {
+			b.showLoginWindow()
+			return
+		}
+		b.openPanel()
+	})
 }
 
 /* ------------------------------------------------------------------
@@ -1282,6 +1340,38 @@ func (b *accountBook) raiseAccountWindow(id string) {
 		return
 	}
 	b.openWindow(id)
+}
+
+// openAccountCompose 从托盘给指定账号打开发帖 / 发动态窗口。窗口没开时先开
+// 窗口，再把发帖动作排到窗口建好之后；窗口已经开着就直接切模式。只在主线程
+// 调用（托盘菜单的 Click 就在主线程）。
+func (b *accountBook) openAccountCompose(id string, moment bool) {
+	acc := b.account(id)
+	if acc == nil {
+		return
+	}
+	if acc.app == nil {
+		if !b.afterReady {
+			return // 还没就绪 / 无头测试：建不了窗口，也就不打开发帖页
+		}
+		b.openWindow(id)
+		b.postMain(func() {
+			if a := b.account(id); a != nil && a.app != nil {
+				b.showComposeIn(a.app, moment)
+			}
+		})
+		return
+	}
+	b.showComposeIn(acc.app, moment)
+}
+
+// showComposeIn 把发帖 / 发动态的请求交给那扇账号自己的界面状态。
+func (b *accountBook) showComposeIn(a *app, moment bool) {
+	if moment {
+		a.showMomentCompose()
+	} else {
+		a.showCompose()
+	}
 }
 
 /* ------------------------------------------------------------------
@@ -1549,7 +1639,7 @@ func (b *accountBook) handleDeepLink(raw string) {
 	log.Printf("深链：收到 %q", raw)
 	// 账号册这一侧在等（添加账号 / 重新登录）。
 	if b.completeCallback(raw) {
-		b.showPanel()
+		b.showPendingAuthorization()
 		return
 	}
 	// 某个账号窗口在补授权（缺权限后的重新授权）。

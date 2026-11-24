@@ -285,7 +285,8 @@ type app struct {
 	schemeWarn string
 	// authGate 是全局授权弹窗：任何缺少权限的调用都收敛到这里，授权成功后
 	// 重跑被中断的调用。
-	authGate authGate
+	authGate     authGate
+	lastAuthHost toastTarget
 	// contentFilter 是当前账号的内容屏蔽名单与运行状态（见 content_filter.go）。
 	// 一个账号窗口一份，不放进 appDeps：名单是账号数据，不能进程级共享。
 	contentFilter *contentFilterState
@@ -1388,11 +1389,9 @@ func (a *app) onAuthChanged(err error) {
 	case err != nil:
 		a.loginMsg = friendlyError(err)
 		a.status = a.loginMsg
-		// 失败时才把回退页摆出来：那里有「重新打开浏览器」和粘贴回调链接，
-		// 正常授权成功不进这一页。授权弹窗先让位，授权状态保留：用户可以
-		// 在回退页重新发起授权。
-		a.authGate.open = false
-		a.pageName = "login"
+		if !a.authGate.open {
+			a.pageName = "login"
+		}
 	case a.auth.loggedIn():
 		// 未登录窗口首次登录：guest 草稿先落盘并清掉 live 状态，之后按账号
 		// 作用域重新载入，避免把 guest 的内容写进新账号的文件。
@@ -1597,12 +1596,12 @@ func (a *app) dialogs(c *ui.Context) {
 	a.pandoraDialog(c)
 	a.nodeEditorDialog(c)
 	a.draftsClearDialog(c)
-	a.authDialogFor(c, toastMain)
 	a.closePromptDialog(c)
 	// 首次启动声明放最后，盖在其它弹窗之上；确认后本进程不再画。
 	a.disclaimerDialog(c)
-	// 断网提示放在最上层：离线时压住其它弹窗，先让用户处理网络。
+	// 授权提示保持在其它弹窗之上。
 	a.offlineDialog(c)
+	a.authDialogFor(c, toastMain)
 }
 
 // feedMaxWidth 是正文栏的最大宽度：窗口再宽，一行文字也不超过 760 DIP，

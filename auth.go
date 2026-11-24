@@ -969,6 +969,9 @@ func (m *AuthManager) Complete(rawURL string) error {
 		return fmt.Errorf("这不是本应用的回调链接，应形如 %s?code=...&state=...", defaultRedirectURI)
 	}
 	q := u.Query()
+	if q.Get("state") != p.state {
+		return errors.New("回调链接与当前授权不匹配，请使用这次授权的链接")
+	}
 	if e := q.Get("error"); e != "" {
 		p.deliver(loginResult{err: fmt.Errorf("授权被拒绝：%s", e)})
 		return nil

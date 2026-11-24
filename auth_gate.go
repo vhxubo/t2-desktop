@@ -108,17 +108,20 @@ var authFocusedWindow = func() *mygo.Window { return mygo.FocusedWindow() }
 // 里等于没弹。找不到（无头测试，或聚焦的是不画弹窗的窗口）时返回 ok=false，
 // 调用方沿用传进来的 owner。
 func (a *app) focusedAuthTarget() (toastTarget, bool) {
-	w := authFocusedWindow()
+	return a.authTargetForWindow(authFocusedWindow())
+}
+
+func (a *app) authTargetForWindow(w *mygo.Window) (toastTarget, bool) {
 	if w == nil {
-		// 应用不在前台时没有聚焦窗口；弹在主窗口，用户切回来第一眼就能看到。
-		if a.win != nil {
-			return toastMain, true
-		}
-		return 0, false // 无头测试：没有真实窗口
+		return 0, false
 	}
 	switch w {
 	case a.win:
-		return toastMain, true
+		if !a.mainClosed {
+			return toastMain, true
+		}
+	}
+	switch w {
 	case a.notifWin:
 		return toastNotifications, true
 	case a.settingsWin:
@@ -145,6 +148,8 @@ func (a *app) focusedAuthTarget() (toastTarget, bool) {
 		return toastViewer, true
 	case a.netLogWin:
 		return toastNetLog, true
+	case a.aboutWin:
+		return toastAbout, true
 	}
 	for _, h := range a.detailWindows {
 		if h.win == w && !h.removed {
@@ -179,6 +184,9 @@ func (a *app) handleGlobalAuthError(ae *apiError) {
 	need := scopeNeed(ae.RequiredScope)
 	a.publish(func() {
 		target, ok := a.focusedAuthTarget()
+		if !ok && authFocusedWindow() == nil {
+			target, ok = a.lastAuthTarget()
+		}
 		if !ok {
 			return // 无头测试：没有真实聚焦窗口，交给显式调用点登记
 		}
@@ -191,16 +199,15 @@ func (a *app) handleGlobalAuthError(ae *apiError) {
 // 不需要再点任何按钮去发起授权。授权成功后只清空这个状态，被中断的操作由用户
 // 自己重新触发，应用不代劳。
 //
-// owners 是发起被中断调用的窗口：弹窗只画在这些窗口里，别的窗口（尤其是
-// 主窗口）不跟着弹。同一个账号的多个窗口可以同时缺权限，它们各自显示同一份
-// 说明、共用一次授权。
+// host 是当前显示位置，owners 保留参与这次授权的窗口，供宿主关闭时接替。
 type authGate struct {
 	open   bool
+	host   toastTarget
 	owners map[toastTarget]struct{}
 	need   authNeed
 }
 
-// wants 报告这次弹窗该不该画在 target 窗口里。
+// wants 报告窗口是否参与这次授权。
 func (g *authGate) wants(target toastTarget) bool {
 	if g == nil || g.owners == nil {
 		return false
@@ -210,21 +217,32 @@ func (g *authGate) wants(target toastTarget) bool {
 }
 
 // demandAuthorizationFor 登记一次需要授权的操作。owner 是发起这次操作（也就
-// 是缺少权限）的窗口。已有弹窗时合并缺失的 scope、把新窗口加进要显示弹窗的
-// 集合：一次授权可以解决同时失败的多条请求。授权本身不自动重跑操作。
+// 是缺少权限）的窗口。已有弹窗时合并缺失的 scope，仍只在一个窗口显示。
 func (a *app) demandAuthorizationFor(owner toastTarget, need authNeed) {
 	// 全局弹窗只画在用户此刻看得见的窗口：后台请求从哪扇窗口发出不重要，
 	// 重要的是弹窗出现在当前聚焦窗口，第一眼就能看到「前往授权」。
 	if focused, ok := a.focusedAuthTarget(); ok {
 		owner = focused
 	}
+	if owner == toastPandora {
+		owner = toastMain
+	}
+	if owner == toastMain && (a.mainClosed || authFocusedWindow() == nil) {
+		if last, ok := a.lastAuthTarget(); ok {
+			owner = last
+		}
+	}
 	// 发起这次操作的窗口已经关掉：操作随窗口一起作废，不弹到别的窗口去。
 	// 无头测试没有真实窗口（a.win == nil），由各自的 view 直接渲染，不受此限。
 	if owner != toastMain && a.win != nil && a.toastWindow(owner) == nil {
 		return
 	}
-	if need.Message == "" {
-		need.Message = "这次操作需要授权后才能继续。"
+	if owner == toastMain && a.mainClosed {
+		if live, ok := a.authTargetForWindow(a.win); ok {
+			owner = live
+		} else {
+			return
+		}
 	}
 	if !a.authGate.open {
 		a.authGate.open = true
@@ -243,10 +261,70 @@ func (a *app) demandAuthorizationFor(owner toastTarget, need authNeed) {
 		a.authGate.need.Message = need.Message
 	} else if len(a.authGate.need.Scopes) > 0 {
 		a.authGate.need.Message = scopeNeed(a.authGate.need.Scopes).Message
+	} else {
+		a.authGate.need.Message = "这次操作需要授权后才能继续。"
 	}
+	a.moveAuthPrompt(owner, true)
 	if a.onAuthPrompt != nil {
 		a.onAuthPrompt()
 	}
+}
+
+func (a *app) lastAuthTarget() (toastTarget, bool) {
+	win := a.toastWindow(a.lastAuthHost)
+	if win == nil || win.IsDestroyed() {
+		return 0, false
+	}
+	return a.authTargetForWindow(win)
+}
+
+// moveAuthPrompt 只移动显示位置，不丢掉其它窗口汇总进来的权限。
+func (a *app) moveAuthPrompt(owner toastTarget, raise bool) {
+	previous := a.authGate.host
+	a.authGate.host = owner
+	if a.win == nil {
+		return
+	}
+	if previous != owner {
+		if win := a.toastWindow(previous); win != nil {
+			win.Invalidate()
+		}
+	}
+	if win := a.toastWindow(owner); win != nil {
+		if raise && win != authFocusedWindow() {
+			win.Update(func() {
+				if a.authGateShowsIn(owner) && a.toastWindow(owner) == win {
+					raiseAuthWindow(win)
+				}
+			})
+		} else {
+			win.Invalidate()
+		}
+	}
+}
+
+func (a *app) newAppWindow(opts mygo.WindowOptions, owner toastTarget) *mygo.Window {
+	win := mygo.NewWindow(opts)
+	win.OnFocus(func() {
+		a.lastAuthHost = owner
+		if a.authGate.open && a.authGate.host != owner {
+			a.authGate.owners[owner] = struct{}{}
+			a.moveAuthPrompt(owner, false)
+		}
+	})
+	return win
+}
+
+func raiseAuthWindow(win *mygo.Window) {
+	if win == nil || win.IsDestroyed() {
+		return
+	}
+	if win.IsMinimized() {
+		win.Restore()
+	}
+	win.Show()
+	win.Focus()
+	win.Invalidate()
 }
 
 // demandAuthorization 是主窗口入口的简写：发起的窗口就是主窗口。
@@ -302,6 +380,10 @@ func (a *app) requestLogin(message string) {
 // 默认范围）打开授权页。账号窗口走账号册的内置浏览器，未登录窗口走系统浏览器
 // （见 startLoginWithScopes）。授权成功后应用不重跑操作，用户需要自己再点一次。
 func (a *app) authorizeGate() {
+	if a.book != nil && a.book.pendingLogin() != nil {
+		a.book.showPendingAuthorization()
+		return
+	}
 	scopes := append([]string(nil), a.authGate.need.Scopes...)
 	a.authGate.open = false
 	// 未登录窗口里的「前往授权」其实就是添加一个账号：授权回来之后会给那个
@@ -331,13 +413,20 @@ func (a *app) cancelAuthGate(reason string) {
 // authGateWindowClosed 在某个窗口关掉时把它从授权弹窗里摘掉：别的窗口缺权限
 // 的那一份继续保留。最后一个发起窗口也关掉时整次授权作废。只在 UI 线程调用。
 func (a *app) authGateWindowClosed(owner toastTarget) {
-	if !a.authGate.open && len(a.authGate.owners) == 0 {
+	if a.lastAuthHost == owner {
+		a.lastAuthHost = toastMain
+	}
+	if !a.authGate.open {
 		return
 	}
-	if a.authGate.owners != nil {
-		delete(a.authGate.owners, owner)
-	}
+	delete(a.authGate.owners, owner)
 	if len(a.authGate.owners) > 0 {
+		if a.authGate.host == owner {
+			for target := range a.authGate.owners {
+				a.moveAuthPrompt(target, false)
+				break
+			}
+		}
 		return
 	}
 	a.authGate = authGate{}

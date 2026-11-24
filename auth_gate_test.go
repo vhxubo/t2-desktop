@@ -159,9 +159,7 @@ func TestAuthPromptStaysInOriginatingWindow(t *testing.T) {
 	}
 }
 
-// 同一个账号的两个窗口同时缺权限时，两处都弹；一次授权解决两条被中断的
-// 请求。主窗口仍然不跟着弹。
-func TestAuthPromptShowsInEveryFailingWindow(t *testing.T) {
+func TestAuthPromptMovesWithoutLosingScopes(t *testing.T) {
 	a := testApp(t)
 	a.userCard = newUserCardState("amy")
 	a.demandAuthorizationFor(toastCompose, scopeNeed([]string{"write:topic"}))
@@ -169,7 +167,7 @@ func TestAuthPromptShowsInEveryFailingWindow(t *testing.T) {
 
 	for _, owner := range []toastTarget{toastCompose, toastUserCard} {
 		if !a.authGate.wants(owner) {
-			t.Errorf("缺少权限的窗口 %v 应显示授权弹窗", owner)
+			t.Errorf("应保留窗口 %v 的授权请求", owner)
 		}
 	}
 	if a.authGate.wants(toastMain) {
@@ -186,8 +184,8 @@ func TestAuthPromptShowsInEveryFailingWindow(t *testing.T) {
 
 	ct := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	ct.Frame()
-	if !ct.HasText("缺少的权限范围：write:topic、interact") {
-		t.Errorf("发帖窗口没有列出合并后的 scope：%q", ct.Texts())
+	if ct.HasText("前往授权") {
+		t.Errorf("发帖窗口仍显示已经移走的弹窗：%q", ct.Texts())
 	}
 	ut := ui.NewTester(a.userCardWindowView, userCardWindowWidth, userCardWindowHeight)
 	ut.Frame()
@@ -198,6 +196,41 @@ func TestAuthPromptShowsInEveryFailingWindow(t *testing.T) {
 	mt.Frame()
 	if mt.HasText("需要授权") {
 		t.Errorf("主窗口不该跟着弹：%q", mt.Texts())
+	}
+}
+
+func TestAuthPromptHostsInSecondaryWindows(t *testing.T) {
+	for _, target := range []toastTarget{toastViewer, toastNetLog, toastAbout, toastDetailBase} {
+		a := testApp(t)
+		window := &mygo.Window{}
+		var view func(*ui.Context)
+		switch target {
+		case toastViewer:
+			a.viewerWin, view = window, a.imageViewerWindowView
+		case toastNetLog:
+			a.netLogWin, view = window, a.netLogWindowView
+		case toastAbout:
+			a.aboutWin, view = window, a.aboutWindowView
+		case toastDetailBase:
+			a.detailWindows = []*detailWindow{{win: window, toast: target}}
+		}
+		a.win, a.mainClosed = window, true
+		if got, ok := a.authTargetForWindow(window); !ok || got != target {
+			t.Fatalf("主窗关闭后宿主 = %v, %v，预期 %v", got, ok, target)
+		}
+		a.win = nil
+		if view == nil {
+			continue
+		}
+		a.requestLoginFor(target, "继续操作需要授权")
+		tester := ui.NewTester(view, 900, 680)
+		tester.Frame()
+		if !tester.HasText("前往授权") {
+			t.Errorf("窗口 %v 没有显示授权按钮：%v", target, tester.Texts())
+		}
+		if err := tester.Click("取消"); err != nil || a.hasPendingAuthorization() {
+			t.Errorf("窗口 %v 取消授权失败：%v", target, err)
+		}
 	}
 }
 
