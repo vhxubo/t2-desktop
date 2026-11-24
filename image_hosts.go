@@ -569,7 +569,8 @@ func (a *app) officialHostAccess() (allowed, known bool) {
 // force 为 false 时只在还没确认过的情况下才发请求（启动时用），force 为 true 时
 // 不管缓存直接重读（刚登录、或用户在设置里点了「重新确认」）。
 func (a *app) refreshProStatus(force bool) {
-	if a.auth == nil || !a.autoLoad || a.proChecking || !a.auth.loggedIn() {
+	auth := a.auth
+	if auth == nil || !a.autoLoad || a.proChecking || !auth.loggedIn() {
 		return
 	}
 	if !force {
@@ -577,21 +578,23 @@ func (a *app) refreshProStatus(force bool) {
 			return
 		}
 	}
-	name := a.auth.username()
+	name := auth.username()
 	if name == "" {
 		return
 	}
 	a.proChecking = true
+	client := *a.client
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		p, err := a.client.fetchAccountProfile(ctx, name)
+		p, err := client.fetchAccountProfile(ctx, name)
+		if err == nil && p.Name != "" {
+			auth.setOfficialHostAccess(p.IsPro, p.Role)
+		}
 		a.publish(func() {
-			a.proChecking = false
-			if err != nil || p.Name == "" {
-				return
+			if a.auth == auth {
+				a.proChecking = false
 			}
-			a.auth.setOfficialHostAccess(p.IsPro, p.Role)
 		})
 	}()
 }

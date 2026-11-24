@@ -653,33 +653,17 @@ func (m *AuthManager) officialHostAccess() (allowed, known bool) {
 	return m.token.IsPro || m.token.Role == roleGuardian, m.token.ProKnown
 }
 
-// setProStatus 记下刚读到的 Pro 状态并落盘：下次启动不必再问一次。没登录
-// （令牌已被清掉）时直接忽略，不把上一个账号的结论写给下一个账号。
-func (m *AuthManager) setProStatus(pro bool) {
-	m.setAccountAccess(pro, "")
-}
-
 // setOfficialHostAccess 记下刚读到的 is_pro 与 role 并落盘。role 为空（例如
-// 公开资料没带这个字段）时沿用缓存里已有的角色，避免把守护者误判成普通人。
+// 公开资料没带这个字段）时沿用已有角色。须在后台调用：主线程等待凭据库时
+// 会处理其他 UI 回调，那些回调也需要读取会话。
 func (m *AuthManager) setOfficialHostAccess(pro bool, role string) {
-	curRole := ""
-	if m.token != nil {
-		m.mu.Lock()
-		curRole = m.token.Role
-		m.mu.Unlock()
-	}
-	if role == "" {
-		role = curRole
-	}
-	m.setAccountAccess(pro, role)
-}
-
-// setAccountAccess 把 Pro / 角色一次性写进令牌缓存并落盘。
-func (m *AuthManager) setAccountAccess(pro bool, role string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.token == nil {
 		return
+	}
+	if role == "" {
+		role = m.token.Role
 	}
 	if m.token.ProKnown && m.token.IsPro == pro && m.token.Role == role {
 		return

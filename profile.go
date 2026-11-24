@@ -783,6 +783,8 @@ func (a *app) loadProfileInfo(name string) {
 	seq := ps.infoSeq
 	ps.infoLoading = true
 	ps.infoErr = ""
+	auth := a.auth
+	client := *a.client
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	go func() {
 		defer cancel()
@@ -790,16 +792,19 @@ func (a *app) loadProfileInfo(name string) {
 		// 资料端点，页面不能因为一次接口问题就整块空着。
 		var p accountProfile
 		var err error
-		if a.auth.loggedIn() && strings.EqualFold(name, a.auth.username()) {
-			p, err = a.client.fetchMyProfile(ctx)
+		if auth.loggedIn() && strings.EqualFold(name, auth.username()) {
+			p, err = client.fetchMyProfile(ctx)
 			if err != nil {
-				p, err = a.client.fetchAccountProfile(ctx, name)
+				p, err = client.fetchAccountProfile(ctx, name)
 			}
 		} else {
-			p, err = a.client.fetchAccountProfile(ctx, name)
+			p, err = client.fetchAccountProfile(ctx, name)
+		}
+		if err == nil && p.Name != "" && p.Name == auth.username() {
+			auth.setOfficialHostAccess(p.IsPro, p.Role)
 		}
 		a.publish(func() {
-			if a.profile != ps || ps.infoSeq != seq {
+			if a.auth != auth || a.profile != ps || ps.infoSeq != seq {
 				return
 			}
 			ps.infoLoading = false
@@ -810,11 +815,6 @@ func (a *app) loadProfileInfo(name string) {
 			}
 			ps.user = p
 			ps.infoErr = ""
-			// 「个人中心」读到的资料最权威：顺手把 Pro 状态与角色写回令牌缓存，
-			// 图库设置里官方图床的可用性跟着一起更新。
-			if p.Name != "" && p.Name == a.auth.username() {
-				a.auth.setOfficialHostAccess(p.IsPro, p.Role)
-			}
 			a.prefetchAvatars(p.Avatar)
 		})
 	}()

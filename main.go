@@ -818,6 +818,7 @@ func (a *app) replaceAuth(auth *AuthManager) {
 		old.detach()
 	}
 	a.auth = auth
+	a.proChecking = false
 	if a.client != nil {
 		a.client.Auth = auth
 	}
