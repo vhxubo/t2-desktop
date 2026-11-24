@@ -108,8 +108,10 @@ func (a *app) saveNodeShortcuts() {
 // sidebarNodeSection 是展开态的「节点」分组：标题右侧的设置图标、快捷入口
 // 列表与空态。点击快捷行直接进入「首页 + 该节点筛选」，不新开窗口。
 func (a *app) sidebarNodeSection(c *ui.Context, nav layout.SideNavState) {
-	ui.Box(c).Height(1).Margin(8, 8).AlignSelf(ui.Stretch).Background(c.Theme().Border)
 	tk := lobetheme.TokensOf(c)
+	// 分组上方的分割线与导航列表里的 Divider 用同一条：4 的上下留白、
+	// Lobe 的 BorderSecondary，不再单独内缩 8、用更深的 Border。
+	ui.Box(c).Height(1).Margin(4, 0).AlignSelf(ui.Stretch).Background(tk.BorderSecondary)
 	ui.Row(c).FillWidth().Padding(0, sidebarInsetX, 2, sidebarInsetX).
 		AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "节点").FontSize(11).TextColor(tk.TextDescription).Grow(1)
@@ -152,16 +154,11 @@ func (a *app) sidebarNodeSection(c *ui.Context, nav layout.SideNavState) {
 // sidebarNodeRail 是折叠态的单个 Hash 入口。菜单列出快捷入口，末项是配置
 // 弹窗；当前筛选命中任一项时图标保持激活态。
 func (a *app) sidebarNodeRail(c *ui.Context) {
-	ui.Box(c).Height(1).Margin(4, 8).AlignSelf(ui.Stretch).Background(c.Theme().Border)
+	tk := lobetheme.TokensOf(c)
+	// 与折叠态图标轨里的其它分割线同色同距：Lobe 的 BorderSecondary。
+	ui.Box(c).Height(1).Margin(4, 8).AlignSelf(ui.Stretch).Background(tk.BorderSecondary)
 	active := a.activeNodeShortcutKey() != ""
-	items := make([]lobeoverlay.MenuItem, 0, len(a.nodeShortcuts)+2)
-	for _, r := range a.nodeShortcuts {
-		items = append(items, lobeoverlay.MenuItem{
-			Key: nodeShortcutKeyTag + r.key(), Label: r.label(), Icon: nodeRefIcon(r),
-		})
-	}
-	items = append(items, lobeoverlay.MenuItem{Divider: true})
-	items = append(items, lobeoverlay.MenuItem{Key: "configure", Label: "配置节点…", Icon: lucide.Settings2()})
+	items := a.nodeRailMenuItems()
 	chosen := lobeoverlay.DropdownMenu(c, &a.nodeRailOpen, lobeoverlay.DropdownMenuProps{Items: items}, func(t ui.Element) {
 		// DropdownMenu 的触发按钮默认靠左，和其余图标轨项目不在同一条中线；
 		// 对齐父 Column 的中线，折叠态节点入口才不会贴着侧边栏左缘。
@@ -182,6 +179,23 @@ func (a *app) sidebarNodeRail(c *ui.Context) {
 			}
 		}
 	}
+}
+
+// nodeRailMenuItems 是折叠态节点下拉菜单的数据：快捷入口排在前面，
+// 「配置节点…」固定是末项。分隔线只用来把这两组分开——没有快捷入口时它是
+// 悬在菜单顶部的第一条，不能展示。
+func (a *app) nodeRailMenuItems() []lobeoverlay.MenuItem {
+	items := make([]lobeoverlay.MenuItem, 0, len(a.nodeShortcuts)+2)
+	for _, r := range a.nodeShortcuts {
+		items = append(items, lobeoverlay.MenuItem{
+			Key: nodeShortcutKeyTag + r.key(), Label: r.label(), Icon: nodeRefIcon(r),
+		})
+	}
+	if len(items) > 0 {
+		items = append(items, lobeoverlay.MenuItem{Divider: true})
+	}
+	items = append(items, lobeoverlay.MenuItem{Key: "configure", Label: "配置节点…", Icon: lucide.Settings2()})
+	return items
 }
 
 func nodeRefIcon(r nodeRef) *ui.SVG {

@@ -10,6 +10,93 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// 折叠态节点菜单的分隔线只用来分开已配置的节点与「配置节点…」末项。
+// 没有快捷入口时它是悬在菜单顶部的第一条，不该出现。
+func TestNodeRailMenuDividerFollowsShortcuts(t *testing.T) {
+	a := testApp(t)
+	a.nodeShortcuts = nil
+	items := a.nodeRailMenuItems()
+	if len(items) != 1 || items[0].Key != "configure" {
+		t.Fatalf("空快捷入口时菜单不该有分隔线：%+v", items)
+	}
+	a.nodeShortcuts = []nodeRef{
+		{ID: "n-life", Slug: "life", Name: "生活"},
+		{ID: "n-work", Slug: "work", Name: "职场"},
+	}
+	items = a.nodeRailMenuItems()
+	if len(items) != 4 || !items[2].Divider || items[3].Key != "configure" {
+		t.Fatalf("有快捷入口时只在末项前画一条分隔线：%+v", items)
+	}
+}
+
+// 节点分组上方的分割线要和导航列表里的 Divider 同色：取「评分榜」行与
+// 「节点」标题之间的横线，颜色必须是 Lobe 的 BorderSecondary，而不是
+// 更深的 Border。
+func TestSidebarNodeDividerUsesListToken(t *testing.T) {
+	a := testApp(t)
+	a.navExpanded = true
+	a.nodeShortcuts = []nodeRef{{ID: "n-life", Slug: "life", Name: "生活"}}
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	scores, ok := tt.Find("评分榜")
+	if !ok {
+		t.Fatalf("展开态找不到「评分榜」：%q", tt.Texts())
+	}
+	header, ok := tt.Find("节点")
+	if !ok {
+		t.Fatalf("展开态找不到「节点」标题：%q", tt.Texts())
+	}
+	if header.Y <= scores.Y+scores.H {
+		t.Fatalf("节点标题没在评分榜下面：scores=%+v header=%+v", scores, header)
+	}
+	want := lobeCfg.Tokens(false).BorderSecondary
+	wantLum := 0.299*float64(want.R) + 0.587*float64(want.G) + 0.114*float64(want.B)
+	found := false
+	for y := int(scores.Y + scores.H); y < int(header.Y); y++ {
+		if d := lum(tt.Image(), 20, y) - wantLum; d > -2 && d < 2 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("评分榜与节点标题之间没找到 BorderSecondary 色的分割线：%q", tt.Texts())
+	}
+}
+
+// 折叠态节点入口上方的分割线同样用 Lobe 的 BorderSecondary，与图标轨里
+// 其它分组线一致。
+func TestSidebarNodeRailDividerUsesListToken(t *testing.T) {
+	a := testApp(t)
+	if a.navExpanded {
+		t.Fatal("前置条件：默认应是折叠态")
+	}
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	scores, ok := tt.Access("评分榜")
+	if !ok {
+		t.Fatalf("折叠态找不到「评分榜」：%q", tt.Texts())
+	}
+	node, ok := tt.Access("节点快捷入口")
+	if !ok {
+		t.Fatalf("折叠态找不到节点入口：%q", tt.Texts())
+	}
+	if node.Bounds.Y <= scores.Bounds.Y+scores.Bounds.H {
+		t.Fatalf("节点入口没在评分榜下面：scores=%+v node=%+v", scores.Bounds, node.Bounds)
+	}
+	want := lobeCfg.Tokens(false).BorderSecondary
+	wantLum := 0.299*float64(want.R) + 0.587*float64(want.G) + 0.114*float64(want.B)
+	found := false
+	for y := int(scores.Bounds.Y + scores.Bounds.H); y < int(node.Bounds.Y); y++ {
+		if d := lum(tt.Image(), 20, y) - wantLum; d > -2 && d < 2 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("评分榜与节点入口之间没找到 BorderSecondary 色的分割线：%q", tt.Texts())
+	}
+}
+
 func TestNodeEditorLimitAndDuplicate(t *testing.T) {
 	a := testApp(t)
 	st := &nodeEditor{}
