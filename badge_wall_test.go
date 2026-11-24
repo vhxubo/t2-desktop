@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -212,6 +213,83 @@ func TestProfileBadgeTabRenders(t *testing.T) {
 	}
 	if n := countMarker(tt.Image()); n == 0 {
 		t.Error("徽章墙没有画出徽章图标")
+	}
+}
+
+// 佩戴中的徽章排到第一行，方便就地取消佩戴，其余照常展示在下面；说明区定高，
+// 有无说明的卡片内部对齐一致，卡片尺寸不随文案长短变化。
+func TestProfileBadgesEquippedFirstUniformCards(t *testing.T) {
+	a := profileWindowApp(t)
+	ps := a.profile
+	ps.tab = profileTabBadges
+	ps.badgeLoaded = true
+	ps.badges = []badgeWallEntry{
+		{BadgeID: "b1", Name: "全勤", AchievedAt: "2026-02-01T00:00:00Z"},
+		{BadgeID: "b2", Name: "早起鸟", Description: "连续早起签到的社区徽章", Equipped: true},
+		{BadgeID: "b3", Name: "潜水员", AchievedAt: "2026-03-01T00:00:00Z"},
+		{BadgeID: "b4", Name: "热心人", Equipped: true},
+	}
+	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
+	tt.Frame()
+
+	eq, ok := tt.Find("取消佩戴「早起鸟」")
+	if !ok {
+		t.Fatalf("找不到已佩戴徽章的按钮：%q", tt.Texts())
+	}
+	eq2, ok := tt.Find("取消佩戴「热心人」")
+	if !ok {
+		t.Fatalf("找不到第二枚已佩戴徽章的按钮：%q", tt.Texts())
+	}
+	plain, ok := tt.Find("佩戴「全勤」")
+	if !ok {
+		t.Fatalf("找不到未佩戴徽章的按钮：%q", tt.Texts())
+	}
+	if eq.Y >= plain.Y {
+		t.Errorf("佩戴中的徽章没有排到第一行：eq.y=%.0f, plain.y=%.0f", eq.Y, plain.Y)
+	}
+	if diff := eq2.Y - eq.Y; diff < -2 || diff > 2 {
+		t.Errorf("第一行两枚卡片的按钮没有对齐：dy=%.0f", diff)
+	}
+
+	// 「早起鸟」有两行说明，「热心人」没有；说明区定高后，按钮相对名字的
+	// 位置应当一致，否则卡片高矮会随文案变化。
+	nameA, ok := tt.Find("早起鸟")
+	if !ok {
+		t.Fatalf("找不到徽章名：%q", tt.Texts())
+	}
+	nameB, ok := tt.Find("热心人")
+	if !ok {
+		t.Fatalf("找不到徽章名：%q", tt.Texts())
+	}
+	if diff := (eq.Y - nameA.Y) - (eq2.Y - nameB.Y); diff < -2 || diff > 2 {
+		t.Errorf("有无说明的卡片内部没对齐：按钮相对名字的 dy 相差 %.0f", diff)
+	}
+}
+
+// 徽章卡片悬停时底色加深：指针落在卡片内（含里面的按钮）就换到 Lobe 的
+// 悬停表面，但卡片本身不是按钮，点击动作仍由里面的「佩戴 / 取消佩戴」承担。
+func TestProfileBadgeCardHoverHighlight(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Padding(16).Children(func() {
+			a.profileBadgeCard(c, a.profile, badgeWallEntry{BadgeID: "b1", Name: "全勤"})
+		})
+	}, 300, 220)
+	tt.Frame()
+	btn, ok := tt.Find("佩戴「全勤」")
+	if !ok {
+		t.Fatalf("找不到徽章按钮：%q", tt.Texts())
+	}
+	// 按钮上方 4px 落在说明区与按钮行之间的空隙，露出卡片自己的底色。
+	px, py := int(btn.X+4), int(btn.Y-4)
+	before := tt.Image().RGBAAt(px, py)
+	tt.Move(btn.X-8, btn.Y-4)
+	tt.Frame()
+	// Lobe Block 的底色带 150ms 过渡，画面要等过渡走完才到悬停色。
+	tt.Advance(300 * time.Millisecond)
+	after := tt.Image().RGBAAt(px, py)
+	if before == after {
+		t.Errorf("悬停后徽章卡片底色没变：%v", after)
 	}
 }
 

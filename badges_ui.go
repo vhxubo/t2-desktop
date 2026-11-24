@@ -2,10 +2,13 @@ package main
 
 import (
 	"fmt"
-	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // authorBadges 在通用的用户标识里画佩戴中的社区徽章图标。徽章小图由服务端
@@ -95,11 +98,31 @@ func (a *app) commentText(c *ui.Context, text, commentID string, emojis map[stri
 ---------------------------------------------------------------- */
 
 // 徽章墙的展示尺寸：卡片里的图用 48px 槽位，图标跟着槽位等比缩放；徽章名
-// 旁的小图仍然走 authorBadges 的 15px。
+// 旁的小图仍然走 authorBadges 的 15px。卡片与说明区定高，说明有无、文案长短
+// 都不改变行高，两列网格里的每一枚看起来才是一样大。
 const (
 	badgeWallIconSize     float32 = 48
 	badgeWallIconFallback float32 = 0.72
+	badgeWallCardHeight   float32 = 148
+	badgeWallDescHeight   float32 = 28
 )
+
+// badgeWallOrdered 把佩戴中的徽章排到最前面：两列网格下它们占第一行的位置，
+// 想取消佩戴时不用翻遍整面墙。其余徽章按原来的相对顺序照常展示在下面。
+func badgeWallOrdered(badges []badgeWallEntry) []badgeWallEntry {
+	out := make([]badgeWallEntry, 0, len(badges))
+	for _, b := range badges {
+		if b.Equipped {
+			out = append(out, b)
+		}
+	}
+	for _, b := range badges {
+		if !b.Equipped {
+			out = append(out, b)
+		}
+	}
+	return out
+}
 
 // profileBadgesBody 是「徽章」标签页：顶部是数量与刷新，下面是两列徽章卡片。
 // 每张卡片有名字、说明、等级 / 持有比例与获得日期，佩戴中再标一枚胶囊；点
@@ -151,8 +174,8 @@ func (a *app) profileBadgesBody(c *ui.Context, ps *profileState) {
 
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Grid(c).FillWidth().Columns(2).Gap(10).Children(func() {
-			for i := range ps.badges {
-				a.profileBadgeCard(c, ps, ps.badges[i])
+			for _, b := range badgeWallOrdered(ps.badges) {
+				a.profileBadgeCard(c, ps, b)
 			}
 		})
 	})
@@ -168,19 +191,29 @@ func profileBadgeCounts(badges []badgeWallEntry) (total, equipped int) {
 	return len(badges), equipped
 }
 
-// profileBadgeCard 是一枚徽章的卡片。佩戴中的卡片用强调色描边并标「佩戴中」；
-// 提交期间按钮显示「正在提交…」并禁用，避免连点重复提交。
+// profileBadgeCard 是一枚徽章的卡片。Lobe 的扁平表面：不画圆角与描边，佩戴中
+// 用主色浅底与「佩戴中」标出，不再靠一圈强调色边框。说明区与卡片定高，所有
+// 卡片一般大小。提交期间按钮显示「正在提交…」并禁用，避免连点重复提交。
 func (a *app) profileBadgeCard(c *ui.Context, ps *profileState, b badgeWallEntry) {
 	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	name := profileBadgeDisplayName(b)
 	busy := ps.badgeBusyID != "" && ps.badgeBusyID == b.BadgeID
-	border := t.Border
-	if b.Equipped {
-		border = t.Accent
-	}
 
-	ui.Column(c).FillWidth().Padding(10, 12).Gap(6).Radius(10).
-		Background(t.Surface).Border(1, border).Children(func() {
+	// Lobe 的 Filled 表面只在 Clickable 时自己处理悬停；这里卡片不可点（动作
+	// 在里面的按钮上），所以自己按 Hovered 换个稍深的底色，避免把整张卡片
+	// 变成按钮。佩戴中的卡片用主色浅底与对应的悬停色。
+	card := layout.Block(c.Key("badge-card-"+b.BadgeID), layout.BlockProps{Variant: layout.BlockFilled}).Radius(0)
+	rest, hover := tk.FillTertiary, tk.FillSecondary
+	if b.Equipped {
+		rest, hover = tk.PrimaryBg, tk.PrimaryBgHover
+	}
+	if card.Hovered() {
+		card.Background(hover)
+	} else {
+		card.Background(rest)
+	}
+	card.FillWidth().Height(badgeWallCardHeight).Padding(12, 12).Gap(8).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 			a.profileBadgeIcon(c, b, badgeWallIconSize)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
@@ -188,7 +221,7 @@ func (a *app) profileBadgeCard(c *ui.Context, ps *profileState, b badgeWallEntry
 					ui.Text(c, name).FontSize(12).Bold().SingleLine().
 						Grow(1).MinWidth(0)
 					if b.Equipped {
-						ui.Text(c, "佩戴中").FontSize(9).TextColor(t.Accent).Shrink(0)
+						ui.Text(c, "佩戴中").FontSize(9).TextColor(tk.Primary).Shrink(0)
 					}
 				})
 				if meta := profileBadgeMeta(b); meta != "" {
@@ -196,22 +229,27 @@ func (a *app) profileBadgeCard(c *ui.Context, ps *profileState, b badgeWallEntry
 				}
 			})
 		})
-		if desc := strings.TrimSpace(b.Description); desc != "" {
-			ui.Text(c, desc).FontSize(10).TextColor(t.TextMuted).MaxLines(2)
-		}
-		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-			action := "佩戴"
-			if b.Equipped {
-				action = "取消佩戴"
+		// 说明区留两行的位置：有说明与没说明的卡片内部布局一致。
+		ui.Box(c).FillWidth().Height(badgeWallDescHeight).Children(func() {
+			if desc := strings.TrimSpace(b.Description); desc != "" {
+				ui.Text(c, desc).FontSize(10).TextColor(t.TextMuted).MaxLines(2)
 			}
-			label := action
+		})
+		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			verb := "佩戴"
+			if b.Equipped {
+				verb = "取消佩戴"
+			}
+			label := verb
 			if busy {
 				label = "正在提交…"
 			}
-			button := ui.Button(c, label).FontSize(10)
+			button := action.Button(c, label, action.ButtonProps{
+				Size: lobetheme.Small, Variant: action.Filled,
+			})
 			// 每张卡片的按钮文字都一样，用无障碍名把徽章名字带上：读屏与
 			// 测试都能点到确定的那一枚。
-			button.Label(action + "「" + name + "」")
+			button.Label(verb + "「" + name + "」")
 			button.Disabled(ps.badgeBusyID != "" || b.BadgeID == "")
 			if button.Clicked() {
 				a.toggleProfileBadge(b.BadgeID, name, !b.Equipped, "")
@@ -233,8 +271,8 @@ func (a *app) profileBadgeIcon(c *ui.Context, b badgeWallEntry, size float32) {
 	if url == "" {
 		url, iconSize = b.IconURL, size*badgeWallIconFallback
 	}
-	box := ui.Box(c).Size(size, size).Radius(8).Shrink(0).Center().
-		Background(t.SurfaceHover)
+	box := ui.Box(c).Size(size, size).Radius(0).Shrink(0).Center().
+		Background(lobetheme.TokensOf(c).FillSecondary)
 	box.Children(func() {
 		if src := a.articleImage(url, imageCacheStable); src != nil {
 			ui.Image(c, src).Size(iconSize, iconSize).Fit(ui.Contain)
@@ -302,26 +340,35 @@ func (a *app) userCardBadgesBody(c *ui.Context, cs *userCardState) {
 
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Grid(c).FillWidth().Columns(2).Gap(10).Children(func() {
-			for i := range st.entries {
-				a.userCardBadgeCard(c, st.entries[i])
+			for _, b := range badgeWallOrdered(st.entries) {
+				a.userCardBadgeCard(c, b)
 			}
 		})
 	})
 }
 
 // userCardBadgeCard 是一枚他人徽章的卡片：图标、名字、等级 / 持有比例、说明
-// 与获得日期。佩戴中的徽章用强调色描边并标「佩戴中」，与「我的」徽章页一致，
-// 但没有佩戴按钮。
+// 与获得日期。和「我的」徽章页用同一套 Lobe 扁平卡片：没有描边，佩戴中用主色
+// 浅底与「佩戴中」标出，尺寸也一致；这里只读，没有佩戴按钮。
 func (a *app) userCardBadgeCard(c *ui.Context, b badgeWallEntry) {
 	t := c.Theme()
+	tk := lobetheme.TokensOf(c)
 	name := profileBadgeDisplayName(b)
-	border := t.Border
-	if b.Equipped {
-		border = t.Accent
-	}
 
-	ui.Column(c).FillWidth().Padding(10, 12).Gap(6).Radius(10).
-		Background(t.Surface).Border(1, border).Children(func() {
+	// Lobe 的 Filled 表面只在 Clickable 时自己处理悬停；这里卡片不可点（动作
+	// 在里面的按钮上），所以自己按 Hovered 换个稍深的底色，避免把整张卡片
+	// 变成按钮。佩戴中的卡片用主色浅底与对应的悬停色。
+	card := layout.Block(c.Key("badge-card-"+b.BadgeID), layout.BlockProps{Variant: layout.BlockFilled}).Radius(0)
+	rest, hover := tk.FillTertiary, tk.FillSecondary
+	if b.Equipped {
+		rest, hover = tk.PrimaryBg, tk.PrimaryBgHover
+	}
+	if card.Hovered() {
+		card.Background(hover)
+	} else {
+		card.Background(rest)
+	}
+	card.FillWidth().Height(badgeWallCardHeight).Padding(12, 12).Gap(8).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 			a.profileBadgeIcon(c, b, badgeWallIconSize)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
@@ -329,7 +376,7 @@ func (a *app) userCardBadgeCard(c *ui.Context, b badgeWallEntry) {
 					ui.Text(c, name).FontSize(12).Bold().SingleLine().
 						Grow(1).MinWidth(0).Tooltip(name)
 					if b.Equipped {
-						ui.Text(c, "佩戴中").FontSize(9).TextColor(t.Accent).Shrink(0)
+						ui.Text(c, "佩戴中").FontSize(9).TextColor(tk.Primary).Shrink(0)
 					}
 				})
 				if meta := profileBadgeMeta(b); meta != "" {
@@ -337,14 +384,16 @@ func (a *app) userCardBadgeCard(c *ui.Context, b badgeWallEntry) {
 				}
 			})
 		})
-		if desc := strings.TrimSpace(b.Description); desc != "" {
-			ui.Text(c, desc).FontSize(10).TextColor(t.TextMuted).MaxLines(2).Tooltip(desc)
-		}
-		if achieved := profileBadgeAchievedText(b.AchievedAt); achieved != "" {
-			ui.Row(c).FillWidth().Children(func() {
-				ui.Spacer(c).Grow(1)
+		ui.Box(c).FillWidth().Height(badgeWallDescHeight).Children(func() {
+			if desc := strings.TrimSpace(b.Description); desc != "" {
+				ui.Text(c, desc).FontSize(10).TextColor(t.TextMuted).MaxLines(2).Tooltip(desc)
+			}
+		})
+		ui.Row(c).FillWidth().Children(func() {
+			ui.Spacer(c).Grow(1)
+			if achieved := profileBadgeAchievedText(b.AchievedAt); achieved != "" {
 				ui.Text(c, achieved).FontSize(9).TextColor(t.TextMuted).SingleLine()
-			})
-		}
+			}
+		})
 	})
 }
