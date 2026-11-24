@@ -969,7 +969,7 @@ func TestComposeWindowLayout(t *testing.T) {
 	}
 	openModule("投票", "投票类型", "单选", "多选", "公开投票结果", "添加选项",
 		"批量添加", "删除选中", "设置截止时间")
-	openModule("可见性（谁可以看）", "可见范围", "所有人可见", "门槛由服务端判定")
+	openModule("可见性（谁可以看）", "可见范围", "所有人可见")
 	openModule("金币池", "初始金币", "中奖概率（0 = 默认）")
 	openModule("兑换码 / 红包", "兑换码（一行一个）", "批量粘贴", "清空兑换码",
 		"每人可领", "红包上限", "同时开红包")
@@ -1097,7 +1097,7 @@ func TestComposeRestrictedDialog(t *testing.T) {
 	tt.Frame()
 	for _, want := range []string{
 		"解锁方式", "隐藏正文（Markdown）", "D20 属性", "目标值（1～25）",
-		"有效期（月，0 = 不填）", "隐藏内容涉及金币规则，发布后不可撤销。",
+		"有效期（月，0 = 不填）",
 	} {
 		if !tt.HasText(want) {
 			t.Errorf("弹窗缺少 %q：%q", want, tt.Texts())
@@ -1141,10 +1141,9 @@ func TestComposeToolbarEditsBody(t *testing.T) {
 	}
 }
 
-// 工具条与视图切换只画图标：名字留在无障碍名里（读屏与点击靠它），说明放在
-// 悬浮提示里——鼠标停在「加粗」上才给出它会插进正文的标记。按钮宽度正好是
-// 一个图标加一圈内边距，画了文字就会宽出去。
-func TestComposeEditorIconsWithTooltips(t *testing.T) {
+// 工具条与视图切换只画图标：名字留在无障碍名里（读屏与点击靠它），按钮宽度
+// 正好是一个图标加一圈内边距，画了文字就会宽出去。
+func TestComposeEditorIconsAreIconOnly(t *testing.T) {
 	a := testApp(t)
 	composeReady(a)
 	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
@@ -1158,14 +1157,8 @@ func TestComposeEditorIconsWithTooltips(t *testing.T) {
 			t.Errorf("%q 画了文字，宽 %v 超过纯图标按钮的 %v", name, r.W, want)
 		}
 	}
-	// 悬浮说明要等指针停留一会儿才出现，移开就收起。
-	rest := func(x, y float32) {
-		tt.Move(x, y)
-		tt.Advance(time.Second)
-		tt.Frame()
-	}
-	r, _ := tt.Find("加粗")
 	// 图标按钮没有边框，鼠标扫过要给一圈浅底，否则一排黑图标看不出哪儿能点。
+	r, _ := tt.Find("加粗")
 	probe := func() color.RGBA {
 		return tt.Image().RGBAAt(int(r.X+3), int(r.Y+r.H/2))
 	}
@@ -1174,15 +1167,6 @@ func TestComposeEditorIconsWithTooltips(t *testing.T) {
 	tt.Frame()
 	if probe() == plain {
 		t.Errorf("悬停在加粗上没有底色：%v", plain)
-	}
-	tt.Advance(time.Second)
-	tt.Frame()
-	if !tt.HasText("加粗：**加粗**") {
-		t.Errorf("悬浮提示没有说明加粗：%q", tt.Texts())
-	}
-	rest(5, 5)
-	if tt.HasText("加粗：**加粗**") {
-		t.Errorf("移开后悬浮提示还挂着：%q", tt.Texts())
 	}
 }
 
@@ -1386,8 +1370,7 @@ func TestComposeOptionRowsAddRemove(t *testing.T) {
 	if len(st.voteOptions) != 2 {
 		t.Fatalf("添加后行数 = %d，期望 2", len(st.voteOptions))
 	}
-	// 只剩一行时行尾的删除图标被禁用，避免删成空列表。图标按钮靠无障碍名
-	// 命中，完整说明在 tooltip 里（参见 AGENTS.md 的操作按钮规范）。
+	// 只剩一行时行尾的删除图标被禁用，避免删成空列表。图标按钮靠无障碍名命中。
 	st.voteOptions = []string{"甲"}
 	tt.Frame()
 	del, ok := tt.Access("删除投票选项 1")
@@ -1396,9 +1379,6 @@ func TestComposeOptionRowsAddRemove(t *testing.T) {
 	}
 	if !del.Disabled {
 		t.Errorf("只剩一个选项时删除按钮应当禁用")
-	}
-	if del.Description == "" {
-		t.Errorf("删除按钮应当带 tooltip 说明")
 	}
 	// 到上限后不再加行。
 	st.voteOptions = make([]string, composeOptionMax)

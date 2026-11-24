@@ -18,10 +18,10 @@ import (
 // Popover、盖在整页上的 Lobe Modal（插入帖子 / Base64 编码）、一个内联的图片面板，
 // 以及按文章正文方式渲染的预览。
 //
-// 编辑器里所有入口都只画图标，说明交给悬浮提示：工具条上十二个标记按钮排成
-// 一行也不会互相挤，表情 / 图片 / 编辑预览这些入口也不会因为文案长短不一而
-// 参差。图标按钮的无障碍名仍是文字（Label），读屏与点击测试照旧按名字找得到；
-// 平时给一层悬停底色，鼠标扫过就知道哪些地方能点。
+// 编辑器里所有入口都只画图标：工具条上十二个标记按钮排成一行也不会互相挤，
+// 表情 / 图片 / 编辑预览这些入口也不会因为文案长短不一而参差。图标按钮的无障碍
+// 名仍是文字（Label），读屏与点击测试照旧按名字找得到；平时给一层悬停底色，
+// 鼠标扫过就知道哪些地方能点。
 //
 // 界面本身不保存任何 ui.Element 或 *ui.Context；它只读写调用方传进来的
 // mdEditor 状态与正文指针。两边各自负责把输入框、拖放区和预览容器摆好，
@@ -50,9 +50,8 @@ const (
 	editorIconRadius float32 = 5
 )
 
-// editorToolbar 是两边共用的 Markdown 工具条：每个标记一个图标按钮，悬浮
-// 提示写「名字：插入的标记」（例如「加粗：**加粗**」）——只画图标时它是唯一
-// 的说明来源，所以把会插进正文的标记一并带上。
+// editorToolbar 是两边共用的 Markdown 工具条：每个标记一个图标按钮，只画图标
+// 不写文字，无障碍名仍是标记的名字。
 //
 // 表情 / 图片入口不放在这里：工具条窄时 MyGo 从末尾把放不下的按钮收进「»」
 // 菜单，这两项恰好会是最先被藏起来的（见 editorPanelButtons）。
@@ -62,15 +61,14 @@ const (
 func (a *app) editorToolbar(c *ui.Context, e *mdEditor, body *string) {
 	ui.Toolbar(c, func() {
 		for _, b := range markdownButtons {
-			if a.editorIconButton(c, b.icon, b.label, b.label+"："+b.hint).Clicked() {
+			if a.editorIconButton(c, b.icon, b.label, "").Clicked() {
 				e.applyMarkdown(body, b.format)
 			}
 		}
 		// Base64 编码不走 applyMarkdown：它要先在 Lobe Modal 里输入原文，
 		// 确认后才把编码串插进正文（见 editorBase64Dialog）。打开时若正文
 		// 里有选区，直接拿选区当原文，省得再抄一遍。
-		if a.editorIconButton(c, base64Icon, "Base64 编码",
-			"把选中的文字或输入的原文编成 Base64 片段").Clicked() {
+		if a.editorIconButton(c, base64Icon, "Base64 编码", "").Clicked() {
 			e.base64Input = editorSelectedText(e, *body)
 			e.togglePanel("base64")
 		}
@@ -94,7 +92,7 @@ func editorSelectedText(e *mdEditor, body string) string {
 // 里已经有一个「表情」表态按钮，评论工具条改用别的名字，免得分不清两个入口。
 func (a *app) editorPanelButtons(c *ui.Context, e *mdEditor, body *string,
 	extra map[string]string, emojiLabel, imageLabel string) {
-	emojiBtn := a.editorIconButton(c, reactionIcon, emojiLabel, "插入社区表情")
+	emojiBtn := a.editorIconButton(c, reactionIcon, emojiLabel, "")
 	// 气泡关着时每个编辑器都把 Popover 建出来，否则那一次点击传不进去；
 	// 开着时也只画这一个，开合由 Lobe 自己管。
 	panel := lobeoverlay.Popover(c, emojiBtn, &e.emojiOpen, lobeoverlay.PopoverProps{
@@ -110,18 +108,17 @@ func (a *app) editorPanelButtons(c *ui.Context, e *mdEditor, body *string,
 		e.topicOpen = false
 		e.base64Open = false
 	}
-	if a.editorIconButton(c, myTopicIcon, "插入帖子", "从自己发过的帖子里选一篇插入链接").Clicked() {
+	if a.editorIconButton(c, myTopicIcon, "插入帖子", "").Clicked() {
 		e.togglePanel("topic")
 	}
-	if a.editorIconButton(c, imageIcon, imageLabel, "拖入、选择或粘贴图片").Clicked() {
+	if a.editorIconButton(c, imageIcon, imageLabel, "").Clicked() {
 		e.togglePanel("image")
 	}
 }
 
-// editorIconButton 画一个「图标 + 无障碍名 + 悬浮提示」的按钮，编辑器里所有
-// 只显示图标的入口都走它：平时只有图标，鼠标扫过时给一层底色并弹出说明。
-// label 同时作无障碍名与点击测试的命中名，tip 是悬浮时给出的说明。调用方
-// 照常用返回值的 Clicked() 判断点击。
+// editorIconButton 画一个只有图标的按钮，编辑器里所有只显示图标的入口都走它：
+// 平时只有图标，鼠标扫过时给一层底色。label 同时作无障碍名与点击测试的命中名，
+// 调用方照常用返回值的 Clicked() 判断点击。
 func (a *app) editorIconButton(c *ui.Context, icon *ui.SVG, label, tip string) ui.Element {
 	t := c.Theme()
 	b := ui.Button(c, "").
@@ -144,8 +141,7 @@ func (a *app) editorIconButton(c *ui.Context, icon *ui.SVG, label, tip string) u
 }
 
 // editorIconToggle 是编辑器里的二选一开关（编辑 / 预览）。选中的一项用底色
-// 区分，未选中的一项鼠标扫过也给同样的底色；label 作无障碍名、点击测试的
-// 命中名，tip 是悬浮说明。
+// 区分，未选中的一项鼠标扫过也给同样的底色；label 作无障碍名与点击测试的命中名。
 func (a *app) editorIconToggle(c *ui.Context, on bool, icon *ui.SVG,
 	label, tip string, onClick func()) {
 	t := c.Theme()
@@ -200,9 +196,6 @@ func (a *app) editorBase64Dialog(c *ui.Context, e *mdEditor, body *string) {
 		CancelText: "取消",
 	}, func() {
 		ui.Column(c).FillWidth().Gap(8).Children(func() {
-			display.Text(c, base64HintText, display.TextProps{
-				Type: display.TextSecondary, FontSize: 12, Rows: 2,
-			})
 			ui.TextInput(c, &e.base64Input).Label("原文").
 				Placeholder("输入要编码的文字，或先在正文里选中一段").Grow(1).MinWidth(0)
 			a.base64DialogPreview(c, e.base64Input)
@@ -234,8 +227,7 @@ func (a *app) editorTopicDialog(c *ui.Context, t uploadTarget, e *mdEditor, body
 				// 防抖重拉；这里不用再监听 Changed，免得同一次输入发两次请求。
 				ui.TextInput(c, &e.topicQuery).Label("搜索我的帖子").
 					Placeholder("按标题找一篇自己发过的帖子").Grow(1).MinWidth(0)
-				if a.editorIconButton(c, refreshIcon, "搜索我的帖子",
-					"按当前标题关键字重新搜索").Clicked() {
+				if a.editorIconButton(c, refreshIcon, "搜索我的帖子", "").Clicked() {
 					a.reloadMyTopicPicker(t, e, e.topicQuery)
 				}
 			})
@@ -269,7 +261,7 @@ func (a *app) editorTopicDialog(c *ui.Context, t uploadTarget, e *mdEditor, body
 				})
 			}
 			if e.topicLoaded && len(e.topicItems) == 0 {
-				display.Text(c, "没有找到标题匹配的帖子。换个关键字，或清空搜索看最新的 20 篇。",
+				display.Text(c, "没有找到匹配的帖子。",
 					display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 				return
 			}
@@ -339,7 +331,7 @@ func (a *app) editorEmojiPanel(c *ui.Context, e *mdEditor, body *string,
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.TextInput(c, &e.emojiQuery).Label("搜索表情").
 				Placeholder("输入关键字搜索表情").Grow(1).MinWidth(0)
-			if a.editorIconButton(c, closeIcon, "收起表情", "收起表情气泡").Clicked() {
+			if a.editorIconButton(c, closeIcon, "收起表情", "").Clicked() {
 				e.emojiOpen = false
 			}
 		})
@@ -394,11 +386,10 @@ func (a *app) editorCommunityEmojiSection(c *ui.Context, e *mdEditor, body *stri
 						ui.Box(c).Size(20, 20).Radius(4).Background(tk.FillSecondary)
 					}
 				})
-				cell.Label(em.Name).Tooltip("插入 " + emojiShortcode(em)).
-					OnClick(func() {
-						e.insertText(body, emojiShortcode(em))
-						e.emojiOpen = false
-					})
+				cell.Label(em.Name).OnClick(func() {
+					e.insertText(body, emojiShortcode(em))
+					e.emojiOpen = false
+				})
 			}
 		})
 	}
@@ -423,11 +414,10 @@ func (a *app) editorSystemEmojiGrid(c *ui.Context, e *mdEditor, body *string,
 				cell.Children(func() {
 					ui.Text(c, em.Char).FontSize(20).SingleLine()
 				})
-				cell.Label(name).Tooltip("插入 " + em.Char + " " + name).
-					OnClick(func() {
-						e.insertText(body, em.Char)
-						e.emojiOpen = false
-					})
+				cell.Label(name).OnClick(func() {
+					e.insertText(body, em.Char)
+					e.emojiOpen = false
+				})
 			}
 		})
 	}
@@ -437,9 +427,9 @@ func (a *app) editorSystemEmojiGrid(c *ui.Context, e *mdEditor, body *string,
 // 图片面板
 // ------------------------------------------------------------------
 
-// editorImagePanel 是三条上传入口的说明与任务列表：切图库、选文件、粘贴
-// 剪贴板，以及每一张图的排队 / 上传 / 完成 / 失败状态与重试、移除。
-// 入口只有图标，说明在悬浮提示里；右上角的叉号与表情面板一致，用来收起面板。
+// editorImagePanel 是三条上传入口与任务列表：切图库、选文件、粘贴剪贴板，
+// 以及每一张图的排队 / 上传 / 完成 / 失败状态与重试、移除。
+// 入口只有图标，右上角的叉号与表情面板一致，用来收起面板。
 func (a *app) editorImagePanel(c *ui.Context, t uploadTarget, e *mdEditor) {
 	th := c.Theme()
 	ui.Column(c).FillWidth().Padding(8, 10).Gap(8).
@@ -459,12 +449,10 @@ func (a *app) editorImagePanel(c *ui.Context, t uploadTarget, e *mdEditor) {
 			}
 			ui.Spacer(c).Grow(1)
 			// 收起面板：与表情面板同一个叉号，两个面板的关闭方式一致。
-			if a.editorIconButton(c, closeIcon, "收起图片", "收起图片面板").Clicked() {
+			if a.editorIconButton(c, closeIcon, "收起图片", "").Clicked() {
 				e.imageOpen = false
 			}
 		})
-		ui.Text(c, "把图片直接拖进编辑区或粘贴进来，也可以用下面的按钮。支持 JPEG / PNG / WebP，单张上限在图库设置里改。").
-			FontSize(11).TextColor(th.TextMuted).MaxLines(2)
 		// 当前图库不能用时先把原因说清楚：否则用户拖进图片只看到一句上传
 		// 失败，还得自己去设置里猜是没登录、不是 Pro 还是没填 Token。
 		if h := a.activeHost(); h != nil && !a.hostReady(h) {
@@ -472,16 +460,13 @@ func (a *app) editorImagePanel(c *ui.Context, t uploadTarget, e *mdEditor) {
 				FontSize(11).TextColor(th.Danger).MaxLines(2)
 		}
 		ui.Row(c).Gap(8).Wrap().KeepFocus().Children(func() {
-			if a.editorIconButton(c, imageIcon, "选择图片",
-				"从本地选择图片上传").Clicked() {
+			if a.editorIconButton(c, imageIcon, "选择图片", "").Clicked() {
 				a.pickImages(t)
 			}
-			if a.editorIconButton(c, clipboardIcon, "粘贴剪贴板图片",
-				"把剪贴板里的图片上传并插入正文").Clicked() {
+			if a.editorIconButton(c, clipboardIcon, "粘贴剪贴板图片", "").Clicked() {
 				a.pasteImages(t)
 			}
-			if a.editorIconButton(c, settingsIcon, "图库设置",
-				"打开图库设置，配置图床与单张上限").Clicked() {
+			if a.editorIconButton(c, settingsIcon, "图库设置", "").Clicked() {
 				a.showSettings()
 			}
 		})
@@ -501,8 +486,7 @@ func (a *app) editorImagePanel(c *ui.Context, t uploadTarget, e *mdEditor) {
 }
 
 // editorUploadRow 是上传队列里的一行：文件名、状态，失败时可重试，随时可
-// 从正文里移除。两个动作只画图标，悬浮提示带上文件名，一行里不会因为文案
-// 长短把文件名挤掉。
+// 从正文里移除。两个动作只画图标，一行里不会因为文案长短把文件名挤掉。
 func (a *app) editorUploadRow(c *ui.Context, j *uploadJob) {
 	t := c.Theme()
 	state, color := "排队中", t.TextMuted
@@ -519,13 +503,11 @@ func (a *app) editorUploadRow(c *ui.Context, j *uploadJob) {
 			SingleLine().Grow(1).MinWidth(0)
 		ui.Text(c, state).FontSize(11).TextColor(color).MaxLines(2)
 		if j.State == uploadFailed {
-			if a.editorIconButton(c, refreshIcon, "重试 "+j.Name,
-				"重新上传 "+j.Name).Clicked() {
+			if a.editorIconButton(c, refreshIcon, "重试 "+j.Name, "").Clicked() {
 				a.retryUpload(j.ID)
 			}
 		}
-		if a.editorIconButton(c, trashIcon, "移除 "+j.Name,
-			"从正文里移除 "+j.Name).Clicked() {
+		if a.editorIconButton(c, trashIcon, "移除 "+j.Name, "").Clicked() {
 			a.removeUpload(j.ID)
 		}
 	})
@@ -553,8 +535,7 @@ func (a *app) editorPreviewView(c *ui.Context, body string,
 	sc.Children(func() {
 		ui.Column(c).FillWidth().Padding(12, 14).Children(func() {
 			if strings.TrimSpace(body) == "" {
-				ui.Text(c, "还没有正文。切回「编辑」写点什么，这里会按发表后的样子显示。").
-					FontSize(12).TextColor(t.TextMuted).MaxLines(3)
+				ui.Text(c, "还没有正文。").FontSize(12).TextColor(t.TextMuted).MaxLines(3)
 				return
 			}
 			a.markdownView(c, a.editorPreviewSource(body, emojis), o)

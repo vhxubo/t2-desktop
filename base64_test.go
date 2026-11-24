@@ -138,8 +138,7 @@ func TestCommentBase64ModalStaysOpen(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		tt.Frame()
 		tt.Advance(100 * time.Millisecond)
-		if !d.mdEditor.base64Open || !tt.HasText("编码并插入") ||
-			!tt.HasText("编码预览会显示在这里") {
+		if !d.mdEditor.base64Open || !tt.HasText("编码并插入") {
 			t.Fatalf("第 %d 帧 Modal 没保持打开：open=%v（%q）",
 				i, d.mdEditor.base64Open, tt.Texts())
 		}

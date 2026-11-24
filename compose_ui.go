@@ -340,9 +340,8 @@ func (a *app) composeWindowView(c *ui.Context) {
 	}
 
 	title := "发帖"
-	hint := "· 支持 Markdown"
 	if st.mode == composeModeMoment {
-		title, hint = "发动态", "· 最多 500 字"
+		title = "发动态"
 	}
 	ui.Column(c).Fill().Children(func() {
 		// 自绘标题栏：拖动窗口，右上角是最小化与关闭。图标与文字都走 Lobe。
@@ -352,9 +351,6 @@ func (a *app) composeWindowView(c *ui.Context) {
 				AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, lucide.SquarePen()).Size(16, 16).TextColor(tk.Primary)
 				display.Text(c, title, display.TextProps{Strong: true, FontSize: 13, Rows: 1})
-				display.Text(c, hint, display.TextProps{
-					Type: display.TextSecondary, FontSize: 11, Rows: 1,
-				})
 				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
@@ -415,8 +411,6 @@ func (a *app) composeMomentBody(c *ui.Context, st *composeState) {
 	list := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
 		ui.Column(c).FillWidth().Padding(18, 20).Gap(12).Children(func() {
 			display.Text(c, "写一条动态", display.TextProps{Strong: true, FontSize: 14, Rows: 1})
-			display.Text(c, "短内容，最多 500 字；不需要标题和节点。",
-				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 			momentEditor := composeSuggestEditor{
 				body: &st.momentDraft, ed: &st.mdEditor,
 				field: &st.momentField, font: composeSuggestFontSize,
@@ -492,23 +486,6 @@ func (a *app) composeNodeSection(c *ui.Context, st *composeState) {
 						Type: display.TextSecondary, FontSize: 12, Rows: 1,
 					})
 					display.Tag(c, "选填", display.TagProps{Size: lobetheme.Small})
-				})
-				state := "留空即可：发布后由 AI 按内容判定分类。"
-				switch node := st.selectedNode(); {
-				case node != nil:
-					state = "发布到：" + node.parentDisplay()
-				case st.nodeID != "":
-					// 选中过但节点表里已经没有了（缓存被换掉）：不要显示一串 uuid。
-					state = "已选的节点已不在列表里，留空会让 AI 判定分类。"
-				case st.nodeLoading:
-					state = "正在读取节点…留空也能发布，由 AI 判定分类。"
-				case st.nodeErr != "":
-					state = "节点读取失败，留空发布时由 AI 判定分类。"
-				case st.nodeLoaded:
-					state = "没有可用的节点，留空发布时由 AI 判定分类。"
-				}
-				display.Text(c, state, display.TextProps{
-					Type: display.TextSecondary, FontSize: 11, Rows: 2,
 				})
 				// 选中节点后补一条简介：列表响应不带可靠的 description，
 				// 单独读一次 GET /v1/nodes/:slug。失败只影响这条说明。
@@ -608,17 +585,16 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		// 标题行：区块名、编辑 / 预览切换与字数。切换放在工具条外面，因为
 		// 工具条窄了会把末尾的控件收进「»」菜单——模式切换不该被藏起来。
-		// 与评论区一样只画图标：编辑 / 预览是反复点的开关，图标比文字省地方，
-		// 说明在悬浮提示里。
+		// 与评论区一样只画图标：编辑 / 预览是反复点的开关，图标比文字省地方。
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
 			display.Text(c, "正文", display.TextProps{
 				Type: display.TextSecondary, FontSize: 12, Rows: 1,
 			}).Grow(1)
 			ui.Row(c).Gap(2).AlignItems(ui.Center).KeepFocus().
 				Label("正文视图").Children(func() {
-				a.editorIconToggle(c, st.preview == 0, editIcon, "编辑", "编辑模式",
+				a.editorIconToggle(c, st.preview == 0, editIcon, "编辑", "",
 					func() { st.preview = 0 })
-				a.editorIconToggle(c, st.preview == 1, eyeIcon, "预览", "预览模式",
+				a.editorIconToggle(c, st.preview == 1, eyeIcon, "预览", "",
 					func() { st.preview = 1 })
 			})
 			a.editorPanelButtons(c, &st.mdEditor, &st.body, nil, "表情", "上传图片")
@@ -643,11 +619,6 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 			})
 			layout.Divider(c, layout.DividerProps{})
 			a.editorPanels(c, uploadTargetCompose, &st.mdEditor, &st.body, nil)
-			if over {
-				display.Text(c, "松开即可把图片插入正文", display.TextProps{
-					Type: display.TextInfo, FontSize: 11, Rows: 1,
-				}).Padding(6, 10)
-			}
 			if st.preview == 1 {
 				a.composePreview(c, st)
 				return
@@ -681,28 +652,26 @@ func (a *app) composeEditorSection(c *ui.Context, st *composeState) {
 }
 
 // markdownButton 是工具条上的一项：图标（必填，工具条只画图标）、无障碍名
-// 与悬浮提示用的名字、它插入的标记，以及悬浮提示里附带的标记示例。
-// 悬浮提示写成「名字：标记」的形式（见 editorToolbar）。
+// 与它插入的标记。
 type markdownButton struct {
 	label  string
-	hint   string
 	format composeFormat
 	icon   *ui.SVG
 }
 
 var markdownButtons = []markdownButton{
-	{"加粗", "**加粗**", composeBold, boldIcon},
-	{"斜体", "*斜体*", composeItalic, italicIcon},
-	{"删除线", "~~删除线~~", composeStrike, strikeIcon},
-	{"代码", "`行内代码`", composeInlineCode, inlineCodeIcon},
-	{"标题", "## 标题", composeHeading, headingIcon},
-	{"引用", "> 引用", composeQuote, quoteIcon},
-	{"代码块", "```代码块```", composeCodeBlock, codeBlockIcon},
-	{"列表", "- 列表项", composeBulletList, bulletListIcon},
-	{"编号", "1. 编号列表", composeOrderedList, orderedListIcon},
-	{"链接", "[文字](url)", composeLink, linkIcon},
-	{"图片", "![说明](url)", composeImage, imageIcon},
-	{"分割线", "---", composeDivider, dividerIcon},
+	{"加粗", composeBold, boldIcon},
+	{"斜体", composeItalic, italicIcon},
+	{"删除线", composeStrike, strikeIcon},
+	{"代码", composeInlineCode, inlineCodeIcon},
+	{"标题", composeHeading, headingIcon},
+	{"引用", composeQuote, quoteIcon},
+	{"代码块", composeCodeBlock, codeBlockIcon},
+	{"列表", composeBulletList, bulletListIcon},
+	{"编号", composeOrderedList, orderedListIcon},
+	{"链接", composeLink, linkIcon},
+	{"图片", composeImage, imageIcon},
+	{"分割线", composeDivider, dividerIcon},
 }
 
 // composePreview 是正文的预览：与详情页同一套 Markdown 渲染（一个回车换行、
@@ -722,7 +691,6 @@ func (a *app) composePreview(c *ui.Context, st *composeState) {
 // review 表示它用《X》点评：N 分｜ 而不是【】标签写标题（网页端的「点评」）。
 type composeModuleSpec struct {
 	name   string
-	hint   string
 	tag    string
 	review bool
 	flag   func(*composeState) *bool
@@ -739,7 +707,7 @@ type composeModuleSpec struct {
 // 默认一个都不启用：没点「添加此组件」的块，一个字段都不会进请求体。
 var composeModuleSpecs = []composeModuleSpec{
 	// 工作内容排在投票之前：它常与求职 / 招人啦节点绑定，且前缀要始终在最前。
-	{name: "工作内容", hint: "求职或招人，在标题前加工作信息。",
+	{name: "工作内容",
 		flag:   func(st *composeState) *bool { return &st.jobOpen },
 		body:   func(a *app, c *ui.Context, st *composeState) { a.composeJob(c, st) },
 		onOpen: composePresetJobNode,
@@ -750,25 +718,25 @@ var composeModuleSpecs = []composeModuleSpec{
 			}
 			return ""
 		}},
-	{name: "投票", hint: "给帖子加一个单选或多选投票。", tag: "投票",
+	{name: "投票", tag: "投票",
 		flag: func(st *composeState) *bool { return &st.voteOpen },
 		body: func(a *app, c *ui.Context, st *composeState) { a.composeVote(c, st) }},
-	{name: "评分", hint: "给某个对象打分并附上理由。", review: true,
+	{name: "评分", review: true,
 		flag: func(st *composeState) *bool { return &st.scoreOpen },
 		body: func(a *app, c *ui.Context, st *composeState) { a.composeScore(c, st) }},
-	{name: "竞猜", hint: "发起一场竞猜，让读者选边。", tag: "竞猜",
+	{name: "竞猜", tag: "竞猜",
 		flag: func(st *composeState) *bool { return &st.betOpen },
 		body: func(a *app, c *ui.Context, st *composeState) { a.composeBet(c, st) }},
-	{name: "兑换码 / 红包", hint: "发兑换码，或开一个随帖红包。", tag: "兑换码",
+	{name: "兑换码 / 红包", tag: "兑换码",
 		flag: func(st *composeState) *bool { return &st.redeemOpen },
 		body: func(a *app, c *ui.Context, st *composeState) { a.composeRedeem(c, st) }},
-	{name: "金币池", hint: "放一笔金币，读者浏览时按概率领取。", tag: "💰",
+	{name: "金币池", tag: "💰",
 		flag: func(st *composeState) *bool { return &st.poolOpen },
 		body: func(a *app, c *ui.Context, st *composeState) { a.composePool(c, st) }},
-	{name: "可见性（谁可以看）", hint: "限制谁能读这篇帖子。",
+	{name: "可见性（谁可以看）",
 		flag: func(st *composeState) *bool { return &st.guardOpen },
 		body: func(a *app, c *ui.Context, st *composeState) { a.composeGuard(c, st) }},
-	{name: "隐藏内容", hint: "付费 / 属性检定 / 竞拍才能解锁的正文。", tag: "🔒",
+	{name: "隐藏内容", tag: "🔒",
 		flag: func(st *composeState) *bool { return &st.restrictedOpen },
 		body: func(a *app, c *ui.Context, st *composeState) { a.composeRestricted(c, st) }},
 }
@@ -839,12 +807,8 @@ func (a *app) composeSidebar(c *ui.Context, st *composeState) {
 		Background(tk.BgContainer).Padding(14, 12).Gap(8).Children(func() {
 		display.Text(c, "发布设置", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
 		a.composeAnonymousToggle(c, st)
-		display.Text(c, "匿名只随这篇帖子生效。",
-			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 		layout.Divider(c, layout.DividerProps{})
 		display.Text(c, "附加组件", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
-		display.Text(c, "选填。点一行，在弹窗里设置好再添加。",
-			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 3})
 		c.Key("compose-side-scroll")
 		list := layout.ScrollArea(c, layout.ScrollAreaProps{}, func() {
 			ui.Column(c).FillWidth().Gap(6).Children(func() {
@@ -870,7 +834,7 @@ func (a *app) composeSidebar(c *ui.Context, st *composeState) {
 							}
 							display.Text(c, mark, display.TextProps{Type: fg, FontSize: 11, Rows: 1})
 						})
-						setup.Label(m.name).Tooltip(m.hint)
+						setup.Label(m.name)
 						if setup.Clicked() {
 							st.moduleIndex = index
 							if m.onOpen != nil {
@@ -881,8 +845,7 @@ func (a *app) composeSidebar(c *ui.Context, st *composeState) {
 						if on {
 							// 移除就在行尾：不用再打开弹窗，填过的内容仍留在草稿里。
 							// 行尾位置窄，用废纸篓图标，说明与无障碍名一起给出移除的是谁。
-							if iconActionButton(c, trashIcon, "移除"+m.name,
-								"移除"+m.name+"，填过的内容仍留在草稿里").Clicked() {
+							if iconActionButton(c, trashIcon, "移除"+m.name, "").Clicked() {
 								*m.flag(st) = false
 								composeApplyModuleTitle(st, m, false)
 								a.toast(toastCompose, "已移除"+m.name)
@@ -942,18 +905,6 @@ func (a *app) composeModuleDialog(c *ui.Context, st *composeState) {
 		CancelText: "取消",
 	}, func() {
 		ui.Column(c).FillWidth().Gap(8).Children(func() {
-			state := "未添加：不会随帖发送"
-			if on {
-				state = "已添加：会随帖一起发送；移除在右侧栏这一行的行尾。"
-			}
-			display.Text(c, state, display.TextProps{
-				Type: display.TextSecondary, FontSize: 11, Rows: 2,
-			})
-			layout.Divider(c, layout.DividerProps{})
-			display.Text(c, m.hint, display.TextProps{
-				Type: display.TextSecondary, FontSize: 12, Rows: 3,
-			})
-			layout.Divider(c, layout.DividerProps{})
 			m.body(a, c, st)
 			// 最后一行不要紧贴滚动区下沿：看起来像被截断。
 			ui.Spacer(c).Height(8)
@@ -1021,8 +972,6 @@ func composePresetJobNode(st *composeState) {
 func (a *app) composeJob(c *ui.Context, st *composeState) {
 	tk := lobetheme.TokensOf(c)
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
-		display.Text(c, "适合发在求职、招人啦节点；标题会自动加【…】前缀。",
-			display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 2})
 		ui.Row(c).FillWidth().Gap(10).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 				display.Text(c, "节点类型：", display.TextProps{FontSize: 12, Rows: 1})
@@ -1067,12 +1016,7 @@ func (a *app) composeJob(c *ui.Context, st *composeState) {
 			}).Label("联系方式").MaxLength(composeJobContactMax)
 		})
 		preview := composeJobPrefix(st)
-		if preview == "" {
-			preview = "填写后生成前缀"
-		}
 		ui.Text(c, preview).Font("monospace").FontSize(11).TextColor(tk.TextSecondary)
-		display.Text(c, "联系方式按文档的 contact 字段提交，不写进正文。",
-			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 	})
 }
 
@@ -1098,14 +1042,12 @@ func (a *app) composeOptionList(c *ui.Context, opts *[]string, checked *[]bool,
 			*opts = append(*opts, "")
 			*checked = append(*checked, false)
 		}
-		if action.Button(c, "批量添加", action.ButtonProps{Size: lobetheme.Small}).
-			Tooltip("一次粘贴多行，每行一个选项").Clicked() {
+		if action.Button(c, "批量添加", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
 			batchToggled = true
 		}
 		ui.Spacer(c).Grow(1)
-		// 批量删除在行尾，用废纸篓图标：勾选数写进 Tooltip，按钮本身不占文字宽度。
-		drop := iconActionButton(c, trashIcon, "删除选中",
-			fmt.Sprintf("删除勾选的 %d 个%s", nChecked, label))
+		// 批量删除在行尾，用废纸篓图标，按钮本身不占文字宽度。
+		drop := iconActionButton(c, trashIcon, "删除选中", "")
 		drop.Disabled(nChecked == 0)
 		if drop.Clicked() {
 			removeChecked = true
@@ -1127,8 +1069,6 @@ func (a *app) composeOptionList(c *ui.Context, opts *[]string, checked *[]bool,
 	if *batchOpen {
 		popupSurface(c, false).FillWidth().Padding(8, 10).Children(func() {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				display.Text(c, "批量添加：一行一个，可直接粘贴多行",
-					display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1}).Grow(1)
 				if action.Button(c, "取消", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
 					*batchOpen = false
 					*batchText = ""
@@ -1153,8 +1093,6 @@ func (a *app) composeOptionList(c *ui.Context, opts *[]string, checked *[]bool,
 					a.toast(toastCompose, msg)
 				}
 			})
-			display.Text(c, fmt.Sprintf("最多 %d 项", maxCount),
-				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 			composeTextArea(c, batchText, field.TextAreaProps{
 				Placeholder: "第一行\n第二行\n第三行",
 				MinRows:     4,
@@ -1166,15 +1104,13 @@ func (a *app) composeOptionList(c *ui.Context, opts *[]string, checked *[]bool,
 	for i := range *opts {
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 			choice.Checkbox(c, &(*checked)[i], "", choice.CheckboxProps{}).Shrink(0).
-				Label(fmt.Sprintf("勾选%s %d", label, i+1)).
-				Tooltip("勾选后可批量删除")
+				Label(fmt.Sprintf("勾选%s %d", label, i+1))
 			composeInput(c, &(*opts)[i], field.InputProps{
 				Placeholder: fmt.Sprintf("%s %d", label, i+1),
 			}).Label(fmt.Sprintf("%s %d", label, i+1)).MaxLength(maxLen)
 			// 行尾删除同样是图标按钮：无障碍名带上第几项，读屏与点击测试都能区分。
 			remove := iconActionButton(c, trashIcon,
-				fmt.Sprintf("删除%s %d", label, i+1),
-				fmt.Sprintf("删掉%s %d；至少保留 %d 项", label, i+1, minCount))
+				fmt.Sprintf("删除%s %d", label, i+1), "")
 			remove.Disabled(len(*opts) <= minCount)
 			if remove.Clicked() {
 				removeAt = i
@@ -1289,12 +1225,11 @@ func (a *app) composeRedeem(c *ui.Context, st *composeState) {
 					Type: display.TextSecondary, FontSize: 12, Rows: 1,
 				}).Grow(1)
 				if action.Button(c, "批量粘贴", action.ButtonProps{Size: lobetheme.Small}).
-					Label("批量粘贴兑换码").
-					Tooltip("一次粘贴多行，追加到兑换码列表").Clicked() {
+					Label("批量粘贴兑换码").Clicked() {
 					st.redeemBatchOpen = !st.redeemBatchOpen
 				}
 				clear := action.Button(c, "清空", action.ButtonProps{Size: lobetheme.Small}).
-					Label("清空兑换码").Tooltip("清空全部兑换码").Disabled(st.redeemCodes == "")
+					Label("清空兑换码").Disabled(st.redeemCodes == "")
 				if clear.Clicked() {
 					st.redeemCodes = ""
 					st.redeemBatchText = ""
@@ -1306,8 +1241,6 @@ func (a *app) composeRedeem(c *ui.Context, st *composeState) {
 				MinRows:     4,
 				MaxRows:     10,
 			}).Label("兑换码").MaxLength(composeCodeMax * (composeCodeTextMax + 1))
-			display.Text(c, "支持一次粘贴多行，或用逗号 / 分号分隔；上限 500 个。",
-				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 		})
 		if st.redeemBatchOpen {
 			a.composeRedeemBatch(c, st)
@@ -1388,8 +1321,6 @@ func (a *app) composeRedeemBatch(c *ui.Context, st *composeState) {
 				a.toast(toastCompose, msg)
 			}
 		})
-		display.Text(c, "一行一个，可直接粘贴多行；空行会丢掉。",
-			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 		composeTextArea(c, &st.redeemBatchText, field.TextAreaProps{
 			Placeholder: "CODE-1\nCODE-2\nCODE-3",
 			MinRows:     4,
@@ -1402,8 +1333,6 @@ func (a *app) composeRedeemBatch(c *ui.Context, st *composeState) {
 // 概率留 0 表示不发送，由服务端用默认值。
 func (a *app) composePool(c *ui.Context, st *composeState) {
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
-		display.Text(c, "发帖时先往帖子里的金币池放一笔金币，读者浏览时按概率领取。",
-			display.TextProps{Type: display.TextSecondary, FontSize: 12, Rows: 3})
 		ui.Row(c).Gap(10).AlignItems(ui.End).Children(func() {
 			ui.Column(c).Width(200).Gap(4).Children(func() {
 				display.Text(c, "初始金币", display.TextProps{
@@ -1475,8 +1404,6 @@ func (a *app) composeGuard(c *ui.Context, st *composeState) {
 				})
 			})
 		}
-		display.Text(c, "门槛由服务端判定；属性取自官网 D20 属性字典。",
-			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 	})
 }
 
@@ -1550,8 +1477,6 @@ func (a *app) composeRestricted(c *ui.Context, st *composeState) {
 				Min: 0, Max: composeRestrictedDurationHi, Step: 1,
 			}).Label("隐藏内容有效期")
 		})
-		display.Text(c, "隐藏内容涉及金币规则，发布后不可撤销。",
-			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 	})
 }
 
@@ -1655,7 +1580,7 @@ func (a *app) composeFooter(c *ui.Context, st *composeState) {
 		// 重心；发布在途时直接禁用，省得点了没反应还要靠提示解释。
 		clear := action.Button(c, "清空", action.ButtonProps{
 			Variant: action.Text,
-		}).Tooltip("清空当前草稿，保留节点选择").Disabled(busy)
+		}).Disabled(busy)
 		if clear.Clicked() {
 			id := st.draftID
 			if moment {

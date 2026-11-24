@@ -8,7 +8,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/lobehub/lobe-mygo/pkg/display"
 )
 
 // 编辑器里的「Base64 编码」与评论正文里的解码块共用的约定。
@@ -223,18 +222,11 @@ func (a *app) base64DecodedBlock(c *ui.Context, d *detailState, plain, key strin
 	})
 }
 
-// base64HintText 是 Modal 里的一行说明：告诉用户插入的是什么、发出来以后怎么
-// 看原文。文案保持短，Modal 是入口不是说明书。
-const base64HintText = "把输入的文字编成 Base64 插入正文；发表后评论里悬浮编码串点「原文」即可解码查看。"
-
 // base64DialogPreview 在 Modal 里给出编码结果预览：用户输入的同时就能看到会
 // 插进正文的编码串，确认之前还有反悔的机会。
 func (a *app) base64DialogPreview(c *ui.Context, input string) {
 	t := c.Theme()
 	if strings.TrimSpace(input) == "" {
-		display.Text(c, "编码预览会显示在这里。", display.TextProps{
-			Type: display.TextSecondary, FontSize: 12, Rows: 1,
-		})
 		return
 	}
 	ui.Box(c).FillWidth().Padding(6, 8).Radius(6).
