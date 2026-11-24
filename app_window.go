@@ -97,6 +97,9 @@ func (a *app) afterMainWindowOpen() {
 	if !a.auth.loggedIn() {
 		return
 	}
+	// 打开应用（账号窗口）时静默签到一次：已签到不提示，新签到才在内容顶部
+	// 弹一条明显的结果。偏好关掉或本窗口已经试过时是空操作。
+	a.maybeAutoSignIn()
 	a.refreshUnread()
 	a.refreshFollowsUnread()
 	a.startNotificationWatch()

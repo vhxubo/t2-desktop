@@ -43,6 +43,9 @@ func TestResetAllSettingsRestoresDefaults(t *testing.T) {
 	if err := a.watchLaterPrefs.setKeepAfterOpen(true); err != nil {
 		t.Fatal(err)
 	}
+	if err := a.autoSignPrefs.setEnabled(false); err != nil {
+		t.Fatal(err)
+	}
 	p := a.notificationPrefs
 	for _, change := range []func() error{
 		func() error { return p.setEnabled(false) },
@@ -123,6 +126,9 @@ func TestResetAllSettingsRestoresDefaults(t *testing.T) {
 	if a.watchLaterPrefs.keepAfterOpen() {
 		t.Error("稍后再看设置没有重置")
 	}
+	if !a.autoSignPrefs.on() {
+		t.Error("自动签到设置没有重置")
+	}
 	if !p.notificationEnabled() || !p.soundEnabled() || !p.badgeEnabled() || !p.streamEnabled() ||
 		p.keywordText() != "" || p.keywordIsBlacklist() || !p.categoryEnabled(notifyCategoryReply) ||
 		p.burstLimit() != 3 || p.quietOn() || p.quietFromText() != "22:00" || p.quietToText() != "08:00" {
@@ -165,6 +171,9 @@ func TestResetAllSettingsRestoresDefaults(t *testing.T) {
 	}
 	if s := newWatchLaterPrefsStore(dir); s.keepAfterOpen() {
 		t.Error("watch-later.json 没有重置")
+	}
+	if s := newAutoSignPrefsStore(dir); !s.on() {
+		t.Error("auto_sign.json 没有重置")
 	}
 	if s := newNotificationPrefsStore(dir); s.keywordText() != "" || !s.notificationEnabled() || s.quietOn() {
 		t.Errorf("notify.json 没有重置：%+v", s)

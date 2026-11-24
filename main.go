@@ -246,7 +246,7 @@ type app struct {
 	// images 是全应用共用的图片缓存（见 image_cache.go）：登录账号、帖子
 	// 作者、评论作者与通知操作者的头像，正文与评论里的表情、社区图标，
 	// 以及帖子配图都由它统一管理，同一个地址只下载一次。下载完成前
-	// userTag 先画昵称首字母。
+	// userTag 先画按昵称生成的图案。
 	images *imageCache
 	// kv 是离线缓存（见 offline_store.go）：金币页的余额与资产曲线、阅读
 	// 记录，以及每篇帖子缓存的正文。只读写本机文件，不发请求。
@@ -326,6 +326,12 @@ type app struct {
 	// updateMirror 是更新包下载加速入口的选择（见 update_mirror.go）：默认
 	// 不选、走「网络代理」里配置的代理。进程级共享，只在本窗口的界面里读。
 	updateMirror *updateMirrorStore
+	// autoSignPrefs 是「打开应用时自动签到」的开关，进程级共享。
+	autoSignPrefs *autoSignPrefsStore
+	// autoSignStarted 保证本窗口只尝试一次自动签到；窗口关掉重开不会重复。
+	// autoSignNotice 是签到成功后的顶部 Alert 提示，nil 表示没有要显示的提示。
+	autoSignStarted bool
+	autoSignNotice  *autoSignNotice
 	// revealedImages 是「默认不加载图片」模式下已经点开过的配图地址：点过一次
 	// 之后这张图不再退回占位。只在 UI 线程读写。
 	revealedImages map[string]bool
@@ -604,6 +610,9 @@ type appDeps struct {
 	updateMirror *updateMirrorStore
 	// notificationPrefs 是通知偏好，进程级一份（见 notification_prefs.go）。
 	notificationPrefs *notificationPrefsStore
+	// autoSignPrefs 是「打开应用时自动签到」的开关，进程级一份（见
+	// auto_sign_prefs.go），默认开启。
+	autoSignPrefs *autoSignPrefsStore
 	// commands 是命令快捷键 / 收藏 / 最近使用的偏好，进程级一份。
 	commands *commandPrefs
 	book     *accountBook
@@ -628,6 +637,7 @@ func newAppDeps(dir string) appDeps {
 		watchLaterPrefs:   newWatchLaterPrefsStore(dir),
 		imagePrefs:        newImagePrefsStore(dir),
 		updateMirror:      newUpdateMirrorStore(dir),
+		autoSignPrefs:     newAutoSignPrefsStore(dir),
 		commands:          newCommandPrefs(dir),
 	}
 }
@@ -647,6 +657,7 @@ func (b *accountBook) deps() appDeps {
 		watchLaterPrefs:   b.watchLaterPrefs,
 		imagePrefs:        b.imagePrefs,
 		updateMirror:      b.updateMirror,
+		autoSignPrefs:     b.autoSignPrefs,
 		commands:          b.commands,
 		book:              b,
 	}
@@ -699,6 +710,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 		watchLaterPrefs:   d.watchLaterPrefs,
 		imagePrefs:        d.imagePrefs,
 		updateMirror:      d.updateMirror,
+		autoSignPrefs:     d.autoSignPrefs,
 		commands:          newCommandRegistry(d.commands),
 		draftDir:          d.dir,
 		tabs:              make([]*tabState, len(tabSpecs)),
@@ -1550,6 +1562,9 @@ func (a *app) view(c *ui.Context) {
 			// 侧边栏，只换这一块。后三页不是信息流，不画右下角的 FAB 列
 			// （那里没有可刷新、可发帖的列表）。
 			ui.Column(c).Grow(1).MinWidth(0).FillHeight().MinHeight(0).Children(func() {
+				// 自动签到的成功提示放在内容顶部：一条绿色 Alert 比底部一闪
+				// 而过的 toast 明显，点关闭或到点后收起。
+				a.autoSignAlert(c)
 				switch a.pageName {
 				case "drafts":
 					a.draftsBody(c)
@@ -2583,24 +2598,35 @@ func (a *app) rowWithOptions(c *ui.Context, it Item, open func(Item), watchLater
 // 最新（也是最高）楼层。没人回复过的帖子没有这一行；评论与合集行也不会走
 // 到这里（它们的 Stats 为 nil）。
 //
-// 接口给了最后一条回复的评论 id 时，这一行整行是个链接：点它带着 CommentID
-// 打开正文，直接定位到那层楼（openDetail 的 focusID）。它是最内层可点元素，
-// 点这行不会连带触发外层整行的点击。id 未知时退回纯文本，不可点。
+// 接口给了最后一条回复的评论 id 时，「最后回复 谁」这段文案是个链接：点它
+// 带着 CommentID 打开正文，直接定位到那层楼（openDetail 的 focusID）。只有
+// 这段文字可点、悬停高亮加下划线，后面的时间与最高楼层只是说明文字，不跟着
+// 响应点击或悬停。链接是最内层可点元素，点它不会连带触发外层整行的点击。
+// id 未知时退回纯文本，不可点。
 func (a *app) latestReplyRow(c *ui.Context, it Item, open func(Item)) {
 	st := it.Stats
 	tk := lobetheme.TokensOf(c)
-	link := ui.Row(c).MinWidth(0).Gap(6).AlignItems(ui.Center).Font(sidebarFont)
-	ink := tk.TextDescription
-	if st.LastCommentID != "" && link.Hovered() {
-		ink = tk.Primary
-	}
-	link.Children(func() {
-		label := ui.Text(c, "最后回复").FontSize(tk.FontSizeSM).TextColor(ink).SingleLine().Shrink(0)
-		name := ui.Text(c, st.Replier).FontSize(tk.FontSizeSM).Bold().TextColor(ink).
-			SingleLine().Shrink(1).Ellipsis("…")
+	row := ui.Row(c).MinWidth(0).Gap(6).AlignItems(ui.Center).Font(sidebarFont)
+	row.Children(func() {
+		link := ui.Row(c).Gap(6).AlignItems(ui.Center)
+		ink := tk.TextDescription
 		if st.LastCommentID != "" && link.Hovered() {
-			label.Underline()
-			name.Underline()
+			ink = tk.Primary
+		}
+		link.Children(func() {
+			label := ui.Text(c, "最后回复").FontSize(tk.FontSizeSM).TextColor(ink).SingleLine().Shrink(0)
+			name := ui.Text(c, st.Replier).FontSize(tk.FontSizeSM).Bold().TextColor(ink).
+				SingleLine().Shrink(1).Ellipsis("…")
+			if st.LastCommentID != "" && link.Hovered() {
+				label.Underline()
+				name.Underline()
+			}
+		})
+		if st.LastCommentID != "" {
+			jump := it
+			jump.CommentID = st.LastCommentID
+			link.Cursor(ui.CursorPointer).OnClick(func() { open(jump) })
+			link.Tooltip("跳到最后回复")
 		}
 		if st.Updated != "" {
 			ui.Text(c, "·").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription).Shrink(0)
@@ -2612,12 +2638,6 @@ func (a *app) latestReplyRow(c *ui.Context, it Item, open func(Item)) {
 				TextColor(tk.TextDescription).SingleLine().Shrink(0)
 		}
 	})
-	if st.LastCommentID != "" {
-		jump := it
-		jump.CommentID = st.LastCommentID
-		link.Cursor(ui.CursorPointer).OnClick(func() { open(jump) })
-		link.Tooltip("跳到最后回复")
-	}
 }
 
 // postStatsBadge 是帖子行右端的状态块：置顶角标，以及一个等宽数字表示的

@@ -91,6 +91,9 @@ func (a *app) resetAllSettings() {
 	if a.notificationPrefs != nil {
 		fail(a.notificationPrefs.Reset())
 	}
+	if a.autoSignPrefs != nil {
+		fail(a.autoSignPrefs.Reset())
+	}
 	fail(a.restoreImageHosts())
 	if a.commands != nil && a.commands.prefs != nil {
 		fail(a.commands.prefs.resetAll())

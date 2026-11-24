@@ -221,6 +221,7 @@ func (a *app) settingsWindowView(c *ui.Context) {
 				default:
 					a.appearanceSettingsSection(c)
 					a.windowSettingsSection(c)
+					a.autoSignSettingsSection(c)
 					a.updateSettingsSection(c)
 					a.resetSettingsSection(c)
 				}
@@ -401,6 +402,23 @@ func (a *app) windowSettingsSection(c *ui.Context) {
 		if !a.trayReady {
 			display.Text(c, "系统托盘当前不可用，关闭窗口只能直接关掉。",
 				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
+		}
+	})
+}
+
+/* ------------------------------------------------------------------
+   自动签到一块：打开应用时为当前账号签到
+--------------------------------------------------------------- */
+
+// autoSignSettingsSection 是「签到」一块：打开应用时自动提交今日签到，默认
+// 开启。开关立即落盘，进程级共享；已签到不弹任何提示，新签到才在内容顶部弹
+// 一条明显的结果。
+func (a *app) autoSignSettingsSection(c *ui.Context) {
+	p := a.autoSignPrefs
+	settingsSection(c, "签到", func() {
+		settingsDescription(c, "打开应用时自动为当前账号签到；已签到不会提示。", 1)
+		if v := settingsCheckbox(c, "打开应用时自动签到", p.on()); v != p.on() {
+			a.setAutoSignEnabled(v)
 		}
 	})
 }
