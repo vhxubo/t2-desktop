@@ -176,6 +176,9 @@ type accountBook struct {
 	// autoSignPrefs 是「打开应用时自动签到」的开关，进程级一份（见
 	// auto_sign_prefs.go），默认开启。
 	autoSignPrefs *autoSignPrefsStore
+	// sidebarPrefs 是首页到「节点」之前导航入口的显示与排序偏好，进程级一份
+	// （见 sidebar_prefs.go）。
+	sidebarPrefs *sidebarPrefsStore
 	// commands 是命令中心的快捷键 / 收藏 / 最近使用偏好，进程级一份。
 	commands *commandPrefs
 
@@ -264,6 +267,7 @@ func newAccountBook(dir string) *accountBook {
 		updateMirror:      newUpdateMirrorStore(dir),
 		updateChannel:     newUpdateChannelStore(dir),
 		autoSignPrefs:     newAutoSignPrefsStore(dir),
+		sidebarPrefs:      newSidebarPrefsStore(dir),
 		commands:          newCommandPrefs(dir),
 		openURL:           func(u string) error { return mygo.Shell.OpenExternal(u) },
 	}

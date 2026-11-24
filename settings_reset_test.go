@@ -238,6 +238,7 @@ func TestResetButtonOnlyOnGeneralTab(t *testing.T) {
 	a := testApp(t)
 	for tab, want := range map[int]bool{
 		settingsTabGeneral:   true,
+		settingsTabSidebar:   false,
 		settingsTabNetwork:   false,
 		settingsTabImages:    false,
 		settingsTabReading:   false,

@@ -556,17 +556,18 @@ func TestSettingsCheckForUpdatesWired(t *testing.T) {
    设置窗口分栏与代理连通性测试
 ---------------------------------------------------------------- */
 
-// 设置按大类分页：默认「通用」页放外观、窗口与检查更新；图片相关几块合成
-// 「图片」页，评论与稍后再看合成「阅读与评论」页。切页之后只显示新分类的内容。
+// 设置按大类分页：默认「通用」页放外观、窗口与检查更新；「侧边栏」页自定义
+// 导航入口，图片相关几块合成「图片」页，评论与稍后再看合成「阅读与评论」页。
+// 切页之后只显示新分类的内容。
 func TestSettingsTabsShowOneSectionAtATime(t *testing.T) {
 	a := testApp(t)
-	if got := len(settingsTabLabels); got != 6 {
-		t.Fatalf("设置分类数量 = %d，期望 6", got)
+	if got := len(settingsTabLabels); got != 7 {
+		t.Fatalf("设置分类数量 = %d，期望 7", got)
 	}
 	// 合并后的页面更长，无头窗口给足高度，底部的按钮与统计也要布局出来。
 	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 2400)
 	st.Frame()
-	// 六个分类要能在一行里放下：标签不能挤出窗口，顺序也要和 labels 一致。
+	// 七个分类要能在一行里放下：标签不能挤出窗口，顺序也要和 labels 一致。
 	lastX := float32(0)
 	for _, label := range settingsTabLabels {
 		r, ok := st.Find(label)

@@ -97,6 +97,7 @@ func (a *app) resetAllSettings() {
 	if a.autoSignPrefs != nil {
 		fail(a.autoSignPrefs.Reset())
 	}
+	fail(a.sidebarPrefs.Reset())
 	fail(a.restoreImageHosts())
 	if a.commands != nil && a.commands.prefs != nil {
 		fail(a.commands.prefs.resetAll())

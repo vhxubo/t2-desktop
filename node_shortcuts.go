@@ -109,8 +109,8 @@ func (a *app) saveNodeShortcuts() {
 // 列表与空态。点击快捷行直接进入「首页 + 该节点筛选」，不新开窗口。
 func (a *app) sidebarNodeSection(c *ui.Context, nav layout.SideNavState) {
 	tk := lobetheme.TokensOf(c)
-	// 分组上方的分割线与导航列表里的 Divider 用同一条：4 的上下留白、
-	// Lobe 的 BorderSecondary，不再单独内缩 8、用更深的 Border。
+	// 分组上方的分割线用 4 的上下留白与 Lobe 的 BorderSecondary，和侧边栏
+	// 其它分组线保持一致，不单独内缩 8、不用更深的 Border。
 	ui.Box(c).Height(1).Margin(4, 0).AlignSelf(ui.Stretch).Background(tk.BorderSecondary)
 	ui.Row(c).FillWidth().Padding(0, sidebarInsetX, 2, sidebarInsetX).
 		AlignItems(ui.Center).Children(func() {

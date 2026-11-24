@@ -18,8 +18,8 @@ import (
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 设置窗口的尺寸：比代理弹窗宽一些，放得下「通用 / 网络 / 图片 / 阅读与评论 /
-// 通知 / 快捷键」几页。
+// 设置窗口的尺寸：比代理弹窗宽一些，放得下「通用 / 侧边栏 / 网络 / 图片 /
+// 阅读与评论 / 通知 / 快捷键」几页。
 const (
 	settingsWindowWidth  = 520
 	settingsWindowHeight = 700
@@ -32,6 +32,7 @@ const (
 // 内容区上方；每页的草稿都绑在 app 字段上，切页不会丢。默认打开「通用」。
 const (
 	settingsTabGeneral = iota
+	settingsTabSidebar
 	settingsTabNetwork
 	settingsTabImages
 	settingsTabReading
@@ -39,7 +40,7 @@ const (
 	settingsTabShortcuts
 )
 
-var settingsTabLabels = []string{"通用", "网络", "图片", "阅读与评论", "通知", "快捷键"}
+var settingsTabLabels = []string{"通用", "侧边栏", "网络", "图片", "阅读与评论", "通知", "快捷键"}
 
 /* ------------------------------------------------------------------
    设置窗口：全局入口、显示与关闭
@@ -210,6 +211,8 @@ func (a *app) settingsWindowView(c *ui.Context) {
 		list := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
 			ui.Column(c).FillWidth().Padding(18, 20).Gap(10).Children(func() {
 				switch a.settingsTab {
+				case settingsTabSidebar:
+					a.sidebarSettingsSection(c)
 				case settingsTabNetwork:
 					a.proxySettingsSection(c)
 				case settingsTabImages:

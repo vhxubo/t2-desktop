@@ -238,6 +238,9 @@ type app struct {
 	// sidebarRefresh 把侧边栏切换后的重新请求排进防抖 + 节流队列，避免连续
 	// 点击把配额耗在一闪而过的页面上；详见 sidebar_refresh.go。
 	sidebarRefresh sidebarRefreshScheduler
+	// sidebarPrefs 是首页到「节点」之前导航入口的显示与排序偏好，进程级一份
+	// （见 sidebar_prefs.go），只在 UI 线程读写。
+	sidebarPrefs *sidebarPrefsStore
 
 	pageName    string // list / detail / login / drafts / watchlater / scores
 	status      string
@@ -624,6 +627,9 @@ type appDeps struct {
 	// autoSignPrefs 是「打开应用时自动签到」的开关，进程级一份（见
 	// auto_sign_prefs.go），默认开启。
 	autoSignPrefs *autoSignPrefsStore
+	// sidebarPrefs 是首页到「节点」之前导航入口的显示与排序偏好，进程级一份
+	// （见 sidebar_prefs.go）。
+	sidebarPrefs *sidebarPrefsStore
 	// commands 是命令快捷键 / 收藏 / 最近使用的偏好，进程级一份。
 	commands *commandPrefs
 	book     *accountBook
@@ -650,6 +656,7 @@ func newAppDeps(dir string) appDeps {
 		updateMirror:      newUpdateMirrorStore(dir),
 		updateChannel:     newUpdateChannelStore(dir),
 		autoSignPrefs:     newAutoSignPrefsStore(dir),
+		sidebarPrefs:      newSidebarPrefsStore(dir),
 		commands:          newCommandPrefs(dir),
 	}
 }
@@ -671,6 +678,7 @@ func (b *accountBook) deps() appDeps {
 		updateMirror:      b.updateMirror,
 		updateChannel:     b.updateChannel,
 		autoSignPrefs:     b.autoSignPrefs,
+		sidebarPrefs:      b.sidebarPrefs,
 		commands:          b.commands,
 		book:              b,
 	}
@@ -725,6 +733,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 		updateMirror:      d.updateMirror,
 		updateChannel:     d.updateChannel,
 		autoSignPrefs:     d.autoSignPrefs,
+		sidebarPrefs:      d.sidebarPrefs,
 		commands:          newCommandRegistry(d.commands),
 		draftDir:          d.dir,
 		tabs:              make([]*tabState, len(tabSpecs)),
@@ -1679,44 +1688,6 @@ func (a *app) sidebar(c *ui.Context) {
 	})
 }
 
-// sidebarNavItems 是浏览页导航的列表数据，展开态交给 display.List，折叠态
-// 交给 sidebarRail 的 ActionIcon。
-//
-// 草稿箱与稍后再看是一组：两者都是「存到本地、稍后回来处理」的入口，上下各
-// 一条分割线把它们和浏览页分开。评分榜单独列在最下面，同样是主窗口内嵌页；
-// 图标用奖杯对应「榜」的名次含义，和前两项的笔记 / 书签区分开。
-func (a *app) sidebarNavItems() []display.ListItem {
-	items := make([]display.ListItem, 0, len(tabSpecs)+5)
-	for i, s := range tabSpecs {
-		if s.Kind == kindNotification {
-			continue
-		}
-		icon := tabIcons[i]
-		if i >= len(tabIcons) || icon == nil {
-			icon = lucide.LayoutGrid()
-		}
-		items = append(items, display.ListItem{
-			Key:   tabID(i),
-			Label: s.Label,
-			Icon:  icon,
-		})
-	}
-	// 草稿箱与稍后再看自成一组：上面一条线和浏览页分开，下面一条线再接
-	// 评分榜。两项的小红点计数由 navBadgeCount 提供。
-	items = append(items, display.ListItem{Divider: true})
-	items = append(items, display.ListItem{
-		Key: "drafts", Label: "草稿箱", Icon: lucide.NotebookPen(),
-	})
-	items = append(items, display.ListItem{
-		Key: "watchlater", Label: "稍后再看", Icon: lucide.Bookmark(),
-	})
-	items = append(items, display.ListItem{Divider: true})
-	items = append(items, display.ListItem{
-		Key: "scores", Label: "评分榜", Icon: lucide.Trophy(),
-	})
-	return items
-}
-
 // navBadgeCount 是侧边栏导航项的 Lobe 红点计数。草稿箱读内存 store，稍后再看
 // 读当前账号的待读清单，浏览页读接口带回来的分区未读数（见 section_unread.go）；
 // 其余导航项不挂角标。返回 0 时 Badge 自动隐藏。
@@ -1820,8 +1791,8 @@ func sidebarRail(c *ui.Context, items []display.ListItem, active string, onSelec
 	ui.Column(c).Gap(2).AlignItems(ui.Center).AlignSelf(ui.Stretch).Children(func() {
 		for _, it := range items {
 			if it.Divider {
-				// 折叠态也把分组的分割线画出来：草稿箱/稍后再看一组的两头
-				// 各一条，和浏览页、独立窗口入口分开。
+				// 自定义导航项里没有内部分组线；节点分组与底部入口另有
+				// 分隔线。保留这里的绘制，兼容仍带 Divider 的其它列表。
 				ui.Box(c).Height(1).Margin(4, 8).AlignSelf(ui.Stretch).
 					Background(tk.BorderSecondary)
 				continue
