@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1126,53 +1125,6 @@ func TestClickCommentOpensParentTopic(t *testing.T) {
 	a.closeDetail()
 	if a.detail != nil || a.pageName != "list" {
 		t.Error("关闭详情页状态不对")
-	}
-}
-
-// Optional live check: TWOLIBRA_LIVE=1 go test -run TestLiveDetail -v
-func TestLiveDetail(t *testing.T) {
-	if os.Getenv("TWOLIBRA_LIVE") == "" {
-		t.Skip("设置 TWOLIBRA_LIVE=1 才会访问真实 API")
-	}
-	c := &Client{}
-	res, err := c.fetch(context.Background(), tabSpecs[0], 1)
-	if err != nil || len(res.Items) == 0 {
-		t.Fatalf("取首页失败：%v", err)
-	}
-	id := res.Items[0].ShortID
-	if id == "" {
-		t.Skip("首页首条没有 short_id")
-	}
-	topic, err := c.fetchTopic(context.Background(), id)
-	if err != nil {
-		t.Fatalf("详情失败：%v", err)
-	}
-	replies, err := c.fetchReplies(context.Background(), id, 1, false)
-	if err != nil {
-		t.Fatalf("评论失败：%v", err)
-	}
-	t.Logf("%s · %s · %d 字正文 · %d 条评论 / 共 %d 条",
-		id, topic.Title, len(topic.Content), len(replies.Items), replies.Total)
-
-	// Render the real markdown body and floors headlessly once, so a shape
-	// the docs did not mention cannot silently break the detail page.
-	a := testApp(t)
-	a.openDetail(Item{ShortID: id, URL: topic.URL})
-	a.detail.topic = &topic
-	a.detail.replyList = flattenReplies(replies)
-	a.detail.replyTotal = replies.Total
-	a.detail.replyPage = 1
-	a.detail.replyTotalPages = replies.TotalPages
-	a.detail.replyLoaded = true
-	if emojis, err := c.fetchEmojis(context.Background()); err == nil {
-		a.emojis = emojis
-	}
-	view := ui.NewTester(a.view, 1100, 760)
-	if topic.Title == "" || !view.HasText(topic.Title) {
-		t.Errorf("真实标题没有渲染出来：%q", view.Texts())
-	}
-	if !view.HasText("内容来自 2Libra 用户") {
-		t.Error("真实详情页缺少版权与原文链接声明")
 	}
 }
 

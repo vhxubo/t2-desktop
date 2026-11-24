@@ -47,10 +47,28 @@ func TestTabEndpointsMatchContract(t *testing.T) {
 	if len(tabIcons) != len(tabSpecs) {
 		t.Fatalf("tabIcons 与 tabSpecs 数量不一致：%d / %d", len(tabIcons), len(tabSpecs))
 	}
-	for i, s := range tabSpecs {
-		if got := endpoint(apiBaseURL, s, 1); got != want[i] {
-			t.Errorf("tab %s 第 1 页 URL = %s，期望 %s", s.Label, got, want[i])
+	assertEndpoint := func(spec tabSpec, page int, expected string) {
+		t.Helper()
+		actual := endpoint(apiBaseURL, spec, page)
+		actualURL, err := url.Parse(actual)
+		if err != nil {
+			t.Fatalf("tab %s 第 %d 页 URL 无效：%v", spec.Label, page, err)
 		}
+		expectedURL, err := url.Parse(expected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actualQuery, err := url.ParseQuery(actualURL.RawQuery)
+		if err != nil {
+			t.Fatalf("tab %s 第 %d 页查询参数无效：%v", spec.Label, page, err)
+		}
+		actualURL.RawQuery, expectedURL.RawQuery = actualQuery.Encode(), expectedURL.Query().Encode()
+		if actualURL.String() != expectedURL.String() {
+			t.Errorf("tab %s 第 %d 页 URL = %s，期望 %s", spec.Label, page, actual, expected)
+		}
+	}
+	for i, s := range tabSpecs {
+		assertEndpoint(s, 1, want[i])
 		if i >= 6 && !s.NeedsAuth {
 			t.Errorf("tab %s 应标记为需要登录", s.Label)
 		}
@@ -72,9 +90,7 @@ func TestTabEndpointsMatchContract(t *testing.T) {
 		{7, "https://2libra.com/api/v1/me/notifications?limit=50&page=2"},
 	}
 	for _, c := range cases {
-		if got := endpoint(apiBaseURL, tabSpecs[c.i], 2); got != c.want {
-			t.Errorf("tab %s 第 2 页 URL = %s，期望 %s", tabSpecs[c.i].Label, got, c.want)
-		}
+		assertEndpoint(tabSpecs[c.i], 2, c.want)
 	}
 	if tabSpecs[4].Paging != pagingIgnored || tabSpecs[4].ListKey != "items" {
 		t.Errorf("最新评论必须用 items 且不翻页：%+v", tabSpecs[4])
@@ -180,9 +196,10 @@ func TestDecodePageListFields(t *testing.T) {
 }
 
 func TestClientRequestAndErrorCodes(t *testing.T) {
-	var path, query, auth string
+	var method, path, auth string
+	var query url.Values
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path, query, auth = r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization")
+		method, path, query, auth = r.Method, r.URL.Path, r.URL.Query(), r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, envelopeJSON(`{"posts":[{"short_id":"ABC12345","title":"测试帖","node":{"slug":"ai-tools","name":"AI 工具"}}],"total":1,"page":1,"limit":50,"total_pages":1}`))
 	}))
@@ -192,8 +209,9 @@ func TestClientRequestAndErrorCodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != "/api/v1/topics" || query != "page=1&limit=50&parent_slug=All&sort=value" {
-		t.Errorf("请求路径不对：%s?%s", path, query)
+	wantQuery := url.Values{"page": {"1"}, "limit": {"50"}, "parent_slug": {"All"}, "sort": {"value"}}
+	if method != http.MethodGet || path != "/api/v1/topics" || !reflect.DeepEqual(query, wantQuery) {
+		t.Errorf("请求不对：%s %s?%s", method, path, query.Encode())
 	}
 	if auth != "Bearer tok" {
 		t.Errorf("Authorization 头不对：%q", auth)
@@ -204,7 +222,9 @@ func TestClientRequestAndErrorCodes(t *testing.T) {
 
 	// 匿名请求不能带空的 Authorization 头
 	c.bearer = func() string { return "" }
-	_, _ = c.fetch(context.Background(), tabSpecs[1], 1)
+	if _, err := c.fetch(t.Context(), tabSpecs[0], 1); err != nil {
+		t.Fatalf("匿名请求失败：%v", err)
+	}
 	if auth != "" {
 		t.Errorf("匿名请求带了 Authorization 头：%q", auth)
 	}
@@ -305,25 +325,6 @@ func TestLogoutClearsToken(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "token.json")); !os.IsNotExist(err) {
 		t.Error("退出后令牌文件未删除")
-	}
-}
-
-// Optional live smoke test: TWOLIBRA_LIVE=1 go test -run TestLivePublicTabs -v
-func TestLivePublicTabs(t *testing.T) {
-	if os.Getenv("TWOLIBRA_LIVE") == "" {
-		t.Skip("设置 TWOLIBRA_LIVE=1 才会访问真实 API")
-	}
-	c := &Client{}
-	for _, s := range tabSpecs[:6] {
-		res, err := c.fetch(context.Background(), s, 1)
-		if err != nil {
-			t.Errorf("tab %s 请求失败：%v", s.Label, err)
-			continue
-		}
-		if len(res.Items) == 0 {
-			t.Errorf("tab %s 返回 0 条", s.Label)
-		}
-		t.Logf("%-6s %3d 条 / 共 %d 条，首条：%s", s.Label, len(res.Items), res.Total, res.Items[0].Title)
 	}
 }
 

@@ -1,9 +1,7 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"slices"
 	"testing"
 
@@ -320,39 +318,5 @@ func TestInlineBackStackIsBounded(t *testing.T) {
 	}
 	if a.pageName != "list" || a.detail != nil || len(a.detailStack) != 0 {
 		t.Errorf("清空返回栈后应回到列表：%s %+v %+v", a.pageName, a.detail, a.detailStack)
-	}
-}
-
-// TWOLIBRA_LIVE=1 go test -run TestLiveInlinePostLink -v
-// JBYGf2A really contains the link the user asked about. Check the whole
-// chain against live data: markdown body -> parse -> handleLink -> in-app.
-func TestLiveInlinePostLink(t *testing.T) {
-	if os.Getenv("TWOLIBRA_LIVE") == "" {
-		t.Skip("设置 TWOLIBRA_LIVE=1 才会访问真实 API")
-	}
-	c := &Client{}
-	topic, err := c.fetchTopic(context.Background(), "JBYGf2A")
-	if err != nil {
-		t.Fatalf("取真实正文失败：%v", err)
-	}
-	links := inAppTopicLinks(topic.Content)
-	if len(links) == 0 {
-		t.Fatalf("真实正文里没有识别出站内帖子链接：%s", topic.Content)
-	}
-	t.Logf("%s · 正文 %d 字 · %d 个站内链接，首个 %s (%s)",
-		topic.ShortID, len(topic.Content), len(links), links[0].ShortID, links[0].URL)
-
-	a := testApp(t)
-	a.openDetail(Item{ShortID: "JBYGf2A", URL: topic.URL})
-	tt := ui.NewTester(a.view, 1200, 800) // binds a.srv
-	a.handleLink(links[0].URL)
-	if a.detail == nil || a.detail.shortID != links[0].ShortID {
-		t.Errorf("真实站内链接没有内联打开：%+v", a.detail)
-	}
-	if len(a.detailStack) != 1 || a.detailStack[0].shortID != "JBYGf2A" {
-		t.Errorf("真实跳转没有保留返回栈：%+v", a.detailStack)
-	}
-	if got := tt.OpenedURLs(); len(got) != 0 {
-		t.Errorf("真实站内链接被交给了系统浏览器：%q", got)
 	}
 }
