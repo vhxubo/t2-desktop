@@ -22,8 +22,8 @@ func TestShortcutSettingsListsCommands(t *testing.T) {
 			t.Errorf("快捷键页缺少「%s」：%q", label, tt.Texts())
 		}
 	}
-	if !tt.HasText("Ctrl+K") && !tt.HasText("⌘K") {
-		t.Errorf("没有显示命令的默认键位：%q", tt.Texts())
+	if shortcut := cmdKey(ui.KeyK).label(); shortcut == "" || !tt.HasText(shortcut) {
+		t.Errorf("没有显示命令的默认键位 %q：%q", shortcut, tt.Texts())
 	}
 }
 

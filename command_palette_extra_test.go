@@ -61,8 +61,8 @@ func TestCommandPaletteIncludesRegisteredCommandsAndShortcuts(t *testing.T) {
 	if _, ok := tt.Find("命令 自定义命令"); !ok {
 		t.Fatalf("新注册的命令没有出现在面板：%q", tt.Texts())
 	}
-	if !tt.HasText("Ctrl+T") && !tt.HasText("⌘T") {
-		t.Errorf("面板没有显示命令的快捷键：%q", tt.Texts())
+	if shortcut := a.commands.bindingLabel("test.palette"); shortcut == "" || !tt.HasText(shortcut) {
+		t.Errorf("面板没有显示命令的快捷键 %q：%q", shortcut, tt.Texts())
 	}
 	if err := tt.Click("命令 自定义命令"); err != nil {
 		t.Fatal(err)
