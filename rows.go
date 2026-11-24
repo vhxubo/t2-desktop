@@ -11,7 +11,7 @@ import (
 // 它要比作者名大一档、比帖子标题（17）小一档，才能一眼分出「谁说的」和
 // 「说了什么」；元信息再降一档，并整行改用等宽字体，和正文的无衬线体分层。
 // 数值与详情页的字号阶梯（detail_ui.go）同一节奏，列表与详情之间切换时
-// 正文不会忽大忽小。动态里的帖子行另有 17 粗体标题占住重心，正文只是
+// 正文不会忽大忽小。动态里的帖子行另有 17 标题占住重心，正文只是
 // 摘要，因此再小一档，免得标题与摘要糊成一片。
 const (
 	richCommentFontSize float32 = 15 // 评论正文：这一行的阅读主体
@@ -19,6 +19,16 @@ const (
 	richAuthorFontSize  float32 = 13 // 作者、被回复人、行内动作
 	richMetaFontSize    float32 = 11 // 时间、楼层、节点、原帖、计数、表态（等宽）
 )
+
+// richExcerptInk 返回动态行摘要的颜色：未读时退到次级文字色，和标题的正文色
+// 拉开层级；读过后和标题一样退到四级文字色。评论正文不走这里——没点开的评论
+// 是新内容，仍用正文色，不跟着帖子一起压灰。
+func richExcerptInk(tk *lobetheme.Tokens, read bool) ui.Color {
+	if read {
+		return tk.TextQuaternary
+	}
+	return tk.TextSecondary
+}
 
 // foldRowView 画一行可见行：组首条评论先照常画成一条评论，再在它下面挂
 // 「展开另外几条」的入口；其余行仍走 rowWith。
@@ -157,7 +167,7 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item), watchLater bool) 
 			// 帖子行保留标题；评论行的正文在下面作为摘要展示。标题字号比
 			// 作者、节点等辅助信息大一档，和主列表行保持一致。
 			if !comment && it.Title != "" {
-				ui.Text(c, it.Title).FontSize(tk.FontSizeLG).Bold().MaxLines(2).TextColor(titleColor)
+				ui.Text(c, it.Title).FontSize(tk.FontSizeLG).MaxLines(2).TextColor(titleColor)
 			}
 			body := x.Excerpt
 			if body == "" && comment {
@@ -167,10 +177,11 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item), watchLater bool) 
 				// 动态与点开过的评论，正文跟着这一行一起置灰；没点开的评论
 				// 仍用正文字色，它是新内容，压灰会让人先跳过它。行高不变。
 				size := richPreviewFontSize
+				bodyColor := richExcerptInk(tk, read)
 				if comment {
 					size = richCommentFontSize
+					bodyColor = postReadInk(tk, read)
 				}
-				bodyColor := postReadInk(tk, read)
 				ui.Text(c, body).FontSize(size).LineHeight(1.55).
 					MaxLines(3).TextColor(bodyColor)
 			}

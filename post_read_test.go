@@ -179,8 +179,9 @@ func TestRichRowsGrayReadPostsAndClickedComments(t *testing.T) {
 	if readBody < unreadPost+110 {
 		t.Errorf("已读动态的正文没有跟着置灰：亮度 %.0f，未读标题 %.0f", readBody, unreadPost)
 	}
-	if unreadBody > unreadPost+30 {
-		t.Errorf("未读动态的正文不该被置灰：亮度 %.0f，未读标题 %.0f", unreadBody, unreadPost)
+	// 未读摘要用次级文字色，和标题的正文色拉开层级，但还没灰到读过的程度。
+	if unreadBody < unreadPost+40 || unreadBody > unreadPost+110 {
+		t.Errorf("未读动态的摘要颜色没和标题分层：摘要 %.0f，标题 %.0f", unreadBody, unreadPost)
 	}
 	if freshComment > unreadPost+30 {
 		t.Errorf("没点开的评论跟着帖子已读一起变灰了：亮度 %.0f，未读帖子 %.0f", freshComment, unreadPost)
