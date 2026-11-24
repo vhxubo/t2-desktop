@@ -217,6 +217,7 @@ type coinPandoraStatus struct {
 // publish 回填，并用每类数据的 seq 丢弃过期结果。
 type coinState struct {
 	view        int
+	statsTab    int
 	todayList   ui.ListState
 	historyList ui.ListState
 	rankingList ui.ListState

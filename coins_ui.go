@@ -390,14 +390,30 @@ func (a *app) coinHistoryReasonRow(c *ui.Context, cs *coinState) {
 	})
 }
 
+// 统计页用两个 Tab 分开两类数据：列表是「近 30 天收支」的逐日明细，图表是
+// 「收入 / 支出构成」的占比条。cs.statsTab 默认 0（列表），1 是图表。
+const coinStatsChart = 1
+
+var coinStatsTabLabels = []string{"列表", "图表"}
+
 func (a *app) coinStatsView(c *ui.Context, cs *coinState) {
-	list := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
-		ui.Column(c).FillWidth().Padding(8, 14).Gap(12).Children(func() {
-			a.coinDailyCard(c, cs)
-			a.coinBreakdownCard(c, cs)
+	ui.Column(c).Fill().MinHeight(0).Children(func() {
+		ui.Row(c).FillWidth().Shrink(0).Padding(4, 14, 2, 14).Children(func() {
+			action.Segmented(c, &cs.statsTab, coinStatsTabLabels, action.SegmentedProps{
+				Size: lobetheme.Small,
+			}).Label("统计视图")
 		})
+		body := layout.ScrollArea(c, layout.ScrollAreaProps{Fade: true}, func() {
+			ui.Column(c).FillWidth().Padding(8, 14).Children(func() {
+				if cs.statsTab == coinStatsChart {
+					a.coinBreakdownCard(c, cs)
+				} else {
+					a.coinDailyCard(c, cs)
+				}
+			})
+		})
+		body.Grow(1).FillWidth().MinHeight(0)
 	})
-	list.Grow(1).FillWidth().MinHeight(0)
 }
 
 func (a *app) coinDailyCard(c *ui.Context, cs *coinState) {
@@ -598,28 +614,31 @@ func (a *app) coinRankingView(c *ui.Context, cs *coinState) {
 
 func (a *app) coinRankRow(c *ui.Context, e coinRankEntry) {
 	tk := lobetheme.TokensOf(c)
-	row := popupRow(c, true).FillWidth().Padding(10, 14)
+	row := popupRow(c, true).FillWidth().Padding(8, 14)
 	row.Children(func() {
-		display.Text(c, fmt.Sprintf("%d", e.Rank), display.TextProps{
-			Strong: true, FontSize: 14, Rows: 1,
-		}).Width(36).TextColor(coinRankColor(tk, e.Rank))
-		// 排行榜用户名同样走统一用户标识：13px 昵称配 19.5px 头像。
-		a.userTag(c, userTagSpec{
-			Name:   e.Username,
-			Avatar: e.AvatarURL,
-			Size:   13,
-			Bold:   true,
-			Badges: e.Badges,
-			Pro:    e.IsPro,
-		})
-		if name := a.auth.username(); name != "" && strings.EqualFold(name, e.Username) {
-			display.Text(c, "（我）", display.TextProps{
-				Type: display.TextSecondary, FontSize: 10, Rows: 1,
-			})
-		}
-		ui.Spacer(c).Grow(1)
-		display.Text(c, coinThousands(e.Balance)+" 金币", display.TextProps{
-			Type: display.TextSecondary, FontSize: 12, Rows: 1,
+		// popupRow 是列容器：整行字段必须装进同一个 Row，否则会竖着排成多行。
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			display.Text(c, fmt.Sprintf("%d", e.Rank), display.TextProps{
+				Strong: true, FontSize: 14, Rows: 1,
+			}).Width(32).Shrink(0).TextColor(coinRankColor(tk, e.Rank))
+			// 昵称吃掉中间剩余空间，过长时单行省略；「我」不参与压缩。
+			a.userTag(c, userTagSpec{
+				Name:   e.Username,
+				Avatar: e.AvatarURL,
+				Size:   13,
+				Bold:   true,
+				Badges: e.Badges,
+				Pro:    e.IsPro,
+			}).Grow(1).MinWidth(0)
+			if name := a.auth.username(); name != "" && strings.EqualFold(name, e.Username) {
+				display.Text(c, "（我）", display.TextProps{
+					Type: display.TextSecondary, FontSize: 10, Rows: 1,
+				}).Shrink(0)
+			}
+			// 金币固定在最右侧：等宽数字加粗，用金币金，金额一眼可辨。
+			ui.Text(c, coinThousands(e.Balance)+" 金币").
+				Font(sidebarFont).FontSize(13).FontWeight(700).
+				TextColor(tk.Gold).Shrink(0).TextAlign(ui.End).SingleLine()
 		})
 	})
 	if e.Username != "" {

@@ -638,10 +638,26 @@ func TestCoinWindowRendersBalanceTodayHistoryStatsRanking(t *testing.T) {
 		t.Fatalf("切换到统计失败：%v（%q）", err, tt.Texts())
 	}
 	tt.Frame()
-	for _, want := range []string{"近 30 天收支", "2026-11-12", "收入构成", "签到", "50.0%"} {
+	// 统计页默认停在「列表」Tab：只显示逐日明细，不显示构成图表。
+	for _, want := range []string{"列表", "图表", "近 30 天收支", "2026-11-12"} {
 		if !tt.HasText(want) {
-			t.Fatalf("统计页缺少 %q：%q", want, tt.Texts())
+			t.Fatalf("统计页列表 Tab 缺少 %q：%q", want, tt.Texts())
 		}
+	}
+	if tt.HasText("收入构成") {
+		t.Fatalf("统计页列表 Tab 不该显示构成图：%q", tt.Texts())
+	}
+	if err := tt.Click("图表"); err != nil {
+		t.Fatalf("切换到图表 Tab 失败：%v（%q）", err, tt.Texts())
+	}
+	tt.Frame()
+	for _, want := range []string{"收入构成", "签到", "50.0%"} {
+		if !tt.HasText(want) {
+			t.Fatalf("统计页图表 Tab 缺少 %q：%q", want, tt.Texts())
+		}
+	}
+	if tt.HasText("近 30 天收支") {
+		t.Fatalf("统计页图表 Tab 不该显示逐日列表：%q", tt.Texts())
 	}
 
 	if err := tt.Click("排行"); err != nil {
@@ -774,6 +790,7 @@ func TestCoinBreakdownRangeChipsInUI(t *testing.T) {
 	a.coins.dailyLoaded, a.coins.breakdownLoaded = true, true
 	a.coins.breakdownItems = []coinBreakdown{{Reason: "checkin", Amount: 5, Ratio: 1}}
 	a.coins.view = coinViewStats
+	a.coins.statsTab = coinStatsChart // 构成图在「图表」Tab 里
 	tt := ui.NewTester(a.coinWindowView, coinWindowWidth, coinWindowHeight)
 	tt.Frame()
 	for _, label := range coinBreakdownRangeLabels {
