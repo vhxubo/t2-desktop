@@ -184,7 +184,7 @@ func (a *app) createDetailWindow(h *detailWindow) {
 	if d != nil {
 		title = detailTabTitle(d)
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle(title),
 		Width:             detailWindowWidth,
 		Height:            detailWindowHeight,
@@ -195,7 +195,7 @@ func (a *app) createDetailWindow(h *detailWindow) {
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(func(c *ui.Context) { a.detailWindowView(h, c) })),
-	})
+	}, h.toast)
 	h.win = win
 	win.OnClosed(func() {
 		if h.win != win {

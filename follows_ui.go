@@ -60,7 +60,7 @@ func (a *app) showFollowsWindow(tab int) {
 		a.setFollowsWindowShown(true)
 		return
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle("关注与粉丝"),
 		Width:             followsWindowWidth,
 		Height:            followsWindowHeight,
@@ -71,7 +71,7 @@ func (a *app) showFollowsWindow(tab int) {
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.followsWindowView)),
-	})
+	}, toastFollows)
 	a.followsWin = win
 	win.OnShow(func() { a.setFollowsWindowShown(true) })
 	win.OnHide(func() { a.setFollowsWindowShown(false) })

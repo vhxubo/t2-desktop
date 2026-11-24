@@ -106,7 +106,7 @@ func (a *app) openEditWindow(st *editState) {
 		win.Invalidate()
 		return
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle(st.windowTitle()),
 		Width:             editWindowWidth,
 		Height:            editWindowHeight,
@@ -117,7 +117,7 @@ func (a *app) openEditWindow(st *editState) {
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、发帖窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.editWindowView)),
-	})
+	}, toastEdit)
 	a.editWin = win
 	win.OnClosed(func() {
 		a.editWin = nil

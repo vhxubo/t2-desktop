@@ -66,7 +66,7 @@ func (a *app) showNetLogWindow() {
 		return
 	}
 	a.netLogUnwatch = a.proxy.net.addWatcher(a.netLogChanged)
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle("网络调试"),
 		Width:             netLogWindowWidth,
 		Height:            netLogWindowHeight,
@@ -77,10 +77,11 @@ func (a *app) showNetLogWindow() {
 		TitleBarStyle:     mygo.TitleBarHidden, // 与其他窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.netLogWindowView)),
-	})
+	}, toastNetLog)
 	a.netLogWin = win
 	win.OnClosed(func() {
 		a.netLogWin = nil
+		a.authGateWindowClosed(toastNetLog)
 		a.unwatchNetLog()
 		a.accountWindowClosed(win)
 	})
@@ -137,6 +138,7 @@ func (a *app) netLogWindowView(c *ui.Context) {
 	// Esc 直接关掉窗口。复制结果这类提示归本窗口自己领走（见 toasts.go）。
 	c.OnShortcut(0, ui.KeyEscape, a.closeNetLogWindow)
 	defer a.drainToasts(c, a.claimsToasts(toastNetLog))
+	defer a.authDialogFor(c, toastNetLog)
 
 	entries := a.proxy.net.Snapshot()
 	shown := a.netLogFiltered(entries)

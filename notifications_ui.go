@@ -138,7 +138,7 @@ func (a *app) showNotificationWindow() {
 		a.setNotificationWindowShown(true)
 		return
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle("通知"),
 		Width:             notifWindowWidth,
 		Height:            notifWindowHeight,
@@ -149,7 +149,7 @@ func (a *app) showNotificationWindow() {
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.notificationsWindowView)),
-	})
+	}, toastNotifications)
 	a.notifWin = win
 	// 显示状态跟着窗口事件走：用户收起、最小化、关掉窗口时铃铛都要跟着变，
 	// 不能只按「窗口对象还在不在」判断。

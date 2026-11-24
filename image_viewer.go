@@ -196,7 +196,7 @@ func (a *app) showViewerWindow() {
 		win.Invalidate()
 		return
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle(imageViewerLabel),
 		Width:             imageViewerWindowWidth,
 		Height:            imageViewerWindowHeight,
@@ -207,10 +207,11 @@ func (a *app) showViewerWindow() {
 		TitleBarStyle:     mygo.TitleBarHidden, // 工具条兼作标题栏，见 imageViewerToolbar
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.imageViewerWindowView)),
-	})
+	}, toastViewer)
 	a.viewerWin = win
 	win.OnClosed(func() {
 		a.viewerWin = nil
+		a.authGateWindowClosed(toastViewer)
 		if v := a.viewer; v != nil {
 			v.close()
 		}
@@ -249,6 +250,7 @@ func (a *app) imageViewerWindowView(c *ui.Context) {
 	c.Root().Background(lobeStageBackground)
 	defer a.drainToasts(c, a.claimsToasts(toastViewer))
 	a.imageViewer(c)
+	a.authDialogFor(c, toastViewer)
 }
 
 /* ------------------------------------------------------------------
@@ -1203,7 +1205,7 @@ func (a *app) saveImage(raw string) {
 
 // saveImageTo 是另存为的后台部分：问路径、取字节、写文件。用户取消时返回空
 // 路径与 nil 错误，由调用方静默处理。先问路径再取字节：用户点「取消」时
-// 既不该下载，也不该报一个他根本没关心的网络错误。
+// 既不该下载，也不该报一个ta根本没关心的网络错误。
 func (a *app) saveImageTo(raw string) (string, error) {
 	path, err := a.pickImageSavePath(raw)
 	if err != nil || path == "" {

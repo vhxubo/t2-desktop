@@ -51,7 +51,7 @@ func (a *app) openNodeEditWindow(st *nodeEditState) {
 		win.Invalidate()
 		return
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle("修改节点"),
 		Width:             nodeEditWindowWidth,
 		Height:            nodeEditWindowHeight,
@@ -62,7 +62,7 @@ func (a *app) openNodeEditWindow(st *nodeEditState) {
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.nodeEditWindowView)),
-	})
+	}, toastNodeEdit)
 	a.nodeEditWin = win
 	win.OnClosed(func() {
 		a.nodeEditWin = nil

@@ -65,7 +65,7 @@ func (a *app) showCoinWindow() {
 		a.setCoinWindowShown(true)
 		return
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle("金币"),
 		Width:             coinWindowWidth,
 		Height:            coinWindowHeight,
@@ -76,7 +76,7 @@ func (a *app) showCoinWindow() {
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、通知窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.coinWindowView)),
-	})
+	}, toastCoins)
 	a.coinWin = win
 	// 显示状态跟着窗口事件走：标题栏金币数据此高亮，不能只按窗口对象还
 	// 在不在判断（用户可以最小化或者收起来）。

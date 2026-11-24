@@ -88,7 +88,7 @@ func (a *app) openReplyWindow() {
 		win.Invalidate()
 		return
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle("写评论"),
 		Width:             replyWindowWidth,
 		Height:            replyWindowHeight,
@@ -99,7 +99,7 @@ func (a *app) openReplyWindow() {
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、发帖窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.replyWindowView)),
-	})
+	}, toastReply)
 	a.replyWin = win
 	win.OnClosed(func() {
 		a.replyWin = nil

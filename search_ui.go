@@ -58,7 +58,7 @@ func (a *app) showSearchWindow() {
 		win.Invalidate()
 		return
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle("搜索"),
 		Width:             searchWindowWidth,
 		Height:            searchWindowHeight,
@@ -69,7 +69,7 @@ func (a *app) showSearchWindow() {
 		TitleBarStyle:     mygo.TitleBarHidden,
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.searchWindowView)),
-	})
+	}, toastSearch)
 	a.searchWin = win
 	win.OnClosed(func() {
 		a.stopSearchTimer()

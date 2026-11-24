@@ -56,7 +56,7 @@ func (a *app) showAboutWindow() {
 		win.Invalidate()
 		return
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
+	win := a.newAppWindow(mygo.WindowOptions{
 		Title:             a.subWindowTitle("关于"),
 		Width:             aboutWindowWidth,
 		Height:            aboutWindowHeight,
@@ -67,10 +67,11 @@ func (a *app) showAboutWindow() {
 		TitleBarStyle:     mygo.TitleBarHidden, // 和主窗口、设置窗口一样自绘标题栏
 		HideWindowButtons: true,
 		Content:           ui.View(a.windowView(a.aboutWindowView)),
-	})
+	}, toastAbout)
 	a.aboutWin = win
 	win.OnClosed(func() {
 		a.aboutWin = nil
+		a.authGateWindowClosed(toastAbout)
 		a.accountWindowClosed(win)
 	})
 }
@@ -98,6 +99,7 @@ func (a *app) closeAboutWindow() {
 // aboutWindowView 是「关于」窗口的 view。窗口自己带标题栏与窗口按钮，所以
 // 这里不需要遮罩，也不占主窗口的位置。
 func (a *app) aboutWindowView(c *ui.Context) {
+	defer a.authDialogFor(c, toastAbout)
 	a.applyTheme(c)
 	// 外链（开发者入口、协议、服务条款、致谢）走 a.openExternal，这里必须
 	// 把当前窗口的 Services 交给它，否则点了没反应。
