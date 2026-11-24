@@ -133,6 +133,31 @@ func TestTopicRowLastReplyJumpsToComment(t *testing.T) {
 	}
 }
 
+// 时间与最高楼层只是说明文字，不绑定「跳到最后回复」：点它们按普通整行
+// 打开帖子，不带定位目标，也不连带触发行内链接。
+func TestTopicRowTimeAndFloorDoNotJump(t *testing.T) {
+	a := testApp(t)
+	it := itemFrom([]byte(topicWithReplyStatsJSON), kindTopic)
+	a.tabs[0].items = []Item{it}
+	a.tabs[0].loaded = true
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	if err := tt.Click(it.Stats.Updated); err != nil {
+		t.Fatalf("点最后回复时间失败：%v", err)
+	}
+	tt.Frame()
+	if a.detail == nil {
+		t.Fatal("点最后回复时间没有打开详情")
+	}
+	if a.detail.focusID != "" || a.detail.focusPending {
+		t.Errorf("点时间不该定位到最后回复：focusID=%q pending=%v", a.detail.focusID, a.detail.focusPending)
+	}
+	if len(a.detailStack) != 0 {
+		t.Errorf("点时间触发了行内链接：返回栈 %d 层", len(a.detailStack))
+	}
+}
+
 // 接口没给最后一条回复的 uuid 时，「最后回复」退回纯文本：点它仍按普通行
 // 打开帖子本身，不带着定位目标。
 func TestTopicRowLastReplyWithoutIDIsPlainText(t *testing.T) {

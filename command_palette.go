@@ -387,7 +387,7 @@ func (a *app) commandPalette(c *ui.Context, anchor ui.Element, q string) {
 						})
 						star.OnClick(func() { a.toggleFavoriteCommand(cmd.id) })
 					})
-					button.Label("命令 " + cmd.title).Tooltip(cmd.hint)
+					button.Label("命令 " + cmd.title)
 					button.OnClick(func() { a.runCommandByID(cmd.id) })
 				}
 			})

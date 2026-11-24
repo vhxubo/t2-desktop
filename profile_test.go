@@ -264,8 +264,8 @@ func TestProfileTabsFitMinWidth(t *testing.T) {
 	}
 }
 
-// 「我的」窗口的标题栏与页面底色都取 Lobe token（浅色纯白），不再用原生
-// 主题的灰色 Surface；账号面板与设置窗口用的是同一支颜色。
+// 「我的」窗口的标题栏与页面底色都取 Lobe token（浅色是 BgLayout 默认值），
+// 不再用原生主题的灰色 Surface；账号面板与设置窗口用的是同一支颜色。
 func TestProfileWindowUsesLobeTokens(t *testing.T) {
 	a := profileWindowApp(t)
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)
@@ -816,6 +816,42 @@ func TestAccountMenuRoutesToFourPages(t *testing.T) {
 	}
 }
 
+// 账号菜单气泡里只有潘多拉入口保留 tooltip（用来展示进行中事件的效果），
+// 签到、金币、个人中心与退出登录都不再挂悬浮说明。
+func TestAccountMenuOnlyPandoraHasTooltip(t *testing.T) {
+	a := profileWindowApp(t)
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	openAccountMenu(t, tt)
+
+	for _, name := range []string{"签到", "金币", "打开个人中心窗口", "退出登录"} {
+		row, ok := tt.Access(name)
+		if !ok {
+			t.Fatalf("账号菜单里没有 %q：%q", name, tt.Texts())
+		}
+		if row.Description != "" {
+			t.Errorf("%q 不该带悬浮说明：%q", name, row.Description)
+		}
+		r, ok := tt.Find(name)
+		if !ok {
+			t.Fatalf("找不到 %q 的位置：%q", name, tt.Texts())
+		}
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Advance(800 * time.Millisecond)
+		if tip, ok := tt.AccessByRole(ui.RoleTooltip, ""); ok {
+			t.Errorf("悬浮 %q 仍弹出 tooltip：%q", name, tip.Name)
+		}
+	}
+
+	pandora, ok := tt.Access("潘多拉")
+	if !ok {
+		t.Fatalf("账号菜单里没有潘多拉入口：%q", tt.Texts())
+	}
+	if pandora.Description == "" {
+		t.Error("潘多拉入口应保留展示事件效果的悬浮说明")
+	}
+}
+
 // 退出登录从侧边栏挪到了标题栏账号菜单：收起的气泡里看不到它，展开后点一下
 // 退出当前账号，气泡随之收起，侧边栏回到未登录的「登录 / 注册」入口。
 func TestAccountMenuLogout(t *testing.T) {
@@ -830,8 +866,8 @@ func TestAccountMenuLogout(t *testing.T) {
 	if !ok {
 		t.Fatalf("账号菜单里没有「退出登录」：%q", tt.Texts())
 	}
-	if row.Description != "退出当前账号并关闭它的窗口" {
-		t.Errorf("退出登录的悬浮说明 = %q，期望写明点了会退出哪个账号", row.Description)
+	if row.Description != "" {
+		t.Errorf("退出登录不该带悬浮说明：%q", row.Description)
 	}
 	if err := tt.Click("退出登录"); err != nil {
 		t.Fatalf("点账号菜单的退出登录失败：%v", err)
