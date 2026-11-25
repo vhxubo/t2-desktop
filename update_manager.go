@@ -23,7 +23,7 @@ const (
 	updateChecking
 	updateDownloading
 	updateInstalling
-	updateDetected // 有新版本，但用户关掉了闲时自动下载
+	updateDetected // 有新版本，但用户关掉了闲时自动下载或取消了下载
 	updateReady    // 已下载安装，等用户手动重启
 	updateFailed
 )
@@ -63,6 +63,11 @@ type updateManager struct {
 	intervalChanged chan struct{}
 	started         bool
 	stopped         bool
+	// cancelDownload 是本次下载的取消函数，只在 updateDownloading 期间有效。
+	cancelDownload context.CancelFunc
+	// cancelledVersion 记下用户取消过自动下载的版本，后台循环不再替他偷偷下回来；
+	// 出现新版本时清空。只在 mu 下读写。
+	cancelledVersion string
 	// relaunch 由测试替换，避免无头环境真的拉起应用。
 	relaunch func()
 }
@@ -184,11 +189,12 @@ func (d *desktop) updateLoop() {
 }
 
 // runUpdateCheck 检查并在允许时静默下载。安装完只置 updateReady：重启动作只由
-// 用户在标题栏点「重启更新」触发。
+// 用户在标题栏点「重启更新」触发；下载中用户点进度按钮可取消本次下载。
 func (d *desktop) runUpdateCheck() {
 	if d == nil || !d.updates {
 		return
 	}
+	m := d.updateMgr
 	// 已经装好等重启时不再检查，免得下一轮把「重启更新」按钮冲掉。
 	if d.updateStatusSnapshot().Phase == updateReady {
 		return
@@ -206,15 +212,41 @@ func (d *desktop) runUpdateCheck() {
 		d.setUpdateStatus(updateStatus{Phase: updateIdle})
 		return
 	}
-	if !d.idleAutoDownload() {
+	// 用户取消过这个版本的自动下载，就不再偷偷下回来；换版本时解除。
+	skipped := false
+	if m != nil {
+		m.mu.Lock()
+		skipped = m.cancelledVersion == cand.version
+		m.mu.Unlock()
+	}
+	if !d.idleAutoDownload() || skipped {
 		d.setUpdateStatus(updateStatus{Phase: updateDetected, Version: cand.version})
 		return
 	}
+	if m != nil {
+		m.mu.Lock()
+		m.cancelledVersion = ""
+		m.mu.Unlock()
+	}
+	downloadCtx, cancelDownload := context.WithCancel(context.Background())
+	if m != nil {
+		m.mu.Lock()
+		m.cancelDownload = cancelDownload
+		m.mu.Unlock()
+	}
+	defer func() {
+		cancelDownload()
+		if m != nil {
+			m.mu.Lock()
+			m.cancelDownload = nil
+			m.mu.Unlock()
+		}
+	}()
 	d.setUpdateStatus(updateStatus{Phase: updateDownloading, Version: cand.version})
 	// 下载不设总时限：慢网可以慢慢下，mygo 自己的响应头 / 停滞看门狗会
 	// 处理断掉的链接；给安装加总超时会误杀正常的慢速下载。
-	err = cand.install(context.Background(), func(downloaded, total int64) {
-		if total <= 0 {
+	err = cand.install(downloadCtx, func(downloaded, total int64) {
+		if downloadCtx.Err() != nil || total <= 0 {
 			return
 		}
 		if downloaded >= total {
@@ -225,11 +257,39 @@ func (d *desktop) runUpdateCheck() {
 		d.setUpdateStatus(updateStatus{Phase: updateDownloading, Version: cand.version, Percent: pct})
 	})
 	if err != nil {
+		if downloadCtx.Err() != nil {
+			// 用户取消，不按失败上报；状态由取消处统一改成「有新版本」。
+			return
+		}
 		log.Printf("后台下载更新失败：%v", err)
 		d.setUpdateStatus(updateStatus{Phase: updateFailed, Version: cand.version, Err: err.Error()})
 		return
 	}
+	if downloadCtx.Err() != nil {
+		return
+	}
 	d.setUpdateStatus(updateStatus{Phase: updateReady, Version: cand.version, Percent: 100})
+}
+
+// cancelUpdateDownload 中止正在进行的自动下载；只在下载中有效。取消后回到
+// 「有新版本」，后台循环也不会再自动下载同一版本。
+func (d *desktop) cancelUpdateDownload() {
+	if d == nil || d.updateMgr == nil {
+		return
+	}
+	m := d.updateMgr
+	m.mu.Lock()
+	if m.status.Phase != updateDownloading || m.cancelDownload == nil {
+		m.mu.Unlock()
+		return
+	}
+	cancel := m.cancelDownload
+	version := m.status.Version
+	m.cancelDownload = nil
+	m.cancelledVersion = version
+	m.mu.Unlock()
+	cancel()
+	d.setUpdateStatus(updateStatus{Phase: updateDetected, Version: version})
 }
 
 // restartForUpdate 只由用户点击触发：没装好之前点不动，装好之后才真正重启。
@@ -257,5 +317,16 @@ func (a *app) restartForUpdate() {
 	}
 	if a != nil && a.onUpdateRestart != nil {
 		a.onUpdateRestart()
+	}
+}
+
+// cancelUpdateDownload 由标题栏下载进度按钮点击触发：中止后台下载，回到
+// 「有新版本」；测试钩子先触发，便于无窗口用例确认接线。
+func (a *app) cancelUpdateDownload() {
+	if a != nil && a.onUpdateCancel != nil {
+		a.onUpdateCancel()
+	}
+	if a != nil && a.desktop != nil {
+		a.desktop.cancelUpdateDownload()
 	}
 }

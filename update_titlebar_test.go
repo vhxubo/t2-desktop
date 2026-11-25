@@ -8,14 +8,15 @@ import (
 )
 
 // 标题栏的更新按钮默认不露出；发现新版本后才出现一枚圆角图标按钮，下载中用
-// 自绘的描边圆环显示进度，装完只提示「重启更新」，且重启只由用户点击触发。
+// 自绘的描边圆环显示进度并可点取消，装完只提示「重启更新」，重启只由用户点击。
 func TestTitleBarUpdateButtonStates(t *testing.T) {
 	a := testApp(t)
-	var restarts, checks int
+	var restarts, checks, cancels int
 	d := &desktop{updateMgr: newUpdateManager()}
 	d.updateMgr.relaunch = func() { restarts++ }
 	a.desktop = d
 	a.onUpdateCheck = func() { checks++ }
+	a.onUpdateCancel = func() { cancels++ }
 
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
@@ -44,6 +45,12 @@ func TestTitleBarUpdateButtonStates(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("下载中 45%") {
 		t.Errorf("下载中没有显示进度：%q", tt.Texts())
+	}
+	if err := tt.Click("下载中 45%"); err != nil {
+		t.Fatal(err)
+	}
+	if cancels != 1 {
+		t.Errorf("点下载进度没有取消下载：%d", cancels)
 	}
 	if restarts != 0 {
 		t.Fatal("下载过程中不该重启")

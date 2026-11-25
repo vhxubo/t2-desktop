@@ -11,8 +11,8 @@ import (
 )
 
 // 标题栏的更新按钮默认不露出：只有发现新版本、下载中、装完待重启时才出现一枚
-// Lobe 风格的圆角图标按钮。下载中沿按钮边缘自绘一圈描边进度条，装完只提示
-// 「重启更新」，重启完全由用户点击触发。
+// Lobe 风格的圆角图标按钮。下载中沿按钮边缘自绘一圈描边进度条，点它可以取消
+// 本次下载；装完只提示「重启更新」，重启完全由用户点击触发。
 const titleUpdateIconSize float32 = 28
 
 func (a *app) titleBarUpdateButton(c *ui.Context) {
@@ -28,21 +28,27 @@ func (a *app) titleBarUpdateButton(c *ui.Context) {
 	})
 	b.Label(label).Radius(titleUpdateIconSize / 2)
 	tk := lobetheme.TokensOf(c)
+	cancelable := s.Phase == updateDownloading
 	switch {
 	case primary:
 		b.Background(tk.Primary).Border(1, tk.Primary).TextColor(tk.PrimaryForeground)
 	case ring >= 0:
-		// 下载中只让描边进度条抢眼，图标用主色、取消手型，免得看着像能点。
-		b.Background(ui.Transparent).Border(0, ui.Transparent).
-			TextColor(tk.Primary).Cursor(ui.CursorDefault)
+		// 进度环里图标用主色；下载中可点取消，给手型；安装中不接受点击。
+		b.Background(ui.Transparent).Border(0, ui.Transparent).TextColor(tk.Primary)
+		if !cancelable {
+			b.Cursor(ui.CursorDefault)
+		}
 		b.Draw(func(p *ui.Painter, r ui.Rect) {
 			drawUpdateRing(p, r, ring, tk.FillTertiary, tk.Primary)
 		})
 	}
-	if b.Clicked() && ring < 0 {
-		if s.Phase == updateReady {
+	if b.Clicked() {
+		switch {
+		case cancelable:
+			a.cancelUpdateDownload()
+		case s.Phase == updateReady:
 			a.restartForUpdate()
-		} else {
+		case s.Phase == updateDetected:
 			a.checkForUpdates()
 		}
 	}
@@ -69,7 +75,7 @@ func titleUpdateLook(s updateStatus) (*ui.SVG, string, string, bool, float32) {
 			fmt.Sprintf("发现新版本 %s，点击查看并手动更新", s.Version), true, -1
 	case updateDownloading:
 		pct := fmt.Sprintf("下载中 %d%%", int(s.Percent))
-		return lucide.Download(), pct, pct, false, s.Percent
+		return lucide.Download(), pct, pct + "，点击取消下载", false, s.Percent
 	case updateInstalling:
 		return lucide.Download(), "安装中…", "正在安装更新…", false, 100
 	case updateReady:

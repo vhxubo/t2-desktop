@@ -227,10 +227,11 @@ type app struct {
 	// onIdleAutoDownload 是测试钩子：无窗口时确认「闲时自动下载更新」接到了
 	// 更新插件。生产为 nil。
 	onIdleAutoDownload func(on bool)
-	// onUpdateInterval / onUpdateRestart 是测试钩子：无窗口时确认间隔切换与
-	// 标题栏「重启更新」按钮接上了动作。生产为 nil。
+	// onUpdateInterval / onUpdateRestart / onUpdateCancel 是测试钩子：无窗口时
+	// 确认间隔切换、标题栏「重启更新」与「取消下载」按钮接上了动作。生产为 nil。
 	onUpdateInterval func(hours int)
 	onUpdateRestart  func()
+	onUpdateCancel   func()
 	onCoinsOpen      func()
 	onPandoraOpen    func()
 	onProfileOpen    func()
