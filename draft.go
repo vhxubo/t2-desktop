@@ -30,8 +30,7 @@ const (
 	draftMaxReply    = 200
 	draftMaxCompose  = 50
 	draftMaxFileSize = 4 << 20 // 4 MiB
-	// draftFileName 沿用单账号版本的固定文件名。旧版按账号分文件；升级后
-	// 读到的是 local 那一份，不需要迁移，也不会把草稿留在看不见的目录里。
+	// draftFileName 固定为本机一份；beta.2 按账号存的草稿不迁移，升级后不再读取。
 	draftFileName = "local.json"
 	// draftDebounce 是停手后落盘的延迟；draftMaxDelay 是连续打字时距上次改动
 	// 的最长落盘间隔，保证崩溃最多丢 5 秒内容。

@@ -2,8 +2,8 @@ package main
 
 import "time"
 
-// 离线缓存的分组。本机只有一份缓存，键固定带 local 段；沿用旧键名，
-// 升级后能直接读到既有数据。金币缓存仍要求已登录才落盘。
+// 离线缓存的分组。本机只有一份缓存，键固定带 local 段；beta.2 按账号存的
+// 键不迁移，升级后重新累积。金币缓存仍要求已登录才落盘。
 const (
 	coinCachePrefix    = "coin:"
 	readingCachePrefix = "reading:"

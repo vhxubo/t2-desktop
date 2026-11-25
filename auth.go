@@ -247,17 +247,17 @@ var errNoToken = errors.New("no stored token")
 // without a credential store, where secureTokenStore transparently falls back
 // to it.
 //
-// 本机只有一份凭据，沿用旧名读写，升级后不需要迁移。
+// 本机只有一份凭据；beta.2 的按账号凭据不迁移，升级后需重新登录。
 type tokenStore interface {
 	load() (*tokenData, error) // errNoToken when nothing is saved
 	save(t *tokenData) error
 	delete() error
 }
 
-// tokenSecretName 是会话在 OS 凭据库里的条目名，沿用旧名 session-token。
+// tokenSecretName 是本机唯一会话的凭据条目名；beta.2 的 session-token/<id> 不再读取。
 const tokenSecretName = "session-token"
 
-// tokenFilePath 是凭据库不可用时退回的明文文件，同样保留旧名 token.json。
+// tokenFilePath 是凭据库不可用时退回的明文文件；beta.2 的 token-<id>.json 不再读取。
 func tokenFilePath(dir string) string {
 	return filepath.Join(dir, "token.json")
 }
