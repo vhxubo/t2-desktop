@@ -17,6 +17,7 @@ func TestCancelUpdateDownload(t *testing.T) {
 	checkUpdateForApp = func(context.Context) (*updateCandidate, error) {
 		return &updateCandidate{
 			version: "9.9.9",
+			notes:   "本次更新：修复下载中断",
 			install: func(ctx context.Context, _ func(int64, int64)) error {
 				close(started)
 				<-ctx.Done()
@@ -57,6 +58,10 @@ func TestCancelUpdateDownload(t *testing.T) {
 	if s.Phase != updateDetected || s.Version != "9.9.9" {
 		t.Fatalf("取消后状态 = %+v，期望有新版本", s)
 	}
+	if s.Notes != "本次更新：修复下载中断" {
+		t.Errorf("取消后丢失了更新日志：%q", s.Notes)
+	}
+
 	// 下一轮只提示有新版本，不再自动下载这个版本。
 	var downloads int
 	checkUpdateForApp = func(context.Context) (*updateCandidate, error) {

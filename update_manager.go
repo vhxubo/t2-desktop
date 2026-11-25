@@ -34,12 +34,14 @@ type updateStatus struct {
 	Version string
 	Percent float32
 	Err     string
+	Notes   string // 该版本的更新日志，来自更新清单，供标题栏悬浮说明使用
 }
 
 // updateCandidate 把 mygo 的 Update 收敛成可替换的最小接口，测试可以注入假的
 // 检查结果，不必真的访问 GitHub。
 type updateCandidate struct {
 	version string
+	notes   string
 	install func(context.Context, func(int64, int64)) error
 }
 
@@ -48,7 +50,7 @@ var checkUpdateForApp = func(ctx context.Context) (*updateCandidate, error) {
 	if err != nil || up == nil {
 		return nil, err
 	}
-	return &updateCandidate{version: up.Version, install: up.Install}, nil
+	return &updateCandidate{version: up.Version, notes: up.Notes, install: up.Install}, nil
 }
 
 const (
@@ -99,8 +101,12 @@ func (d *desktop) setUpdateStatus(s updateStatus) {
 	m := d.updateMgr
 	m.mu.Lock()
 	old := m.status
+	// 插件装完经 OnInstalled 改状态时拿不到清单里的日志，同版本沿用它。
+	if s.Notes == "" && old.Version != "" && old.Version == s.Version {
+		s.Notes = old.Notes
+	}
 	if old.Phase == s.Phase && old.Version == s.Version &&
-		int(old.Percent) == int(s.Percent) && old.Err == s.Err {
+		int(old.Percent) == int(s.Percent) && old.Err == s.Err && old.Notes == s.Notes {
 		m.mu.Unlock()
 		return
 	}
@@ -220,7 +226,7 @@ func (d *desktop) runUpdateCheck() {
 		m.mu.Unlock()
 	}
 	if !d.idleAutoDownload() || skipped {
-		d.setUpdateStatus(updateStatus{Phase: updateDetected, Version: cand.version})
+		d.setUpdateStatus(updateStatus{Phase: updateDetected, Version: cand.version, Notes: cand.notes})
 		return
 	}
 	if m != nil {
@@ -242,7 +248,7 @@ func (d *desktop) runUpdateCheck() {
 			m.mu.Unlock()
 		}
 	}()
-	d.setUpdateStatus(updateStatus{Phase: updateDownloading, Version: cand.version})
+	d.setUpdateStatus(updateStatus{Phase: updateDownloading, Version: cand.version, Notes: cand.notes})
 	// 下载不设总时限：慢网可以慢慢下，mygo 自己的响应头 / 停滞看门狗会
 	// 处理断掉的链接；给安装加总超时会误杀正常的慢速下载。
 	err = cand.install(downloadCtx, func(downloaded, total int64) {
@@ -250,11 +256,11 @@ func (d *desktop) runUpdateCheck() {
 			return
 		}
 		if downloaded >= total {
-			d.setUpdateStatus(updateStatus{Phase: updateInstalling, Version: cand.version, Percent: 100})
+			d.setUpdateStatus(updateStatus{Phase: updateInstalling, Version: cand.version, Percent: 100, Notes: cand.notes})
 			return
 		}
 		pct := float32(downloaded) * 100 / float32(total)
-		d.setUpdateStatus(updateStatus{Phase: updateDownloading, Version: cand.version, Percent: pct})
+		d.setUpdateStatus(updateStatus{Phase: updateDownloading, Version: cand.version, Percent: pct, Notes: cand.notes})
 	})
 	if err != nil {
 		if downloadCtx.Err() != nil {
@@ -262,13 +268,13 @@ func (d *desktop) runUpdateCheck() {
 			return
 		}
 		log.Printf("后台下载更新失败：%v", err)
-		d.setUpdateStatus(updateStatus{Phase: updateFailed, Version: cand.version, Err: err.Error()})
+		d.setUpdateStatus(updateStatus{Phase: updateFailed, Version: cand.version, Err: err.Error(), Notes: cand.notes})
 		return
 	}
 	if downloadCtx.Err() != nil {
 		return
 	}
-	d.setUpdateStatus(updateStatus{Phase: updateReady, Version: cand.version, Percent: 100})
+	d.setUpdateStatus(updateStatus{Phase: updateReady, Version: cand.version, Percent: 100, Notes: cand.notes})
 }
 
 // cancelUpdateDownload 中止正在进行的自动下载；只在下载中有效。取消后回到

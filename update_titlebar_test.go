@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -101,6 +102,46 @@ func TestTitleBarUpdateDrawsProgressRing(t *testing.T) {
 	// 轨道色是带低透明度的黑，画在浅底上会合成浅灰，不能直接和 token 的 RGB 比。
 	if bottom.R < 200 || bottom.G < 200 || bottom.B < 200 {
 		t.Errorf("进度环正下方应是浅色轨道，实际 #%02x%02x%02x", bottom.R, bottom.G, bottom.B)
+	}
+}
+
+// 悬浮标题栏更新按钮能看到该版本的更新日志；日志来自更新清单，非空才追加。
+func TestTitleBarUpdateTooltipShowsReleaseNotes(t *testing.T) {
+	a := testApp(t)
+	d := &desktop{updateMgr: newUpdateManager()}
+	a.desktop = d
+
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	d.setUpdateStatus(updateStatus{
+		Phase: updateDetected, Version: "9.9.9",
+		Notes: "本次更新：\n- 修复下载中断\n- 支持取消下载",
+	})
+	tt.Frame()
+	r, ok := tt.Find("有新版本")
+	if !ok {
+		t.Fatalf("没有更新按钮：%q", tt.Texts())
+	}
+	tt.Move(r.X+r.W/2, r.Y+r.H/2)
+	tt.Advance(800 * time.Millisecond)
+	tt.Frame()
+	if !tt.HasText("更新日志（9.9.9）") || !tt.HasText("支持取消下载") {
+		t.Fatalf("悬浮没有显示更新日志：%q", tt.Texts())
+	}
+}
+
+func TestTitleUpdateTip(t *testing.T) {
+	if got := titleUpdateTip("提示", "9.9.9", "  "); got != "提示" {
+		t.Errorf("空日志不该追加标题：%q", got)
+	}
+	got := titleUpdateTip("提示", "9.9.9", "第一行\n第二行")
+	if want := "提示\n\n更新日志（9.9.9）：\n第一行\n第二行"; got != want {
+		t.Errorf("悬浮说明 = %q，期望 %q", got, want)
+	}
+	long := strings.Repeat("长", 400)
+	got = titleUpdateTip("提示", "9.9.9", long)
+	if r := []rune(got); len(r) > 340 || !strings.HasSuffix(got, "…") {
+		t.Errorf("长日志没有截断：%d 字", len([]rune(got)))
 	}
 }
 

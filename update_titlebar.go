@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/action"
@@ -24,7 +25,8 @@ func (a *app) titleBarUpdateButton(c *ui.Context) {
 
 	c.Key("title-update")
 	b := action.ActionIcon(c, glyph, action.ActionIconProps{
-		BlockSize: titleUpdateIconSize, GlyphSize: 15, Title: tip,
+		BlockSize: titleUpdateIconSize, GlyphSize: 15,
+		Title: titleUpdateTip(tip, s.Version, s.Notes),
 	})
 	b.Label(label).Radius(titleUpdateIconSize / 2)
 	tk := lobetheme.TokensOf(c)
@@ -52,6 +54,20 @@ func (a *app) titleBarUpdateButton(c *ui.Context) {
 			a.checkForUpdates()
 		}
 	}
+}
+
+// titleUpdateTip 把操作提示和该版本的更新日志拼成悬浮说明。清单里的日志可能
+// 很长，截断后只留一段预览，免得一个提示把整块标题栏遮住。
+func titleUpdateTip(tip, version, notes string) string {
+	notes = strings.TrimSpace(notes)
+	if notes == "" {
+		return tip
+	}
+	const maxRunes = 320
+	if r := []rune(notes); len(r) > maxRunes {
+		notes = string(r[:maxRunes]) + "…"
+	}
+	return fmt.Sprintf("%s\n\n更新日志（%s）：\n%s", tip, version, notes)
 }
 
 // titleUpdateVisible 决定标题栏是否露出更新按钮。空闲、检查中与失败都不露出：
