@@ -10,9 +10,10 @@ import (
 )
 
 // 系统托盘：Windows 是任务栏通知区域，macOS 是菜单栏。左键点图标把主窗口
-// 带回前台；右键弹出菜单。未登录时提供登录、注册；登录后顶部显示当前账号，
-// 下面接发帖、发动态、设置。退出登录不放在托盘里，去「我的」或命令中心。
-// 两种状态都有「关闭全部」（收进托盘，应用继续在后台跑）与「退出」。
+// 带回前台；右键弹出菜单。未登录时顶部提示「未登录」，提供登录、注册；登录后
+// 顶部换成通知入口（铃铛 + 未读角标），下面接发帖、发动态、设置。退出登录不
+// 放在托盘里，去「我的」或命令中心。两种状态都有「关闭全部」（收进托盘，应用
+// 继续在后台跑）与「退出」。
 //
 // 托盘是进程级资源：菜单每次右键现建一份，弹出的菜单挂着时左键也会弹出
 // 菜单，所以弹出后立刻用 SetMenu(nil) 摘掉。
@@ -27,26 +28,28 @@ const (
 	trayID      = "main"
 	trayToolTip = "T2 Desktop"
 
-	trayLoginID    = "tray-login"
-	traySignupID   = "tray-signup"
-	trayPostID     = "tray-post"
-	trayMomentID   = "tray-moment"
-	traySettingsID = "tray-settings"
-	trayCloseAllID = "tray-close-all"
-	trayQuitID     = "tray-quit"
+	trayNotificationsID = "tray-notifications"
+	trayLoginID         = "tray-login"
+	traySignupID        = "tray-signup"
+	trayPostID          = "tray-post"
+	trayMomentID        = "tray-moment"
+	traySettingsID      = "tray-settings"
+	trayCloseAllID      = "tray-close-all"
+	trayQuitID          = "tray-quit"
 )
 
 // trayMenuIcons 是托盘菜单各项的图标：把现有的 *ui.SVG 渲染成菜单图标。全部
 // 按 template 渲染（只取形状，跟随菜单文字颜色，深色菜单里自动变白），和侧边栏
 // 入口保持同一套线性图标。mygo 要求图标只生成一次，因此集中在 init 里建好复用。
 var (
-	trayLoginMI    *mygo.MenuIcon
-	traySignupMI   *mygo.MenuIcon
-	trayPostMI     *mygo.MenuIcon
-	trayMomentMI   *mygo.MenuIcon
-	traySettingsMI *mygo.MenuIcon
-	trayCloseAllMI *mygo.MenuIcon
-	trayQuitMI     *mygo.MenuIcon
+	trayNotificationsMI *mygo.MenuIcon
+	trayLoginMI         *mygo.MenuIcon
+	traySignupMI        *mygo.MenuIcon
+	trayPostMI          *mygo.MenuIcon
+	trayMomentMI        *mygo.MenuIcon
+	traySettingsMI      *mygo.MenuIcon
+	trayCloseAllMI      *mygo.MenuIcon
+	trayQuitMI          *mygo.MenuIcon
 )
 
 func init() {
@@ -57,6 +60,8 @@ func init() {
 		}
 		return mi
 	}
+	// 通知入口与标题栏铃铛同源，用同一份 bellIcon。
+	trayNotificationsMI = makeMI(bellIcon)
 	trayLoginMI = makeMI(loginIcon)
 	traySignupMI = makeMI(signupIcon)
 	// 与命令中心里的发帖 / 发动态 / 设置用同一组图标。
@@ -130,20 +135,31 @@ func (d *desktop) destroyTray() {
 	tray.Destroy()
 }
 
-// trayMenu 建右键菜单。顶部一行只读的账号状态：未登录提示「未登录」，登录后
-// 露出当前账号；再按状态给登录 / 注册或发帖 / 发动态 / 设置。关闭全部与退出
-// 是窗口管理动作，两种状态都在。
+// trayMenu 建右键菜单。登录后顶部第一项是通知入口：铃铛 + 未读角标，点开消息
+// 窗口；未登录时那一行只读提示「未登录」。再按状态给登录 / 注册或发帖 / 发动态
+// / 设置。关闭全部与退出是窗口管理动作，两种状态都在。
 func (d *desktop) trayMenu() *mygo.Menu {
 	a := d.app
 	var auth *AuthManager
 	if a != nil {
 		auth = a.auth
 	}
-	items := []*mygo.MenuItem{
-		{ID: "tray-state", Label: trayStateLabel(auth), Disabled: true},
-	}
+	items := []*mygo.MenuItem{}
 	if auth != nil && auth.loggedIn() {
+		// 通知入口不再写「已登录」，未读数复用标题栏铃铛的口径：0 不显示
+		// 角标，三位数以上收成 99+。
+		notifications := &mygo.MenuItem{
+			ID:    trayNotificationsID,
+			Label: "通知",
+			Icon:  trayNotificationsMI,
+			Click: func(*mygo.MenuItem, *mygo.Window) { a.showNotifications() },
+		}
+		if unread := unreadCountText(a.unread); unread != "" {
+			notifications.Badge = unread
+			notifications.BadgeShape = mygo.BadgeShapePill
+		}
 		items = append(items,
+			notifications,
 			&mygo.MenuItem{
 				ID:    trayPostID,
 				Label: "发帖",
@@ -165,6 +181,7 @@ func (d *desktop) trayMenu() *mygo.Menu {
 		)
 	} else {
 		items = append(items,
+			&mygo.MenuItem{ID: "tray-state", Label: "未登录", Disabled: true},
 			&mygo.MenuItem{
 				ID:    trayLoginID,
 				Label: "登录",
@@ -215,14 +232,4 @@ func (d *desktop) trayOpenApp(open func()) {
 		a.raiseMainWindow()
 	}
 	open()
-}
-
-func trayStateLabel(auth *AuthManager) string {
-	if auth == nil || !auth.loggedIn() {
-		return "未登录"
-	}
-	if name := auth.username(); name != "" {
-		return "已登录：" + name
-	}
-	return "已登录"
 }

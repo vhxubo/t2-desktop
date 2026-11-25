@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"image/png"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo"
@@ -49,35 +50,53 @@ func TestTrayMenuLoggedOut(t *testing.T) {
 	}
 }
 
-// 登录后顶部换成当前账号，动作变成发帖 / 发动态 / 设置；退出登录不放在托盘里。
+// 登录后顶部换成通知入口（带未读角标），动作变成发帖 / 发动态 / 设置；
+// 不再写「已登录」，退出登录也不放在托盘里。
 func TestTrayMenuLoggedIn(t *testing.T) {
 	d := testBook(t)
 	addTestAccount(t, d, "jimmy")
 	d.app = &app{auth: d.auth}
+	d.app.unread = 3
 	menu := d.trayMenu()
 
-	want := []string{"tray-state", trayPostID, trayMomentID, traySettingsID, "-", trayCloseAllID, "-", trayQuitID}
+	want := []string{trayNotificationsID, trayPostID, trayMomentID, traySettingsID, "-", trayCloseAllID, "-", trayQuitID}
 	if got := trayItemIDs(menu.Items()); !reflect.DeepEqual(got, want) {
 		t.Errorf("已登录的托盘菜单 = %v，期望 %v", got, want)
 	}
-	if label := menu.Items()[0].Label; label != "已登录：jimmy" {
-		t.Errorf("账号状态行 = %q，期望 %q", label, "已登录：jimmy")
+	first := menu.Items()[0]
+	if first.Label != "通知" {
+		t.Errorf("通知入口文案 = %q，期望 %q", first.Label, "通知")
+	}
+	if first.Badge != "3" || first.BadgeShape != mygo.BadgeShapePill {
+		t.Errorf("未读角标 = %q / %q，期望 %q / pill", first.Badge, first.BadgeShape, "3")
+	}
+	if first.Icon == nil || first.Click == nil {
+		t.Error("通知入口应带铃铛图标且可点击")
 	}
 	for _, it := range menu.Items() {
-		if it.Label == "退出登录" {
-			t.Error("托盘菜单不该有退出登录入口")
+		if strings.Contains(it.Label, "已登录") || it.Label == "退出登录" {
+			t.Errorf("托盘菜单不该出现 %q", it.Label)
 		}
 	}
 }
 
-// 令牌里没有昵称时状态行不能空着。
-func TestTrayStateLabelWithoutUsername(t *testing.T) {
-	m := newAuthManagerAt(t.TempDir(), newProxyManager(t.TempDir()))
-	m.store = &memoryTokenStore{}
-	if err := m.storeToken(tokenData{AccessToken: "tok", TokenType: "Bearer"}); err != nil {
-		t.Fatal(err)
+// 未读数为 0 时不画角标；三位数以上收成 99+，和标题栏铃铛一致。
+func TestTrayNotificationBadge(t *testing.T) {
+	cases := []struct {
+		unread int
+		badge  string
+	}{
+		{0, ""},
+		{7, "7"},
+		{100, "99+"},
 	}
-	if got, want := trayStateLabel(m), "已登录"; got != want {
-		t.Errorf("无昵称的状态行 = %q，期望 %q", got, want)
+	for _, tc := range cases {
+		d := testBook(t)
+		addTestAccount(t, d, "jimmy")
+		d.app = &app{auth: d.auth, unread: tc.unread}
+		first := d.trayMenu().Items()[0]
+		if first.Badge != tc.badge {
+			t.Errorf("未读 %d 的角标 = %q，期望 %q", tc.unread, first.Badge, tc.badge)
+		}
 	}
 }
