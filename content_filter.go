@@ -159,17 +159,19 @@ func (f *contentFilter) keywordHit(text string) (blockReason, bool) {
 }
 
 // matchItem 判定一条列表行是否命中。作者为空或「匿名」不参与用户匹配；
-// 节点只按显示名匹配，Node.Name 为空时跳过；关键词对帖子匹配标题，
-// 动态与评论行再带上正文摘要（列表接口不返回帖子正文，这是接口限制）。
+// 节点只按显示名匹配，Node.Name 为空时跳过；关键词匹配标题 / 正文摘要。
+// 最新评论行带被回复人（Extra.ReplyTo），它被屏蔽时整条不展示。
 func (f *contentFilter) matchItem(it Item) (blockReason, bool) {
 	if f == nil {
 		return blockReason{}, false
 	}
 	author, text, node := it.Author, it.Title, it.Node.Name
+	var replyTo string
 	if x := it.Extra; x != nil {
 		if x.Author != "" {
 			author = x.Author // 最新评论行的 Item.Author 是空的
 		}
+		replyTo = x.ReplyTo
 		if x.Excerpt != "" {
 			text += " " + x.Excerpt
 		}
@@ -183,7 +185,10 @@ func (f *contentFilter) matchItem(it Item) (blockReason, bool) {
 	if r, ok := f.nodeHit(node); ok {
 		return r, true
 	}
-	return f.keywordHit(text)
+	if r, ok := f.userHit(replyTo); ok {
+		return r, true
+	}
+	return f.keywordHit(text + " " + replyTo)
 }
 
 // matchComment 判定一条详情评论。子回复由渲染层单独处理：这里只折叠这一条。

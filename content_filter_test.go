@@ -99,6 +99,53 @@ func TestContentFilterNormalizeAndHit(t *testing.T) {
 	}
 }
 
+func TestContentFilterLatestCommentMatchesReplyTo(t *testing.T) {
+	f := newContentFilter(contentFilterDTO{Keywords: []string{"广告"}, BlockedUsers: []string{"spammer"}})
+
+	// 最新评论行：正文与作者都不含命中，被回复人命中关键词。
+	comment := Item{Title: "随便聊聊", Extra: &rowExtra{
+		Author: "bob", ReplyTo: "广告小王子", Excerpt: "今天天气不错",
+	}}
+	r, ok := f.matchItem(comment)
+	if !ok || r.Kind != filterKindKeyword || r.Value != "广告" {
+		t.Fatalf("被回复人命中关键词应屏蔽整条，得到 %+v %v", r, ok)
+	}
+
+	// 被回复人命中屏蔽用户名单，同样屏蔽整条。
+	r, ok = f.matchItem(Item{Extra: &rowExtra{Author: "bob", ReplyTo: "SPAMMER", Excerpt: "正文"}})
+	if !ok || r.Kind != filterKindUser || r.Value != "spammer" {
+		t.Fatalf("被回复人命中用户名单应屏蔽整条，得到 %+v %v", r, ok)
+	}
+
+	// 作者命中关键词、正文命中关键词，行为不变。
+	if _, ok := f.matchItem(Item{Author: "bob", Title: "全是广告的标题"}); !ok {
+		t.Error("正文命中关键词仍应屏蔽")
+	}
+	// 作者命中关键词但被回复人和正文都不含，不应屏蔽（只按被回复人）。
+	if _, ok := f.matchItem(Item{Extra: &rowExtra{Author: "广告号", ReplyTo: "bob", Excerpt: "正文"}}); ok {
+		t.Error("评论作者命中关键词不该按这条规则屏蔽")
+	}
+
+	// 都没命中时放行。
+	if _, ok := f.matchItem(Item{Extra: &rowExtra{Author: "bob", ReplyTo: "小明", Excerpt: "正文"}}); ok {
+		t.Error("作者与被回复人都没命中不该屏蔽")
+	}
+
+	// 大小写归一化。
+	up := newContentFilter(contentFilterDTO{Keywords: []string{"AD"}})
+	if _, ok := up.matchItem(Item{Extra: &rowExtra{Author: "bob", ReplyTo: "ad号", Excerpt: "正文"}}); !ok {
+		t.Error("被回复人命中关键词应忽略大小写")
+	}
+
+	// 详情评论不按被回复人过滤：作者命中关键词不应屏蔽，正文命中仍有效。
+	if _, ok := f.matchComment("广告号", "今天天气不错", false); ok {
+		t.Error("详情评论不应按作者命中关键词屏蔽")
+	}
+	if _, ok := f.matchComment("bob", "广告正文", false); !ok {
+		t.Error("详情评论正文命中关键词仍应屏蔽")
+	}
+}
+
 func TestValidateFilterDTO(t *testing.T) {
 	full := make([]string, contentFilterMaxPerList)
 	for i := range full {
