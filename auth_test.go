@@ -104,6 +104,29 @@ func TestRefreshTransientFailureKeepsSession(t *testing.T) {
 	}
 }
 
+func TestRefreshKeepsCachedAvatar(t *testing.T) {
+	srv := newTestTokenServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"c":0,"d":{"access_token":"new","refresh_token":"r2","token_type":"Bearer","expires_in":3600}}`)
+	})
+	dir := t.TempDir()
+	m := signedInManager(t, dir)
+	m.apiBase = srv.URL + "/api"
+	m.http = srv.Client()
+	if err := m.storeToken(tokenData{
+		AccessToken: "old", RefreshToken: "r1", TokenType: "Bearer",
+		Username: "jimmy", Avatar: "https://r2.2libra.com/avatar.png",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.refresh(context.Background(), "old"); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.avatarURL(); got != "https://r2.2libra.com/avatar.png" {
+		t.Fatalf("刷新令牌后头像地址丢失：%q", got)
+	}
+}
+
 // 刷新令牌被服务端明确拒绝（invalid_grant）才算登录失效：清令牌并通知 UI。
 func TestRefreshInvalidGrantClearsSession(t *testing.T) {
 	srv := newTestTokenServer(t, func(w http.ResponseWriter, r *http.Request) {

@@ -578,6 +578,9 @@ func (m *AuthManager) storeTokenForEpoch(t tokenData, epoch uint64) error {
 	if m.token != nil && t.Username == "" {
 		t.Username = m.token.Username
 	}
+	if m.token != nil && t.Avatar == "" {
+		t.Avatar = m.token.Avatar
+	}
 	// 刷新令牌不会带回账号资料：官方图床权限（Pro / 守护者）沿用上一次
 	// 读到的结果，免得每次刷新后官方图床又变回「还没确认」。
 	if m.token != nil && !t.ProKnown {
