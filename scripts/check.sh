@@ -3,7 +3,11 @@ set -euo pipefail
 
 export CGO_ENABLED=0
 
-unformatted=$(git ls-files -z -- '*.go' | xargs -0 gofmt -l)
+unformatted=$(
+  while IFS= read -r -d '' f; do
+    gofmt -l "$f"
+  done < <(git ls-files -z -- '*.go')
+)
 if [[ -n "$unformatted" ]]; then
   printf '以下文件需要 gofmt：\n%s\n' "$unformatted" >&2
   exit 1

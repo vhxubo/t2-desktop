@@ -30,10 +30,10 @@ const notificationFallbackInterval = 60 * time.Second
 // 所以这里不再给单条通知挂 OnClick，否则同一次点击会被处理两次。
 func showNativeNotice(n nativeNotice) error {
 	return mygo.NewNotification(mygo.NotificationOptions{
-		ID:       n.ID,
-		Title:    n.Title,
-		Body:     n.Body,
-		Silent:   n.Silent,
+		ID:     n.ID,
+		Title:  n.Title,
+		Body:   n.Body,
+		Silent: n.Silent,
 	}).Show()
 }
 
