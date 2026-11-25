@@ -40,3 +40,4 @@
 ## 检查与发版
 
 - 按 [CHECKS.md](CHECKS.md) 做提交前验证和发版门禁。发版操作见 [RELEASE.md](RELEASE.md)；代理只做本地准备，触发公开发布的远程推送须由人工执行。
+- 推送 GitHub 远程走 gh CLI 的 HTTPS 凭据，不直接读 `~/.ssh`：`gh` 没有 `push` 子命令，先 `gh auth setup-git`，再 `git -c url."https://github.com/".insteadOf="git@github.com:" push origin <branch>`。Windows 上 gh 若不在 PATH，用 `"C:/Program Files/GitHub CLI/gh.exe"`；公开发布仍须人工确认。
