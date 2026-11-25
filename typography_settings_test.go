@@ -112,7 +112,7 @@ func TestTypographyNumericInputAppliesExactValue(t *testing.T) {
 	if err := st.Click("正文字号数值"); err != nil {
 		t.Fatal(err)
 	}
-	st.Key(ui.Ctrl, ui.KeyA)
+	st.Key(ui.Cmd, ui.KeyA)
 	st.Type("17")
 	st.Key(0, ui.KeyEnter)
 	st.Frame()
@@ -132,7 +132,7 @@ func TestTypographyNumericInputAppliesExactValue(t *testing.T) {
 	if err := st.Click("行距数值"); err != nil {
 		t.Fatal(err)
 	}
-	st.Key(ui.Ctrl, ui.KeyA)
+	st.Key(ui.Cmd, ui.KeyA)
 	st.Type("1.6")
 	st.Key(0, ui.KeyEnter)
 	st.Frame()
@@ -142,7 +142,7 @@ func TestTypographyNumericInputAppliesExactValue(t *testing.T) {
 	if err := st.Click("页宽数值"); err != nil {
 		t.Fatal(err)
 	}
-	st.Key(ui.Ctrl, ui.KeyA)
+	st.Key(ui.Cmd, ui.KeyA)
 	st.Type("777")
 	st.Key(0, ui.KeyEnter)
 	st.Frame()
@@ -152,7 +152,7 @@ func TestTypographyNumericInputAppliesExactValue(t *testing.T) {
 	if err := st.Click("行留白数值"); err != nil {
 		t.Fatal(err)
 	}
-	st.Key(ui.Ctrl, ui.KeyA)
+	st.Key(ui.Cmd, ui.KeyA)
 	st.Type("8")
 	st.Key(0, ui.KeyEnter)
 	st.Frame()
@@ -162,7 +162,7 @@ func TestTypographyNumericInputAppliesExactValue(t *testing.T) {
 	if err := st.Click("行内间距数值"); err != nil {
 		t.Fatal(err)
 	}
-	st.Key(ui.Ctrl, ui.KeyA)
+	st.Key(ui.Cmd, ui.KeyA)
 	st.Type("3")
 	st.Key(0, ui.KeyEnter)
 	st.Frame()
@@ -187,7 +187,7 @@ func TestTypographyNumericInputClamps(t *testing.T) {
 	if err := st.Click("正文字号数值"); err != nil {
 		t.Fatal(err)
 	}
-	st.Key(ui.Ctrl, ui.KeyA)
+	st.Key(ui.Cmd, ui.KeyA)
 	st.Type("99")
 	st.Key(0, ui.KeyEnter)
 	st.Frame()
