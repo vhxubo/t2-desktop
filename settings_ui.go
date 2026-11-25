@@ -660,7 +660,7 @@ func (a *app) readingTypographySection(c *ui.Context) {
 	}
 
 	settingsSection(c, "阅读排版", func() {
-		settingsDescription(c, "只改正文与评论的阅读字号、行距、页宽和行密度；每行的档位与数值排在同一条水平中心线上。列表字号与系统界面不变。", 2)
+		settingsDescription(c, "只改正文、正文标题与评论的阅读字号、行距、页宽和行密度；每行的档位与数值排在同一条水平中心线上。列表字号与系统界面不变。", 2)
 
 		// Form 只用来对齐标签和控件，不挂字段名字，因此不需要在 app 里保存表单状态。
 		f := form.New(0)
@@ -681,6 +681,25 @@ func (a *app) readingTypographySection(c *ui.Context) {
 				if v != initial {
 					n := int(math.Round(v))
 					change(func() error { return p.setBodySize(n) })
+				}
+			})
+
+			// 详情页正文标题单独一档，默认 24 DIP 与原来的 Lobe H3 一致；
+			// 档位直接用数值，和正文字号的「小 / 标准」按钮区分开。
+			title := typographyOptionIndex(typographyTitleSizes, p.titleSize())
+			typographyField(c, f, "详情标题字号 (DIP)", func() {
+				selected := settingsChoice(c, "详情标题字号", typographyTitleOptions, title)
+				initial := float64(p.titleSize())
+				v := typographyNumber(c, "详情标题字号数值", initial,
+					field.InputNumberProps{Min: typographyTitleMin, Max: typographyTitleMax, Step: 1,
+						Precision: 0, Size: lobetheme.Small}, 112)
+				if selected >= 0 && selected != title {
+					n := typographyOptionValue(typographyTitleSizes, selected)
+					change(func() error { return p.setTitleSize(n) })
+				}
+				if v != initial {
+					n := int(math.Round(v))
+					change(func() error { return p.setTitleSize(n) })
 				}
 			})
 
@@ -758,14 +777,14 @@ func (a *app) readingTypographySection(c *ui.Context) {
 	})
 }
 
-// typographyResetPanel 是「恢复默认排版」的二次确认：只重置四项排版，
+// typographyResetPanel 是「恢复默认排版」的二次确认：只重置五项排版，
 // 评论开关与阅读记录都不动。确认弹窗沿用「一键重置所有设置」的样式。
 func (a *app) typographyResetPanel(c *ui.Context) {
 	ui.Column(c).Width(240).Gap(10).Children(func() {
 		display.Text(c, "确定恢复默认阅读排版？", display.TextProps{
 			Strong: true, FontSize: 12, Rows: 2,
 		})
-		display.Text(c, "只重置字号、行距、页宽与列表密度，不影响评论设置和阅读记录。",
+		display.Text(c, "只重置正文标题与正文字号、行距、页宽和列表密度，不影响评论设置和阅读记录。",
 			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 3})
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.Spacer(c).Grow(1)

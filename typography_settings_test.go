@@ -46,6 +46,7 @@ func TestTypographyChoicesSitWithTheirValues(t *testing.T) {
 		}
 	}
 	check("正文字号 (DIP)", "特大", "正文字号数值")
+	check("详情标题字号 (DIP)", "32", "详情标题字号数值")
 	check("行距 (倍)", "宽松", "行距数值")
 	check("页宽 (DIP)", "宽", "页宽数值")
 
@@ -70,20 +71,20 @@ func TestTypographyChoicesSitWithTheirValues(t *testing.T) {
 	}
 }
 
-// 阅读与评论页顶部有四项排版选择与恢复入口，默认全部落在标准档。
+// 阅读与评论页顶部有五项排版选择与恢复入口，默认全部落在标准档。
 func TestReadingTypographySectionDefaultsAndLabels(t *testing.T) {
 	a := testApp(t)
 	a.settingsTab = settingsTabReading
 	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
 	st.Frame()
 	for _, label := range []string{
-		"阅读排版", "正文字号", "行距", "页宽", "列表密度", "恢复默认排版",
+		"阅读排版", "正文字号", "详情标题字号", "行距", "页宽", "列表密度", "恢复默认排版",
 	} {
 		if !st.HasText(label) {
 			t.Fatalf("阅读与评论页缺少 %q：%q", label, st.Texts())
 		}
 	}
-	for _, label := range []string{"小", "标准", "大", "特大", "紧凑", "宽松", "窄", "宽"} {
+	for _, label := range []string{"小", "标准", "大", "特大", "20", "24", "28", "32", "紧凑", "宽松", "窄", "宽"} {
 		if !st.HasText(label) {
 			t.Fatalf("排版档位缺少 %q：%q", label, st.Texts())
 		}
@@ -100,7 +101,7 @@ func TestTypographyNumericInputAppliesExactValue(t *testing.T) {
 	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
 	st.Frame()
 	for _, label := range []string{
-		"正文字号数值", "行距数值", "页宽数值", "行留白数值", "行内间距数值",
+		"正文字号数值", "详情标题字号数值", "行距数值", "页宽数值", "行留白数值", "行内间距数值",
 	} {
 		if _, ok := st.Access(label); !ok {
 			t.Fatalf("缺少精确数值输入框 %q：%q", label, st.Texts())
@@ -172,7 +173,7 @@ func TestTypographyNumericInputAppliesExactValue(t *testing.T) {
 	if err := readJSONFile(filepath.Join(a.draftDir, typographyFileName), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if want := (typographyConfig{17, 16, 777, 8, 3}); cfg != want {
+	if want := (typographyConfig{17, 16, 777, 8, 3, detailTitleFontSizeDefault}); cfg != want {
 		t.Errorf("精确数值没有落盘：%+v，想要 %+v", cfg, want)
 	}
 }
@@ -243,6 +244,68 @@ func TestTypographyBodySizeChangesDetailTextAndResets(t *testing.T) {
 	if got := detailBodyItemHeight(t, 16); got != base {
 		t.Errorf("恢复默认后正文高度 %g，期望 %g", got, base)
 	}
+}
+
+// 详情标题字号单独可调：改档位后落盘、详情页正文标题随之变大，恢复默认后回原样。
+func TestTypographyTitleSizeChangesDetailTitleAndResets(t *testing.T) {
+	a := testApp(t)
+	a.settingsTab = settingsTabReading
+	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
+	st.Frame()
+
+	base := detailTitleHeight(t, detailTitleFontSizeDefault)
+	if err := st.Click("32"); err != nil {
+		t.Fatal(err)
+	}
+	st.Frame()
+	if got := a.typePrefs.titleSize(); got != 32 {
+		t.Fatalf("选 32 后正文标题字号 = %d，想要 32", got)
+	}
+	if !st.HasText("已应用阅读排版") {
+		t.Errorf("切换标题字号没有提示：%q", st.Texts())
+	}
+	var cfg typographyConfig
+	if err := readJSONFile(filepath.Join(a.draftDir, typographyFileName), &cfg); err != nil {
+		t.Fatalf("切换后没有写入 typography.json：%v", err)
+	}
+	if cfg.TitleSize != 32 {
+		t.Errorf("落盘标题字号 = %d，想要 32", cfg.TitleSize)
+	}
+	if large := detailTitleHeight(t, 32); large <= base {
+		t.Errorf("标题字号 32 的高度 %g 没有超过默认档 %g", large, base)
+	}
+
+	if err := st.Click("恢复默认排版"); err != nil {
+		t.Fatal(err)
+	}
+	st.Frame()
+	if err := st.Click("确认恢复"); err != nil {
+		t.Fatal(err)
+	}
+	st.Frame()
+	if got := a.typePrefs.snapshot(); got != defaultTypographyConfig() {
+		t.Errorf("恢复默认后排版 = %+v", got)
+	}
+	if got := detailTitleHeight(t, detailTitleFontSizeDefault); got != base {
+		t.Errorf("恢复默认后标题高度 %g，期望 %g", got, base)
+	}
+}
+
+// detailTitleHeight 用给定标题字号渲染详情页，返回正文标题的高度。
+func detailTitleHeight(t *testing.T, titleSize int) float32 {
+	t.Helper()
+	a := detailAppWithReplies(t)
+	if err := a.typePrefs.setTitleSize(titleSize); err != nil {
+		t.Fatal(err)
+	}
+	a.rebuildMarkdownViews()
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	r, ok := tt.Find("正文与评论的测试帖")
+	if !ok {
+		t.Fatalf("找不到正文标题：%q", tt.Texts())
+	}
+	return r.H
 }
 
 // detailBodyItemHeight 用给定字号档渲染详情页，返回一条 Markdown 正文的高度。
@@ -319,7 +382,7 @@ func TestTypographyDensityChangesRowHeight(t *testing.T) {
 	}
 }
 
-// 切到别的分类再回来，四项仍显示已保存的档位。
+// 切到别的分类再回来，五项仍显示已保存的档位。
 func TestTypographyChoiceSurvivesTabSwitch(t *testing.T) {
 	a := testApp(t)
 	a.settingsTab = settingsTabReading

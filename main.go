@@ -343,8 +343,8 @@ type app struct {
 	// 正文与评论里的配图先画占位、点一下才下载；动图自动播放决定 gif / apng
 	// 在正文与预览里是动图还是首帧。进程级共享，只在本窗口的界面里读。
 	imagePrefs *imagePrefsStore
-	// typePrefs 是阅读排版的四项偏好（见 typography.go）：正文与评论的字号、
-	// 行距、列表页宽与列表密度。进程级共享，只在 UI 线程读写。
+	// typePrefs 是阅读排版的五项偏好（见 typography.go）：正文与正文标题的字号、
+	// 评论字号、行距、列表页宽与列表密度。进程级共享，只在 UI 线程读写。
 	typePrefs *typographyStore
 	// updateMirror 是更新包下载加速入口的选择（见 update_mirror.go）：默认
 	// 不选、走「网络代理」里配置的代理。进程级共享，只在本窗口的界面里读。
@@ -633,7 +633,7 @@ type appDeps struct {
 	// imagePrefs 是图片显示的两项偏好：默认不加载图片、动图自动播放，
 	// 进程级一份（见 image_prefs.go）。
 	imagePrefs *imagePrefsStore
-	// typePrefs 是阅读排版的四项偏好（见 typography.go），进程级一份。
+	// typePrefs 是阅读排版的五项偏好（见 typography.go），进程级一份。
 	typePrefs *typographyStore
 	// updateMirror 是更新包下载加速入口的选择，进程级一份（见 update_mirror.go）。
 	updateMirror *updateMirrorStore

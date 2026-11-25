@@ -6,22 +6,29 @@ import (
 	"path/filepath"
 )
 
-// 阅读排版偏好：正文 / 评论的字号与行距、列表页的正文栏宽度、列表行密度。
-// 四项都是进程级的一份（见 appDeps），所有窗口共用；默认档位与改造前
-// 逐像素一致，升级后的首帧不变。系统 UI 字号、编辑器输入字号与资料卡
+// 阅读排版偏好：正文与正文标题的字号、评论字号与行距、列表页的正文栏宽度、
+// 列表行密度。五项都是进程级的一份（见 appDeps），所有窗口共用；默认档位与
+// 改造前逐像素一致，升级后的首帧不变。系统 UI 字号、编辑器输入字号与资料卡
 // 「个人简介」都不在这里。
 //
 // 每组设置都存实际数值，档位只是常用数值的快捷按钮：设置页同时提供 lobeui
 // 数字输入框做精确控制，输入非预设值时档位按钮不再高亮。
 const typographyFileName = "typography.json"
 
+// detailTitleFontSizeDefault 与 Lobe 主题的 FontSizeHeading3 一致：详情页
+// 正文标题原本写死用这一字阶，新增设置后默认档仍保持同样的像素。
+const detailTitleFontSizeDefault = 24
+
 // 档位预设。字号用 DIP，行距用十分之一倍（17 表示 1.7），页宽用 DIP，
-// 密度由行上下留白与行内间距两个 DIP 值组成。
+// 密度由行上下留白与行内间距两个 DIP 值组成。标题档位直接用数值，避免和
+// 正文字号的「小 / 标准 / 大 / 特大」按钮重名。
 var (
 	typographyBodySizes    = []int{14, 16, 18, 20}
+	typographyTitleSizes   = []int{20, 24, 28, 32}
 	typographyLineHeights  = []int{15, 17, 19}
 	typographyPageWidths   = []int{640, 760, 880}
 	typographyBodyOptions  = []string{"小", "标准", "大", "特大"}
+	typographyTitleOptions = []string{"20", "24", "28", "32"}
 	typographyLineOptions  = []string{"紧凑", "标准", "宽松"}
 	typographyWidthOptions = []string{"窄", "标准", "宽"}
 	typographyDensityNames = []string{"紧凑", "标准", "宽松"}
@@ -33,6 +40,8 @@ var (
 const (
 	typographyBodyMin  = 12
 	typographyBodyMax  = 28
+	typographyTitleMin = 18
+	typographyTitleMax = 36
 	typographyLineMin  = 12
 	typographyLineMax  = 24
 	typographyWidthMin = 560
@@ -53,6 +62,7 @@ type typographyConfig struct {
 	PageWidth  int `json:"page_width"`  // 560～1200 DIP
 	RowPadY    int `json:"row_pad_y"`   // 4～20 DIP
 	RowGap     int `json:"row_gap"`     // 1～12 DIP
+	TitleSize  int `json:"title_size"`  // 18～36 DIP，详情页正文标题
 }
 
 type typographyStore struct {
@@ -67,6 +77,7 @@ func defaultTypographyConfig() typographyConfig {
 		PageWidth:  int(feedMaxWidth),
 		RowPadY:    10,
 		RowGap:     4,
+		TitleSize:  detailTitleFontSizeDefault,
 	}
 }
 
@@ -85,6 +96,7 @@ func normalizeTypographyConfig(cfg typographyConfig) typographyConfig {
 	cfg.PageWidth = check(cfg.PageWidth, typographyWidthMin, typographyWidthMax, def.PageWidth)
 	cfg.RowPadY = check(cfg.RowPadY, typographyPadMin, typographyPadMax, def.RowPadY)
 	cfg.RowGap = check(cfg.RowGap, typographyGapMin, typographyGapMax, def.RowGap)
+	cfg.TitleSize = check(cfg.TitleSize, typographyTitleMin, typographyTitleMax, def.TitleSize)
 	return cfg
 }
 
@@ -100,7 +112,7 @@ func newTypographyStore(dir string) *typographyStore {
 	return s
 }
 
-// save 只写盘，不改内存：四项的设置方法先写好内存值，再交给 save 落盘。
+// save 只写盘，不改内存：各项的设置方法先写好内存值，再交给 save 落盘。
 // 写失败时内存保留新值（与 imagePrefsStore.save 一致），调用方按错误提示，
 // 需要停在旧值的界面用 restore 撤回内存改动。
 func (s *typographyStore) save() error {
@@ -171,6 +183,13 @@ func (s *typographyStore) rowGap() int {
 	return s.p.RowGap
 }
 
+func (s *typographyStore) titleSize() int {
+	if s == nil {
+		return defaultTypographyConfig().TitleSize
+	}
+	return s.p.TitleSize
+}
+
 // density 返回当前密度命中的档位序号，精确数值不等于任何预设时返回 -1。
 func (s *typographyStore) density() int {
 	return densityPresetIndex(s.rowPadY(), s.rowGap())
@@ -187,6 +206,10 @@ func densityPresetIndex(pad, gap int) int {
 
 func (s *typographyStore) setBodySize(v int) error {
 	return s.set("正文字号", v, typographyBodyMin, typographyBodyMax, func() { s.p.BodySize = v })
+}
+
+func (s *typographyStore) setTitleSize(v int) error {
+	return s.set("详情标题字号", v, typographyTitleMin, typographyTitleMax, func() { s.p.TitleSize = v })
 }
 
 func (s *typographyStore) setLineHeight(v int) error {
@@ -233,9 +256,9 @@ func (s *typographyStore) set(label string, v, lo, hi int, apply func()) error {
 	return s.save()
 }
 
-// typeBase 是标准档的字号阶梯，保留改造前的数值作为比例基准。标题目前用
-// Lobe 的标题字阶绘制，notice 也没有独立调用点；两项仍留在阶梯里，保证
-// 换算函数覆盖整组字号。
+// typeBase 是标准档的字号阶梯，保留改造前的数值作为比例基准。详情页正文标题
+// 现在由独立的 titleSize 设置控制，notice 也没有独立调用点；两项仍留在阶梯里，
+// 保证换算函数覆盖整组字号。
 var typeBase = struct {
 	title, body, author, comment, section, meta, metaSmall, notice float32
 }{26, 16, 14, 15, 16, 13, 12, 12}
@@ -286,6 +309,14 @@ func (a *app) lineHeight() int {
 		return defaultTypographyConfig().LineHeight
 	}
 	return a.typePrefs.lineHeight()
+}
+
+// titleSize 是详情页正文标题的字号，独立于正文字号，默认与 Lobe H3 一致。
+func (a *app) titleSize() float32 {
+	if a == nil {
+		return detailTitleFontSizeDefault
+	}
+	return float32(a.typePrefs.titleSize())
 }
 
 // rowPadY / rowGap 是列表行的上下留白与行内间距。只管纵向密度，横向

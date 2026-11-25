@@ -33,7 +33,7 @@ type desktop struct {
 	watchLaterPrefs *watchLaterPrefsStore
 	// imagePrefs 是图片显示的两项偏好，进程级一份（见 image_prefs.go）。
 	imagePrefs *imagePrefsStore
-	// typePrefs 是阅读排版的四项偏好，进程级一份（见 typography.go）。
+	// typePrefs 是阅读排版的五项偏好，进程级一份（见 typography.go）。
 	typePrefs *typographyStore
 	// updateMirror 是更新包下载加速入口的选择，进程级一份（见 update_mirror.go）。
 	updateMirror *updateMirrorStore

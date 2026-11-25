@@ -2,18 +2,19 @@
 
 - 状态：已实施（含档位之外的 lobeui 精确数值输入）
 - 日期：2026-11-24
-- 范围：详情正文与评论的字号、行距，列表页正文栏宽度，列表行密度，设置页「阅读与评论」内的排版块
+- 范围：详情正文标题与正文、评论的字号，行距，列表页正文栏宽度，列表行密度，设置页「阅读与评论」内的排版块
 - 约束：进程级共享、立即生效、默认值与现状逐像素一致；不改系统 UI 字号
 
 ## 1. 目标
 
 详情页字号是写死的常量（`detail_ui.go:263-272`），不同 DPI、不同视力、不同阅读距离下没有调整余地。
-要补的是四组可调项，并且**默认档位与现在的渲染完全一致**，升级后首帧不变：
+要补的是五组可调项，并且**默认档位与现在的渲染完全一致**，升级后首帧不变：
 
 1. 正文字号：正文与评论一起缩放，保持现有阶梯比例。
-2. 行距：正文与评论的 Markdown 行高倍数。
-3. 页宽：列表类页面正文栏的最大宽度（现在是固定 760）。
-4. 列表密度：列表行的上下留白与行内间距。
+2. 正文标题字号：详情页正文标题单独可调，默认与原来的 Lobe H3（24 DIP）一致，不带动正文与评论的阶梯。
+3. 行距：正文与评论的 Markdown 行高倍数。
+4. 页宽：列表类页面正文栏的最大宽度（现在是固定 760）。
+5. 列表密度：列表行的上下留白与行内间距。
 
 ## 2. 非目标
 
@@ -29,6 +30,7 @@
 | 现有实现 | 位置 | 说明 |
 | --- | --- | --- |
 | 详情页字号阶梯 | `detail_ui.go:263-272` | `postTitleFontSize=26`、`postBodyFontSize=16`、`postAuthorFontSize=14`、`commentFontSize=15`、`sectionTitleFontSize=16`、`metaFontSize=13`、`metaSmallFontSize=12`、`noticeFontSize=12` |
+| 正文标题字号 | `detail_ui.go` 的 `topicBody` | 写死用 `tk.FontSizeHeading3`（24 DIP），不随字号阶梯变化 |
 | Markdown 排版 | `detail_ui.go:315-327` | `mdTextStyle{size,line,block,item}`；`postTextStyle`、`commentTextStyle`、`bioTextStyle` 三个全局 var |
 | Markdown 选项缓存 | `main.go:360-369` | `a.md`、`a.commentMd`、`a.commentMdLight`、`a.bioMd` 启动时建好；带 `sync.Map`，不能复制 |
 | 页宽 | `main.go:1619`（`feedMaxWidth=760`）、`main.go:2281-2289`（`feedInset`） | 窗口宽于 760 时把多余空间等分到两侧 |
@@ -48,13 +50,14 @@
 | 1 | 存储 | `<配置目录>/typography.json`，进程级一份（`appDeps`），照 `image_prefs.go` 的写法 |
 | 2 | 默认值 | 16 / 1.7 / 760 / 标准；与现状完全一致 |
 | 3 | 字号档位 | 小 14、标准 16、大 18、特大 20；按比例缩放整套阶梯，不改相对关系 |
+| 3a | 正文标题字号 | 独立设置，默认 24 DIP（与 Lobe H3 一致）；档位 20 / 24 / 28 / 32，精确 18～36；只改详情页正文标题，不带动正文与评论阶梯 |
 | 4 | 行距档位 | 紧凑 1.5、标准 1.7、宽松 1.9；只作用于正文与评论的 Markdown，不改列表 |
 | 5 | 页宽档位 | 窄 640、标准 760、宽 880；只作用于列表类内嵌页，不影响独立详情窗口的双栏比例 |
 | 6 | 密度档位 | 紧凑 / 标准 / 宽松；行 `PaddingY` 6 / 10 / 14，行内 `Gap` 2 / 4 / 6 |
 | 7 | 列表字号 | **不跟随**正文字号；列表是扫描场景，调大字会让一屏信息量骤降 |
 | 8 | 生效方式 | 立即生效：改完立刻落盘、重建 Markdown 选项、重画所有窗口 |
 | 9 | 设置位置 | 「阅读与评论」页新增「阅读排版」块，不新开 tab |
-| 10 | 恢复默认 | 块内提供「恢复默认排版」，只重置四项，不动评论开关与阅读记录 |
+| 10 | 恢复默认 | 块内提供「恢复默认排版」，只重置五项，不动评论开关与阅读记录 |
 
 ## 5. 设计
 
@@ -65,6 +68,7 @@
 ```go
 type typographyConfig struct {
     BodySize   int `json:"body_size"`   // 14 / 16 / 18 / 20
+    TitleSize  int `json:"title_size"`  // 24，正文标题；档位 20 / 24 / 28 / 32
     LineHeight int `json:"line_height"` // 15 / 17 / 19，除 10 得到 1.5 / 1.7 / 1.9
     PageWidth  int `json:"page_width"`  // 640 / 760 / 880
     Density    int `json:"density"`     // 0 紧凑 / 1 标准 / 2 宽松
@@ -107,6 +111,7 @@ func (a *app) typeSizes() typeSizes {
 - 每一项等于基准乘以 `scale`，四舍五入到 0.5 DIP，避免出现 13.333 这种值。
 - 现有常量改名或保留为 `typeBase` 字段；**76 处引用逐项替换**为 `ts := a.typeSizes()` 后的字段。
 - 每帧构建时读一次 `ts`，不要在循环里反复调用。
+- 正文标题不走 Markdown：`topicBody` 用 `a.titleSize()` 直接设字号，默认 24 DIP 与原来的 `tk.FontSizeHeading3` 一致；`ts.title` 仍留在阶梯里只作换算完整性。
 
 > 实现时用 `git grep -n 'postTitleFontSize|postBodyFontSize|postAuthorFontSize|commentFontSize|sectionTitleFontSize|metaFontSize|metaSmallFontSize|noticeFontSize'`
 > 建一份清单，逐项勾掉；清单不进文档，避免行号漂移。
@@ -178,8 +183,9 @@ func (a *app) feedInset(c *ui.Context) float32 {
 「阅读与评论」页顶部新增 `readingTypographySection`：
 
 - 标题「阅读排版」。
-- 四行，每行左侧可见设置名，中间是档位快捷按钮，右侧紧挨着对应的精确数值：
+- 五行，每行左侧可见设置名，中间是档位快捷按钮，右侧紧挨着对应的精确数值：
   - 正文字号 (DIP)：小 / 标准 / 大 / 特大，数值 12～28
+  - 详情标题字号 (DIP)：20 / 24 / 28 / 32，数值 18～36；档位直接用数值，避免与正文字号的「小 / 标准」按钮重名
   - 行距 (倍)：紧凑 / 标准 / 宽松，数值 1.2～2.4
   - 页宽 (DIP)：窄 / 标准 / 宽，数值 560～1200
   - 列表密度：紧凑 / 标准 / 宽松，右侧是它改的两个数值：留白 4～20 DIP、
@@ -210,9 +216,9 @@ func (a *app) feedInset(c *ui.Context) float32 {
 | `typography.go`（新增） | 配置结构、store、档位与默认值、`Reset` |
 | `typography_test.go`（新增） | 存储、越界回退、字号换算 |
 | `main.go` | `appDeps` 加 `typePrefs`；`feedInset` 改方法；`rebuildMarkdownViews`；`invalidateReadingWindows`；调用点更新 |
-| `detail_ui.go` | 字号常量改为 `typeBase` + `typeSizes()`；76 处引用替换；`mdStyles()` |
+| `detail_ui.go` | 字号常量改为 `typeBase` + `typeSizes()`；76 处引用替换；`mdStyles()`；正文标题改用 `a.titleSize()` |
 | `rows.go` / `main.go` / `watch_later_ui.go` / `collection_browse.go` / `scores_ui.go` / `draft_ui.go` | `feedInset` 调用改成 `a.feedInset`；列表密度取值 |
-| `settings_ui.go` | 「阅读与评论」页加 `readingTypographySection` |
+| `settings_ui.go` | 「阅读与评论」页加 `readingTypographySection`（含正文标题字号行） |
 | `settings_reset.go` | 「恢复所有设置」里一并 `typePrefs.Reset()` |
 | `detail_test.go` | 像素断言按默认档位保留；新增档位切换测试 |
 
@@ -221,31 +227,33 @@ func (a *app) feedInset(c *ui.Context) float32 {
 ### 7.1 单元测试
 
 - [ ] `TestTypographyDefaults`：新目录读到 16 / 1.7 / 760 / 标准。
-- [ ] `TestTypographyPersist`：改四项后重新构造 store，值一致。
+- [ ] `TestTypographyPersist`：改五项后重新构造 store，值一致。
 - [ ] `TestTypographyInvalidFallsBack`：`body_size=99`、`line_height=0`、`page_width=-1`、`density=9`
       全部回落到默认，其它合法项保留。
-- [ ] `TestTypographyReset`：`Reset()` 后四项回默认且已落盘。
+- [ ] `TestTypographyReset`：`Reset()` 后五项回默认且已落盘。
 - [ ] `TestTypeSizesScaling`：14 / 16 / 18 / 20 四档下
       `title > body > comment > meta > metaSmall` 恒成立，且标准档等于现有常量。
 - [ ] `TestMdStylesLineHeight`：行距 1.5 / 1.7 / 1.9 分别映射到 `postTextStyle.line`，
       评论行距仍比正文略紧。
+- [ ] `TestTypographyTitleSizeIndependent`：默认 24 DIP，改正文标题字号不影响字号阶梯与正文 / 评论 Markdown。
 
 ### 7.2 UI 测试（`ui.NewTester`）
 
-- [ ] 「阅读与评论」页出现「阅读排版」「正文字号」「行距」「页宽」「列表密度」「恢复默认排版」。
+- [ ] 「阅读与评论」页出现「阅读排版」「正文字号」「详情标题字号」「行距」「页宽」「列表密度」「恢复默认排版」。
 - [ ] 默认选中「标准」；点「大」后详情页正文 `Text.H` 明显大于改前。
+- [ ] 正文标题字号点「32」后落盘，详情页标题 `Text.H` 变大，恢复默认后回原值。
 - [ ] 同一窗口宽度下，页宽「窄」比「标准」的行左内边距更大，「宽」更小。
 - [ ] 密度「紧凑」的行高小于「宽松」。
-- [ ] 「恢复默认排版」后四项回到标准，正文高度回到改前值。
-- [ ] 设置页切到别的 tab 再切回来，四项仍显示已保存的值。
+- [ ] 「恢复默认排版」后五项回到默认，正文标题与正文高度回到改前值。
+- [ ] 设置页切到别的 tab 再切回来，五项仍显示已保存的值。
 
 ### 7.3 回归
 
 - [ ] 默认档位下现有像素测试全部通过，不需要改断言
       （特别是 `detail_test.go:632-635` 与 `page_width_test.go`）。
 - [ ] 发帖编辑器、评论输入框、设置页自身的字号不随偏好变化。
-- [ ] 主窗口与附属窗口同时打开时，改一次四项，各窗口都变。
-- [ ] 重启应用后四项保留。
+- [ ] 主窗口与附属窗口同时打开时，改一次五项，各窗口都变。
+- [ ] 重启应用后五项保留。
 - [ ] 独立详情窗口在 720×480 最小尺寸、特大字号下正文不横向溢出；评论栏仍可用。
 - [ ] `CGO_ENABLED=0 go test ./...` 通过。
 - [ ] `go tool mygo vet .` 无告警。

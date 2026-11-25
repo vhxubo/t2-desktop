@@ -1489,8 +1489,9 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 	// 大字；收起 / 展开入口已经移到两栏中间的接缝上，标题右侧不必再留位。
 	ui.Column(c).FillWidth().Gap(12).Children(func() {
 		if title := strings.TrimSpace(p.Title); title != "" {
-			// 标题用 Lobe 的 H3 字阶配负字距，是整页唯一的重心。
-			ui.Text(c, title).FontSize(tk.FontSizeHeading3).Bold().
+			// 标题是整页唯一的重心，字号由设置页的「详情标题字号」控制；
+			// 默认 24 DIP 与原来的 Lobe H3 字阶一致，配负字距收紧大字号。
+			ui.Text(c, title).FontSize(a.titleSize()).Bold().
 				LetterSpacing(-0.4).TextColor(tk.TextHeading).MaxLines(3)
 		}
 		// 作者行：头像、昵称、等级与徽章，收藏按钮贴在这一行的最右侧。

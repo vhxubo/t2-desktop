@@ -20,6 +20,9 @@ func TestTypographyDefaults(t *testing.T) {
 	if got := s.density(); got != typographyDensityStandard {
 		t.Errorf("默认密度 = %d，想要标准档", got)
 	}
+	if got := s.titleSize(); got != detailTitleFontSizeDefault {
+		t.Errorf("默认正文标题字号 = %d，想要 %d", got, detailTitleFontSizeDefault)
+	}
 }
 
 func TestTypographyPersist(t *testing.T) {
@@ -30,20 +33,21 @@ func TestTypographyPersist(t *testing.T) {
 		func() error { return s.setLineHeight(19) },
 		func() error { return s.setPageWidth(880) },
 		func() error { return s.setDensity(typographyDensityLoose) },
+		func() error { return s.setTitleSize(30) },
 	} {
 		if err := change(); err != nil {
 			t.Fatal(err)
 		}
 	}
 	again := newTypographyStore(dir)
-	if got := [4]int{again.bodySize(), again.lineHeight(), again.pageWidth(), again.density()}; got != [4]int{20, 19, 880, typographyDensityLoose} {
-		t.Errorf("重新读取的排版 = %v，想要 [20 19 880 2]", got)
+	if got := [5]int{again.bodySize(), again.lineHeight(), again.pageWidth(), again.density(), again.titleSize()}; got != [5]int{20, 19, 880, typographyDensityLoose, 30} {
+		t.Errorf("重新读取的排版 = %v，想要 [20 19 880 2 30]", got)
 	}
 }
 
 func TestTypographyInvalidFallsBack(t *testing.T) {
 	dir := t.TempDir()
-	cfg := typographyConfig{BodySize: 99, LineHeight: 0, PageWidth: -1, RowPadY: 99, RowGap: 99}
+	cfg := typographyConfig{BodySize: 99, LineHeight: 0, PageWidth: -1, RowPadY: 99, RowGap: 99, TitleSize: 99}
 	if err := writeJSONFile(filepath.Join(dir, typographyFileName), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -60,9 +64,12 @@ func TestTypographyInvalidFallsBack(t *testing.T) {
 	if got := s.density(); got != typographyDensityStandard {
 		t.Errorf("越界密度没有回默认：%d", got)
 	}
+	if got := s.titleSize(); got != detailTitleFontSizeDefault {
+		t.Errorf("越界正文标题字号没有回默认：%d", got)
+	}
 
 	// 一个坏值不能把其它合法项一起丢掉。
-	cfg = typographyConfig{BodySize: 18, LineHeight: 15, PageWidth: 640, RowPadY: 6, RowGap: 99}
+	cfg = typographyConfig{BodySize: 18, LineHeight: 15, PageWidth: 640, RowPadY: 6, RowGap: 99, TitleSize: 30}
 	if err := writeJSONFile(filepath.Join(dir, typographyFileName), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -85,12 +92,18 @@ func TestTypographyInvalidFallsBack(t *testing.T) {
 	if got := s.density(); got != -1 {
 		t.Errorf("混合数值不该命中档位：%d", got)
 	}
+	if got := s.titleSize(); got != 30 {
+		t.Errorf("合法正文标题字号被坏值连带丢掉：%d", got)
+	}
 }
 
 func TestTypographyReset(t *testing.T) {
 	dir := t.TempDir()
 	s := newTypographyStore(dir)
 	if err := s.setBodySize(20); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.setTitleSize(32); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Reset(); err != nil {
@@ -115,13 +128,14 @@ func TestTypographyExactValues(t *testing.T) {
 		func() error { return s.setPageWidth(777) },
 		func() error { return s.setRowPadY(8) },
 		func() error { return s.setRowGap(3) },
+		func() error { return s.setTitleSize(26) },
 	} {
 		if err := change(); err != nil {
 			t.Fatal(err)
 		}
 	}
 	again := newTypographyStore(dir)
-	if got := again.snapshot(); got != (typographyConfig{17, 16, 777, 8, 3}) {
+	if got := again.snapshot(); got != (typographyConfig{17, 16, 777, 8, 3, 26}) {
 		t.Errorf("精确数值没有按原样落盘：%+v", got)
 	}
 	if got := again.density(); got != -1 {
@@ -141,6 +155,7 @@ func TestTypographyExactValues(t *testing.T) {
 		func() error { return s.setPageWidth(typographyWidthMax + 1) },
 		func() error { return s.setRowPadY(typographyPadMax + 1) },
 		func() error { return s.setRowGap(typographyGapMin - 1) },
+		func() error { return s.setTitleSize(typographyTitleMax + 1) },
 	} {
 		if err := bad(); err == nil {
 			t.Error("越界数值应该被拒绝")
@@ -152,8 +167,30 @@ func TestTypographyExactValues(t *testing.T) {
 	if err := s.setDensity(typographyDensityCompact); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.snapshot(); got != (typographyConfig{17, 16, 777, 6, 2}) {
+	if got := s.snapshot(); got != (typographyConfig{17, 16, 777, 6, 2, 26}) {
 		t.Errorf("选档位没有覆盖精确数值：%+v", got)
+	}
+}
+
+// 正文标题字号是独立设置：默认与 Lobe H3 一致，改它不牵动正文与评论的阶梯。
+func TestTypographyTitleSizeIndependent(t *testing.T) {
+	a := testApp(t)
+	if got := a.titleSize(); got != detailTitleFontSizeDefault {
+		t.Fatalf("默认正文标题字号 = %g，想要 %d", got, detailTitleFontSizeDefault)
+	}
+	before := a.typeSizes()
+	if err := a.typePrefs.setTitleSize(32); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.titleSize(); got != 32 {
+		t.Errorf("正文标题字号 = %g，想要 32", got)
+	}
+	if got := a.typeSizes(); got != before {
+		t.Errorf("正文标题字号影响了字号阶梯：%+v / %+v", got, before)
+	}
+	post, comment, bio := a.mdStyles()
+	if post.size != 16 || comment.size != 15 || bio != bioTextStyle {
+		t.Errorf("正文标题字号影响了正文 / 评论 / 简介：%g / %g / %+v", post.size, comment.size, bio)
 	}
 }
 
