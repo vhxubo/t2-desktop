@@ -129,9 +129,10 @@ function Resolve-App {
 }
 
 function Find-Window([string]$Title) {
+    $withAccount = "$Title · $($app.Name)"
     foreach ($handle in [T2Capture.Native]::Windows($app.ProcessId)) {
         $name = [T2Capture.Native]::Title($handle)
-        if ($name -ceq "$Title · $($app.Name)") { return $handle }
+        if ($name -ceq $Title -or $name -ceq $withAccount) { return $handle }
     }
 }
 
@@ -385,9 +386,7 @@ try {
             } '首页找不到匹配的帖子；可用 -TopicTitle 指定首页帖子的标题前缀。')
             $candidate = Wait-Result {
                 foreach ($handle in @([T2Capture.Native]::Windows($app.ProcessId) | Sort-Object { $_ -in $before })) {
-                    $title = [T2Capture.Native]::Title($handle)
-                    if (($handle -eq $app.Handle -or $title.EndsWith(" · $($app.Name)", [StringComparison]::Ordinal)) -and
-                        (Get-NamedControls $handle '评论区')) { return $handle }
+                    if (Get-NamedControls $handle '评论区') { return $handle }
                 }
             } '没有检测到帖子详情。'
             $candidate
