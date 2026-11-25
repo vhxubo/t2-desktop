@@ -154,7 +154,11 @@ func hasToastContaining(a *app, part string) bool {
 	return false
 }
 
+// toastTexts 是队列里各条提示的文案。队列由后台结果（经 publish）追加，读的
+// 时候要跟 toastMu：不锁时可能读到正在追加的切片头，看到的长度和数组对不上。
 func toastTexts(a *app) []string {
+	a.toastMu.Lock()
+	defer a.toastMu.Unlock()
 	out := make([]string, 0, len(a.toasts))
 	for _, n := range a.toasts {
 		out = append(out, n.text)

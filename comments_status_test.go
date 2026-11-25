@@ -271,13 +271,9 @@ func TestCommentsStatusTogglesThroughConfirm(t *testing.T) {
 	if err := tt.Click("确认关闭评论"); err != nil {
 		t.Fatalf("点不到确认按钮：%v（%q）", err, tt.Texts())
 	}
-	waitFor(t, func() bool { return !a.detail.comments.busy && a.detail.topic.CommentsClosed },
-		"关闭评论请求没有完成")
-	// 结果提示：可能在队列里，也可能已经被点击那一帧领走画在窗口上。
-	tt.Frame()
-	if !tt.HasText("评论已关闭，其他读者不能再回复") {
-		t.Errorf("关闭评论没有 toast：%q", tt.Texts())
-	}
+	// 结果提示：先在队列里，等这一帧领走画到窗口上。页面的评论状态在这条
+	// 提示之前就已经改好了，所以等提示等于等整件事收尾。
+	waitForShownToast(t, a, tt, "评论已关闭，其他读者不能再回复")
 	calls, _, key, body := rec.snapshot()
 	if len(calls) != 1 || calls[0] != "POST /v1/topics/a1b2/comments-status" {
 		t.Fatalf("关闭评论请求 = %v", calls)
@@ -309,12 +305,7 @@ func TestCommentsStatusTogglesThroughConfirm(t *testing.T) {
 	if err := tt.Click("确认开启评论"); err != nil {
 		t.Fatalf("点不到开启的确认按钮：%v", err)
 	}
-	waitFor(t, func() bool { return !a.detail.comments.busy && !a.detail.topic.CommentsClosed },
-		"开启评论请求没有完成")
-	tt.Frame()
-	if !tt.HasText("评论已开启，其他读者可以继续回复") {
-		t.Errorf("开启评论没有 toast：%q", tt.Texts())
-	}
+	waitForShownToast(t, a, tt, "评论已开启，其他读者可以继续回复")
 	tt.Frame()
 	tt.Advance(6 * time.Second) // 等开启成功的 toast 退场，免得盖住右下角操作组
 	openDetailMoreMenu(t, tt)
@@ -364,12 +355,10 @@ func TestCommentsStatusNotGrantedExplainsWithoutAuthGate(t *testing.T) {
 	a := commentsStatusApp(t, srv) // 令牌里已经有 write:topic
 
 	a.toggleTopicComments(a.detail)
-	waitFor(t, func() bool { return !a.detail.comments.busy }, "开关请求没有结束")
+	// 原因最后才排进提示队列，等它到了再看这几项。
+	waitForToast(t, a, "还没有给本应用开通")
 	if a.authGate.open {
 		t.Error("已有 write:topic 时不该再弹授权框：重新授权解决不了「需开通」")
-	}
-	if !hasToastContaining(a, "还没有给本应用开通") {
-		t.Errorf("没有说明这个能力需要开通：%+v", a.toasts)
 	}
 	if a.detail.topic.CommentsClosed {
 		t.Error("失败不该改页面上的评论状态")

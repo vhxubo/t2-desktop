@@ -341,7 +341,7 @@ func TestOpenDialogBlocksUnclaimableCodes(t *testing.T) {
 func TestRedeemSectionRendersAndClaims(t *testing.T) {
 	a, got, closeSrv := recordRedeemCalls(t, 0, "")
 	defer closeSrv()
-	d := redeemTestDetail(t, a)
+	redeemTestDetail(t, a)
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
@@ -369,12 +369,8 @@ func TestRedeemSectionRendersAndClaims(t *testing.T) {
 	if c.method != http.MethodPost || c.path != "/v1/redeem-codes/id-1/redeem" || c.key == "" {
 		t.Errorf("领取请求 = %+v", c)
 	}
-	waitFor(t, func() bool { return !d.redeem.busy }, "领取完成")
-	tt.Frame()
-	// toast 只在构建期发出：先让窗口领走队列里的提示。
-	if !tt.HasText("领取成功") {
-		t.Errorf("没有用 toast 报告结果：%q", tt.Texts())
-	}
+	// toast 只在构建期发出：等它排进队列，再由这一帧领走画到窗口上。
+	waitForShownToast(t, a, tt, "领取成功")
 	// 成功页显示完整码与「复制」按钮，提示文案没写进图里。
 	if !tt.HasText("该兑换码领取成功。") || !tt.HasText("ABCD-1234-XPFJ") || !tt.HasText("复制") {
 		t.Errorf("成功页没显示完整码 / 复制：%q", tt.Texts())

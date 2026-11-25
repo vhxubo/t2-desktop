@@ -178,17 +178,13 @@ func TestFollowsWindowBackfillFollow(t *testing.T) {
 	if err := tt.Click("回关 jimmy"); err != nil {
 		t.Fatalf("点不到回关：%v（%q）", err, tt.Texts())
 	}
-	waitFor(t, func() bool { return a.follows.busy == "" && a.follows.lists[followsFollowers].items[0].IsFollowing },
-		"回关请求没有完成")
-	tt.Frame()
+	// 回关结果最后才排进提示队列：等它出现在窗口上，再看请求与按钮。
+	waitForShownToast(t, a, tt, "已关注 @jimmy")
 
 	mu.Lock()
 	defer mu.Unlock()
 	if len(calls) != 1 || calls[0] != "POST /api/v1/users/u1/follow" {
 		t.Errorf("回关请求 = %v", calls)
-	}
-	if !tt.HasText("已关注 @jimmy") {
-		t.Errorf("没有报告回关结果：%q", tt.Texts())
 	}
 	if _, ok := tt.Find("已关注 jimmy"); !ok {
 		t.Errorf("按钮没有变成「已关注」：%q", tt.Texts())

@@ -605,7 +605,8 @@ func TestTopicEditWindowSavesAndUpdatesPage(t *testing.T) {
 	if err := tt.Click("保存修改"); err != nil {
 		t.Fatalf("点不到保存：%v", err)
 	}
-	waitFor(t, func() bool { return a.edit == nil }, "保存请求没有完成")
+	// 等提示入队，不等窗口关掉：关窗口在提示之前，两者之间还隔着几步。
+	waitForToast(t, a, "帖子已更新")
 
 	calls, _, _, body := rec.snapshot()
 	if len(calls) != 1 || calls[0] != "POST /api/v1/topics/a1b2/edit" {
@@ -619,9 +620,6 @@ func TestTopicEditWindowSavesAndUpdatesPage(t *testing.T) {
 	}
 	if got := a.tabs[0].items[0].Title; got != "新标题" {
 		t.Errorf("列表行标题 = %q，期望新标题", got)
-	}
-	if !queuedToast(a, "帖子已更新") {
-		t.Error("没有报告保存结果")
 	}
 	// 本地缓存也要跟着改：下次打开先显示缓存，不该退回旧正文。
 	if c, ok := a.readCachedDetail("a1b2"); ok && c.Topic.Title != "新标题" {
@@ -700,7 +698,8 @@ func TestReplyEditWindowUpdatesComment(t *testing.T) {
 	if err := tt.Click("保存修改"); err != nil {
 		t.Fatalf("点不到保存：%v", err)
 	}
-	waitFor(t, func() bool { return a.edit == nil }, "保存请求没有完成")
+	// 等提示入队，不等窗口关掉：关窗口在提示之前，两者之间还隔着几步。
+	waitForToast(t, a, "评论已更新")
 
 	calls, _, _, body := rec.snapshot()
 	if len(calls) != 1 || calls[0] != "POST /api/v1/replies/c1/edit" {
@@ -711,9 +710,6 @@ func TestReplyEditWindowUpdatesComment(t *testing.T) {
 	}
 	if got := a.detail.replyList[0].Content; got != "改过的评论" {
 		t.Errorf("评论正文没更新：%q", got)
-	}
-	if !queuedToast(a, "评论已更新") {
-		t.Error("没有报告评论结果")
 	}
 }
 
@@ -786,7 +782,8 @@ func TestEditFailureKeepsDraft(t *testing.T) {
 	st.body = "新正文"
 	a.edit = st
 	a.submitEdit()
-	waitFor(t, func() bool { return !a.edit.busy }, "保存请求没有结束")
+	// 失败原因也排在提示队列里，而且排在 busy 之后：等提示到了才算收尾。
+	waitFor(t, func() bool { return !a.edit.busy && len(toastTexts(a)) > 0 }, "保存请求没有结束")
 
 	if a.edit == nil {
 		t.Fatal("失败后窗口不该关掉")
@@ -796,11 +793,5 @@ func TestEditFailureKeepsDraft(t *testing.T) {
 	}
 	if a.detail.topic.Content != "旧正文" {
 		t.Errorf("失败却改了页面正文：%q", a.detail.topic.Content)
-	}
-	a.toastMu.Lock()
-	n := len(a.toasts)
-	a.toastMu.Unlock()
-	if n == 0 {
-		t.Error("失败没有任何提示")
 	}
 }

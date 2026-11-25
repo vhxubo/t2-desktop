@@ -191,7 +191,8 @@ func TestLotteryFlowPostsTriggerAndShowsWinners(t *testing.T) {
 
 	a.detail.lottery.count = 2
 	a.startLottery(a.detail)
-	waitFor(t, func() bool { return !a.detail.lottery.busy }, "抽奖流程没有结束")
+	// 开奖结果最后才排进提示队列（busy 先清、结果先落页面），等它到了才算收尾。
+	waitForToast(t, a, "@jimmy（3 楼）")
 
 	posts, gets := srv.snapshot()
 	if len(posts) != 1 {
@@ -219,9 +220,6 @@ func TestLotteryFlowPostsTriggerAndShowsWinners(t *testing.T) {
 	}
 	if a.detail.topic.Lottery == nil || len(a.detail.topic.Lottery.Winners) != 1 {
 		t.Errorf("开奖结果没有落到页面：%+v", a.detail.topic.Lottery)
-	}
-	if !hasToastContaining(a, "@jimmy（3 楼）") {
-		t.Errorf("没有开奖 toast：%+v", a.toasts)
 	}
 	// 触发评论本身也立刻进了评论列表。
 	if len(a.detail.replyList) != 1 || a.detail.replyList[0].Content != "@抽奖助手 抽 2 个" {
@@ -308,12 +306,9 @@ func TestLotteryTimeoutShowsReason(t *testing.T) {
 	defer s.Close()
 	a := lotteryTestApp(t, s)
 	a.startLottery(a.detail)
-	waitFor(t, func() bool { return !a.detail.lottery.busy }, "抽奖超时没有收尾")
+	// 失败原因同样排在 busy 之后：等它被这一帧领走画到窗口上再断言。
 	tt := ui.NewTester(a.view, 900, 700)
-	tt.Frame()
-	if !tt.HasText("帖子不是你的") {
-		t.Errorf("没有展示开奖失败原因：%q", tt.Texts())
-	}
+	waitForShownToast(t, a, tt, "帖子不是你的")
 }
 
 // 抽奖确认框接在详情工具条上：入口只在帖主的「更多」菜单里；点开先选人数

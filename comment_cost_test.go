@@ -710,10 +710,8 @@ func TestCommentCostBarSwitchesBadge(t *testing.T) {
 		return seen["/api/v1/me/badges"] && seen["/api/v1/me/badges/equipped"] && seen["/api/v1/me"]
 	}, "刷新徽章列表与资料头")
 
-	tt.Frame()
-	if !tt.HasText("已佩戴「前排打手」") {
-		t.Errorf("结果没有用 toast 报告：%q", tt.Texts())
-	}
+	// 结果提示排在 busyID 清空与刷新之后：等它进了队列，再让这一帧画出来。
+	waitForShownToast(t, a, tt, "已佩戴「前排打手」")
 	tt.Frame()
 	if !tt.HasText("当前：前排打手 · 发评约 8 金币") {
 		t.Errorf("状态栏没有跟上新徽章：%q", tt.Texts())

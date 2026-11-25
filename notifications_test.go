@@ -1440,10 +1440,8 @@ func TestNotificationQuickReplyPostsComment(t *testing.T) {
 		t.Errorf("发送成功后没有收起输入框：open=%q draft=%q", st.quickReplyOpen, st.quickReplyDraft)
 	}
 	waitFor(t, func() bool { return st.items[0].Notif.IsRead }, "回复成功后没有把消息标为已读")
-	tt.Frame()
-	if !tt.HasText("已回复 @alice") {
-		t.Errorf("没有提示回复结果：%q", tt.Texts())
-	}
+	// 结果提示排在标已读之后：等它出现在窗口上。
+	waitForShownToast(t, a, tt, "已回复 @alice")
 }
 
 // 发送失败时保留草稿与输入框：用户不必重新打一遍。
@@ -1491,10 +1489,8 @@ func TestNotificationQuickReplyKeepsDraftOnFailure(t *testing.T) {
 		t.Errorf("失败后草稿/输入框没有保留：open=%q draft=%q",
 			st.quickReplyOpen, st.quickReplyDraft)
 	}
-	tt.Frame()
-	if !tt.HasText("回复失败") {
-		t.Errorf("没有报告失败原因：%q", tt.Texts())
-	}
+	// 失败原因排在收尾标志之后：等它被这一帧领走画到窗口上。
+	waitForShownToast(t, a, tt, "回复失败")
 }
 
 // 只有未读消息才提供快捷回复：已读消息已经看过，卡片头不再出现入口。

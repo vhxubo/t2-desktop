@@ -143,7 +143,8 @@ func TestDetailReplyBookmarkToggles(t *testing.T) {
 	}
 	waitFor(t, func() bool { return a.detail.bmBusy == "" && a.detail.replyList[0].Bookmarked },
 		"加书签请求没有完成")
-	tt.Frame()
+	// 结果提示排在 bmBusy 清空之后：等它出现在窗口上。
+	waitForShownToast(t, a, tt, "已加书签")
 
 	mu.Lock()
 	if len(calls) != 1 || calls[0] != "POST /api/v1/replies/c1/bookmark" {
@@ -152,9 +153,6 @@ func TestDetailReplyBookmarkToggles(t *testing.T) {
 	mu.Unlock()
 	if !a.detail.replyList[0].Bookmarked || !a.detail.replyList[0].BookmarkKnown {
 		t.Errorf("成功后评论状态没更新：%+v", a.detail.replyList[0])
-	}
-	if !tt.HasText("已加书签") {
-		t.Errorf("没有报告加书签结果：%q", tt.Texts())
 	}
 	if _, ok := tt.Find("取消书签"); !ok {
 		t.Errorf("按钮没有变成「取消书签」：%q", tt.Texts())
@@ -166,7 +164,8 @@ func TestDetailReplyBookmarkToggles(t *testing.T) {
 	}
 	waitFor(t, func() bool { return a.detail.bmBusy == "" && !a.detail.replyList[0].Bookmarked },
 		"取消书签请求没有完成")
-	tt.Frame()
+	// 移除也要报一声，同样等提示到了再看请求。
+	waitForShownToast(t, a, tt, "已取消书签")
 	mu.Lock()
 	defer mu.Unlock()
 	if len(calls) != 2 || calls[1] != "DELETE /api/v1/replies/c1/bookmark" {
@@ -214,7 +213,8 @@ func TestProfileBookmarkRemove(t *testing.T) {
 	}
 	waitFor(t, func() bool { return a.profile.bookmarkBusy == "" && len(st.items) == 0 },
 		"移除书签请求没有完成")
-	tt.Frame()
+	// 结果提示排在 bookmarkBusy 清空之后：等它出现在窗口上。
+	waitForShownToast(t, a, tt, "已移除书签")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -226,8 +226,5 @@ func TestProfileBookmarkRemove(t *testing.T) {
 	}
 	if a.detail.replyList[0].Bookmarked {
 		t.Error("详情页里同一条评论的书签状态没纠正")
-	}
-	if !tt.HasText("已移除书签") {
-		t.Errorf("没有报告移除结果：%q", tt.Texts())
 	}
 }

@@ -165,10 +165,8 @@ func TestProfileCollectionDeleteSubmits(t *testing.T) {
 		return a.profile.collBusy == "" && a.profile.collDelete == ""
 	}, "删除请求没有完成")
 
-	tt.Frame()
-	if !tt.HasText("已删除合集「甲合集」") {
-		t.Errorf("没有报告删除结果：%q", tt.Texts())
-	}
+	// 结果提示排在 collBusy 清空之后：等它出现在窗口上。
+	waitForShownToast(t, a, tt, "已删除合集「甲合集」")
 	if a.profile.collBrowse != nil {
 		t.Error("删除后不该还停在已删合集的浏览视图里")
 	}

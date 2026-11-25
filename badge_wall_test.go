@@ -513,12 +513,10 @@ func TestProfileBadgeToggle(t *testing.T) {
 		return hasGet("/api/v1/me/badges") && hasGet("/api/v1/me/badges/equipped") &&
 			hasGet("/api/v1/me")
 	})
-	// 提示可能在请求完成的那一帧里已经被窗口领走，所以看界面而不是队列：
-	// 「我的」窗口只认领发给自己的 toast，能在它里面看到就说明目标窗口对。
-	tt.Frame()
-	if !tt.HasText("佩戴成功") {
-		t.Errorf("徽章窗口没有显示佩戴结果：%q", tt.Texts())
-	}
+	// 提示排在 badgeBusyID 清空之后，可能在队列里也可能已经被窗口领走：两种
+	// 情况都要等到。「我的」窗口只认领发给自己的 toast，能在它里面看到就说明
+	// 目标窗口对。
+	waitForShownToast(t, a, tt, "佩戴成功")
 
 	if err := tt.Click("取消佩戴「全勤」"); err != nil {
 		t.Fatal(err)
@@ -592,9 +590,6 @@ func TestProfileBadgeEquipFailure(t *testing.T) {
 	if a.profile.badges[0].Equipped {
 		t.Error("请求失败后徽章仍是佩戴中")
 	}
-	// 同样看界面：失败原因必须以 toast 出现在「我的」窗口里。
-	tt.Frame()
-	if !tt.HasText("服务端错误") {
-		t.Errorf("失败原因没有用 toast 报告：%q", tt.Texts())
-	}
+	// 同样看界面：失败原因要以 toast 出现在「我的」窗口里，可能还在队列里。
+	waitForShownToast(t, a, tt, "服务端错误")
 }
