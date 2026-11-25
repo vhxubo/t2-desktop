@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -218,5 +221,58 @@ func TestTopicRowWithoutReplies(t *testing.T) {
 	}
 	if !tt.HasText("置顶") {
 		t.Errorf("置顶帖缺少置顶角标：%q", tt.Texts())
+	}
+}
+
+// 线上 is_pinned 在 pinned_until 过期后仍为 true，信息流不能继续画置顶角标。
+func TestTopicPinRespectsPinnedUntil(t *testing.T) {
+	past := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	future := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
+	cases := []struct {
+		name   string
+		fields string
+		want   bool
+	}{
+		{"已过期", `"is_pinned":true,"pinned_until":"` + past + `"`, false},
+		{"未过期", `"is_pinned":true,"pinned_until":"` + future + `"`, true},
+		{"别名字段过期", `"pinned":true,"pinned_until":"` + past + `"`, false},
+		{"旧响应没有时间", `"is_pinned":true`, true},
+		{"时间为 null", `"is_pinned":true,"pinned_until":null`, true},
+		{"时间无法解析", `"is_pinned":true,"pinned_until":"不是时间"`, true},
+		{"本来未置顶", `"is_pinned":false,"pinned_until":"` + future + `"`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			raw := fmt.Sprintf(`{"id":"p1","short_id":"P1","title":"置顶判断",`+
+				`"author":{"username":"u1"},"created_at":"2026-11-25T07:33:55.722Z",%s}`, c.fields)
+			it := itemFrom([]byte(raw), kindTopic)
+			if it.Pinned != c.want {
+				t.Errorf("置顶标记 = %v，期望 %v", it.Pinned, c.want)
+			}
+			if got := strings.Contains(it.Meta, "置顶"); got != c.want {
+				t.Errorf("摘要里的置顶 = %v，Meta = %q", got, it.Meta)
+			}
+		})
+	}
+}
+
+func TestTopicRowDropsExpiredPin(t *testing.T) {
+	a := testApp(t)
+	until := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	it := itemFrom([]byte(fmt.Sprintf(`{
+		"id":"yAGbLJL","short_id":"yAGbLJL",
+		"node":{"id":"n1","name":"社区讨论","slug":"forum-function"},
+		"title":"到期后不该再有角标",
+		"author":{"username":"vhxubo"},
+		"created_at":"2026-11-25T07:33:55.722Z","is_pinned":true,
+		"pinned_until":%q,"comment_count":0
+	}`, until)), kindTopic)
+	a.tabs[0].items = []Item{it}
+	a.tabs[0].loaded = true
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+
+	if tt.HasText("置顶") {
+		t.Errorf("置顶过期后不该再显示角标：%q", tt.Texts())
 	}
 }

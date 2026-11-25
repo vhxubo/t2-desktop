@@ -58,6 +58,31 @@ const detailEmojisJSON = `[
   {"id":"e2","code":":collector:","name":"收藏","img_url":"https://r2.2libra.com/emojis/collector.png"}
 ]`
 
+// 详情接口的 is_pinned 在 pinned_until 过期后不会自己清掉，标题下的
+// 「置顶」标签也要按过期时间判断。
+func TestDecodeTopicPinExpiry(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		until string
+		want  bool
+	}{
+		{"已过期", time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano), false},
+		{"未过期", time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			raw := strings.Replace(detailTopicJSON, `"is_pinned":true`,
+				`"is_pinned":true,"pinned_until":"`+c.until+`"`, 1)
+			p, err := decodeTopic([]byte(raw), "fallback")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.IsPinned != c.want {
+				t.Errorf("详情置顶标记 = %v，期望 %v", p.IsPinned, c.want)
+			}
+		})
+	}
+}
+
 func TestDetailPathsMatchContract(t *testing.T) {
 	if got := topicPath("a1b2c3d4"); got != "/v1/topics/a1b2c3d4" {
 		t.Errorf("详情路径 = %s", got)

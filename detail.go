@@ -321,7 +321,7 @@ func decodeTopic(d json.RawMessage, requested string) (topicDetail, error) {
 		UpdatedAt:      o.str("updated_at"),
 		Views:          o.num("views"),
 		CommentCount:   o.num("comment_count"),
-		IsPinned:       o.flag("is_pinned"),
+		IsPinned:       topicPinned(o),
 		CommentsClosed: o.flag("comments_closed"),
 		URL:            topicURL(shortID, ""), // 没有 node 时也要有原文链接
 	}

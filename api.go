@@ -698,6 +698,25 @@ func (o object) flag(keys ...string) bool {
 	return false
 }
 
+// topicPinned 判断帖子此刻是否仍置顶。接口实测在 pinned_until 过期后
+// is_pinned 仍是 true（文档只写 is_pinned），所以还要看过期时间。
+// 没带或解析不了 pinned_until 的旧响应维持原判断，避免误清置顶。
+func topicPinned(o object) bool {
+	if !o.flag("is_pinned", "pinned") {
+		return false
+	}
+	until := o.str("pinned_until")
+	if until == "" {
+		return true
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		if t, err := time.Parse(layout, until); err == nil {
+			return time.Now().Before(t)
+		}
+	}
+	return true
+}
+
 func (o object) sub(keys ...string) object {
 	for _, k := range keys {
 		if raw, ok := o[k]; ok {
@@ -956,7 +975,7 @@ func itemFrom(raw json.RawMessage, kind itemKind) Item {
 			it.SubtitleSuffix = " · " + when
 		}
 		it.Subtitle = strings.Join(parts, " · ")
-		it.Pinned = o.flag("is_pinned", "pinned")
+		it.Pinned = topicPinned(o)
 		it.Stats = stats
 		meta := []string{}
 		if it.Pinned {
