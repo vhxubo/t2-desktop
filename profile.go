@@ -167,8 +167,8 @@ func (a *app) profileSpecFor(ps *profileState, kind, page int) tabSpec {
 // profileNow 单独提出来给测试替换：注册天数按本地时间算。
 var profileNow = func() time.Time { return time.Now() }
 
-// profileScopeLabel 把授权范围翻成一句人话（映射表见 login_window.go 的
-// scopeLabels，登录窗口的「本次申请」用的是同一份）。未列出的范围原样展示。
+// profileScopeLabel 把授权范围翻成一句人话（映射表见 auth.go 的 scopeLabels）。
+// 未列出的范围原样展示。
 func profileScopeLabel(scope string) string {
 	if label := scopeLabel(scope); label != "" {
 		return label

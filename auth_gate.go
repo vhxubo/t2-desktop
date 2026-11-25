@@ -16,9 +16,8 @@ import (
 // 全局拦截（见 Client.onAuthError），不依赖每个调用点记得自己接。
 // 弹窗画在当前聚焦的窗口里（见 focusedAuthTarget），后台请求从哪扇窗口发出
 // 不重要——用户正在看的那一扇才会显示，「前往授权」第一眼就能看到。
-// 用户点「前往授权」后走已有的浏览器 + 回调流程：账号窗口用内置浏览器的独立
-// 会话（系统浏览器里可能登着另一个账号），没有账号册时用系统浏览器 + 深链。
-// 授权成功后应用不会替用户重跑被中断的操作：由用户自己再点一次刚才的操作。
+// 用户点「前往授权」后走系统浏览器 + 深链回调这一条唯一的授权流程。授权成功
+// 后应用不会替用户重跑被中断的操作：由用户自己再点一次刚才的操作。
 //
 // 后台任务（未读数轮询、通知长连接重连）不打开弹窗：它们不是用户主动发起的
 // 操作，失败时保持静默；等用户真正打开对应页面时，前台请求会发起授权。
@@ -377,26 +376,11 @@ func (a *app) requestLogin(message string) {
 }
 
 // authorizeGate 是弹窗里的「前往授权」：先关掉弹窗，再按缺失的 scope（叠加
-// 默认范围）打开授权页。账号窗口走账号册的内置浏览器，未登录窗口走系统浏览器
-// （见 startLoginWithScopes）。授权成功后应用不重跑操作，用户需要自己再点一次。
+// 默认范围）打开系统浏览器授权页（见 startLoginWithScopes）。授权成功后应用
+// 不重跑操作，用户需要自己再点一次。
 func (a *app) authorizeGate() {
-	if a.book != nil && a.book.pendingLogin() != nil {
-		a.book.showPendingAuthorization()
-		return
-	}
 	scopes := append([]string(nil), a.authGate.need.Scopes...)
 	a.authGate.open = false
-	// 未登录窗口里的「前往授权」其实就是添加一个账号：授权回来之后会给那个
-	// 账号开一个自己的窗口，这个匿名窗口随之关掉。这次操作已知需要的 scope
-	// 要带过去，否则新账号登录回来仍缺权限，还得再授权一次。
-	if a.book != nil && a.accountID == "" {
-		if a.auth != nil {
-			scopes = mergeScopeList(a.auth.knownScopesList(), scopes)
-		}
-		a.cancelAuthGate("")
-		a.book.startAddAccountScopes(scopes)
-		return
-	}
 	a.startLoginWithScopes(scopes)
 }
 

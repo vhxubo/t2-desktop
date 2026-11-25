@@ -57,15 +57,15 @@ AI 分区最近都在聊什么？
 | 编号 | 决策 | 结论与理由 |
 | --- | --- | --- |
 | 1 | 传输方式 | MCP Streamable HTTP，单端点 `POST /mcp`，响应 `application/json`。局域网 Agent 无法用 stdio，HTTP 是唯一合理选择 |
-| 2 | 进程模型 | 与应用同进程，作为进程级单例挂在 `accountBook` 上。需要 `AuthManager`、`mygo.Secrets`、共享代理与限流闸门，拆进程只会重复实现这些 |
+| 2 | 进程模型 | 与应用同进程，作为进程级单例挂在 `appDeps` 上。需要 `AuthManager`、`mygo.Secrets`、共享代理与限流闸门，拆进程只会重复实现这些 |
 | 3 | 默认状态 | `enabled=false`，不监听任何端口；`write_enabled=false` |
 | 4 | 监听范围 | 默认只绑 `127.0.0.1`；打开「允许局域网访问」才绑 `0.0.0.0`，且仍逐请求校验来源必须是回环或私有地址 |
 | 5 | 认证 | 每个服务一个 Bearer 令牌，32 字节随机；比对用 `subtle.ConstantTimeCompare`；令牌存 OS 凭据库，不可用时才退回 `mcp.json`（0600） |
 | 6 | 免责声明 | 两个独立确认点：首次开启服务、首次开启写操作，各弹一次；时间戳记在配置里 |
-| 7 | 身份 | 设置里指定「以哪个账号响应」，默认取当前活跃账号；未登录时读走匿名，写直接报错并提示去设置里选账号 |
+| 7 | 身份 | 固定使用应用当前的登录会话；未登录时读走匿名，写直接报错并提示先登录 |
 | 8 | 工具命名 | 统一 `t2_` 前缀，避免与其它 MCP 服务重名；工具描述写清「只读 / 写入」 |
-| 9 | 幂等 | 写工具接受可选 `idempotency_key`；缺省按「账号 + 工具 + 规范化参数」做 SHA-256，重试不会重复发帖 |
-| 10 | 审计 | 追加写 `mcp-audit.jsonl`（0600，2 MB 轮转）；只记工具名、账号、参数摘要、结果码、耗时，不记正文 |
+| 9 | 幂等 | 写工具接受可选 `idempotency_key`；缺省按「工具 + 规范化参数」做 SHA-256，重试不会重复发帖 |
+| 10 | 审计 | 追加写 `mcp-audit.jsonl`（0600，2 MB 轮转）；只记工具名、参数摘要、结果码、耗时，不记正文 |
 | 11 | 限流 | 复用 `proxyManager.rateLimitGate()`；MCP 入口另加每来源 120 次/分钟、全局并发 4 的本地保护 |
 | 12 | 端口 | 默认 `8737`；被占用时报错并保持关闭，不静默换端口，避免客户端配置指向错误地址 |
 | 13 | 工具分层 | 原语（列表 / 正文 / 评论）+ 聚合（批量取正文与评论）；聚合只做取数与截断，不做摘要、不引入 LLM |
@@ -88,7 +88,7 @@ AI 分区最近都在聊什么？
 | 发帖 | `compose.go` 的 `createTopic`、`composeTitleMax`、`composeContentMax` | 复用常量与调用；payload 由 MCP 层按文档字段拼 |
 | 回复 | `detail.go` 的 `createReply`、`replyTarget`、`replyMaxLevel` | 需要抽出底层 `postReply`（见 8.4） |
 | HTML 转文本 | `comments.go` 的 `htmlToText` | 正文与评论统一转纯文本 |
-| 会话与令牌刷新 | `auth.go` 的 `AuthManager`、`withAuthRetry` | MCP 每次请求现建 `Client{Auth: acc.auth, Proxy: deps.proxy}` |
+| 会话与令牌刷新 | `auth.go` 的 `AuthManager`、`withAuthRetry` | MCP 每次请求现建 `Client{Auth: auth, Proxy: deps.proxy}` |
 | 共享代理 | `proxy.go` 的 `proxyManager.Transport()` / `Client()` | 不新建任何 `http.Client` 或 `Transport` |
 | 共享限流 | `rate_limit.go` 的 `rateLimitGate` | 由 `Client` 自动使用，MCP 不重复实现退避 |
 | 凭据库 | `auth.go` 的 `secureTokenStore`（`mygo.Secrets`） | 新增 `mcpTokenStore`，沿用同一套「不可用才落盘」策略 |
@@ -99,7 +99,7 @@ AI 分区最近都在聊什么？
 
 1. 应用目前**没有任何入站 HTTP 服务**，`net.Listen` / `http.Server` 在仓库里只出现在测试中。生命周期、优雅关闭、端口占用处理都要新建。
 2. 设置页已有 8 个分类，宽度 520；再加一个会挤压标签栏，需要同时调整窗口宽度并验证。
-3. 多账号下缺少「配置指定账号 → 会话是否可用」的进程级只读快照。`activeAccountID()` 与 `account(id)` 本身已有锁，MCP 可以直接调用，但要新增一个 `mcpAccount()` 把它们与「未登录 / 已退出」的判断收在一处，避免工具层各写一遍。
+3. 缺少「当前会话是否可用」的进程级只读判断。`AuthManager` 本身已有锁，MCP 可以直接调用，但要新增一个 `mcpAuth()` 把「未登录 / 已退出」的判断收在一处，避免工具层各写一遍。
 4. 写操作缺少可被非 UI 调用方复用的底层函数：`createReply` 只接受 `replyTarget`，无法表达「显式 parentId + replyCommentId + 可选 level」。
 5. 最新评论没有 `Client` 级方法：通用 `fetch` 只返回 UI 用的 `Item`，拿不到完整正文；需要新增 `fetchLatestComments` 返回原始对象。
 6. 节点树有 `loadNodeTree`，但没有进程级只读缓存；MCP 连续调用会重复请求，需要自建 10 分钟内存缓存。
@@ -136,7 +136,7 @@ AI 分区最近都在聊什么？
 
 1. 连接进入 `mcp_server`，依次经过：panic 恢复 → 请求体上限 → Content-Type → Origin 校验 → 来源 IP 校验 → Bearer 校验 → 本地限流 → 协议分发。
 2. `mcp_protocol` 解析 JSON-RPC，`tools/call` 按名字查工具表。
-3. 工具层从 `accountBook` 取当前选定账号的 `*AuthManager`，现场构造 `Client{Auth: ..., Proxy: deps.proxy}`。
+3. 工具层取应用唯一的 `*AuthManager`，现场构造 `Client{Auth: ..., Proxy: deps.proxy}`。
 4. 调 `fetchTopic` / `fetchReplies` / `createTopic` / `postReply`，错误统一映射。
 5. 结果同时给 `content[0].text`（人读的紧凑 JSON）与 `structuredContent`（机器读）。
 6. 审计记录一条，写盘失败只记日志，不影响响应。
@@ -145,9 +145,9 @@ AI 分区最近都在聊什么？
 
 - 启用：保存配置 → `start()` 建 listener → 起 `http.Server` goroutine → 设置页显示地址与状态。
 - 停用：`shutdown(ctx 3s)` → 关闭 listener → 清空会话表 → 状态置为「已停止」。
-- 改端口 / 改监听范围 / 改账号：先停后起；失败时回到「已停止」并 toast 原因，不保留半开状态。
+- 改端口 / 改监听范围：先停后起；失败时回到「已停止」并 toast 原因，不保留半开状态。
 - 应用退出：在 `OnBeforeQuit` 链路里调用 `Stop()`，与窗口关闭同一优先级，不阻塞退出超过 3 秒。
-- 账号退出登录：不重启服务；下一次请求发现账号不存在或未登录，读降级为匿名，写返回明确错误。
+- 退出登录：不重启服务；下一次请求发现未登录，读降级为匿名，写返回明确错误。
 
 ## 5. 安全模型
 
@@ -188,10 +188,10 @@ func allowRemote(ip net.IP) bool {
 文案（设置页弹窗，`feedback.Modal`，`NoFooter`，两个动作）：
 
 ```
-启用后，本机会运行一个 MCP 服务。持有访问令牌的 AI 客户端可以读取你账号可见的内容；
-打开写操作后，还可以用你的账号发帖与回复。
+启用后，本机会运行一个 MCP 服务。持有访问令牌的 AI 客户端可以读取你可见的内容；
+打开写操作后，还可以用你的身份发帖与回复。
 
-· 访问令牌等同于账号权限，请勿分享给不可信的人或程序。
+· 访问令牌等同于你的权限，请勿分享给不可信的人或程序。
 · AI 生成的内容、误操作及由此产生的任何后果由使用者承担，与开发者无关。
 · 服务默认只监听本机；开启局域网访问前请确认所处网络可信。
 
@@ -212,7 +212,6 @@ func allowRemote(ip net.IP) bool {
   "write_enabled": false,
   "bind_lan": false,
   "port": 8737,
-  "account_id": "",
   "token": "",
   "disclaimer_accepted_at": "",
   "write_disclaimer_accepted_at": "",
@@ -222,7 +221,7 @@ func allowRemote(ip net.IP) bool {
 
 - 路径：`configDir()/mcp.json`，`writeJSONFile` 保证 0600。
 - `token` 字段只在凭据库不可用时才写；正常情况下留空，令牌在 `mygo.Secrets` 的 `mcp-server-token`。
-- `account_id` 为空表示「跟随当前活跃账号」；指定后即使切窗口也不变。
+- 身份固定使用应用当前登录会话，设置页不再提供身份选择。
 - 读取时对未知字段忽略、缺失字段取默认值；损坏时按默认值处理并在设置页提示「配置已重置」。
 
 ### 6.2 令牌存储
@@ -249,8 +248,8 @@ type mcpTokenStore struct {
     +--------停用/退出------+-----------------+
 ```
 
-- 运行中改端口 / 改范围 / 换账号 = 停止 → 启动；界面显示「重启中」。
-- 账号退出登录不改变服务状态，只影响下一次请求的身份解析。
+- 运行中改端口 / 改范围 = 停止 → 启动；界面显示「重启中」。
+- 退出登录不改变服务状态，只影响下一次请求的身份解析。
 
 ## 7. 协议层
 
@@ -297,7 +296,7 @@ type rpcError struct {
 | 参数不合 schema | `-32602`，`data` 带字段路径 |
 | 工具内部 panic | `-32603`，日志留栈，响应不带栈 |
 | 2Libra 业务失败（404 / 403 / 429） | **不作为 JSON-RPC 错误**，返回 `isError: true` 的工具结果，让模型能读到原因并自行调整 |
-| 写操作未开启 / 未选账号 | 同上，`isError: true`，文案给出「去 T2 设置 → MCP 打开」 |
+| 写操作未开启 / 未登录 | 同上，`isError: true`，文案给出「去 T2 设置 → MCP 打开」 |
 
 HTTP 层错误：401（缺 / 错令牌，带 `WWW-Authenticate: Bearer`）、403（来源不允许 / Origin 不合法）、413（体过大）、415（类型不对）、429（本地限流，带 `Retry-After`）。
 
@@ -459,7 +458,7 @@ type toolResult struct {
 
 #### `t2_get_me`
 
-无参数。返回 `{ "authenticated": bool, "account_id", "username", "avatar", "scopes", "is_pro", "role" }`。用于 Agent 在写之前确认身份，也方便排查「为什么写不了」。
+无参数。返回 `{ "authenticated": bool, "username", "avatar", "scopes", "is_pro", "role" }`。用于 Agent 在写之前确认身份，也方便排查「为什么写不了」。
 
 #### `t2_list_latest_comments`
 
@@ -667,7 +666,7 @@ func (c *Client) createReply(ctx context.Context, shortID, content string, targe
 - 校验：长度用 `composeTitleMax` / `composeContentMax`；`node_id` 必填；`tags` 去空去重。
 - 调用 `createTopic(ctx, payload, key)`，payload 只含 `title` / `content` / `node_id` / `tags`。
 - 返回 `{ "short_id": "...", "url": "...", "node_slug": "..." }`。
-- 幂等键缺省算法：`hex(sha256(accountID + "|" + tool + "|" + canonicalJSON(args)))[:32]`；相同内容重复提交会被服务端视为同一次创建。需要故意发两篇相同内容时，显式传不同的 `idempotency_key`（文档里写明）。
+- 幂等键缺省算法：`hex(sha256(tool + "|" + canonicalJSON(args)))[:32]`；相同内容重复提交会被服务端视为同一次创建。需要故意发两篇相同内容时，显式传不同的 `idempotency_key`（文档里写明）。
 
 #### `t2_reply_comment`
 
@@ -730,7 +729,6 @@ payload 规则（与 `createReply` 的注释保持一致）：
 │ ┌ 范围 ────────────────────────────────────────┐   │
 │ │ 允许局域网访问                        [ 关 ]  │   │
 │ │ 端口  [8737]                        [保存]    │   │
-│ │ 以账号身份  [ 跟随当前账号 ▾ ]                 │   │
 │ │ 允许写操作（发帖 / 回复）              [ 关 ]  │   │
 │ └──────────────────────────────────────────────┘   │
 │ [复制客户端配置]              [查看审计日志]        │
@@ -782,7 +780,7 @@ payload 规则（与 `createReply` 的注释保持一致）：
 | P0-4 中间件 | 同文件：体上限、Content-Type、Origin、来源 IP、Bearer、限流、panic 恢复 |
 | P0-5 审计 | `mcp_audit.go`：JSONL 追加、轮转、摘要函数 |
 | P0-6 设置页 | `mcp_ui.go` + `settings_ui.go` 接入新 tab、总开关、地址/令牌/状态、免责声明 |
-| P0-7 挂载 | `accountBook` 持有 `*mcpServer`；`newAppDeps` / `deps()` 传递；退出时 `Stop()` |
+| P0-7 挂载 | `appDeps` 持有 `*mcpServer`；`newAppDeps` / `deps()` 传递；退出时 `Stop()` |
 
 验收：
 
@@ -823,7 +821,7 @@ payload 规则（与 `createReply` 的注释保持一致）：
 
 ### P2 写能力（第二优先级）
 
-目标：Agent 能以选定账号发帖、回复，且可审计、可重试。
+目标：Agent 能以当前登录身份发帖、回复，且可审计、可重试。
 
 | 任务 | 产出 |
 | --- | --- |
@@ -840,8 +838,8 @@ payload 规则（与 `createReply` 的注释保持一致）：
 
 - 写开关关闭时，两个写工具都不出现在 `tools/list` 里（不是调用时报错），减少模型误判。
 - 同一参数连续调用两次、复用同一幂等键，只产生一篇帖子 / 一条评论。
-- 缺少 `write:topic` 的账号发帖，返回可读错误且不产生半成品。
-- 审计日志里能看到每次写调用的账号、工具、结果与耗时，且没有正文。
+- 缺少 `write:topic` 时发帖，返回可读错误且不产生半成品。
+- 审计日志里能看到每次写调用的工具、结果与耗时，且没有正文。
 
 ### P3 扩展与体验
 
@@ -873,7 +871,7 @@ payload 规则（与 `createReply` 的注释保持一致）：
 | DTO | 文档字段、缺字段、多余字段、`d:null`、嵌套 `post`/`topic` 两种形状；动态流帖子 / 评论分流 |
 | 表态计数 | `reactionCount` 对 `reactions_summary` / `reactions` 两种键、缺 count、空数组都返回正确数值 |
 | 批量聚合 | 去重保序、超过 10 个报 -32602、部分失败、200 KB 预算下的裁剪顺序（先评论后正文）、`dropped` |
-| 幂等 | 参数顺序无关、显式键优先、账号隔离 |
+| 幂等 | 参数顺序无关、显式键优先、本机单会话 |
 | 审计 | 摘要不含正文、轮转、写失败不影响响应 |
 
 ### 11.2 集成
@@ -911,11 +909,11 @@ payload 规则（与 `createReply` 的注释保持一致）：
 | 风险 | 影响 | 缓解 |
 | --- | --- | --- |
 | 局域网内令牌被转发 | 他人可以用户身份发帖 | 默认回环；写开关；审计；令牌可一键重置；文档强调不要分享 |
-| Agent 误发内容 | 账号声誉受损 | 写开关默认关；第二次声明；建议先只读试用；P3 加 dry-run |
+| Agent 误发内容 | 个人声誉受损 | 写开关默认关；第二次声明；建议先只读试用；P3 加 dry-run |
 | 设置页标签溢出 | 界面错位 | 先调宽窗口并截图验证；必要时把「通知 / MCP」合并为「高级」二级页 |
 | 9 个 tab 的记忆成本 | 找不到入口 | 设置页内搜索/命令面板增加「MCP」跳转（P3） |
 | 端口冲突 | 启动失败 | 明确报错、保留用户输入、提示换端口 |
-| 账号切换导致身份漂移 | 用错账号发帖 | 设置里可固定账号；`t2_get_me` 可自检；写结果回显作者 |
+| 登录态变化导致身份漂移 | 用错身份发帖 | 调用前核对当前会话；`t2_get_me` 可自检；写结果回显作者 |
 | 大响应撑爆上下文 | 客户端报错 | 正文默认 3k 字（可调 8k）；评论默认 8 条；批量 10 篇 / 200 KB；超限先丢评论再截正文 |
 | 批量抓取打满限流 | 正常浏览被拖慢 | 并发 2、单批 ≤10 篇、单次 ≤5 页；遇到 429 立即停止后续抓取，返回已完成部分并说明重试时间 |
 | 「热门评论」被误解成全站排序 | 结论失真 | 接口只有一页 50 条；工具回 `ranked_within_page`，描述里写明「仅当前页排序」 |
@@ -926,7 +924,7 @@ payload 规则（与 `createReply` 的注释保持一致）：
 ## 13. 后续演进
 
 1. **stdio 适配器**：若桌面客户端只支持 stdio，可提供一个极薄的 `t2-mcp-stdio` 子命令，转发到本机 HTTP，不重复实现工具。
-2. **多账号多端点**：`/mcp/<account_id>`，每个 Agent 绑定一个账号，避免身份漂移。
+2. **多 Agent 接入**：多个 Agent 可同时连接，身份统一取应用当前登录会话，各自用不同的 Bearer 令牌，不引入身份漂移。
 3. **MCP 授权**：跟随规范的 OAuth 演进，把 Bearer 换成标准授权流程。
 4. **资源化**：帖子作为 `resource`，支持订阅更新通知（`resources/subscribe`）。
 5. **局域网发现**：mDNS 广播服务名，减少手填地址；仅在同一可信网段开启。

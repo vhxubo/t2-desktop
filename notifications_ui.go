@@ -290,7 +290,6 @@ func (a *app) notificationsWindowView(c *ui.Context) {
 						Type: display.TextSecondary, FontSize: 11, Rows: 1,
 					})
 				}
-				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.notifWin; win != nil {
@@ -634,7 +633,7 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 
 	// 通知行走 Lobe 的扁平列表语言：无圆角、无整圈描边，只在行与行之间留
 	// 一条细分隔线；悬停铺 FillTertiary，整行仍是一张可点的 Block。正文不再
-	// 被卡片边框切碎，与主页列表行、账号面板同一套视觉语言。
+	// 被卡片边框切碎，与主页列表行、「我的」窗口同一套视觉语言。
 	card := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockBorderless}).
 		FillWidth().Padding(a.rowPadY(), 12).Gap(a.rowGap()).Radius(0).
 		BorderWidth(0, 0, 1, 0).BorderColor(tk.BorderSecondary)

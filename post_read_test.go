@@ -38,39 +38,6 @@ func TestPostReadMarksAndPersists(t *testing.T) {
 	}
 }
 
-// 已读状态按账号隔离：未登录时读的帖子不会算成登录账号的已读，退出后匿名
-// 作用域的记录又回来。
-func TestPostReadIsPerAccount(t *testing.T) {
-	a := testApp(t)
-	a.markPostRead("ANON")
-	if !a.isPostRead("ANON") {
-		t.Fatal("匿名阅读没有记下已读")
-	}
-
-	if err := a.auth.storeToken(tokenData{
-		AccessToken: "tok",
-		TokenType:   "Bearer",
-		Username:    "jimmy",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if a.isPostRead("ANON") {
-		t.Error("登录后把匿名读过的帖子算给了当前账号")
-	}
-	a.markPostRead("JIMMY")
-	if !a.isPostRead("JIMMY") {
-		t.Error("登录账号的已读没有记下")
-	}
-
-	a.auth.Logout()
-	if !a.isPostRead("ANON") {
-		t.Error("退出后没有回到匿名作用域的已读状态")
-	}
-	if a.isPostRead("JIMMY") {
-		t.Error("退出后仍能看到上个账号的已读状态")
-	}
-}
-
 // 已读表超过上限时只保留最近读过的那些，内存与落盘都不无限增长。
 func TestPostReadTrimsToNewest(t *testing.T) {
 	a := testApp(t)

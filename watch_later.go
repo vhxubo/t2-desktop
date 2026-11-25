@@ -14,7 +14,7 @@ import (
 //   - 稍后再看是本文件：用户主动标记「等会儿再读」的帖子，挂在侧边栏入口上，
 //     不依赖服务端的收藏 / 书签。
 //
-// 两页都按当前账号隔离（见 accountScope）：换账号后看不到上一个账号读过、
+// 两页都按当前账号隔离（见 cacheScope）：重新登录后看不到上一个账号读过、
 // 攒过什么；未登录时记在 anonymous 下。清空也只清当前账号。
 //
 // 打开一篇稍后再看的帖子之后怎么处理，由 watch_later_prefs.go 的偏好决定：
@@ -45,7 +45,7 @@ type watchLaterData struct {
 // loadWatchLater 确保内存里的稍后再看属于当前账号。作用域没变时直接返回；
 // 新启动、登录 / 退出后从 cache/offline.json 读一次。
 func (a *app) loadWatchLater() {
-	scope := a.accountScope()
+	scope := a.cacheScope()
 	if a.laterLoaded && a.laterFor == scope {
 		return
 	}

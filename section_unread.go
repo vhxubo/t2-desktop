@@ -20,7 +20,7 @@ type sectionReadRecord struct {
 }
 
 func (a *app) sectionReadKey(section string) string {
-	scope := a.accountScope()
+	scope := a.cacheScope()
 	if scope == "" {
 		return ""
 	}

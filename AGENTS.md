@@ -7,16 +7,16 @@
 
 ## 原生 UI
 
-- 界面用 mygo 的原生 `ui`，只有多账号授权可用 WebView。改 UI 前按 [mygo 维护技能](.agents/skills/mygo-maintenance/SKILL.md) 和 [官方技能说明](https://mygo.lobehub.com/skills.md) 核对锁定版本与 API。
+- 界面全部用 mygo 的原生 `ui`，不使用 WebView。改 UI 前按 [mygo 维护技能](.agents/skills/mygo-maintenance/SKILL.md) 和 [官方技能说明](https://mygo.lobehub.com/skills.md) 核对锁定版本与 API。
 - 不在状态中保存 `ui.Element` 或 `*ui.Context`；后台结果经 `Window.Update` / `app.publish` 发回 UI 线程。
 - UI 以当前代码、mygo 与 2Libra 文档、`ui.NewTester` 断言为准。不要拿截图或文档图片当参考，也不要重建截图目录或给文档添加截图。
 - 用户头像统一用 `avatarView` / `avatarWithPro`。无图时用 `username` 生成确定性图案，不能用昵称或首字母替代。
 
 ## 账号与授权
 
-- `AuthManager` 管单账号会话；`accountBook` 管账号索引、窗口调度和后台保活，全局同时只允许一次授权；`app` 管单账号窗口状态，关窗不退账号。代理、外观、图片和离线缓存经 `appDeps` 进程内共享。
-- 账号索引 `accounts.json` 不存令牌。访问和刷新令牌按账号 ID 存入 `mygo.Secrets`；不要扩大 `secureTokenStore` 的明文回退范围，仅凭据库不支持或数据超过 `mygo.MaxSecretSize` 时允许回退。
-- 新增账号、重登和补充授权：本机账号不超过一个时用系统浏览器与深链；多个账号优先使用 `login_window.go` 的独立 WebView 会话，不可用时回退系统浏览器并说明原因。两种浏览器共用 `completeCallback` / `AuthManager.Complete`；重登返回其他用户名时不得覆盖原账号会话。
+- `AuthManager` 管唯一的账号会话，全局同时只允许一次授权；`app` 管主窗口及附属窗口状态，关窗不退账号。代理、外观、图片和离线缓存经 `appDeps` 进程内共享。
+- 访问和刷新令牌作为单条记录存入 `mygo.Secrets`；不要扩大 `secureTokenStore` 的明文回退范围，仅凭据库不支持或数据超过 `mygo.MaxSecretSize` 时允许回退。
+- 登录、重新登录和补充授权统一走系统浏览器 + 深链回调，经 `handleDeepLink` / `AuthManager.Complete` 完成。未登录时主窗口直接显示登录页，不再另开登录窗口；深链回调只落到这一个会话。
 
 ## 网络与限流
 

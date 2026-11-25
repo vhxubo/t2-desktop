@@ -88,7 +88,7 @@ func (c *Client) deleteAvatar(ctx context.Context) (string, error) {
 }
 
 /* ------------------------------------------------------------------
-   本机状态：会话里的头像、账号索引与「我的」资料头
+   本机状态：会话里的头像、本机会话与「我的」资料头
 --------------------------------------------------------------- */
 
 // openAvatarPopup 在点「更换头像」时确认登录。气泡的开合由 Lobe 的 Popover
@@ -237,17 +237,14 @@ func (a *app) resetAvatar(ps *profileState) {
 	}()
 }
 
-// applyAvatar 把服务端确认的新地址写回资料头、会话与账号索引：标题栏、
-// 「我的」窗口和账号切换面板都读这几份状态，任何一份落下都会显示旧头像。
+// applyAvatar 把服务端确认的新地址写回资料头与会话：标题栏和「我的」窗口都读
+// 这几份状态，任何一份落下都会显示旧头像。
 func (a *app) applyAvatar(ps *profileState, url string) {
 	if ps == nil {
 		return
 	}
 	ps.user.Avatar = url
 	a.auth.setAvatar(url)
-	if a.book != nil && a.accountID != "" {
-		a.book.setAccountAvatar(a.accountID, url)
-	}
 	if url != "" {
 		a.prefetchAvatars(url)
 	}

@@ -228,8 +228,7 @@ func (a *app) userCardWindowView(c *ui.Context) {
 
 // userCardTitleBar 是自绘标题栏：左边是 Lucide 人形图标与「用户资料」，右边
 // 是最小化与关闭，画法与主窗口、通知、我的三个窗口一致。它同时是拖动窗口
-// 的区域。资料头里写的是这张卡片的用户；标题栏最右那枚标识写的是「这扇窗口
-// 属于哪个账号」，多账号时不至于把别人的资料当成自己账号的窗口。
+// 的区域。资料头里写的是这张卡片的用户。
 func (a *app) userCardTitleBar(c *ui.Context) {
 	tk := lobetheme.TokensOf(c)
 	ui.Row(c).Height(titleBarHeight).FillWidth().AlignItems(ui.Stretch).
@@ -238,7 +237,6 @@ func (a *app) userCardTitleBar(c *ui.Context) {
 			AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, lucide.User()).Size(16, 16).TextColor(tk.Primary)
 			display.Text(c, "用户资料", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
-			a.accountWindowTag(c)
 		})
 		titleBarButton(c, titleMinimize, "最小化", func() {
 			if win := a.userCardWin; win != nil {

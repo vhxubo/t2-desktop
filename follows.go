@@ -189,7 +189,7 @@ type followsState struct {
 	lists [followsKindCount]followList
 	// busy 是正在提交关注 / 取关的用户 id；一次只提交一个，避免连点。
 	busy string
-	// viewer 记录列表属于哪个账号：换账号后整份状态重建。
+	// viewer 记录列表属于哪个账号：重新登录后整份状态重建。
 	viewer string
 }
 
@@ -209,7 +209,7 @@ func (a *app) ensureFollowsLoaded() {
 		return
 	}
 	if fs.viewer != a.auth.username() {
-		// 换账号：上一个账号的名单不能再展示。
+		// 重新登录：上一个账号的名单不能再展示。
 		*fs = followsState{tab: fs.tab, viewer: a.auth.username()}
 	}
 	l := fs.list(fs.tab)
@@ -393,7 +393,7 @@ type followsReadRecord struct {
 }
 
 func (a *app) followsReadKey() string {
-	scope := a.accountScope()
+	scope := a.cacheScope()
 	if scope == "" {
 		return ""
 	}

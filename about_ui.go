@@ -118,7 +118,6 @@ func (a *app) aboutWindowView(c *ui.Context) {
 				AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, lucide.Info()).Size(16, 16).TextColor(tk.Primary)
 				display.Text(c, "关于", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
-				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.aboutWin; win != nil {

@@ -73,8 +73,6 @@ func (a *app) openReplyWindow() {
 	d.composerDetached = true
 	d.preview = 0 // 页面里的「编辑 / 预览」不带到窗口里：窗口一直两边都显示
 	// 身份气泡跟着评论框走：主窗口里点开的那一份先收起，到窗口里再点开。
-	d.identityOpen = false
-	d.identityHost = ""
 	a.replyWinFor = d
 	if a.win == nil {
 		return
@@ -110,11 +108,6 @@ func (a *app) openReplyWindow() {
 		if d.composerDetached {
 			d.composerDetached = false
 		}
-		// 窗口里点开的身份气泡随窗口一起消失，不能留给主窗口去画。
-		if d.identityHost == replySurfaceWindow {
-			d.identityOpen = false
-			d.identityHost = ""
-		}
 		a.replyWinFor = nil
 		if a.win != nil {
 			a.win.Invalidate()
@@ -131,10 +124,6 @@ func (a *app) closeReplyWindow() {
 	a.flushDrafts()
 	if d := a.replyWinFor; d != nil {
 		d.composerDetached = false
-		if d.identityHost == replySurfaceWindow {
-			d.identityOpen = false
-			d.identityHost = ""
-		}
 	}
 	if d := a.detail; d != nil {
 		d.composerDetached = false
@@ -205,7 +194,6 @@ func (a *app) replyWindowView(c *ui.Context) {
 						Type: display.TextSecondary, FontSize: 11, Rows: 1,
 					})
 				}
-				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.replyWin; win != nil {
@@ -272,10 +260,7 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 		}
 		// 评论费用状态栏：字数、预计发评金币、可省金币的徽章与「走个面」
 		// 开关。占整窗宽度，左右两栏都看得到（见 comment_cost_ui.go）。
-		// 临时换账号回复时这组数字属于窗口自己的账号，不适用，先收起。
-		if d.replyAsID == "" {
-			a.commentCostBar(c, d.draft)
-		}
+		a.commentCostBar(c, d.draft)
 		// 两栏这一行给一个固定 key：状态栏在登录 / 退出时会多出或消失一个
 		// 兄弟节点，没有 key 的话输入框会被挤到另一个节点身份上，焦点与
 		// 选区随之丢失。
@@ -305,17 +290,12 @@ func (a *app) replyWindowBody(c *ui.Context, d *detailState) {
 						Type: display.TextSecondary, FontSize: 11, Rows: 1,
 					}).Grow(1).MinWidth(0)
 					// 登录后字数在评论费用状态栏里报（见 comment_cost_ui.go），
-					// 同一条链上不重复写两遍；未登录时、以及临时换了回复账号
-					// 把状态栏收起时，仍留在这里。
-					if d.replyAsID != "" || !a.commentCostBarVisible() {
+					// 同一条链上不重复写两遍；未登录时状态栏收起，仍留在这里。
+					if !a.commentCostBarVisible() {
 						display.Text(c, strconv.Itoa(utf8.RuneCountInString(d.draft))+" 字",
 							display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
 					}
-					// 窗口页脚同样写明以哪个账号发出，点开还能换一个账号回复
-					//（见 reply_identity.go）：标题栏虽然有窗口账号标识，但点
-					// 「发送」就在这一行里。发送中的转圈跟着动作本身走（见
-					// replyFieldActions）。
-					a.replyIdentityBadge(c, d, replySurfaceWindow)
+					// 发送中的转圈跟着动作本身走（见 replyFieldActions）。
 					a.replyFieldActions(c, d, false)
 				})
 			})

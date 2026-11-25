@@ -18,9 +18,9 @@ import (
 // 真收到 429 时按服务端给的 Retry-After / Reset 退避；两者都没有才退回
 // 错误体里的 retry_after（文档字段）或一个很短的固定值，避免无信号时猛冲。
 //
-// 一个闸门挂在共享的 proxyManager 上，多个账号窗口与后台轮询共用；没有
-// proxyManager 的测试客户端各自用一份私有的。第三方图床与 multipart 上传
-// 各有自己的配额规则，不走这个闸门。
+// 一个闸门挂在共享的 proxyManager 上，所有窗口共用；没有 proxyManager 的
+// 测试客户端各自用一份私有的。第三方图床与 multipart 上传各有自己的配额
+// 规则，不走这个闸门。
 const (
 	rateLimitMaxServerDelay = 10 * time.Minute // 服务端给的秒数异常大时不无限期卡死
 	rateLimitNoHeaderDelay  = 5 * time.Second  // 429 且完全没有时间信号时的保守退避

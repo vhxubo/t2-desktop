@@ -86,8 +86,8 @@ func TestDecodeBadgeStatusOnlyForIWasHere(t *testing.T) {
 	}
 }
 
-// 状态是每次响应带来的瞬时值：不写进阅读历史这类本机缓存，换账号 / 重开
-// 应用都不会从旧数据里冒出过期状态。
+// 状态是每次响应带来的瞬时值：不写进阅读历史这类本机缓存，重开应用也不会
+// 从旧数据里冒出过期状态。
 func TestBadgeStatusNotPersistedInReadingHistory(t *testing.T) {
 	rec := readingRecord{
 		ShortID: "S1",

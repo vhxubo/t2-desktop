@@ -13,22 +13,18 @@ import (
 // 「新」），以及哪些楼中楼被折叠收起。
 //
 // 视图模式（楼层 / 扁平）不在这里：它是「这个人习惯怎么看评论」，与具体帖子
-// 无关，单独按账号记一份（见下面的 replyViewMode）。在一篇帖子里切到扁平，
-// 打开别的帖子也还是扁平。
+// 无关，单独记一份（见下面的 replyViewMode）。在一篇帖子里切到扁平，打开别的
+// 帖子也还是扁平。
 //
 // 状态只记在本机（cache/offline.json 的 replyview:<scope>:<shortID> 与
-// replyview-mode:<scope>），服务端没有这类接口，也不去改动服务端数据。作用域
-// 与阅读记录相同（见 accountScope）：换账号后不会把上一个账号的折叠 / 读到的
-// 位置 / 视图习惯套到自己身上。已登录但还没拿到昵称（sessionScope）时不落盘，
-// 避免被下个账号复用。
+// replyview-mode:<scope>），服务端没有这类接口，也不去改动服务端数据。
 
 const (
 	replyViewPrefix     = "replyview:"
 	replyViewModePrefix = "replyview-mode:"
 )
 
-// replyViewMemory 是一条记忆，全部字段按当前账号 + 帖子隔离。视图模式不
-// 在这里（按账号记，见 replyViewMode）。
+// replyViewMemory 是一条记忆，按帖子隔离。视图模式不在这里（见 replyViewMode）。
 type replyViewMemory struct {
 	// ReadToID 是上次离开时视口顶部那条评论的 ID；scroll_idx 是它落在显示
 	// 列表里的行号。两者一起把评论区恢复到上次停的位置：优先按 ID 定位
@@ -45,8 +41,8 @@ type replyViewMemory struct {
 	SavedAt time.Time `json:"saved_at"`
 }
 
-// replyViewKey 是某篇帖子评论记忆的存储键。作用域拿不到（未登录匿名、
-// sessionScope 或没有 shortID）时返回空，调用方据此跳过读写。
+// replyViewKey 是某篇帖子评论记忆的存储键。没有 shortID 时返回空，调用方据此
+// 跳过读写。
 func (a *app) replyViewKey(shortID string) string {
 	scope := a.persistableScope()
 	if scope == "" || shortID == "" {
@@ -56,7 +52,7 @@ func (a *app) replyViewKey(shortID string) string {
 }
 
 // replyViewMode 是评论区的视图偏好：flat=false 楼层视图，flat=true 扁平
-// 时间序。它跟帖子无关，只按账号记一份。
+// 时间序。它跟帖子无关，只在本机记一份。
 type replyViewMode struct {
 	Flat bool `json:"flat"`
 	// SavedAt 是写入时间，用来判断读到的偏好是否损坏。

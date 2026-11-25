@@ -196,12 +196,10 @@ func TestShortcutStorePersistAndCap(t *testing.T) {
 func TestStartupHomeFilterIsDefault(t *testing.T) {
 	dir := t.TempDir()
 	first := newApp(dir)
-	first.accountID = "alice"
 	first.tabs[0].homeFilterNode = nodeFilterOf(nodeRef{ID: "a1", Name: "甲"})
 	first.saveNodeShortcuts()
 
 	second := newApp(dir)
-	second.accountID = "alice"
 	second.loadNodePrefs()
 	if !second.homeFilter().isAll() {
 		t.Errorf("启动时不该恢复上次筛选：%+v", second.homeFilter())

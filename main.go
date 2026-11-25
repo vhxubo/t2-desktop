@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log"
 	"strconv"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/updater"
 	updatenative "github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
@@ -52,7 +52,7 @@ type tabState struct {
 	// 把整页换成错误页，只在新内容该出现的位置提示并可重试。
 	moreErr string
 	// authWait 表示首屏失败是在等全局授权把缺失的权限补上。等待期间
-	// ensureLoaded 不再重发同一个注定 403 的请求；换账号或用户点「重试」
+	// ensureLoaded 不再重发同一个注定 403 的请求；重新登录或用户点「重试」
 	// 会清掉它。
 	authWait bool
 	gen      uint64
@@ -123,18 +123,15 @@ func (f *tabFold) invalidateRows() {
 // background work publishes results through Window.Update.
 type app struct {
 	auth *AuthManager
-	// book 是进程级的账号册（见 accounts.go）。多账号时每个账号一个 app、
-	// 一个主窗口，共用同一个账号册；没有账号册时（无头测试、单窗口场景）
-	// 登录与退出登录退回到「本窗口自己的会话」那套行为。
-	book *accountBook
-	// accountID 是这个窗口所属账号在本机存储里的 id。未登录窗口为空。
-	accountID string
-	proxy     *proxyManager
-	theme     *themeManager
-	client    *Client
-	win       *mygo.Window
-	srv       ui.Services
-	autoLoad  bool
+	// desktop 是进程级单例（见 desktop.go）：共享依赖、系统事件与窗口调度
+	// 都挂在它上面。无头测试可以不建它，这时登录与退出只用本窗口的会话。
+	desktop  *desktop
+	proxy    *proxyManager
+	theme    *themeManager
+	client   *Client
+	win      *mygo.Window
+	srv      ui.Services
+	autoLoad bool
 	// frameSvc 是现在正在渲染的那一帧所属窗口的重绘服务（见 windowView）。
 	// 图片预取据此把「加载完成」只通知到真正显示它的窗口，而不是重建所有
 	// 附属窗口。只在 UI 线程读写。
@@ -214,6 +211,14 @@ type app struct {
 	// cacheStatus 是设置窗口「图片缓存」一块的显示状态；统计在后台跑，
 	// 结果回到主线程。
 	cacheStatus cacheStatus
+	// 诊断包导出（见 diagnostics.go）：includeNetLog 默认开，导出期间
+	// exporting 置位来禁用按钮。pathHook 与 onExported 是测试钩子：无头环境
+	// 没有原生保存对话框，导出完成后用它把结果同步回测试。只在 UI 线程读写。
+	diagnosticsExporting     bool
+	diagnosticsIncludeNetLog bool
+	diagnosticsIncludePrefs  bool
+	diagnosticsPathHook      func() (string, error)
+	onDiagnosticsExported    func(path string, err error)
 	// updates 表示更新插件已安装（main 里 mygo.Use 之后置 true）。无头
 	// 测试不装插件，点「检查更新」只走测试钩子，不会碰 updater 的主循环。
 	updates bool
@@ -222,11 +227,18 @@ type app struct {
 	// 动作。生产为 nil。
 	onSettingsOpen func()
 	onUpdateCheck  func()
-	onCoinsOpen    func()
-	onPandoraOpen  func()
-	onProfileOpen  func()
-	onSignIn       func()
-	onAboutOpen    func()
+	// onIdleAutoDownload 是测试钩子：无窗口时确认「闲时自动下载更新」接到了
+	// 更新插件。生产为 nil。
+	onIdleAutoDownload func(on bool)
+	// onUpdateInterval / onUpdateRestart 是测试钩子：无窗口时确认间隔切换与
+	// 标题栏「重启更新」按钮接上了动作。生产为 nil。
+	onUpdateInterval func(hours int)
+	onUpdateRestart  func()
+	onCoinsOpen      func()
+	onPandoraOpen    func()
+	onProfileOpen    func()
+	onSignIn         func()
+	onAboutOpen      func()
 
 	tab     int
 	lastTab int
@@ -260,7 +272,7 @@ type app struct {
 	// 记录，以及每篇帖子缓存的正文。只读写本机文件，不发请求。
 	kv *localKV
 	// reading 是当前账号的阅读历史（最近打开的帖子），readingFor 是它所属
-	// 的作用域。未登录时记在 anonymous 下，换账号时整体重新载入。
+	// 的作用域。未登录时记在 anonymous 下，重新登录时整体重新载入。
 	reading       []readingRecord
 	readingFor    string
 	readingLoaded bool
@@ -340,9 +352,14 @@ type app struct {
 	// updateMirror 是更新包下载加速入口的选择（见 update_mirror.go）：默认
 	// 不选、走「网络代理」里配置的代理。进程级共享，只在本窗口的界面里读。
 	updateMirror *updateMirrorStore
-	// updateChannel 是「接收测试版」的选择（见 update_channel.go）：默认只收
-	// 正式版。进程级共享，设置窗口据此画开关。
+	// updateChannel 是「稳定渠道」的选择（见 update_channel.go）：默认关闭，
+	// 接收全部版本；打开后只收正式版。进程级共享，设置窗口据此画开关。
 	updateChannel *updateChannelStore
+	// updateIdlePrefs 是「闲时自动下载更新」的开关（见 update_idle_prefs.go）：
+	// 默认开启。进程级共享，接收测试版时强制开启。
+	updateIdlePrefs *updateIdlePrefsStore
+	// updateIntervalPrefs 是后台检查更新间隔，进程级共享，默认 6 小时。
+	updateIntervalPrefs *updateIntervalPrefsStore
 	// autoSignPrefs 是「打开应用时自动签到」的开关，进程级共享。
 	autoSignPrefs *autoSignPrefsStore
 	// autoSignStarted 保证本窗口只尝试一次自动签到；窗口关掉重开不会重复。
@@ -565,9 +582,7 @@ type app struct {
 	notifyQuietFromDraft string
 	notifyQuietToDraft   string
 	// noticeTargets 是「原生通知 id → 目标地址」的映射：系统通知的点击回调
-	// 只带 id，靠它把点击落回对应的帖子 / 评论，进程重启后再点击则回到站点。
-	// id 里带账号段（见 notificationNativeID），多账号时点击才知道该找哪个
-	// 窗口。
+	// 只带 id，靠它把点击落回对应的帖子 / 评论，映射丢了就回到消息中心。
 	noticeTargets map[string]string
 	// seenNotifications 是一帧里「看到了就标已读」的消息：详情页在评论列表里
 	// 发现目标评论进入了可视区时记下来，该帧构建结束再发请求（见
@@ -602,11 +617,11 @@ type app struct {
 // tabID 把 tab 序号映射成导航项 id；导航轨的选中态由 selectTab 直接维护。
 func tabID(i int) string { return "t" + strconv.Itoa(i) }
 
-// appDeps 是进程级的共享依赖：一个进程一份，多个账号窗口共用。
+// appDeps 是进程级的共享依赖：一个进程一份，所有窗口共用。
 //
-// 代理、外观、图片缓存与离线缓存都必须是全应用一份：每个窗口各建一份会让
-// 代理切换只对一个窗口生效，而离线缓存（cache/offline.json）会被几个窗口
-// 各自整份写回，后写的把前面账号的阅读记录覆盖掉。
+// 代理、外观、图片缓存与离线缓存都必须是全应用一份：各窗口建一份会让代理
+// 切换只对一扇窗口生效，而离线缓存（cache/offline.json）被各自整份写回时
+// 后写的会覆盖前写的阅读记录。
 type appDeps struct {
 	dir        string
 	proxy      *proxyManager
@@ -627,8 +642,13 @@ type appDeps struct {
 	typePrefs *typographyStore
 	// updateMirror 是更新包下载加速入口的选择，进程级一份（见 update_mirror.go）。
 	updateMirror *updateMirrorStore
-	// updateChannel 是「接收测试版」的选择，进程级一份（见 update_channel.go）。
+	// updateChannel 是「稳定渠道」的选择，进程级一份（见 update_channel.go）。
 	updateChannel *updateChannelStore
+	// updateIdlePrefs 是「闲时自动下载更新」的开关，进程级一份（见
+	// update_idle_prefs.go），默认开启。
+	updateIdlePrefs *updateIdlePrefsStore
+	// updateIntervalPrefs 是后台检查更新间隔，进程级一份，默认 6 小时。
+	updateIntervalPrefs *updateIntervalPrefsStore
 	// notificationPrefs 是通知偏好，进程级一份（见 notification_prefs.go）。
 	notificationPrefs *notificationPrefsStore
 	// autoSignPrefs 是「打开应用时自动签到」的开关，进程级一份（见
@@ -639,141 +659,129 @@ type appDeps struct {
 	sidebarPrefs *sidebarPrefsStore
 	// commands 是命令快捷键 / 收藏 / 最近使用的偏好，进程级一份。
 	commands *commandPrefs
-	book     *accountBook
+	desktop  *desktop
 }
 
-// newAppDeps 造一份独立的共享依赖：没有账号册（无头测试）时每个 app 自己
+// newAppDeps 造一份独立的共享依赖：无头测试时每个 app 自己
 // 一份，互不干扰。
 func newAppDeps(dir string) appDeps {
 	if dir == "" {
 		dir = configDir()
 	}
 	return appDeps{
-		dir:               dir,
-		proxy:             newProxyManager(dir),
-		theme:             newThemeManager(dir),
-		images:            newImageCache(dir),
-		kv:                newOfflineKV(dir),
-		closeMode:         newCloseModeStore(dir),
-		disclaimer:        newDisclaimerStore(dir),
-		commentCostPrefs:  newCommentCostPrefsStore(dir),
-		notificationPrefs: newNotificationPrefsStore(dir),
-		watchLaterPrefs:   newWatchLaterPrefsStore(dir),
-		imagePrefs:        newImagePrefsStore(dir),
-		typePrefs:         newTypographyStore(dir),
-		updateMirror:      newUpdateMirrorStore(dir),
-		updateChannel:     newUpdateChannelStore(dir),
-		autoSignPrefs:     newAutoSignPrefsStore(dir),
-		sidebarPrefs:      newSidebarPrefsStore(dir),
-		commands:          newCommandPrefs(dir),
+		dir:                 dir,
+		proxy:               newProxyManager(dir),
+		theme:               newThemeManager(dir),
+		images:              newImageCache(dir),
+		kv:                  newOfflineKV(dir),
+		closeMode:           newCloseModeStore(dir),
+		disclaimer:          newDisclaimerStore(dir),
+		commentCostPrefs:    newCommentCostPrefsStore(dir),
+		notificationPrefs:   newNotificationPrefsStore(dir),
+		watchLaterPrefs:     newWatchLaterPrefsStore(dir),
+		imagePrefs:          newImagePrefsStore(dir),
+		typePrefs:           newTypographyStore(dir),
+		updateMirror:        newUpdateMirrorStore(dir),
+		updateChannel:       newUpdateChannelStore(dir),
+		updateIdlePrefs:     newUpdateIdlePrefsStore(dir),
+		updateIntervalPrefs: newUpdateIntervalPrefsStore(dir),
+		autoSignPrefs:       newAutoSignPrefsStore(dir),
+		sidebarPrefs:        newSidebarPrefsStore(dir),
+		commands:            newCommandPrefs(dir),
 	}
 }
 
-// deps 是账号册那份共享依赖：所有账号窗口都从这里建，不各自造一份。
-func (b *accountBook) deps() appDeps {
+// deps 是进程级那份共享依赖：所有窗口都从这里建，不各自造一份。
+func (b *desktop) deps() appDeps {
 	return appDeps{
-		dir:               b.dir,
-		proxy:             b.proxy,
-		theme:             b.theme,
-		images:            b.images,
-		kv:                b.kv,
-		closeMode:         b.closeMode,
-		disclaimer:        b.disclaimer,
-		commentCostPrefs:  b.commentCostPrefs,
-		notificationPrefs: b.notificationPrefs,
-		watchLaterPrefs:   b.watchLaterPrefs,
-		imagePrefs:        b.imagePrefs,
-		typePrefs:         b.typePrefs,
-		updateMirror:      b.updateMirror,
-		updateChannel:     b.updateChannel,
-		autoSignPrefs:     b.autoSignPrefs,
-		sidebarPrefs:      b.sidebarPrefs,
-		commands:          b.commands,
-		book:              b,
+		dir:                 b.dir,
+		proxy:               b.proxy,
+		theme:               b.theme,
+		images:              b.images,
+		kv:                  b.kv,
+		closeMode:           b.closeMode,
+		disclaimer:          b.disclaimer,
+		commentCostPrefs:    b.commentCostPrefs,
+		notificationPrefs:   b.notificationPrefs,
+		watchLaterPrefs:     b.watchLaterPrefs,
+		imagePrefs:          b.imagePrefs,
+		typePrefs:           b.typePrefs,
+		updateMirror:        b.updateMirror,
+		updateChannel:       b.updateChannel,
+		updateIdlePrefs:     b.updateIdlePrefs,
+		updateIntervalPrefs: b.updateIntervalPrefs,
+		autoSignPrefs:       b.autoSignPrefs,
+		sidebarPrefs:        b.sidebarPrefs,
+		commands:            b.commands,
+		desktop:             b,
 	}
 }
 
-// newApp 建一个独立的单账号界面（无头测试、以及没有账号册的场景）。
+// newApp 建一个独立的界面状态（无头测试用；没有进程级单例时自己建一份会话）。
 func newApp(dir string) *app { return newAppWithDeps(newAppDeps(dir), nil) }
 
-// newAccountApp 建一个账号窗口的界面状态：会话来自账号册，共享依赖也来自
-// 账号册。窗口本身由 app.openMainWindow 创建。
-func newAccountApp(b *accountBook, acc *account) *app {
-	a := newAppWithDeps(b.deps(), acc)
+// newMainApp 建主窗口的界面状态：会话与共享依赖都来自进程级单例。
+func newMainApp(d *desktop) *app {
+	a := newAppWithDeps(d.deps(), d.auth)
 	a.autoLoad = true
 	// 冷启动时已有会话也要读一次名单：缓存已撑住首帧，这里拉最新一份。
 	a.ensureContentFilter(false)
 	return a
 }
 
-// newGuestApp 建未登录窗口的界面状态：没有账号时它照样能浏览公开内容，登录
-// 入口把它变成一个新账号的窗口（见 accountBook.startAddAccount）。
-func newGuestApp(b *accountBook) *app {
-	a := newAppWithDeps(b.deps(), nil)
-	a.autoLoad = true
-	return a
-}
-
-func newAppWithDeps(d appDeps, acc *account) *app {
-	// 账号窗口用它自己的会话；没有账号时用旧版单账号的会话（同一份凭据，
-	// 也就是升级前的 token.json）。
-	// 账号窗口用它自己的会话；没有账号时用旧版单账号的会话（同一份凭据，
-	// 也就是升级前的 token.json）：未登录窗口与无头测试都走这一条。
-	var auth *AuthManager
-	if acc != nil {
-		auth = acc.auth
-	} else {
+func newAppWithDeps(d appDeps, auth *AuthManager) *app {
+	if auth == nil {
 		auth = newAuthManagerAt(d.dir, d.proxy)
 	}
 	a := &app{
-		auth:              auth,
-		book:              d.book,
-		proxy:             d.proxy,
-		theme:             d.theme,
-		client:            &Client{Auth: auth, Proxy: d.proxy},
-		images:            d.images,
-		kv:                d.kv,
-		closeMode:         d.closeMode,
-		disclaimer:        d.disclaimer,
-		commentCostPrefs:  d.commentCostPrefs,
-		notificationPrefs: d.notificationPrefs,
-		watchLaterPrefs:   d.watchLaterPrefs,
-		imagePrefs:        d.imagePrefs,
-		typePrefs:         d.typePrefs,
-		updateMirror:      d.updateMirror,
-		updateChannel:     d.updateChannel,
-		autoSignPrefs:     d.autoSignPrefs,
-		sidebarPrefs:      d.sidebarPrefs,
-		commands:          newCommandRegistry(d.commands),
-		draftDir:          d.dir,
-		tabs:              make([]*tabState, len(tabSpecs)),
-		lastTab:           -1,
-		navSel:            tabID(0),
-		pageName:          "list",
-		coins:             newCoinState(),
-		pandora:           newPandoraState(),
-		profile:           newProfileState(),
-		commentCost:       newCommentCostState(),
+		auth:                     auth,
+		desktop:                  d.desktop,
+		proxy:                    d.proxy,
+		theme:                    d.theme,
+		client:                   &Client{Auth: auth, Proxy: d.proxy},
+		images:                   d.images,
+		kv:                       d.kv,
+		closeMode:                d.closeMode,
+		disclaimer:               d.disclaimer,
+		commentCostPrefs:         d.commentCostPrefs,
+		notificationPrefs:        d.notificationPrefs,
+		watchLaterPrefs:          d.watchLaterPrefs,
+		imagePrefs:               d.imagePrefs,
+		typePrefs:                d.typePrefs,
+		updateMirror:             d.updateMirror,
+		updateChannel:            d.updateChannel,
+		updateIdlePrefs:          d.updateIdlePrefs,
+		updateIntervalPrefs:      d.updateIntervalPrefs,
+		autoSignPrefs:            d.autoSignPrefs,
+		sidebarPrefs:             d.sidebarPrefs,
+		commands:                 newCommandRegistry(d.commands),
+		draftDir:                 d.dir,
+		tabs:                     make([]*tabState, len(tabSpecs)),
+		lastTab:                  -1,
+		navSel:                   tabID(0),
+		pageName:                 "list",
+		coins:                    newCoinState(),
+		pandora:                  newPandoraState(),
+		profile:                  newProfileState(),
+		commentCost:              newCommentCostState(),
+		diagnosticsIncludeNetLog: true,
 	}
 	// HTTP 出口的全局授权拦截：任何 insufficient_scope 都会回到这里登记弹窗，
 	// 不需要每个调用点自己接。必须在 a 建好之后再挂，回调要引用它。
 	a.client.onAuthError = a.handleGlobalAuthError
 	// 设置窗口的关键词 / 时段草稿从已保存偏好起手；无头测试直接渲染设置页时也一致。
 	a.syncNotifyDrafts()
-	if acc != nil {
-		a.accountID = acc.ID
-	}
-	// 草稿箱按账号隔离：启动时就把这一账号的草稿读进内存，侧边栏角标与
-	// 草稿页首帧就是对的（文件不存在或损坏都按空草稿处理）。
+	// 草稿启动时就读进内存，侧边栏角标与草稿页首帧就是对的（文件不存在或
+	// 损坏都按空草稿处理）。
 	a.drafts = newDraftStore(d.dir, draftScope(a))
-	if d.book != nil {
+	if d.desktop != nil {
 		// 这几项是进程级的：回调协议是否注册成功、更新插件装没装、托盘建没
 		// 建出来、以及怎么真正退出应用。窗口只是照着用。
-		a.schemeWarn = d.book.schemeWarning()
-		a.updates = d.book.updates
-		a.notify = d.book.notify
-		a.trayReady = d.book.trayIsReady()
-		a.quitApp = d.book.quitProgram
+		a.schemeWarn = d.desktop.schemeWarning()
+		a.updates = d.desktop.updates
+		a.notify = d.desktop.notify
+		a.trayReady = d.desktop.trayIsReady()
+		a.quitApp = d.desktop.quitProgram
 	}
 	// 托盘的「退出」与窗口关闭走同一条退出流程；测试里换成记录调用，无头
 	// 环境没有主循环，不能真的退出。先立 quitting：退出时主窗口的 OnClose
@@ -809,7 +817,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 }
 
 // bindAuth 把会话变化接回本窗口。窗口开着时由窗口处理：它要重画、要弹授权；
-// 账号册只从 onAuthChanged 里同步昵称与头像（见 noteAuthChange）。
+// 进程级单例只从 onAuthChanged 里同步昵称与头像（见 noteAuthChange）。
 func (a *app) bindAuth() {
 	if a.auth == nil {
 		return
@@ -910,7 +918,7 @@ func (a *app) rebuildMarkdownViews() {
 	a.bioMd = newMarkdownOptions(a, bio, false)
 }
 
-// invalidateReadingWindows 让本账号所有会显示阅读内容或分段选项的窗口
+// invalidateReadingWindows 让本窗口所有会显示阅读内容或分段选项的窗口
 // 下一帧重画。不改状态、不重建页面；只在 UI 线程调用。
 func (a *app) invalidateReadingWindows() {
 	if a == nil {
@@ -931,27 +939,11 @@ func (a *app) invalidateReadingWindows() {
 	}
 }
 
-// applyTypographyChange 把新排版推给所有账号窗口：每个窗口的 Markdown 选项
-// 都绑着自己的 app，必须各自重建，然后一起重画。只在 UI 线程调用。
+// applyTypographyChange 把新排版推给当前窗口：Markdown 选项绑在 app 上，
+// 必须整体重建，然后重画所有读到它的窗口。只在 UI 线程调用。
 func (a *app) applyTypographyChange() {
 	a.rebuildMarkdownViews()
 	a.invalidateReadingWindows()
-	if a.book == nil {
-		return
-	}
-	others := make([]*app, 0, len(a.book.snapshotAccounts())+1)
-	for _, acc := range a.book.snapshotAccounts() {
-		if acc.app != nil && acc.app != a {
-			others = append(others, acc.app)
-		}
-	}
-	if guest := a.book.guest; guest != nil && guest != a {
-		others = append(others, guest)
-	}
-	for _, other := range others {
-		other.rebuildMarkdownViews()
-		other.invalidateReadingWindows()
-	}
 }
 
 // redrawNotificationWindow asks the notification window, when it is open, for
@@ -1455,26 +1447,18 @@ func (a *app) reclickTab(idx int) {
 
 func (a *app) onAuthChanged(err error) {
 	a.loginPending = false
-	// 换账号 / 登录状态变化时，上一次会话排队的侧边栏刷新不再有意义。
+	// 登录状态变化时，上一次会话排队的侧边栏刷新不再有意义。
 	a.sidebarRefresh.cancel()
-	// 内容屏蔽名单是账号数据：换账号 / 退出后整体重建，缓存按新作用域重读；
-	// 登录成功则后台拉一次最新名单。
+	// 内容屏蔽名单与会话绑定：退出后整体重建，登录成功则后台拉一次最新名单。
 	a.resetContentFilter()
 	if a.autoLoad && a.auth != nil && a.auth.loggedIn() {
 		a.ensureContentFilter(false)
 	}
-	// 账号菜单属于当前会话：登录、退出、重新授权都先把它收起，别把上一个
-	// 账号的入口留在新会话里。
+	// 资料菜单属于当前会话：登录、退出、重新授权都先把它收起。
 	a.profileMenuOpen = false
-	// 标题栏的窗口标题带着账号名：登录、退出、重新授权后都要跟着变，任务栏
-	// 里才好分辨这是哪个账号的窗口。
+	// 标题栏带着昵称：登录、退出、重新授权后都要跟着变。
 	if a.win != nil {
 		a.win.SetTitle(a.windowTitle())
-	}
-	// 账号册记的是「本机有哪些账号」：昵称、头像与「登录是否还有效」都要
-	// 从这次会话变化同步过去（账号面板与托盘读的是那一份）。
-	if a.book != nil && a.accountID != "" {
-		a.book.noteAuthChanged(a.accountID)
 	}
 	switch {
 	case err != nil:
@@ -1484,13 +1468,6 @@ func (a *app) onAuthChanged(err error) {
 			a.pageName = "login"
 		}
 	case a.auth.loggedIn():
-		// 未登录窗口首次登录：guest 草稿先落盘并清掉 live 状态，之后按账号
-		// 作用域重新载入，避免把 guest 的内容写进新账号的文件。
-		if a.drafts != nil && a.drafts.scope != draftScope(a) {
-			a.flushDraftsInto(a.drafts)
-			a.clearLiveDrafts()
-			a.drafts = nil
-		}
 		a.loginMsg = "已登录"
 		if name := a.auth.username(); name != "" {
 			a.loginMsg += " · " + name
@@ -1519,8 +1496,8 @@ func (a *app) onAuthChanged(err error) {
 	// 金币页同样绑定当前会话；授权补上的 read:economy 也从这个空状态重新
 	// 发起请求，不会沿用授权前的空结果。
 	a.coins = newCoinState()
-	// 潘多拉状态在「同一个账号重新授权」时要保留：用户可能要重新点重抽，
-	// 需要还拿着原来的 box_instance_id。换账号 / 退出才整体丢弃；
+	// 潘多拉状态在重新授权时要保留：用户可能要重新点重抽，需要还拿着原来的
+	// box_instance_id。退出才整体丢弃；
 	// 保留时把「已加载」标成过期，弹窗下一帧会重读今日状态。
 	switch {
 	case !a.auth.loggedIn(), a.pandora == nil:
@@ -1534,11 +1511,11 @@ func (a *app) onAuthChanged(err error) {
 		a.pandora.err = ""
 		a.pandora.busy = ""
 	}
-	// 「我的」窗口里的资料与列表同样属于某个账号：换账号或退出后一律
-	// 丢弃，下次打开时按新会话重新拉取。
+	// 「我的」窗口里的资料与列表随会话变化：退出后一律丢弃，下次打开时按
+	// 新的登录态重新拉取。
 	a.profile = newProfileState()
-	// 评论框的状态栏读的是这个账号的徽章与佩戴状态：重新授权后按新令牌重新
-	// 读一次，换账号 / 退出则整体丢弃，不沿用上一个账号的徽章。
+	// 评论框的状态栏读的是徽章与佩戴状态：重新授权后按新令牌重新读一次，
+	// 退出则整体丢弃。
 	a.commentCost = newCommentCostState()
 	// 授权状态变了，之前因缺权限停住的 tab 可以重新拉取。
 	for _, st := range a.tabs {
@@ -1553,7 +1530,7 @@ func (a *app) onAuthChanged(err error) {
 		a.resetFollowsUnread()
 		a.refreshUnread()
 		a.startNotificationWatch()
-		// 关注流的未读角标也属于当前账号：登录 / 换账号后重新读一次。
+		// 关注流的未读角标登录后重新读一次。
 		a.refreshFollowsUnread()
 		// 潘多拉入口也静默读一次今日状态：首页标题栏要能直接显示抽中的
 		// 事件名，不必先打开潘多拉弹窗。
@@ -1563,31 +1540,29 @@ func (a *app) onAuthChanged(err error) {
 		a.refreshProStatus(true)
 	} else {
 		a.stopNotificationWatch()
-		// 通知窗口只展示当前账号的消息：退出后立即关掉，别留一屏上一个
-		// 账号的内容。
+		// 通知窗口只展示登录后的消息：退出后立即关掉，别留旧内容。
 		a.closeNotificationWindow()
-		// 「我的」窗口展示的是当前账号的资料与列表，同样随退出关掉。
+		// 「我的」窗口展示的是个人资料与列表，同样随退出关掉。
 		a.closeProfileWindow()
-		// 金币窗口与标题栏金币数也只属于当前账号：丢弃在途请求并关掉窗口。
+		// 金币窗口与标题栏金币数随退出关掉。
 		a.stopCoinTagWatch()
 		a.closeCoinWindow()
-		// 潘多拉弹窗展示的是当前账号的盲盒与抽奖结果，退出后一并关掉。
+		// 潘多拉弹窗展示盲盒与抽奖结果，退出后一并关掉。
 		a.closePandora()
-		// 草稿属于上一个账号，退出前先同步落盘到旧作用域那份 store：此时
-		// auth 已清空，用 flushDrafts 会按新作用域写进 guest 文件。
-		a.flushDraftsInto(a.drafts)
+		// 草稿在退出前同步落盘，下次访问按需重新载入。
+		a.flushDrafts()
 		a.clearLiveDrafts()
 		a.stopDraftTimer()
-		a.drafts = nil // 下一次访问按 guest 作用域重新载入
-		// 发帖窗口里的草稿属于上一个账号，退出后一并关掉并丢弃。
+		a.drafts = nil
+		// 发帖窗口退出后一并关掉并丢弃。
 		a.closeComposeWindow()
 		a.compose = nil
 		// 独立写评论窗口也一样：退出后没有可发的身份，草稿留在页面状态里，
 		// 窗口收起来。
 		a.closeReplyWindow()
-		// 编辑窗口里是上一个账号的内容，退出后一并关掉并丢弃。
+		// 编辑窗口退出后一并关掉并丢弃。
 		a.closeEditWindow()
-		// 关注与粉丝名单、关注流未读角标都只属于当前账号。
+		// 关注与粉丝名单、关注流未读角标都随退出清掉。
 		a.closeFollowsWindow()
 		a.follows = nil
 		a.resetFollowsUnread()
@@ -1596,14 +1571,14 @@ func (a *app) onAuthChanged(err error) {
 		a.sectionUnread = notificationUnreadCounts{}
 		a.notifSeen = nil
 		a.notifBaseline = false
-		// 退出后系统里可能还留着通知，但目标属于上一个账号，一律不再解析。
+		// 退出后系统里可能还留着通知，不再解析它的点击目标。
 		a.noticeTargets = nil
 	}
-	// 资料卡上的关注状态与「是不是我」都跟着账号走：登录、退出、换账号都
-	// 重新读一次（窗口没开时是空操作）。
+	// 资料卡上的关注状态与「是不是我」都跟着登录态走，变化后重新读一次
+	// （窗口没开时是空操作）。
 	a.refreshUserCardForAuth()
-	// 搜索窗口里的「收藏」结果属于上一个账号：换账号 / 退出后清掉结果，
-	// 关键词与类型保留。窗口本身留着：搜索结果大多是公开内容。
+	// 搜索窗口里的「收藏」结果随退出清掉，关键词与类型保留。窗口本身留着：
+	// 搜索结果大多是公开内容。
 	a.resetSearchResults()
 	a.ensureLoaded()
 	// 授权成功后只清掉这次授权状态，不替用户重跑被中断的操作——由用户自己
@@ -1948,8 +1923,6 @@ func (a *app) sidebarFooterItems() []display.ListItem {
 			display.ListItem{Key: "wait", Label: "等待浏览器授权", Icon: lucide.LoaderCircle()},
 			display.ListItem{Key: "cancel", Label: "取消登录", Icon: lucide.X()},
 		)
-	case a.book != nil && a.book.pendingLogin() != nil:
-		items = append(items, display.ListItem{Key: "accounts-panel", Label: "账号面板", Icon: lucide.Users()})
 	case !a.auth.loggedIn():
 		items = append(items,
 			display.ListItem{Key: "login", Label: "登录 2Libra", Icon: lucide.LogIn()},
@@ -1988,8 +1961,6 @@ func (a *app) handleSidebarAction(key string) {
 	switch key {
 	case "":
 		return
-	case "accounts":
-		a.showAccounts()
 	case "settings":
 		a.showSettings()
 	case "about":
@@ -2004,8 +1975,6 @@ func (a *app) handleSidebarAction(key string) {
 		a.pageName = "login"
 	case "cancel":
 		a.cancelLogin()
-	case "accounts-panel":
-		a.showAccounts()
 	case "login":
 		a.startLogin()
 	case "signup":
@@ -2023,15 +1992,6 @@ func tabIndexFromID(id string) (int, bool) {
 		return 0, false
 	}
 	return n, true
-}
-
-// showAccounts 打开账号面板。没有账号册（无头测试、旧的单窗口路径）时它
-// 不存在，也就没有可切的东西。
-func (a *app) showAccounts() {
-	if a.book == nil {
-		return
-	}
-	a.book.showPanel()
 }
 
 // 自绘标题栏的尺寸。32 DIP 是 Windows 标题栏的常规高度，窗口按钮 46×32
@@ -2191,6 +2151,8 @@ func (a *app) titleBar(c *ui.Context) {
 		// 设置与未登录时的登录 / 注册留在侧边栏底部。
 		ui.Row(c).Grow(1).MinWidth(280).Justify(ui.End).AlignItems(ui.Stretch).Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Gap(10).Padding(0, 10, 0, 0).Children(func() {
+				// 更新按钮：检查中发现新版本、下载进度与「重启更新」都收在这里。
+				a.titleBarUpdateButton(c)
 				// 通知铃铛：未读数叠在铃铛右下角，点开独立窗口（不再是侧边栏页面）。
 				a.notificationBell(c)
 				if a.auth.loggedIn() {
@@ -2358,16 +2320,15 @@ func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
 					TextColor(tk.TextDescription).SingleLine().Shrink(0)
 			}
 		})
-		a.guestLoginBanner(c)
+		a.loginBanner(c)
 	})
 }
 
-// guestLoginBanner 在未登录的页头里摆一条登录入口：侧边栏默认折叠成图标轨，
+// loginBanner 在未登录的页头里摆一条登录入口：侧边栏默认折叠成图标轨，
 // 底部的「登录 2Libra」只剩一个图标，不点开很难发现。主页面一进来就能看见
 // 这里的「立即登录 / 注册」；登录后、等待授权期间整条收起。
-func (a *app) guestLoginBanner(c *ui.Context) {
-	if a.auth.loggedIn() || a.loginPending ||
-		(a.book != nil && a.book.pendingLogin() != nil) {
+func (a *app) loginBanner(c *ui.Context) {
+	if a.auth.loggedIn() || a.loginPending {
 		return
 	}
 	tk := lobetheme.TokensOf(c)
@@ -2421,7 +2382,9 @@ func (a *app) body(c *ui.Context) {
 		})
 		return
 	}
-	if st.loading && len(st.items) == 0 {
+	// 刷新请求还在防抖 / 节流队列里时，列表可能已经被清掉（点主页清筛选）
+	// 或还没加载过。这时候不能把「马上就有数据」误画成「暂无内容」。
+	if len(st.items) == 0 && (st.loading || a.sidebarRefresh.hasPending()) {
 		ui.Column(c).Grow(1).Center().Children(func() {
 			lobeSpin(c, feedback.SpinProps{
 				Variant: feedback.SpinNetwork,
@@ -2803,16 +2766,9 @@ func (a *app) loginView(c *ui.Context) {
 	})
 }
 
-// completeLoginCallback 是登录回退页上「用回调链接完成登录」：账号窗口的补
-// 授权挂在账号册上（内置浏览器那条路），回调也要交给它；未登录窗口与没有
-// 账号册的单窗口路径才用本窗口自己的会话。
+// completeLoginCallback 是登录回退页上「用回调链接完成登录」：浏览器没自动
+// 跳回时，用户粘贴的地址同样交给唯一的会话完成授权。
 func (a *app) completeLoginCallback(raw string) error {
-	if a.book != nil && a.accountID != "" {
-		if a.book.completeCallback(raw) {
-			return nil
-		}
-		return errors.New("现在没有在等回调的授权，请先点「打开浏览器授权」")
-	}
 	return a.auth.Complete(raw)
 }
 
@@ -2876,42 +2832,16 @@ func (a *app) raiseMainWindow() {
 	win.Invalidate()
 }
 
-// startLogin 是「登录」入口。多账号时它就是「添加账号」：浏览器授权回来后
-// 会为那个账号开一个自己的主窗口，已经登录的那个账号不受影响；账号窗口的
-// 令牌失效后再点「登录」，重新授权的是这个窗口自己的账号，而不是再添一个。
-// 没有账号册时（无头测试、单窗口路径）走本窗口自己的会话。
-func (a *app) startLogin() {
-	if a.book != nil {
-		if a.accountID != "" {
-			a.book.reloginAccount(a.accountID)
-			return
-		}
-		a.book.startAddAccount()
-		return
-	}
-	a.startLoginWithScopes(nil)
-}
+// startLogin 是「登录」入口：重新授权用的也是这唯一的会话。
+func (a *app) startLogin() { a.startLoginWithScopes(nil) }
 
-// startLoginFromPage 是登录回退页上的「打开浏览器授权」：未登录窗口里就是
-// 添加账号，账号窗口里则是给这个账号补权限（多账号时走内置浏览器）。
+// startLoginFromPage 是登录回退页上的「打开浏览器授权」。
 func (a *app) startLoginFromPage() {
-	if a.book != nil && a.accountID == "" {
-		a.book.startAddAccount()
-		return
-	}
 	a.startLoginWithScopes(a.pendingAuthScopes())
 }
 
-// logoutAccount 退出当前窗口所属的账号：多账号时它把这个账号从账号册里摘掉
-// （令牌删掉、窗口关掉），别的账号照常挂着；没有账号册时就是普通的一次退出
-// 登录。
-func (a *app) logoutAccount() {
-	if a.book != nil && a.accountID != "" {
-		a.book.logoutAccount(a.accountID)
-		return
-	}
-	a.auth.Logout()
-}
+// logoutAccount 退出登录：清掉令牌，主窗口留在登录页。
+func (a *app) logoutAccount() { a.auth.Logout() }
 
 // openSignup 打开带邀请码的 2Libra 注册页：注册在网页完成，应用内不做。未
 // 登录用户点「注册」直接打开系统浏览器，注册成功后再回应用里「登录」授权。
@@ -2922,17 +2852,8 @@ func (a *app) openSignup() {
 // startLoginWithScopes 是上面那条流程的唯一实现：额外 scope 来自全局授权
 // 弹窗登记的缺失权限，普通登录传 nil 只申请默认范围。
 func (a *app) startLoginWithScopes(scopes []string) {
-	// 账号窗口的补授权挂在账号册上：多账号时它开内置浏览器的独立会话，而不是
-	// 系统浏览器 —— 系统浏览器里登着的可能是另一个账号，授权码会落到别人头上。
-	if a.book != nil && a.accountID != "" {
-		a.book.reauthorizeAccount(a.accountID, scopes)
-		return
-	}
-	// 一次只允许一次授权在等回调（回调只带 code 与 state）：这个账号窗口先
-	// 认领，别的窗口 / 账号面板上正在等的授权让位。
-	if a.book != nil {
-		a.book.claimLogin(a.auth)
-	}
+	// 一次只允许一次授权在等回调：BeginScopes 会取消上一次，迟到的回调不会
+	// 把新一次授权顶掉。
 	authorizeURL, err := a.auth.BeginScopes(context.Background(), scopes)
 	if err != nil {
 		a.cancelAuthGate("无法开始授权：" + err.Error())
@@ -2959,34 +2880,49 @@ func (a *app) cancelLogin() {
 }
 
 func main() {
-	// 账号册：本机登录过的账号、每个账号一条令牌、进程级的共享依赖（代理、
-	// 外观、图片缓存、离线缓存），以及多账号窗口的调度。它只读本机文件，
-	// 先建好，后面所有窗口都从它这里开。
-	b := newAccountBook("")
+	// 日志先落盘：本机会话损坏、深链注册失败这类早期事件也要留下记录。
+	// 打包成 GUI 后 stderr 不可见，这里是唯一的现场来源（见 logfile.go）。
+	installLogSink(configDir())
+	log.Printf("启动 t2-desktop %s", mygo.App.Version())
+	// 进程级单例：唯一的会话、共享依赖（代理、外观、图片缓存、离线缓存）
+	// 和系统事件的接线。它只读本机文件，界面状态随后从它这里建。
+	d := newDesktop("")
+	a := newMainApp(d)
+	d.app = a
 	// 先把代理规则接到进程内所有 HTTP 出口，再装更新插件：更新插件自己
 	// 发请求（检查更新、下载更新包），不经过本应用的 Client。接好之后，
 	// 手动代理 / 直连 / 跟随系统三种模式与「不走代理的地址」对它同样生效，
 	// 设置窗口里改完代理立刻就能检查更新。
-	installGlobalProxy(b.proxy)
+	installGlobalProxy(d.proxy)
 	// 下载加速入口：设置里选了镜像时，检查更新与更新包下载都经它转发；
 	// 默认不选，走上面接好的代理规则。
-	applyUpdateMirror(b.updateMirror.current())
-	// 更新通道：设置里打开了「接收测试版」时，检查更新也提供 prerelease。
-	// mygo 的开关启动时是关的，必须在更新插件第一次检查之前按保存的选择设置。
-	applyUpdateChannel(b.updateChannel.prerelease())
+	applyUpdateMirror(d.updateMirror.current())
+	// 更新通道：默认接收全部版本（含 prerelease），只有打开「稳定渠道」才
+	// 只读 latest release。mygo 的开关启动时是关的，必须在更新插件第一次检查
+	// 之前按保存的选择设置。
+	applyUpdateChannel(d.updateChannel.prerelease())
 	// 自动更新：更新包来自 github.com/vhxubo/t2-desktop 的 release，由
 	// mygo build 用 mygo.json 里 updates.publicKey 对应的私钥签名。native
-	// 更新窗口不需要 WebView，与本应用的原生 UI 一致：启动后检查一次，之后
-	// 每天一次，也在设置窗口的「检查更新」被点击时立即检查。
-	mygo.Use(updatenative.Plugin)
-	b.updates = true
+	// 更新窗口不需要 WebView，只负责手动「检查更新」；后台检查和下载由应用
+	// 自己的循环负责（见 update_manager.go），这样间隔能即时切换、标题栏能
+	// 显示进度，而且装完只等用户点「重启更新」，不会自动拉起。
+	mygo.Use(updatenative.New(updater.Options{DisableAutomaticChecks: true}))
+	d.updates = true
+	// 保留插件侧的选择同步：手动检查窗口里的同名开关与偏好保持一致。
+	applyUpdateIdleAutoDownload(d.updateIdlePrefs.on() || d.updateChannel.prerelease())
+	watchIdleAutoDownload(func() bool { return d.updateChannel.prerelease() })
+	updater.OnInstalled(func() {
+		d.setUpdateStatus(updateStatus{
+			Phase: updateReady, Version: updater.AvailableVersion(), Percent: 100,
+		})
+	})
 	// 先按保存的外观模式设置原生外观，让启动首帧、原生更新/通知窗口与
 	// theme.json 一致；自绘界面仍由 view 每帧设置。
-	mygo.Theme.SetSource(themeSource(b.theme.Mode()))
+	mygo.Theme.SetSource(themeSource(d.theme.Mode()))
 	// 深链回调先注册，再取单实例锁：浏览器跳回时系统拉起的是一个新进程，
 	// 它把命令行转给第一个实例，转发可能早于下面几行执行。mygo 的
 	// OnOpenURL 只在投递那一刻有监听者时才送达，注册晚了链接就被丢掉。
-	mygo.App.OnOpenURL(b.handleDeepLink)
+	mygo.App.OnOpenURL(d.handleDeepLink)
 	// On Windows/Linux the custom-scheme callback starts a second process;
 	// hand its URL to the instance that holds the PKCE verifier.
 	if !mygo.App.RequestSingleInstanceLock() {
@@ -2997,47 +2933,46 @@ func main() {
 	// and apps launched without an installer. Failure only disables the
 	// automatic jump back: pasting the callback link still works.
 	if err := mygo.App.RegisterURLScheme(appIdentifier); err != nil {
-		b.schemeWarn = "系统未把 " + appIdentifier + " 关联到本应用（" + err.Error() + "）：授权后浏览器不会自动跳回，请复制地址栏里的完整链接粘贴到「账号」面板里。"
+		d.schemeWarn = "系统未把 " + appIdentifier + " 关联到本应用（" + err.Error() + "）：授权后浏览器不会自动跳回，请复制地址栏里的完整链接粘贴到登录页完成授权。"
 		log.Printf("运行时注册 %s 未成功（打包版由 mygo.json 的 urlSchemes 声明；仍可手动粘贴回调链接）：%v", appIdentifier, err)
 	} else {
 		log.Printf("回调协议已注册：%s", appIdentifier)
 	}
-	// 原生通知的点击只带回 id，由账号册查回它是哪个账号的消息、落到哪个
-	// 窗口：帖子和评论在应用内打开，其余交给系统浏览器。注册在 Run 之前，
-	// 因此连「点击通知才启动本进程」的那一次也能收到。
-	mygo.App.OnNotificationClick(b.openNotice)
+	// 原生通知的点击只带回 id，由进程级单例查回它对应的消息，再把窗口带到
+	// 前台打开。注册在 Run 之前，因此连「点击通知才启动本进程」也能收到。
+	mygo.App.OnNotificationClick(d.openNotice)
 	// 站内读掉消息不会产生 notification_update，窗口回到前台时校准一次。
-	mygo.App.OnDidBecomeActive(b.onBecameActive)
-	// 退出可能来自托盘菜单、系统菜单或会话结束：先给所有窗口立这个标记，
-	// 主窗口的关闭才不会被「收进托盘」拦下来，退不掉。
-	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { b.markQuitting() })
+	mygo.App.OnDidBecomeActive(d.onBecameActive)
+	// 退出可能来自托盘菜单、系统菜单或会话结束：先立这个标记，主窗口的关闭
+	// 才不会被「收进托盘」拦下来，退不掉。
+	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
+		d.markQuitting()
+		d.stopUpdateLoop()
+		// 退出前把队列写完；最多等 200 ms，超时丢弃剩余日志，不让退出卡住。
+		log.Printf("退出应用")
+		flushLogSink(logFlushTimeout)
+	})
 	mygo.App.WhenReady(func() {
 		// 原生通知要等应用就绪：Windows 走托盘气泡，macOS 首次会询问授权。
 		// 头less 测试不经过这里，notify 保持 nil，不会触碰系统通知。
 		if mygo.NotificationsSupported() {
-			b.notify = showNativeNotice
+			d.notify = showNativeNotice
 		}
 		// 从这里开始才有主循环：后台结果可以投到 UI 线程。
-		b.mainLoop = true
-		// 内置浏览器授权要问一次系统 webview 在不在（Windows 的 WebView2
-		// 运行时、macOS 的 WKWebView、Linux 的 WebKitGTK）。不在时授权退回
-		// 系统浏览器，用户照旧能登录。
-		b.webview = mygo.WebViewAvailable()
-		if !b.webview {
-			log.Printf("系统 webview 不可用：添加账号时改用系统浏览器授权")
-		}
+		d.mainLoop = true
+		d.afterReady = true
 		// 图片缓存是进程级的一份，清理循环也只起一次。
-		b.startImageCacheMaintenance()
-		// 未激活账号的未读角标与令牌保活。
-		b.startBackground()
+		d.startImageCacheMaintenance()
+		// 后台更新循环：间隔可在设置里即时切换，装完只标记待重启。
+		d.startUpdateLoop()
 		// 托盘图标：应用就绪后才有原生通知区域，见 tray.go。创建失败只记
 		// 日志，窗口照常使用。
-		b.startTray()
+		d.startTray()
 		// 应用与托盘图标跟随深浅外观切换（见 app_icon.go）。放在托盘之后，
 		// 这样第一次应用就能同时把托盘图标也设成当前外观那版。
-		b.startIcons()
-		// 每个账号一个主窗口；一个账号都没有时打开未登录窗口。
-		b.restoreWindows()
+		d.startIcons()
+		// 打开唯一的主窗口。没登录时它显示登录页，登录后显示内容。
+		a.openMainWindow()
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal("应用启动失败：", err)

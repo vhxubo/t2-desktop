@@ -67,31 +67,6 @@ func TestLocalKVClearsPrefixes(t *testing.T) {
 	}
 }
 
-// 旧版「detail:<short_id>」的全局详情缓存要在启动时清掉：新键是
-// detail:<scope>:<short_id>，旧键会把付费正文和上一个账号的个人状态留着。
-func TestOfflineKVDropsLegacyDetailKeys(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "cache", localKVLegacyName)
-	kv := newLocalKV(path)
-	for key, value := range map[string]string{
-		"detail:OLD1":                         "旧版全局详情",
-		detailScopePrefix("user:jimmy") + "A": "jimmy 的详情",
-	} {
-		if err := kv.put(key, value, time.Now()); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	clean := newOfflineKV(dir)
-	var got string
-	if _, ok := clean.get("detail:OLD1", &got); ok {
-		t.Error("旧版全局详情键没有被清掉")
-	}
-	if _, ok := clean.get(detailScopePrefix("user:jimmy")+"A", &got); !ok || got != "jimmy 的详情" {
-		t.Errorf("带作用域的详情键不该被误删：%q %v", got, ok)
-	}
-}
-
 // 旧版单文件 offline.json 在第一次启动时拆进各分组文件，原文件改名留底。
 func TestOfflineKVMigratesLegacyFile(t *testing.T) {
 	dir := t.TempDir()

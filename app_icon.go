@@ -79,7 +79,7 @@ type iconTheme struct {
 	apply       func(dark bool)
 }
 
-func newIconTheme(b *accountBook) *iconTheme {
+func newIconTheme(b *desktop) *iconTheme {
 	return &iconTheme{
 		currentDark: currentIconDark,
 		apply:       b.applyIcons,
@@ -108,7 +108,7 @@ func (m *iconTheme) refresh() {
 
 // applyIcons 把深浅两套图标真正装到原生应用与托盘上。托盘可能因为创建失败
 // 而是 nil，这只影响托盘那一份，应用图标照常切换。
-func (b *accountBook) applyIcons(dark bool) {
+func (b *desktop) applyIcons(dark bool) {
 	if err := mygo.App.Dock.SetIcon(appIconPNG(dark)); err != nil {
 		log.Printf("切换应用图标失败：%v", err)
 	}
@@ -120,7 +120,7 @@ func (b *accountBook) applyIcons(dark bool) {
 }
 
 // refreshIcons 供设置窗口保存外观、以及 mygo 的系统外观事件调用。
-func (b *accountBook) refreshIcons() {
+func (b *desktop) refreshIcons() {
 	if b.icons != nil {
 		b.icons.refresh()
 	}
@@ -129,7 +129,7 @@ func (b *accountBook) refreshIcons() {
 // startIcons 在应用就绪后接上系统外观变化事件，并立即按当前外观装一次图标。
 // 用户从设置窗口切换外观时另由 saveThemeChoice 显式刷新：mygo 的 SetSource
 // 不会触发 Theme.OnUpdated。
-func (b *accountBook) startIcons() {
+func (b *desktop) startIcons() {
 	mygo.Theme.OnUpdated(b.refreshIcons)
 	b.refreshIcons()
 }

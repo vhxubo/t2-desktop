@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -28,7 +29,7 @@ func TestResetAllSettingsRestoresDefaults(t *testing.T) {
 	if err := a.updateMirror.set("gh-proxy.com"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.updateChannel.setPrerelease(true); err != nil {
+	if err := a.updateChannel.setStable(true); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.commentCostPrefs.setVisible(false); err != nil {
@@ -47,6 +48,12 @@ func TestResetAllSettingsRestoresDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := a.autoSignPrefs.setEnabled(false); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.updateIdlePrefs.setEnabled(false); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.updateIntervalPrefs.setHours(1); err != nil {
 		t.Fatal(err)
 	}
 	p := a.notificationPrefs
@@ -120,8 +127,8 @@ func TestResetAllSettingsRestoresDefaults(t *testing.T) {
 	if a.updateMirror.current() != "" {
 		t.Errorf("下载加速没有重置：%q", a.updateMirror.current())
 	}
-	if a.updateChannel.prerelease() {
-		t.Error("接收测试版没有重置")
+	if a.updateChannel.stable() || !a.updateChannel.prerelease() {
+		t.Error("稳定渠道没有重置到默认（接收全部版本）")
 	}
 	if !a.commentCostPrefs.visible() || a.commentCostPrefs.onSend() {
 		t.Errorf("评论设置没有重置：%v %v", a.commentCostPrefs.visible(), a.commentCostPrefs.onSend())
@@ -134,6 +141,12 @@ func TestResetAllSettingsRestoresDefaults(t *testing.T) {
 	}
 	if !a.autoSignPrefs.on() {
 		t.Error("自动签到设置没有重置")
+	}
+	if !a.updateIdlePrefs.on() {
+		t.Error("闲时自动下载更新没有重置")
+	}
+	if got := a.updateIntervalPrefs.interval(); got != 6*time.Hour {
+		t.Errorf("检查间隔没有重置到 6 小时：%v", got)
 	}
 	if !p.notificationEnabled() || !p.soundEnabled() || !p.badgeEnabled() || !p.streamEnabled() ||
 		p.keywordText() != "" || p.keywordIsBlacklist() || !p.categoryEnabled(notifyCategoryReply) ||
@@ -169,8 +182,8 @@ func TestResetAllSettingsRestoresDefaults(t *testing.T) {
 	if got := newUpdateMirrorStore(dir).current(); got != "" {
 		t.Errorf("update_mirror.json 没有重置：%q", got)
 	}
-	if got := newUpdateChannelStore(dir).prerelease(); got {
-		t.Errorf("update_channel.json 没有重置：%v", got)
+	if got := newUpdateChannelStore(dir).prerelease(); !got {
+		t.Errorf("update_channel.json 没有重置到接收全部版本：%v", got)
 	}
 	if s := newCommentCostPrefsStore(dir); !s.visible() || s.onSend() {
 		t.Errorf("comment-cost.json 没有重置：%v %v", s.visible(), s.onSend())

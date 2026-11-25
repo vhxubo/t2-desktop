@@ -107,8 +107,8 @@ func TestDeleteAvatarRequest(t *testing.T) {
 	}
 }
 
-// 选择本地图片后先进裁剪编辑器，确认上传的是 512×512 的 PNG；资料头、
-// 会话与账号索引都要换到新地址。
+// 选择本地图片后先进裁剪编辑器，确认上传的是 512×512 的 PNG；资料头与会话
+// 都要换到新地址。
 func TestUploadAvatarFromFile(t *testing.T) {
 	type uploaded struct {
 		mime string

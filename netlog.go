@@ -113,7 +113,7 @@ func (e *netEntry) failed() bool {
 }
 
 // netRecorder 是进程级的请求记录缓冲。挂在 proxyManager 上（appDeps 共享
-// 同一个 proxyManager），因此多账号窗口的请求都记进同一份。
+// 同一个 proxyManager），因此所有窗口的请求都记进同一份。
 type netRecorder struct {
 	mu      sync.Mutex
 	entries []*netEntry
@@ -160,6 +160,20 @@ func (r *netRecorder) Snapshot() []*netEntry {
 	defer r.mu.Unlock()
 	out := make([]*netEntry, len(r.entries))
 	copy(out, r.entries)
+	return out
+}
+
+// snapshotForExport 供诊断包导出：在锁内把每条记录按值复制（响应体读完时
+// 后台还会补字段，不能把 *netEntry 交给后台）。头切片也另存一份。
+func (r *netRecorder) snapshotForExport() []netEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]netEntry, len(r.entries))
+	for i, e := range r.entries {
+		out[i] = *e
+		out[i].ReqHeaders = append([]netHeader(nil), e.ReqHeaders...)
+		out[i].RespHeaders = append([]netHeader(nil), e.RespHeaders...)
+	}
 	return out
 }
 

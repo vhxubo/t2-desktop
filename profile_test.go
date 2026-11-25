@@ -265,7 +265,7 @@ func TestProfileTabsFitMinWidth(t *testing.T) {
 }
 
 // 「我的」窗口的标题栏与页面底色都取 Lobe token（浅色是 BgLayout 默认值），
-// 不再用原生主题的灰色 Surface；账号面板与设置窗口用的是同一支颜色。
+// 不再用原生主题的灰色 Surface；设置窗口用的是同一支颜色。
 func TestProfileWindowUsesLobeTokens(t *testing.T) {
 	a := profileWindowApp(t)
 	tt := ui.NewTester(a.profileWindowView, profileWindowWidth, profileWindowHeight)

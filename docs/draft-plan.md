@@ -12,8 +12,8 @@
 对应用户提的四条要求：
 
 1. 侧边栏有「草稿箱」入口，点进去在主窗口里看，不弹新窗口。
-2. 支持一键清空当前账号的所有草稿（带确认，不可撤销）。
-3. 草稿按账号隔离；不只发帖有草稿，评论 / 回复也有。
+2. 支持一键清空所有草稿（带确认，不可撤销）。
+3. 草稿只存本机一份；不只发帖有草稿，评论 / 回复也有。
 4. 自动保存到磁盘：输入到一半进程异常退出（崩溃、断电、任务管理器结束），重新打开后能从草稿箱进去恢复原样——包括「发一条新评论」还是「回复某一层楼」这个状态。
 
 ## 2. 已确认决策
@@ -21,13 +21,13 @@
 | 编号 | 决策 | 结论 |
 | --- | --- | --- |
 | 1 | 草稿箱位置 | 主窗口右侧内容区（`pageName = "drafts"`），标题栏与侧边栏保留，不新开窗口 |
-| 2 | 账号隔离粒度 | 一个账号一个文件：`drafts/<accountID>.json`；未登录窗口 `guest`，旧版单账号会话 `local` |
+| 2 | 存储粒度 | 本机一份文件：`drafts/local.json`，登录前后共用 |
 | 3 | 发帖草稿数量 | 多条。每条有自己的 id；发帖 FAB 接着「最近编辑的那条」写，草稿箱里可「写新帖」另起一条 |
 | 4 | 回复草稿数量 | 每篇帖子最多一条（同一篇的评论框只有一份状态）；不同帖子各一条，上限 200 条 |
 | 5 | 自动保存节奏 | 停手 800ms 落盘；连续打字时最长 5s 必落盘。崩溃最多丢最近 5s |
-| 6 | 清空范围 | 当前账号的全部草稿（发帖 / 动态 / 回复）。其它账号的文件不碰 |
-| 7 | 退出账号是否删草稿 | 不删。账号 id 由昵称哈希得出（`accountIDFor`），重新登录同一昵称就能取回 |
-| 8 | 恢复时的回复身份 | 只恢复「回谁」，不恢复「换个账号回复」（`replyAsID` 是临时借用，不落盘） |
+| 6 | 清空范围 | 本机全部草稿（发帖 / 动态 / 回复），一次清空 |
+| 7 | 退出登录是否删草稿 | 不删。草稿存在本机，下次登录仍能取回 |
+| 8 | 恢复回复目标 | 只恢复「回谁」，不恢复临时身份状态 |
 | 9 | 未上传图片 | 保存时剥离 `![x](upload:N)` 占位符：上传任务不跨进程，留着会让草稿永远发不出去 |
 | 10 | 清空 / 删除后内存里那份 | 一并清掉 live 状态，否则下一次自动保存会把刚删的内容又写回去 |
 
@@ -35,7 +35,7 @@
 
 - 「不新开窗口」不等于「不占页面」：草稿箱是主窗口的一个页面，切走时和列表页一样整块换掉，右下角的 FAB 列随之收起（那里没有可刷新、可发帖的列表）。
 - 多份发帖草稿是「写新帖」的副产品，不做草稿管理面板（重命名、置顶、分组都不做）。
-- 清空只作用于当前账号，是因为一个窗口就是一个账号：别的账号的草稿不在这个窗口里，也就不该被这个窗口的按钮删掉。
+- 清空作用于本机这一份草稿文件，不做按窗口拆分：窗口里看到的和按钮清掉的是同一份数据。
 
 ## 3. 现状与代码位置
 
@@ -51,8 +51,8 @@
 | 独立写评论窗口 | `reply_window.go` | 关窗时落盘；恢复时不需要另开 |
 | 本地落盘工具 | `auth.go` 的 `readJSONFile` / `writeJSONFile`（先 `.tmp` 再改名） | 直接复用，不引入数据库 |
 | 离线缓存 | `offline_store.go` 的 `localKV` | **不复用**：它是一份 `cache/offline.json`，里面装着正文与评论缓存，逐键打字整份重写代价太大 |
-| 账号生命周期 | `app_window.go` 的 `finalizeAccountWindow`，`accounts.go` 的 `markQuitting` / `logoutAccount` | 收尾前落盘；退出账号不删草稿文件 |
-| 账号标识 | `accounts.go` 的 `accountIDFor` | 草稿作用域直接用它 |
+| 窗口与会话生命周期 | `app_window.go` 的窗口收尾，`main.go` 的退出与登录状态切换 | 收尾前落盘；退出登录不删草稿文件 |
+| 草稿作用域 | `draft.go` 的 `draftScope` | 本机固定一份 |
 
 ## 4. 数据模型
 
@@ -62,16 +62,14 @@
 <配置目录>/drafts/<scope>.json
 ```
 
-`scope` 的取值：
+`scope` 固定为 `local`：
 
 | 场景 | scope | 说明 |
 | --- | --- | --- |
-| 账号窗口 | `a.accountID`（`accountIDFor(昵称)`） | 一个账号一份，互不可见 |
-| 未登录窗口 | `guest` | 未登录也能写草稿（发帖窗口会先要求授权），但不与任何账号合并 |
-| 旧版单账号会话（`accountID == ""` 且已登录） | `local` | 升级前的兜底路径，正常情况下会被 `migrateLegacySession` 换成正式账号 |
+| 主窗口 | `local` | 登录前后共用一份草稿，未登录也能写（发帖窗口会先要求授权） |
 
-- 文件名只由 `accountIDFor` 生成，字符集是 `[a-z0-9_-]`，不需要再转义。
-- 每个账号窗口各自持有一份 `draftStore`（同一个账号只会有一扇主窗口），不存在两个进程内实例写同一个文件的情况；`draftStore` 内部仍加 `sync.Mutex` 并复用 `writeJSONFile` 的原子写，防止定时器与退出路径同时落盘。
+- 文件名固定，不需要转义。
+- 进程内只有一份 `draftStore`，不存在两个实例写同一个文件的情况；`draftStore` 内部仍加 `sync.Mutex` 并复用 `writeJSONFile` 的原子写，防止定时器与退出路径同时落盘。
 - 文件损坏（半截 JSON、手工改坏）时另存为 `<scope>.json.bad`，从空草稿继续，只记日志——草稿读不出来不该让应用起不来。
 
 ### 4.2 文件结构
@@ -79,7 +77,6 @@
 ```json
 {
   "version": 1,
-  "account": "alice-1a2b3c",
   "entries": [
     {
       "id": "compose-3f9c1d2e",
@@ -266,8 +263,8 @@ a.flushDrafts()：把改动写成 DTO、删掉空条目、a.drafts.save() 落盘
 | 关详情窗口 / 关标签 | `disposeDetailState` 之前 | 状态马上就 `dead`，之后没人能替它落盘 |
 | 切详情标签 | `detailTabBar` 切换分支 | 隐藏标签不再重建，指纹不会再被算到 |
 | 关主窗口 / 收进托盘 | `onMainWindowClose` 与 `onMainWindowClosed` | 窗口没了就没有帧尾了 |
-| 退出账号 | `onAuthChanged` 里 `a.compose = nil` 之前 | 状态马上被丢弃 |
-| 退出应用 | `accountBook.markQuitting` 里遍历 `acc.app` | 定时器可能来不及跑 |
+| 退出登录 | `onAuthChanged` 里 `a.compose = nil` 之前 | 状态马上被丢弃 |
+| 退出应用 | `main.go` 的退出清理里调 `flushDrafts()` | 定时器可能来不及跑 |
 | 进入草稿箱 | `showDrafts` | 列表读的是内存 store，先把 live 内容并进去 |
 | 打开某条草稿之前 | `restoreDraft` 开头 | 当前正在写的那份不能因为「换了一条」而丢 |
 | 删除 / 清空之后 | `deleteDraft` / `clearAllDrafts` | 删完立刻落盘，别等下一次 tick |
@@ -326,7 +323,7 @@ a.flushDrafts()：把改动写成 DTO、删掉空条目、a.drafts.save() 落盘
 +--------------------------------------------------------------+
 ```
 
-- 页头：标题 + 条数 + 当前账号标识（`a.accountBadge`）+ 右侧「清空全部」按钮（`action.Button`，`Danger`，0 条时 `Disabled`）。
+- 页头：标题 + 条数 + 右侧「清空全部」按钮（`action.Button`，`Danger`，0 条时 `Disabled`）。
 - 分组标题用 `display.Text`，11px 弱化色，与侧边栏分组同一套节奏；「发帖与动态」为空时不画这一组，两组都空走空态。
 - 列表用 `ui.List(c, &a.draftsList, len(rows), ...)`，行表面复用 `feedRowSurface(c)`（与信息流同一种卡片、悬停与圆角），纵向 10、横向 12 的内边距。
 - 行内容：
@@ -341,7 +338,7 @@ a.flushDrafts()：把改动写成 DTO、删掉空条目、a.drafts.save() 落盘
 
 - 空态：`display.Empty{Icon: lucide.NotebookPen(), Title: "还没有草稿", Description: "在发帖窗口或评论框里写下的内容会自动存到这里，关掉窗口、甚至异常退出也不会丢。"}`
 - 「清空全部」→ `feedback.Modal`（Title「清空所有草稿？」，Width 420，OkText「清空草稿」，CancelText「取消」）：
-  - 正文写清范围与后果：「将删除当前账号的 4 条草稿（发帖 1、动态 0、回复 3），删除后无法恢复。其它账号的草稿不受影响。」
+  - 正文写清范围与后果：「将删除本机全部 4 条草稿（发帖 1、动态 0、回复 3），删除后无法恢复。」
   - 确认后：删文件 + 清 live 状态 + toast「已清空 4 条草稿」。
 - 弹窗状态放 `app.draftsClearOpen`，由 `main.go` 的 `dialogs` 画（草稿页走的是同一条 `view` 路径，弹窗照常叠在最上层）。
 
@@ -360,7 +357,7 @@ a.flushDrafts()：把改动写成 DTO、删掉空条目、a.drafts.save() 落盘
 | `selectTab` | 开头补 `a.pageName = "list"`：侧边栏在草稿页是可见的，点任意浏览页必须能回来 |
 | `handleSidebarAction` | `case "drafts": a.showDrafts()` |
 | `showDrafts` | `flushDrafts()` → `pageName = "drafts"` → `navSel = "drafts"` → `Invalidate` |
-| 标题栏搜索 / 账号菜单 / 通知 | 不动：它们在标题栏，草稿页照样可用 |
+| 标题栏搜索 / 通知 | 不动：它们在标题栏，草稿页照样可用 |
 
 ## 7. 恢复流程
 
@@ -394,7 +391,7 @@ a.flushDrafts()：把改动写成 DTO、删掉空条目、a.drafts.save() 落盘
 - `applyReplyDraft` 只做四件事：`draft = Text`、`replyTo = ReplyTo`、`composerIdle = false`、`focusComposer = true`。
 - 评论框本来就会因为「有草稿 / 有回复目标」自动展开（`replyInput` 的 `expanded` 判定），不需要额外的展开标记。
 - `focusComposer` 由 `replyInput` 消费一次：`area.Focus(c)`（独立窗口路径同理），保证点完「打开」就能接着打字。
-- 不恢复：`replyAsID`（临时借用别的账号）、表情 / 图片面板的开关、预览态、`winPreview`。
+- 不恢复：临时身份状态、表情 / 图片面板的开关、预览态、`winPreview`。
 
 ### 7.3 恢复后的一致性
 
@@ -428,8 +425,8 @@ a.flushDrafts()：把改动写成 DTO、删掉空条目、a.drafts.save() 落盘
 - `detail_ui.go`：`detailState` 加 `draftFP` / `draftSavedFP` / `focusComposer`；`replyTextArea` 消费 `focusComposer`；`submitReply` 成功分支删草稿；`detailWindowView` 帧尾 tick；`detailTabBar` 切换前 flush。
 - `detail_window.go`：`disposeDetailState` 开头 flush 该篇。
 - `reply_window.go`：`replyWindowView` 帧尾 tick；`OnClosed` flush。
-- `app_window.go`：`onMainWindowClose` / `onMainWindowClosed` / `finalizeAccountWindow` flush 并停定时器。
-- `accounts.go`：`markQuitting` 里对每个 `acc.app` 调 `flushDrafts()`；`logoutAccount` 不删草稿文件（加一行注释说明）。
+- `app_window.go`：`onMainWindowClose` / `onMainWindowClosed` 及窗口收尾处 flush 并停定时器。
+- `main.go`：退出清理里调 `flushDrafts()`；退出登录不删草稿文件（加一行注释说明）。
 - `main_test.go` / `sidebar_test.go` / `compose_test.go` / `detail_test.go`：补断言，见第 10 节。
 
 不改：`offline_store.go`（不复用 `localKV`）、所有网络出口（草稿只写本机）、`proxy.go`。
@@ -440,7 +437,7 @@ a.flushDrafts()：把改动写成 DTO、删掉空条目、a.drafts.save() 落盘
 
 - `draftEntry` 与各组件 DTO、`draftStore` 的读写 / 上限 / 损坏兜底 / 作用域。
 - `stripUploadPlaceholders`、`draftScope`。
-- 验收：读写往返一致；两个账号互不可见；坏文件不崩；上限按最旧丢。
+- 验收：读写往返一致；进程内共用一份；坏文件不崩；上限按最旧丢。
 
 ### 阶段 2：发帖草稿
 
@@ -463,16 +460,16 @@ a.flushDrafts()：把改动写成 DTO、删掉空条目、a.drafts.save() 落盘
 
 ### 阶段 5：收尾与回归
 
-- 关窗 / 切标签 / 收托盘 / 退出账号 / 退出应用各走一遍落盘。
+- 关窗 / 切标签 / 收托盘 / 退出登录 / 退出应用各走一遍落盘。
 - `CGO_ENABLED=0 go test ./...`、`go tool mygo vet .`、`gofmt -l .`。
-- 深色 / 浅色、窄窗口、侧边栏折叠、多账号窗口并排各看一遍。
+- 深色 / 浅色、窄窗口、侧边栏折叠、主窗口与附属窗口并排各看一遍。
 
 ## 10. 测试计划
 
 ### 单元测试（`draft_test.go`）
 
 - `TestDraftStoreRoundTrip`：写读一致，字段一个不少（含组件块与 `reply_to`）。
-- `TestDraftStoreScopedByAccount`：同目录两个 scope 各写一条，互不可见。
+- `TestDraftStoreSingleScope`：本机固定 scope，读写落到同一份文件。
 - `TestDraftStoreCorruptFileFallsBack`：坏 JSON → 空草稿 + `.bad` 副本，不 panic。
 - `TestDraftStorePrunesOldestReply`：第 201 条挤掉最旧的，`updated_at` 顺序正确。
 - `TestDraftStripUploadPlaceholders`：`![x](upload:3)` 被剥离，正常图片链接保留。
@@ -514,7 +511,7 @@ a.flushDrafts()：把改动写成 DTO、删掉空条目、a.drafts.save() 落盘
 ## 11. 验收标准
 
 1. 侧边栏有「草稿箱」，带条数；点进去是主窗口内的页面，任务栏与窗口数不变。
-2. 草稿箱只显示当前账号的草稿；换一个账号窗口看，看到的是另一个账号的草稿（或空）。
+2. 草稿箱显示本机这一份草稿；登录前后、重开窗口看到的内容一致。
 3. 发帖 / 动态写到一半关窗、结束进程、断电重启，重开点「打开」内容原样回来（含节点、匿名、投票等组件）。
 4. 在评论框写一段「回复 12 楼」的话，强杀进程；重开后从草稿箱进去，正文、「回复 12 楼」的提示、光标位置都对。
 5. 发布帖子 / 发出评论后，对应草稿从箱子里消失，不会重复出现。
@@ -537,14 +534,14 @@ a.flushDrafts()：把改动写成 DTO、删掉空条目、a.drafts.save() 落盘
 | 草稿文件被手工改坏 | 另存 `.bad` 后从空开始，记日志，不阻塞启动 |
 | 磁盘写失败 | 日志 + toast，内存内容继续可用，下次 tick 重试 |
 | 多份发帖草稿让 FAB 行为变复杂 | 明确规则：有内容接着写 → 否则最近一条 → 否则空白；「写新帖」强制新开 |
-| 退出账号后草稿成了孤儿文件 | 账号 id 由昵称哈希得出，重新登录同昵称即取回；不做自动清理 |
+| 退出登录后草稿还在磁盘 | 草稿按本机固定路径保存，下次登录照常读回；不做自动清理 |
 
 ## 13. 本次不做
 
 - 不做草稿重命名、置顶、分组、搜索；草稿箱按时间倒序 + 两类分组。
 - 不做云端同步、跨设备草稿、多窗口实时共享同一份草稿。
 - 不做草稿版本历史与「撤销删除」；清空与删除都不可恢复（确认弹窗里写明）。
-- 不做未登录窗口 → 首个账号的草稿迁移（`guest` 作用域独立保留）。
+- 不做未登录与登录态之间的草稿迁移（本机共用同一份）。
 - 不保存未上传完成的图片本体，也不恢复上传队列。
-- 不恢复「换个账号回复」的临时身份，不恢复表情 / 图片面板的展开状态。
+- 不恢复临时身份状态，不恢复表情 / 图片面板的展开状态。
 - 不改 `offline_store.go` 的 `localKV`，也不为草稿引入 SQLite。

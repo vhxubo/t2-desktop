@@ -409,7 +409,7 @@ func TestNotificationNativeNotice(t *testing.T) {
 			"postTitle":"社会观察","commentText":"说得对"}
 	}`))
 	n.FromUser = mustObject(t, `{"username":"alice"}`)
-	notice := notificationNative(n, "", "")
+	notice := notificationNative(n)
 	if notice.Title != "@alice 回复了你" {
 		t.Errorf("通知标题 = %q", notice.Title)
 	}
@@ -421,33 +421,6 @@ func TestNotificationNativeNotice(t *testing.T) {
 	}
 	if notice.Target != "https://2libra.com/post/social/wEOIDnn" {
 		t.Errorf("点击目标 = %q", notice.Target)
-	}
-	if notice.Subtitle != "" || notice.AccountID != "" {
-		t.Errorf("单账号不该写账号：%+v", notice)
-	}
-}
-
-// 多账号时系统通知要写明是哪个账号收到的：账号写进副标题，通知 id 也带上
-// 账号段，点击才落回正确的窗口。
-func TestNotificationNativeNoticeNamesAccount(t *testing.T) {
-	n := decodeNotificationObject(mustObject(t, `{
-		"id":"n1","type":"reply","payload":{"postShortId":"wEOIDnn","postNodeSlug":"social",
-			"postTitle":"社会观察"}
-	}`))
-	n.FromUser = mustObject(t, `{"username":"alice"}`)
-	notice := notificationNative(n, "jimmy-1a2b3c", "jimmy")
-	if notice.Subtitle != "账号 @jimmy" {
-		t.Errorf("副标题 = %q，期望写明账号", notice.Subtitle)
-	}
-	if want := "t2-notification:jimmy-1a2b3c:n1"; notice.ID != want {
-		t.Errorf("通知 id = %q，期望 %q", notice.ID, want)
-	}
-	if accountID, messageID := splitNotificationNoticeID(notice.ID); accountID != "jimmy-1a2b3c" || messageID != "n1" {
-		t.Errorf("通知 id 拆回 = %q / %q", accountID, messageID)
-	}
-	// 升级前弹出的通知只有消息 id，拆不出账号，仍按旧格式认。
-	if accountID, messageID := splitNotificationNoticeID("t2-notification:old"); accountID != "" || messageID != "old" {
-		t.Errorf("旧格式 id 拆回 = %q / %q", accountID, messageID)
 	}
 }
 
@@ -1217,11 +1190,10 @@ func TestNotificationCommentReadWaitsUntilVisible(t *testing.T) {
 // 系统通知 id 里的消息 id 用来按条已读；认不出前缀的 id 不做猜测。
 func TestNoticeMessageID(t *testing.T) {
 	cases := map[string]string{
-		"t2-notification:n1":              "n1",
-		"t2-notification:jimmy-1a2b3c:n1": "n1",
-		"t2-notification:legacy":          "legacy",
-		"other-notification:n1":           "",
-		"":                                "",
+		"t2-notification:n1":     "n1",
+		"t2-notification:legacy": "legacy",
+		"other-notification:n1":  "",
+		"":                       "",
 	}
 	for id, want := range cases {
 		if got := noticeMessageID(id); got != want {
@@ -1251,8 +1223,8 @@ func TestNotificationWindowFitsMinSize(t *testing.T) {
 	}
 }
 
-// 原生通知的点击回调只带 id：进程内能查到目标时在应用内打开，查不到时由
-// 账号册决定落点（见 accounts.go 的 openNotice）。
+// 原生通知的点击回调只带 id：进程内能查到目标时在应用内打开，查不到时回到
+// 消息中心（见 desktop.go 的 openNotice）。
 func TestNotificationNoticeTarget(t *testing.T) {
 	a := testApp(t)
 	a.rememberNoticeTarget("t2-notification:n1", "https://2libra.com/post/ai-tools/ABC12345")
@@ -1271,33 +1243,6 @@ func TestNotificationNoticeTarget(t *testing.T) {
 	}
 	if len(a.noticeTargets) == 0 {
 		t.Error("清理后应保留最近写入的目标")
-	}
-}
-
-// 多账号时系统通知写明是哪个账号收到的；单账号不写，免得白占一行。
-func TestNativeNoticeNamesAccountOnlyWhenMultiAccount(t *testing.T) {
-	n := decodeNotificationObject(mustObject(t, `{
-		"id":"n1","type":"reply","payload":{"postShortId":"wEOIDnn","postNodeSlug":"social",
-			"postTitle":"社会观察"}
-	}`))
-	n.FromUser = mustObject(t, `{"username":"alice"}`)
-
-	multi := multiAccountWindow(t, "jimmy")
-	notice := multi.notificationNative(n)
-	if notice.Subtitle != "账号 @jimmy" {
-		t.Errorf("多账号的通知副标题 = %q", notice.Subtitle)
-	}
-	if notice.AccountID != multi.accountID || notice.ID != notificationNativeID(multi.accountID, "n1") {
-		t.Errorf("通知没有带上账号：%+v", notice)
-	}
-
-	single := singleAccountWindow(t, "jimmy")
-	notice = single.notificationNative(n)
-	if notice.Subtitle != "" {
-		t.Errorf("单账号的通知不该写账号：%q", notice.Subtitle)
-	}
-	if notice.Title != "@alice 回复了你" {
-		t.Errorf("通知标题 = %q", notice.Title)
 	}
 }
 

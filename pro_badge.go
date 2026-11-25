@@ -80,7 +80,7 @@ func proMarkBitmapOf(images *imageCache) *ui.Bitmap {
 func (a *app) proMarkBitmap() *ui.Bitmap { return proMarkBitmapOf(a.images) }
 
 // proMarkFor 画一枚 Pro 圆章：绝对定位在宿主右下角、略微外扩，描边取自当前
-// 主题底色（官网的 border-base-100）。位图由调用方传入，便于账号面板这种没有
+// 主题底色（官网的 border-base-100）。位图由调用方传入，便于「我的」窗口这种没有
 // app 上下文的地方复用同一套画法。
 func proMarkFor(c *ui.Context, size float32, bmp *ui.Bitmap) ui.Element {
 	t := c.Theme()

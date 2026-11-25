@@ -65,38 +65,7 @@ func newOfflineKV(dir string) *localKV {
 	if dir == "" {
 		dir = configDir()
 	}
-	s := newLocalKV(filepath.Join(dir, "cache", localKVLegacyName))
-	s.dropLegacyDetailKeys()
-	return s
-}
-
-// dropLegacyDetailKeys 清掉旧版「detail:<short_id>」这种不带账号作用域的
-// 正文缓存。那一版会把解锁后的付费正文、收藏与编辑状态留给下一个账号；
-// 新键形如 detail:<scope>:<short_id>，scope 是 anonymous: / session: /
-// user:<昵称>:。
-func (s *localKV) dropLegacyDetailKeys() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.loadLocked(); err != nil {
-		return
-	}
-	removed := false
-	for key := range s.entries {
-		if !strings.HasPrefix(key, detailCachePrefix) {
-			continue
-		}
-		rest := strings.TrimPrefix(key, detailCachePrefix)
-		if strings.HasPrefix(rest, anonymousScope+":") ||
-			strings.HasPrefix(rest, sessionScope+":") ||
-			strings.HasPrefix(rest, "user:") {
-			continue
-		}
-		delete(s.entries, key)
-		removed = true
-	}
-	if removed {
-		logCacheWriteError(s.saveShardLocked(localKVShard(detailCachePrefix)))
-	}
+	return newLocalKV(filepath.Join(dir, "cache", localKVLegacyName))
 }
 
 // logCacheWriteError 统一缓存写盘失败的日志：缓存是加速手段，写不进去

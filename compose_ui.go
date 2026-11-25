@@ -32,7 +32,7 @@ import (
 //
 // 整套界面走 Lobe UI：颜色取 TokensOf(c)，标签 / 按钮 / 开关 / 输入框 / 提示
 // 分别由 display.Text、action.Button、choice.Switch、field 与 feedback 提供，
-// 和主窗口、账号面板、详情页是同一套设计语言；文案与动作保持不变，只换观感。
+// 和主窗口、「我的」窗口、详情页是同一套设计语言；文案与动作保持不变，只换观感。
 //
 // 这是独立的 mygo 窗口而不是主窗口里的一层遮罩。数据、校验与请求在
 // compose.go；这里只负责窗口的开关与界面。
@@ -367,7 +367,6 @@ func (a *app) composeWindowView(c *ui.Context) {
 				AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, lucide.SquarePen()).Size(16, 16).TextColor(tk.Primary)
 				display.Text(c, title, display.TextProps{Strong: true, FontSize: 13, Rows: 1})
-				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.composeWin; win != nil {
@@ -1602,11 +1601,9 @@ func (a *app) composeFooter(c *ui.Context, st *composeState) {
 				a.deleteDraft(id)
 			}
 		}
-		// 「当前账号」与「发布」贴在一起：多账号时点下去之前就能看清是哪个
-		// 账号发出去（见 account_badge.go）。发布按钮带图标，用的是和主页悬浮
-		// 「发帖」按钮同一枚 SquarePen（见 composePostIcon）。
+		// 发布按钮带图标，用的是和主页悬浮「发帖」按钮同一枚 SquarePen
+		// （见 composePostIcon）。
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Children(func() {
-			a.accountBadge(c)
 			label := "发布"
 			if moment {
 				label = "发布动态"

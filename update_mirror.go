@@ -52,8 +52,8 @@ var (
 	updateFeedRepo = "vhxubo/t2-desktop"
 	// updateAPIBase / updateTagPrefix 复刻 mygo 解析 prerelease feed 用到的两个
 	// 常量（internal/update 的 GitHubAPI 与 mygo build 默认的 tagPrefix "v"）。
-	// 只有「接收测试版 + 选了下载加速」这一条路要用：镜像只会转发 github.com
-	// 上的文件，找不到「版本最高的 release」，得先用 GitHub API 自己算一次 tag。
+	// 只有「接收测试版（默认）+ 选了下载加速」这一条路要用：镜像只会转发
+	// github.com 上的文件，找不到「版本最高的 release」，得先用 GitHub API 自己算一次 tag。
 	// 测试把 updateAPIBase 换成 httptest 地址（与 updateFeedBase 同一套做法）。
 	updateAPIBase   = "https://api.github.com"
 	updateTagPrefix = "v"
@@ -161,7 +161,7 @@ func applyUpdateMirror(m string) {
 // mirrorSource 是选中镜像后的更新源：manifest 与更新包都经镜像转发。它实现
 // mygo 的 UpdateSource 接口，由 applyUpdateMirror 通过 SetSource 挂到更新器上。
 //
-// 正式版通道直取 latest feed；「接收测试版」打开时，mygo 默认链路会经 GitHub
+// 稳定渠道直取 latest feed；默认接收测试版时 mygo 默认链路会经 GitHub
 // API 找版本最高的 release，而镜像只转发 github.com 上的文件，所以这里按同样
 // 的规则自己算一次 tag（updateHighestTag），再取那个 tag 的 manifest 经镜像
 // 下载。API 请求走配置的代理、不经镜像：镜像服务不代理 api.github.com。

@@ -236,7 +236,7 @@ func TestRefreshUserCardForAuthDropsBadges(t *testing.T) {
 	a.refreshUserCardForAuth()
 
 	if cs.badges.loaded || len(cs.badges.entries) != 0 {
-		t.Errorf("换账号后仍留着旧徽章墙：%+v", cs.badges)
+		t.Errorf("重新登录后仍留着旧徽章墙：%+v", cs.badges)
 	}
 }
 

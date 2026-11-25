@@ -226,7 +226,6 @@ func (a *app) coinWindowView(c *ui.Context) {
 						Type: display.TextSecondary, FontSize: 11, Rows: 1,
 					})
 				}
-				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.coinWin; win != nil {

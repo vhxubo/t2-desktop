@@ -29,7 +29,7 @@
 - 「节点对应的主页分类页面」= 首页 + 该节点筛选，不新开独立分类页。
 - 「4 也支持配置筛选」落地为：排序写进每个快捷入口的节点引用，随快捷入口一起落盘；
   从帖子 Tag 等接口引用进入的筛选没有排序偏好，按价值优先。
-- 首页筛选不再按账号落盘，也没有启动恢复逻辑。
+- 首页筛选不落盘，也没有启动恢复逻辑。
 
 ## 3. 现状与代码位置
 
@@ -399,7 +399,7 @@ type nodeShortcutFile struct {
 }
 ```
 
-旧文件里的 `prefs` 与按账号存的 `node.lastfilter:v1:*` 不再读取；它们在磁盘上
+旧文件里的 `prefs` 与 `node.lastfilter:v1:*` 不再读取；它们在磁盘上
 留着无妨，启动一律回默认筛选。
 
 - 快捷入口只存引用与排序，不存令牌、不存帖子内容。
@@ -562,7 +562,7 @@ func (a *app) nodeEditorDialog(c *ui.Context)
 - `CGO_ENABLED=0 go test ./...`
 - `go tool mygo vet .`
 - `gofmt -l .` 无输出
-- 深色/浅色、窄窗口、侧边栏折叠、详情窗口多开各走一遍。
+- 深色/浅色、窄窗口、侧边栏折叠、同时打开多个详情窗口各走一遍。
 - 新增网络出口检查：本方案没有新端点，仍走现有客户端。
 
 ## 9. 测试计划
@@ -581,7 +581,7 @@ func (a *app) nodeEditorDialog(c *ui.Context)
 - `TestNodeSearchLimit`：超过 50 条时截断并给提示。
 - `TestNodeSearchEmptyAndWhitespace`：空串与纯空白回到级联。
 - `TestShortcutStorePersistAndCap`：保存、去重、截断 8 个、重启读取。
-- `TestLastFilterPerAccount`：不同账号的上次筛选互不影响。
+- `TestLastFilterNotPersisted`：上次筛选只留在本机内存，重启回默认。
 
 ### UI 测试（`ui.NewTester`）
 

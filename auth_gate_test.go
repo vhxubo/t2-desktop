@@ -256,44 +256,22 @@ func TestAuthGateDropsCallsOfClosedWindow(t *testing.T) {
 	}
 }
 
-// 只有一个账号时补权限直接走系统浏览器：即使 webview 可用也不开内置窗口，
-// 并且仍然申请缺失的 scope。
-func TestScopeReauthUsesSystemBrowserWithSingleAccount(t *testing.T) {
-	b := testBook(t)
-	acc := addTestAccount(t, b, "jimmy")
-	b.webview = true
-	b.afterReady = true
-	b.openLogin = func(string) error {
-		t.Error("只有一个账号时不该打开内置浏览器")
-		return nil
-	}
-	var systemURL string
-	b.openURL = func(u string) error { systemURL = u; return nil }
-
-	a := newAppWithDeps(b.deps(), acc)
-	a.autoLoad = false
-	acc.app = a
+// 补权限直接走系统浏览器：授权地址仍申请缺失的 scope，且不带 webview 专用
+// 的 redirect_mode 参数。
+func TestScopeReauthUsesSystemBrowser(t *testing.T) {
+	a := testApp(t)
 	a.demandAuthorization(scopeNeed([]string{"write:vote"}))
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
 	a.authorizeGate()
 
-	if systemURL == "" {
-		t.Fatal("没有打开系统浏览器授权页")
+	urls := tt.OpenedURLs()
+	if len(urls) != 1 {
+		t.Fatalf("没有打开系统浏览器授权页：%v", urls)
 	}
+	systemURL := urls[0]
 	if strings.Contains(systemURL, "redirect_mode=") {
 		t.Errorf("系统浏览器的授权地址不该带 redirect_mode：%s", systemURL)
-	}
-	p := b.pendingLogin()
-	if p == nil {
-		t.Fatal("没有登记等待中的授权")
-	}
-	if p.accountID != acc.ID {
-		t.Errorf("等待授权的账号 = %q，期望 %q", p.accountID, acc.ID)
-	}
-	if p.embedded {
-		t.Error("补授权应走系统浏览器")
-	}
-	if p.auth == a.auth {
-		t.Error("补授权应挂在临时会话上，不能拿窗口里的会话去换别人的令牌")
 	}
 	u, err := url.Parse(systemURL)
 	if err != nil {
@@ -302,11 +280,17 @@ func TestScopeReauthUsesSystemBrowserWithSingleAccount(t *testing.T) {
 	if !strings.Contains(" "+u.Query().Get("scope")+" ", " write:vote ") {
 		t.Errorf("授权 URL 没有申请缺失的 scope：%q", u.Query().Get("scope"))
 	}
+	if !a.loginPending {
+		t.Error("授权应进入等待回调状态")
+	}
 
 	// 取消这次补授权：窗口里的授权状态一并清掉。
-	b.cancelLogin()
+	a.cancelLogin()
 	if a.hasPendingAuthorization() {
 		t.Error("取消后仍留着授权状态")
+	}
+	if a.loginPending {
+		t.Error("取消后不该还在等回调")
 	}
 	if !strings.Contains(a.loginMsg, "已取消授权") {
 		t.Errorf("取消后窗口提示不对：%q", a.loginMsg)
@@ -314,47 +298,35 @@ func TestScopeReauthUsesSystemBrowserWithSingleAccount(t *testing.T) {
 }
 
 // 系统浏览器里补权限成功后，窗口换成新会话并清掉授权状态，但应用不替用户
-// 重跑被中断的操作 —— 与内置浏览器授权走的是同一条完成路径。
-func TestScopeReauthDoesNotReplayAfterSystemLogin(t *testing.T) {
+// 重跑被中断的操作。
+func TestScopeReauthCompletesAfterSystemLogin(t *testing.T) {
 	srv := newTestTokenServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"c":0,"d":{"access_token":"NEW","refresh_token":"R","token_type":"Bearer","expires_in":3600}}`)
 	})
-	b := testBook(t)
-	acc := addTestAccount(t, b, "jimmy")
-	b.webview = true
-	b.afterReady = true
-	b.openURL = func(string) error { return nil }
-	b.newLoginAuth = func() *AuthManager {
-		m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
-		m.store = &memoryTokenStore{}
-		m.apiBase = srv.URL + "/api"
-		m.http = srv.Client()
-		return m
-	}
-
-	a := newAppWithDeps(b.deps(), acc)
+	a := newApp(t.TempDir())
 	a.autoLoad = false
-	acc.app = a
+	a.auth.apiBase = srv.URL + "/api"
+	a.auth.http = srv.Client()
+	a.client = &Client{HTTP: srv.Client(), Base: srv.URL + "/api", Auth: a.auth}
+
 	a.demandAuthorization(scopeNeed([]string{"write:vote"}))
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
 	a.authorizeGate()
 
-	p := b.pendingLogin()
-	if p == nil || p.embedded {
-		t.Fatalf("没有在系统浏览器里开始补授权：%+v", p)
+	urls := tt.OpenedURLs()
+	if len(urls) != 1 {
+		t.Fatalf("没有打开系统浏览器授权页：%v", urls)
 	}
-	u, err := url.Parse(p.url)
+	u, err := url.Parse(urls[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.handleDeepLink(defaultRedirectURI + "?code=c&state=" + u.Query().Get("state"))
-
+	if err := a.auth.Complete(defaultRedirectURI + "?code=c&state=" + u.Query().Get("state")); err != nil {
+		t.Fatalf("回调没有被接受：%v", err)
+	}
 	waitFor(t, func() bool { return a.auth.accessToken() == "NEW" }, "授权成功后窗口没有换成新会话")
-	if a.hasPendingAuthorization() {
-		t.Error("授权完成后授权状态应清空")
-	}
-	if b.pendingLogin() != nil {
-		t.Error("授权结束后不该还挂着 pending")
-	}
+	waitFor(t, func() bool { return !a.hasPendingAuthorization() }, "授权完成后没有清掉授权状态")
 }
 
 // 取消授权会清掉授权状态：之后某次无关的登录成功不该再弹出过期提示。

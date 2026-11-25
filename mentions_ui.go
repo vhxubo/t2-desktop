@@ -251,7 +251,7 @@ func mentionPersonKey(p mentionPerson) string { return "person:" + mentionKey(p.
 // 本地一个都没命中时，再补上搜到的用户与一行「按输入」——面板因此永远跟着
 // 输入走，不会因为名单里没这个人就空掉。名单还没回来或名额已满时对应项不
 // 出现，不摆一个点了没反应的入口。抽奖助手只在自己的帖子里出现：服务端只认
-// 帖主发的一级评论，换账号回复或别人的帖子写了也不开奖，所以入口与工具条用
+// 帖主发的一级评论，重新登录回复或别人的帖子写了也不开奖，所以入口与工具条用
 // 同一套作者判断（见 canLottery）。
 func (a *app) mentionRows(d *detailState, data mentionResult) []mentionRow {
 	exclude := a.mentionExclude(d)
@@ -276,8 +276,7 @@ func (a *app) mentionRows(d *detailState, data mentionResult) []mentionRow {
 			out = append(out, mentionRow{Key: "quick:random", Label: "@随机守护者",
 				Icon: profileIcon, Text: mentionAt(random)})
 		}
-		if a.canLottery(d) && !a.replyIdentityFor(d).Switched &&
-			mentionQuickHit("@"+lotteryName, query) {
+		if a.canLottery(d) && mentionQuickHit("@"+lotteryName, query) {
 			out = append(out, mentionRow{Key: "quick:lottery", Label: "@" + lotteryName,
 				Icon: lotteryIcon, Text: lotteryCommand(lotteryDefaultWinners) + " "})
 		}

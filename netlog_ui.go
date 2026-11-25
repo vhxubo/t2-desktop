@@ -159,7 +159,6 @@ func (a *app) netLogWindowView(c *ui.Context) {
 				AlignItems(ui.Center).Children(func() {
 				display.Text(c, "网络调试", display.TextProps{FontSize: 13, Strong: true, Rows: 1}).
 					TextColor(t.Text)
-				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.netLogWin; win != nil {

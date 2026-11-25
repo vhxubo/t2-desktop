@@ -105,7 +105,8 @@ func TestSendButtonCostToggle(t *testing.T) {
 // 设置窗口的「评论」页：两枚开关点击后立即生效并落盘，且默认页不显示它们。
 func TestCommentSettingsTogglesPersist(t *testing.T) {
 	a := testApp(t)
-	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, settingsWindowHeight)
+	// 阅读页在上面多了一块排版设置：给足高度让评论开关落在可视区内。
+	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
 	st.Frame()
 	if st.HasText("金币消耗与徽章切换") {
 		t.Errorf("默认打开的通用页不该显示评论开关：%q", st.Texts())

@@ -1157,8 +1157,7 @@ func svgViewBox(data []byte) (minX, minY, w, h float64, ok bool) {
 }
 
 // imageFetcher 是图片加载要的外部依赖：怎么取字节、结果到了怎么通知界面
-// 重绘。图片缓存是全应用一份（见 appDeps），而取图与重绘属于各自的界面：
-// 账号窗口有它自己的未读数与窗口，账号面板只有它自己那一个窗口。
+// 重绘。图片缓存是全应用一份（见 appDeps），而取图与重绘属于当前窗口。
 type imageFetcher struct {
 	fetch  func(raw string) ([]byte, error)
 	redraw func()
@@ -1316,7 +1315,7 @@ func parseImageURL(raw string) (*url.URL, error) {
 }
 
 // cleanExpiredImages 清理过期的帖子图片，有删除时记一行日志。
-func (b *accountBook) cleanExpiredImages() {
+func (b *desktop) cleanExpiredImages() {
 	files, bytes := b.images.cleanExpired(time.Now())
 	if files > 0 {
 		log.Printf("图片缓存：清理了 %d 个过期帖子图片（%s）", files, formatBytes(bytes))
@@ -1326,7 +1325,7 @@ func (b *accountBook) cleanExpiredImages() {
 // startImageCacheMaintenance 在启动时清一次过期帖子图片，之后每
 // imageCacheCleanupInterval 再清一次。图片缓存是全应用一份，所以这个循环
 // 也只起一次（见 main 的 WhenReady）。无头测试不经过这里。
-func (b *accountBook) startImageCacheMaintenance() {
+func (b *desktop) startImageCacheMaintenance() {
 	go func() {
 		b.cleanExpiredImages()
 		ticker := time.NewTicker(imageCacheCleanupInterval)

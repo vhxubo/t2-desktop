@@ -14,7 +14,7 @@ import (
 )
 
 // 侧边栏导航自定义：首页到「节点」分组之前的所有入口都可以单独显示 / 隐藏并
-// 拖动排序。偏好是进程级的（见 appDeps），多账号窗口共用同一份，落盘在
+// 拖动排序。偏好是进程级的（见 appDeps），所有窗口共用同一份，落盘在
 // sidebar.json；底部账号 / 设置 / 关于入口与节点快捷入口不在这里。
 
 const sidebarPrefsFileName = "sidebar.json"

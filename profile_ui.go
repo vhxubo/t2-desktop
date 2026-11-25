@@ -26,7 +26,7 @@ import (
 //
 // 整套界面走 Lobe UI：标题栏、资料头与一级标签统一用 Token 配色和 Lobe
 // 组件（TabsBase、nav.Tabs、display.Avatar、popupSurface / popupRow 等），与
-// 账号面板、设置窗口是同一套设计语言。区块与列表行不画圆角与整圈描边。
+// 「我的」窗口、设置窗口是同一套设计语言。区块与列表行不画圆角与整圈描边。
 //
 // 数据、状态与请求在 profile.go；这里只负责窗口的开关与界面。
 
@@ -311,9 +311,8 @@ func (a *app) profileMenuMineRow(c *ui.Context) {
 	})
 }
 
-// profileMenuLogoutRow 是账号菜单末尾的退出登录入口：原来它占着侧边栏底部
-// 一行，现在和其余账号操作一起收在气泡里。退出实际走 a.logoutAccount，多账号
-// 时摘掉这个账号并关掉它的窗口，单账号时就是普通退出。
+// profileMenuLogoutRow 是「我的」菜单末尾的退出登录入口：退出实际走
+// a.logoutAccount，清掉令牌，主窗口留在登录页。
 func (a *app) profileMenuLogoutRow(c *ui.Context) {
 	a.profileMenuRow(c, logoutIcon, "退出登录", "", "", nil, func() {
 		a.logoutAccount()
@@ -355,7 +354,6 @@ func (a *app) profileWindowView(c *ui.Context) {
 						Type: display.TextSecondary, FontSize: 11, Rows: 1,
 					})
 				}
-				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.profileWin; win != nil {
@@ -468,7 +466,7 @@ func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 		title = "已登录"
 	}
 	ui.Row(c).FillWidth().Padding(14, 16).Gap(14).AlignItems(ui.Center).Children(func() {
-		// 头像与列表、评论、账号面板同一套：有缓存位图就用它，没有时按用户名
+		// 头像与列表、评论、「我的」窗口同一套：有缓存位图就用它，没有时按用户名
 		// 画同一个图案，各页面看到的是同一张。
 		a.avatarWithPro(c, seed, a.avatarBitmap(avatar), 48, u.IsPro)
 		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {

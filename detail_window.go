@@ -270,7 +270,6 @@ func (a *app) disposeDetailState(d *detailState) {
 	if d.composerDetached && a.replyWinFor == d {
 		a.closeReplyWindow()
 	}
-	a.resetReplyIdentity(d)
 	d.dead = true
 }
 
@@ -462,7 +461,6 @@ func (a *app) detailWindowTitleBar(h *detailWindow, c *ui.Context) {
 			AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, lucide.FileText()).Size(16, 16).TextColor(t.Accent)
 			ui.Text(c, "详情").FontSize(13).Bold().SingleLine().TextColor(t.Text)
-			a.accountWindowTag(c)
 		})
 		ui.Row(c).AlignItems(ui.Center).Padding(0, 4).Gap(2).Children(func() {
 			if lone != nil {

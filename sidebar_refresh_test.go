@@ -128,6 +128,66 @@ func TestSidebarSwitchDebouncesUnloadedTabs(t *testing.T) {
 	}
 }
 
+// 刷新请求还在防抖 / 节流队列里时不能闪出「暂无内容」：列表正在等新数据，
+// 该显示加载态。等空结果真的回来之后，才允许显示空文案。
+func TestSidebarRefreshDoesNotFlashEmptyState(t *testing.T) {
+	var mu sync.Mutex
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		_, _ = io.WriteString(w, envelopeJSON(`{"posts":[],"total":0,"page":1,"limit":50,"total_pages":0}`))
+	}))
+	defer srv.Close()
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+
+	t.Run("再点当前页", func(t *testing.T) {
+		base := count()
+		a := loginApp(t, srv)
+		a.tabs[0].loaded = true
+		tt := ui.NewTester(a.view, 1100, 760)
+		tt.Frame()
+		if !tt.HasText("暂无内容") {
+			t.Fatal("前置条件：空列表本来应显示「暂无内容」")
+		}
+		if err := tt.Click(tabSpecs[0].Label); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+		if tt.HasText("暂无内容") {
+			t.Error("刷新排队期间不该闪出「暂无内容」")
+		}
+		waitForNavRequests(t, base+1, count)
+	})
+
+	t.Run("点主页清筛选", func(t *testing.T) {
+		base := count()
+		a := loginApp(t, srv)
+		a.tabs[0].loaded = true
+		a.tabs[0].homeFilterNode = nodeFilterOf(nodeRef{ID: "n-work", Slug: "work", Name: "职场"})
+		a.tabs[0].items = []Item{{Key: "old", Title: "旧内容"}}
+		a.tabs[0].noMore = true // 别让首帧的无限滚动续拉覆盖这份内容
+		tt := ui.NewTester(a.view, 1100, 760)
+		tt.Frame()
+		if !tt.HasText("旧内容") {
+			t.Fatalf("前置条件：应显示已有内容，实际 %q", tt.Texts())
+		}
+		if err := tt.Click(tabSpecs[0].Label); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+		if tt.HasText("暂无内容") {
+			t.Error("清筛选后等请求的空窗期不该闪出「暂无内容」")
+		}
+		waitForNavRequests(t, base+1, count)
+	})
+}
+
 func containsNavPath(paths []string, want string) bool {
 	for _, p := range paths {
 		if p == want {

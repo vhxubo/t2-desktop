@@ -9,8 +9,8 @@ func (a *app) saveThemeChoice() {
 	a.syncNativeAppearance()
 	// mygo 的 SetSource 不会触发 Theme.OnUpdated，这里显式换图标；系统与
 	// 跟随系统模式下的变化由 startIcons 订阅的事件处理。
-	if a.book != nil {
-		a.book.refreshIcons()
+	if a.desktop != nil {
+		a.desktop.refreshIcons()
 	}
 	// 外观是进程级共享状态：主窗口与附属窗口都要跟着换深浅色，publish 会把
 	// 它们重建一遍，否则别的窗口还停在上一帧的主题。

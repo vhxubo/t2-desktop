@@ -138,11 +138,6 @@ func (a *app) registerBuiltinCommands() {
 		Icon: lucide.Bookmark(), DefaultShortcut: cmdShiftKey(ui.KeyW), Run: a.showWatchLater,
 	})
 	add(commandDef{
-		ID: "accounts", Title: "账号", Category: commandCategoryAccount,
-		Hint: "打开账号面板切换账号", Keywords: "account zhanghao switch",
-		Icon: lucide.UsersRound(), DefaultShortcut: cmdShiftKey(ui.KeyA), Run: a.showAccounts,
-	})
-	add(commandDef{
 		ID: "settings", Title: "设置", Category: commandCategoryTools,
 		Hint: "代理、外观与图片缓存", Keywords: "settings shezhi proxy config",
 		Icon: lucide.Settings(), DefaultShortcut: cmdKey(ui.KeyComma), Run: a.showSettings,

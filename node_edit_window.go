@@ -115,7 +115,6 @@ func (a *app) nodeEditWindowView(c *ui.Context) {
 				AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, lucide.Hash()).Size(15, 15).TextColor(t.Accent)
 				ui.Text(c, "修改节点").FontSize(13).Bold().SingleLine().TextColor(t.Text)
-				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.nodeEditWin; win != nil {

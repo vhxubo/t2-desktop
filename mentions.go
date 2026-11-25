@@ -27,7 +27,7 @@ import (
 //     面板永远跟着输入走，不会空着。
 //   - 拼正文："@名字 "（后面必须补空格，否则服务端把整段当用户名，不发通知）。
 //
-// 拼串前必须排除自己（含临时换用的回复身份），单条内容最多 50 个 @ 会发
+// 拼串前必须排除自己，单条内容最多 50 个 @ 会发
 // 通知。名单缓存与失败退避都放在 detailState 的 mentionState 里：参与人名单
 // 单独限流 20/30 次每分，搜索端点单独限流（匿名 5 次/分、登录 20 次/分），
 // 所以都要防抖 + 同一个词只查一次，不能每帧或每次按键重拉。
@@ -465,8 +465,8 @@ func (a *app) onMentionInput(d *detailState, host replySurface, caret int) {
 	a.ensureMentionUserSearch(d)
 }
 
-// mentionPeople 是面板里的逐人列表与键盘上下键共用的口径：排掉自己（含临时
-// 换用的回复身份）、按当前 @前缀 过滤、按用户名去重，顺序与名单一致。
+// mentionPeople 是面板里的逐人列表与键盘上下键共用的口径：排掉自己、按当前
+// @前缀 过滤、按用户名去重，顺序与名单一致。
 //
 // 两处必须是同一份：键盘高亮的那一行就是回车会选的那一个，各筛各的会错位。
 func mentionPeople(people []mentionPerson, exclude map[string]bool, query string) []mentionPerson {
@@ -697,7 +697,7 @@ func mentionEchoRow(query string, exclude map[string]bool) (mentionRow, bool) {
 
 // mentionState 是每篇详情自己的名单状态。它只活在 detailState 上，不存
 // ui.Element / *ui.Context；后台结果通过 a.publish 回到 UI 线程再写进来。
-// open / host 让气泡只在点开它的那扇窗口里画（与回复身份气泡同一套做法）。
+// open / host 让气泡只在点开它的那扇窗口里画（与提示气泡同一套做法）。
 type mentionState struct {
 	guardians       []mentionPerson
 	guardiansBusy   bool
@@ -707,8 +707,7 @@ type mentionState struct {
 
 	participants      []mentionPerson
 	participantsTotal int
-	// participantsKey 是「帖子 + 回复身份」：换账号回复时可见性与自己是谁
-	// 都会变，不能沿用上一个身份拿到的名单。
+	// participantsKey 用来给名单缓存定键；帖子换了就重新取。
 	participantsKey    string
 	participantsBusy   bool
 	participantsLoaded bool
@@ -766,20 +765,14 @@ func mentionRetryAfter(failures int) time.Duration {
 	return delay
 }
 
-// mentionClient 用这次回复真正会用的身份取名单：换了临时回复账号时，
-// 参与人名单的可见性（403）和自己要排除的名字都按那个账号算。
-func (a *app) mentionClient(d *detailState) (*Client, string) {
-	identity := a.replyIdentityFor(d)
-	return a.replyClientFor(identity), identity.ID
-}
+// mentionClient 返回取名单用的客户端。名单按帖子缓存，会话只有一个。
+func (a *app) mentionClient(*detailState) (*Client, string) { return a.client, "" }
 
-// mentionExclude 是需要从名单里排除的名字：窗口自己的账号、临时换用的回复
-// 账号。当前版本没有分身身份选择，所以没有「当前分身名」可排除；以后接了
-// 分身发言，只要把选中的分身名加进这个 map，@所有人 / @随机守护者会自动跟上。
-func (a *app) mentionExclude(d *detailState) map[string]bool {
+// mentionExclude 是需要从名单里排除的名字：自己的账号。自己 @ 自己不会发通知。
+func (a *app) mentionExclude(*detailState) map[string]bool {
 	out := map[string]bool{}
-	for _, name := range []string{a.currentReplyName(), a.replyIdentityFor(d).Name} {
-		if key := mentionKey(name); key != "" {
+	if a.auth != nil {
+		if key := mentionKey(a.auth.username()); key != "" {
 			out[key] = true
 		}
 	}
@@ -831,7 +824,7 @@ func (a *app) ensureMentionGuardians(d *detailState) {
 }
 
 // ensureMentionParticipants 取当前帖子的参与人名单。同一次写评论只取一次：
-// 换帖子、换回复身份或缓存过期才重拉，避免撞上该端点单独的每分限流。
+// 换帖子或缓存过期才重拉，避免撞上该端点单独的每分限流。
 func (a *app) ensureMentionParticipants(d *detailState) {
 	st := &d.mentions
 	if st.participantsBusy || !a.autoLoad || a.client == nil || d.shortID == "" {

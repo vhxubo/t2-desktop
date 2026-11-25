@@ -374,7 +374,8 @@ func imageBoxWidth(w, h, maxH float32) float32 {
 
 // articlePicture 显示一张配图：仍在下载时转圈并说明，失败后给一句说明，
 // 加载完成后按原比例缩到栏宽，imageMaxH 大于 0 时再按原比例收窄到不超过
-// 这个高度（评论区用，见 commentImageMaxH）。配图是帖子里的外部图片，进
+// 这个高度（评论区用，见 commentImageMaxH）。图比栏窄时在栏内左右居中。
+// 配图是帖子里的外部图片，进
 // 临时缓存，过期后自动清理。点一下打开多图预览窗口（见 image_viewer.go）。
 //
 // 占位按图片的真实宽高来：图片已经在磁盘缓存里时（读文件头，见
@@ -401,7 +402,8 @@ func (a *app) articlePicture(c *ui.Context, dest, alt string, pictures []article
 		w, h, _ = a.images.cachedSize(dest, imageCacheTemporary)
 	}
 	if src != nil {
-		img := ui.Image(c, src).MaxWidthPercent(100).Radius(4).Label(alt)
+		img := ui.Image(c, src).MaxWidthPercent(100).Radius(4).Label(alt).
+			AlignSelf(ui.Center)
 		if w > 0 && h > 0 {
 			img.AspectRatio(w / h)
 			if maxW := imageBoxWidth(w, h, imageMaxH); maxW > 0 {
@@ -419,7 +421,8 @@ func (a *app) articlePicture(c *ui.Context, dest, alt string, pictures []article
 			return
 		}
 		ph := ui.Box(c).Width(w).MaxWidthPercent(100).AspectRatio(w / h).
-			Radius(4).Background(th.CodeBackground).Center().Clip()
+			Radius(4).Background(th.CodeBackground).Center().Clip().
+			AlignSelf(ui.Center)
 		if maxW := imageBoxWidth(w, h, imageMaxH); maxW > 0 {
 			ph.MaxWidth(maxW)
 		}
@@ -443,7 +446,8 @@ func (a *app) articlePicture(c *ui.Context, dest, alt string, pictures []article
 // ui.Image 自带图片角色，这里不必抢。
 func (a *app) articlePicturePending(c *ui.Context, dest, alt string, w, h float32, pictures []articlePicture, imageMaxH float32) {
 	th := markdown.DefaultTheme(c.Theme())
-	box := ui.Box(c).Radius(4).Background(th.CodeBackground).Center().Clip()
+	box := ui.Box(c).Radius(4).Background(th.CodeBackground).Center().Clip().
+		AlignSelf(ui.Center)
 	if w > 0 && h > 0 {
 		box.Width(w).MaxWidthPercent(100).AspectRatio(w / h)
 		if maxW := imageBoxWidth(w, h, imageMaxH); maxW > 0 {
@@ -513,7 +517,7 @@ func (a *app) articlePictureLazy(c *ui.Context, dest, alt string, imageMaxH floa
 	th := markdown.DefaultTheme(c.Theme())
 	w, h, _ := a.images.cachedSize(dest, imageCacheTemporary)
 	box := ui.Box(c).Radius(4).Background(th.CodeBackground).Center().Clip().
-		Cursor(ui.CursorPointer)
+		Cursor(ui.CursorPointer).AlignSelf(ui.Center)
 	if w > 0 && h > 0 {
 		box.Width(w).MaxWidthPercent(100).AspectRatio(w / h)
 		if maxW := imageBoxWidth(w, h, imageMaxH); maxW > 0 {

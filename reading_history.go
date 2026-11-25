@@ -14,7 +14,7 @@ import (
 // 最前面。它不依赖网络，也不属于服务端接口；离线时列表照样可读，已缓存
 // 过正文的帖子还能直接打开。
 //
-// 记录按当前账号隔离（见 accountScope）。未登录时记在 anonymous 下；换账号
+// 记录按当前账号隔离（见 cacheScope）。未登录时记在 anonymous 下；重新登录
 // 后不会把上一个账号读过什么展示出来。
 
 const readingHistoryLimit = 200
@@ -39,7 +39,7 @@ type readingHistoryData struct {
 // loadReadingHistory 确保内存里的阅读历史属于当前账号。作用域没变时
 // 直接返回；新启动、登录 / 退出后从 cache/offline.json 读一次。
 func (a *app) loadReadingHistory() {
-	scope := a.accountScope()
+	scope := a.cacheScope()
 	if a.readingLoaded && a.readingFor == scope {
 		return
 	}

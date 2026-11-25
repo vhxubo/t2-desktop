@@ -55,8 +55,10 @@ func (a *app) composeSuggestLive(st *composeState) bool {
 // 自己 @ 自己不会发通知，列出来只会误导。
 func (a *app) composeMentionExclude() map[string]bool {
 	out := map[string]bool{}
-	if key := mentionKey(a.currentReplyName()); key != "" {
-		out[key] = true
+	if a.auth != nil {
+		if key := mentionKey(a.auth.username()); key != "" {
+			out[key] = true
+		}
 	}
 	return out
 }

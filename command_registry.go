@@ -217,7 +217,7 @@ type commandDef struct {
 }
 
 // commandRegistry 是当前窗口可用的命令表。定义按注册顺序保存，命令面板与
-// 设置页都按这个顺序展示；偏好是进程级共享的，所以多账号窗口的快捷键和
+// 设置页都按这个顺序展示；偏好是进程级共享的，所以所有窗口的快捷键和
 // 收藏始终一致。
 type commandRegistry struct {
 	prefs *commandPrefs
@@ -262,7 +262,7 @@ func (r *commandRegistry) get(id string) (commandDef, bool) {
 }
 
 // available 返回当前能用的命令，保持注册顺序。登录态相关的命令由
-// Available 决定，未登录窗口里不会出现「退出登录」这类入口。
+// Available 决定，未登录状态里不会出现「退出登录」这类入口。
 func (r *commandRegistry) available() []commandDef {
 	if r == nil {
 		return nil

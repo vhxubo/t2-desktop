@@ -41,35 +41,6 @@ func TestWatchLaterAddPersists(t *testing.T) {
 	}
 }
 
-// 稍后再看按账号隔离：匿名攒的条目不会出现在登录账号里，退出后又回来。
-func TestWatchLaterIsPerAccount(t *testing.T) {
-	a := testApp(t)
-	a.addWatchLater(Item{ShortID: "ANON", Title: "匿名时加入的"}, nil)
-	if !a.inWatchLater("ANON") {
-		t.Fatal("匿名加入没有记下")
-	}
-
-	if err := a.auth.storeToken(tokenData{
-		AccessToken: "tok",
-		TokenType:   "Bearer",
-		Username:    "jimmy",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if a.inWatchLater("ANON") {
-		t.Error("登录后看到了匿名账号的稍后再看")
-	}
-	a.addWatchLater(Item{ShortID: "JIMMY", Title: "账号里加入的"}, nil)
-
-	a.auth.Logout()
-	if !a.inWatchLater("ANON") {
-		t.Error("退出后没有回到匿名账号的稍后再看")
-	}
-	if a.inWatchLater("JIMMY") {
-		t.Error("退出后仍能看到上个账号的稍后再看")
-	}
-}
-
 // 默认偏好：打开一篇稍后再看的帖子就把它从列表移除。
 func TestWatchLaterOpenRemovesByDefault(t *testing.T) {
 	a := testApp(t)
@@ -117,28 +88,6 @@ func TestWatchLaterOpenKeepsAndMarksRead(t *testing.T) {
 		if !r.ReadAt.IsZero() {
 			t.Errorf("关闭保留后仍留着已读标记：%+v", r)
 		}
-	}
-}
-
-// 清空只清当前账号，不碰另一个账号的清单。
-func TestWatchLaterClearOnlyCurrentAccount(t *testing.T) {
-	a := testApp(t)
-	a.addWatchLater(Item{ShortID: "ANON", Title: "匿名"}, nil)
-
-	if err := a.auth.storeToken(tokenData{
-		AccessToken: "tok", TokenType: "Bearer", Username: "jimmy",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	a.addWatchLater(Item{ShortID: "JIMMY", Title: "jimmy 的"}, nil)
-	a.clearWatchLater()
-	if len(a.later) != 0 {
-		t.Fatalf("清空后仍有 %d 条", len(a.later))
-	}
-
-	a.auth.Logout()
-	if !a.inWatchLater("ANON") {
-		t.Error("清空 jimmy 的清单时把匿名账号的记录也删了")
 	}
 }
 

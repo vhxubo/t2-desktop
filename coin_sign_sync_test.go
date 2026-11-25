@@ -64,8 +64,8 @@ func TestAccountMenuSignSyncsOncePerDay(t *testing.T) {
 	}
 }
 
-// 隔天（或换账号后同步日期过期）时，昨天缓存的「已签到」不能先冒充今天的，
-// 打开菜单要用新响应覆盖。
+// 隔天（或同步日期过期）时，昨天缓存的「已签到」不能先冒充今天的，打开菜单
+// 要用新响应覆盖。
 func TestAccountMenuSignSyncsAfterStaleDay(t *testing.T) {
 	var gets atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

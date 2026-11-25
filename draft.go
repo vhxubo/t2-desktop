@@ -172,7 +172,7 @@ type draftFile struct {
 	Entries []draftEntry `json:"entries"`
 }
 
-// draftStore 是一个账号（或一个 scope）的全部草稿。目录与文件名只由 accountIDFor
+// draftStore 是本机一份草稿集合。目录与文件名固定在
 // 生成，字符集是 [a-z0-9_-]，不需要再转义。每个账号窗口各自持有一份实例。
 type draftStore struct {
 	mu      sync.Mutex
@@ -390,17 +390,9 @@ func (s *draftStore) dropOldestLocked(kind string) {
 	}
 }
 
-// draftScope 是草稿文件的隔离作用域：账号窗口用账号 id，未登录窗口用 guest，
-// 旧版单账号会话用 local。
-func draftScope(a *app) string {
-	if a == nil || a.auth == nil || !a.auth.loggedIn() {
-		return "guest"
-	}
-	if a.accountID != "" {
-		return a.accountID
-	}
-	return "local"
-}
+// draftScope 是草稿文件在本机的作用域。只有一个会话，固定用 local；退出登录
+// 也不换文件，草稿留着，下次登录回来还在。
+func draftScope(*app) string { return "local" }
 
 // stripUploadPlaceholders 剥掉未完成的图片上传占位符。上传任务不跨进程，留着
 // 会让恢复后的草稿永远发不出去（payload 会一直报「还有 N 张图片未处理完」）。
@@ -860,7 +852,7 @@ func (a *app) scheduleDraftTimer(now time.Time) {
 	})
 }
 
-// draftsForCurrent 在作用域变化（登录 / 退出 / 换账号）时换一份 store。旧 store
+// draftsForCurrent 在作用域变化（登录 / 退出 / 重新登录）时换一份 store。旧 store
 // 已经在强制落盘点保存过，这里只切引用。
 func (a *app) draftsForCurrent() *draftStore {
 	scope := draftScope(a)
@@ -877,8 +869,8 @@ func (a *app) flushDrafts() {
 	a.flushDraftsInto(a.draftsForCurrent())
 }
 
-// flushDraftsInto 把改动写进指定的 store。退出 / 换账号时 auth 状态可能已经变
-// 了，必须显式用旧作用域那份 store，否则内容会被写进新账号或 guest 的文件。
+// flushDraftsInto 把改动写进指定的 store。退出时 auth 状态可能已经变了，显式
+// 传入 store，确保内容写进当前这份草稿文件。
 func (a *app) flushDraftsInto(store *draftStore) {
 	if store == nil {
 		return

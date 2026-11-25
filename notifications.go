@@ -901,27 +901,18 @@ func notificationReactionText(o notificationReactionOverview) string {
 // nativeNotice is what the platform actually shows. Target is where a click
 // should land; the app resolves it on the UI thread, never on the platform's
 // callback thread.
-//
-// AccountID / Subtitle 标明这条消息属于哪个账号：多账号时每个账号一个窗口，
-// 系统通知中心里的消息与本应用的其它窗口混在一起，不写账号就分不清点开后
-// 该切到哪个窗口。
 type nativeNotice struct {
-	ID        string
-	AccountID string // 消息属于哪个账号；通知 id 与 macOS 的通知分组都用它
-	Subtitle  string // 「账号 @昵称」；单账号与未登录窗口为空
-	Title     string
-	Body      string
-	Target    string
-	Silent    bool // 不播提示音（由通知设置里的「提示音」开关决定）
+	ID     string
+	Title  string
+	Body   string
+	Target string
+	Silent bool // 不播提示音（由通知设置里的「提示音」开关决定）
 }
 
 // notificationNative turns a message into the native notification text:
 // "@谁 做了什么" as the title, then the target title and the comment body.
 // 表态消息没有单一操作者，句首换成合并后的「表情 + 人名」。
-//
-// accountID / accountName 是这条消息所属的账号：通知 id 带上账号段，多账号
-// 时点击才认得出归属；accountName 非空时副标题写明「账号 @昵称」。
-func notificationNative(n *notification, accountID, accountName string) nativeNotice {
+func notificationNative(n *notification) nativeNotice {
 	v := notificationViewOf(n)
 	title := v.Action
 	switch {
@@ -947,55 +938,24 @@ func notificationNative(n *notification, accountID, accountName string) nativeNo
 		lines = append(lines, v.TypeLabel)
 	}
 	notice := nativeNotice{
-		ID:        notificationNativeID(accountID, n.ID),
-		AccountID: accountID,
-		Title:     truncate(title, 80),
-		Target:    v.TargetURL,
+		ID:     notificationNativeID(n.ID),
+		Title:  truncate(title, 80),
+		Target: v.TargetURL,
 	}
-	if accountName != "" {
-		// 副标题在 Windows / Linux 上会并进正文最前面，昵称过长时截一下，
-		// 免得把「谁做了什么」那行挤到看不见。
-		notice.Subtitle = truncate("账号 @"+accountName, 40)
-	}
-	// 副标题占的就是正文那一段的位置（Windows 的气泡正文与副标题共用一
-	// 段文字）：正文要给它让出地方，否则系统在末尾截断，切掉的正是评论正文。
-	budget := noticeBodyMax
-	if notice.Subtitle != "" {
-		budget = max(0, budget-len([]rune(notice.Subtitle))-1)
-	}
-	notice.Body = truncate(strings.Join(lines, "\n"), budget)
+	notice.Body = truncate(strings.Join(lines, "\n"), noticeBodyMax)
 	return notice
 }
 
 // noticeBodyMax 是系统通知正文的长度上限（字符）。
 const noticeBodyMax = 220
 
-// noticeIDPrefix 是系统通知 id 的前缀，后面接「账号 id:消息 id」。
+// noticeIDPrefix 是系统通知 id 的前缀，后面接消息 id。
 const noticeIDPrefix = "t2-notification:"
 
-// notificationNativeID 给系统通知一个 id。系统只把这个 id 带回来，所以一次
-// 写全「哪个账号的哪条消息」：多账号时点击才认得出归属，也不会让两个账号的
-// 消息在系统通知中心里互相顶掉。
-func notificationNativeID(accountID, messageID string) string {
-	if accountID == "" {
-		return noticeIDPrefix + messageID
-	}
-	return noticeIDPrefix + accountID + ":" + messageID
-}
-
-// splitNotificationNoticeID 把系统通知 id 拆回账号与消息。账号 id 由
-// accountIDFor 生成，只含 [a-z0-9_-]，所以第一个冒号一定是它的结尾；升级前
-// 弹出的通知只有消息 id，账号段为空。
-func splitNotificationNoticeID(id string) (accountID, messageID string) {
-	rest, ok := strings.CutPrefix(id, noticeIDPrefix)
-	if !ok {
-		return "", id
-	}
-	accountID, messageID, found := strings.Cut(rest, ":")
-	if !found {
-		return "", rest
-	}
-	return accountID, messageID
+// notificationNativeID 给系统通知一个 id：系统只把这个 id 带回来，点击时据此
+// 找回消息与它的跳转目标。
+func notificationNativeID(messageID string) string {
+	return noticeIDPrefix + messageID
 }
 
 // noticeMessageID 是系统通知 id 里那条消息的 id，用于点击后按条标为已读。
@@ -1005,6 +965,5 @@ func noticeMessageID(id string) string {
 	if !strings.HasPrefix(id, noticeIDPrefix) {
 		return ""
 	}
-	_, messageID := splitNotificationNoticeID(id)
-	return messageID
+	return strings.TrimPrefix(id, noticeIDPrefix)
 }

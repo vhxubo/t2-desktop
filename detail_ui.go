@@ -219,16 +219,8 @@ type detailState struct {
 	// 的开关，默认显示。
 	composerDetached bool
 	winPreview       bool
-	// replyAsID 是这篇帖子临时换用的回复账号 id（零值表示窗口自己的账号）：
-	// 只对这一篇的评论生效，关闭或离开详情页就清空，不落盘，也不改变窗口的
-	// 登录身份与阅读状态（见 reply_identity.go）。
-	replyAsID string
-	// identityOpen / identityHost 是「换个账号回复」气泡的展开状态与它所在的
-	// 窗口：气泡只在点开它的那扇窗口里画，主窗口与独立写评论窗口不会同时弹。
-	identityOpen bool
-	identityHost replySurface
 	// mentions 是 @ 提及的两份名单（守护者 / 本帖参与人）与气泡状态。名单
-	// 按「帖子 + 回复身份」缓存，只在这里存运行态，不落盘（见 mentions.go）。
+	// 只在这里存运行态，不落盘（见 mentions.go）。
 	mentions mentionState
 	// emojiShortcodes 是键入 ":" 弹出的社区表情短码候选面板状态。候选来自
 	// 进程级表情表，没有名单与网络请求（见 emoji_shortcode.go）。
@@ -459,7 +451,7 @@ func (a *app) fetchImage(raw string) ([]byte, error) {
 }
 
 // fetchImageBytes 取一张图片的原始字节。hc 必须来自 proxyManager 的共享
-// transport：图片也是出站请求，同样要走配置的代理。账号面板预取账号头像
+// transport：图片也是出站请求，同样要走配置的代理。「我的」窗口预取账号头像
 // 时用的是同一个函数。
 //
 // 请求地址先经 imageRequestURL 适配图片代理：2Libra 的 wsrv.nl 代理默认把
@@ -591,9 +583,6 @@ func (a *app) openDetailInline(it Item) {
 		if len(a.detailStack) >= 20 {
 			a.detailStack = a.detailStack[1:]
 		}
-		// 离开这一页就把临时回复身份作废：换帖子后还借别人的令牌回评论，
-		// 很容易忘了自己是谁（见 reply_identity.go）。
-		a.resetReplyIdentity(a.detail)
 		a.detailStack = append(a.detailStack, a.detail)
 	} else {
 		a.detailStack = nil
@@ -631,9 +620,6 @@ func (a *app) closeDetail() {
 		// 退回上一篇同样是「进入详情」：双栏重新展开，收起状态不跨页面保留。
 		a.detail.bodyCollapsed = false
 		a.detail.replyCollapsed = false
-		// 临时回复身份也不跨页面：返回栈里那一页就算上次换过账号，回来时
-		// 也要先按窗口自己的账号算（压栈时已经清过一次，这里再兜一层）。
-		a.resetReplyIdentity(a.detail)
 		return
 	}
 	a.detail = nil
@@ -1053,7 +1039,7 @@ func (a *app) detailContent(c *ui.Context, d *detailState) {
 		a.redeemDialog(c, d)
 		// 打赏、表态与明细都是贴着入口的 Lobe Popover（见 interact.go）；
 		// 合集、注资、竞猜与解锁确认是盖在整页上的 Lobe Modal（见 collections.go /
-		// reward_pool.go / bets.go / restricted_ui.go / reply_identity.go）。
+		// reward_pool.go / bets.go / restricted_ui.go）。
 		a.collectionDialog(c, d)
 		a.rewardPoolDialog(c, d)
 		a.betDialog(c, d)
@@ -1913,14 +1899,9 @@ func (a *app) topicSubtitle(c *ui.Context, p *topicDetail) {
 }
 
 // topicSourceFooter 占满整个窗口底部，放在最底部：数据来源声明 + 可点击原文
-// 链接（点一下用系统浏览器打开），右侧是多账号时的「当前账号」标签。这一行
-// 从进入详情起就画出来，正文是否加载完成都不改变它占的高度，正文出现时两栏
-// 卡片不会先高后矮地跳一下；原文地址用打开这一帖时带进来的链接兜底，正文到了
-// 再换成规范的永久链接。
-//
-// 把账号标签放在这里而不是评论输入栏里：它正好在评论框正下方的右下角，
-// 点发送之前抬眼看得到，又不会分掉输入框的宽度（见 reply_identity.go）。
-// 版权声明与原文链接自己占一个会折行的左栏，窄窗口下也不会和标签叠在一起。
+// 链接（点一下用系统浏览器打开）。这一行从进入详情起就画出来，正文是否加载
+// 完成都不改变它占的高度，正文出现时两栏卡片不会先高后矮地跳一下；原文地址
+// 用打开这一帖时带进来的链接兜底，正文到了再换成规范的永久链接。
 func (a *app) topicSourceFooter(c *ui.Context, d *detailState) {
 	tk := lobetheme.TokensOf(c)
 	layout.Divider(c, layout.DividerProps{})
@@ -1939,7 +1920,6 @@ func (a *app) topicSourceFooter(c *ui.Context, d *detailState) {
 				a.openExternal(origin)
 			}
 		})
-		a.replyIdentityBadge(c, d, replySurfaceDetail)
 	})
 }
 
@@ -3179,7 +3159,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 				// 服务端在发送时拦截。登录后字数在下面那条状态栏里报（见
 				// comment_cost_ui.go），那里同时报发评金币与徽章建议，同一条
 				// 链上不重复写两遍。
-				if d.replyAsID != "" || !a.commentCostBarVisible() {
+				if !a.commentCostBarVisible() {
 					ui.Text(c, fmt.Sprintf("%d 字", utf8.RuneCountInString(d.draft))).
 						FontSize(11).TextColor(t.TextMuted).SingleLine()
 				}
@@ -3293,11 +3273,7 @@ func (a *app) replyInput(c *ui.Context, d *detailState) {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).KeepFocus().
 				Label("评论发送栏").Children(func() {
 				ui.Box(c).Grow(1).MinWidth(0).Children(func() {
-					// 临时换成别的账号回复时这组数字不适用（费用、徽章与潘多拉
-					// 事件都是窗口自己账号的），先收起；字数在头部那一行照常显示。
-					if d.replyAsID == "" {
-						a.commentCostBar(c, d.draft)
-					}
+					a.commentCostBar(c, d.draft)
 				})
 				a.replyFieldActions(c, d, true)
 			})
@@ -3598,32 +3574,18 @@ func (a *app) submitReply() {
 		a.replyToast("评论内容不能为空")
 		return
 	}
-	// 这次提交用哪个账号：窗口自己的，还是详情页上临时换的那个。身份在
-	// 提交前固定下来，发送过程中再切换账号也不影响已经在路上的这一条
-	// （见 reply_identity.go）。
-	identity := a.replyIdentityFor(d)
 	// 潘多拉的「多说多写」对评论字数有硬要求：没到门槛就发不出去，先在本地
-	// 拦下来，免得白跑一次请求（判断依据见 comment_cost.go）。这条规则属于
-	// 窗口自己的账号，临时换账号回复时不适用。
-	if !identity.Switched {
-		if short, minLength := a.commentCostShortfall(content); short > 0 {
-			a.replyToast(fmt.Sprintf("还差 %d 字才能发送（潘多拉要求 ≥%d 字）", short, minLength))
-			return
-		}
+	// 拦下来，免得白跑一次请求（判断依据见 comment_cost.go）。
+	if short, minLength := a.commentCostShortfall(content); short > 0 {
+		a.replyToast(fmt.Sprintf("还差 %d 字才能发送（潘多拉要求 ≥%d 字）", short, minLength))
+		return
 	}
 	if n := editorPendingUploads(d.draft); n > 0 {
 		a.replyToast("还有 " + strconv.Itoa(n) + " 张图片未处理完，请等上传结束或移除后再发送")
 		return
 	}
-	if identity.Auth == nil || !identity.Auth.loggedIn() {
-		switch {
-		case identity.Switched && identity.Name == "":
-			a.replyToast("回复用的账号已不在本机账号里，请换一个账号或切回当前账号")
-		case identity.Switched:
-			a.replyToast("「" + identity.Name + "」的登录已失效，请换一个账号或切回当前账号")
-		default:
-			a.replyToast("请先登录后再评论")
-		}
+	if a.auth == nil || !a.auth.loggedIn() {
+		a.replyToast("请先登录后再评论")
 		return
 	}
 	if d.topic != nil && d.topic.CommentsClosed {
@@ -3647,7 +3609,7 @@ func (a *app) submitReply() {
 		}
 	}
 	d.posting = true
-	client := a.replyClientFor(identity)
+	client := a.client
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	go func() {
 		defer cancel()
@@ -3658,22 +3620,10 @@ func (a *app) submitReply() {
 			}
 			d.posting = false
 			if err != nil {
-				if identity.Switched {
-					// 借用别的账号时不能弹本窗口的授权弹窗：那会重新授权窗口
-					// 自己的账号，重跑后仍然发不出去。请用户去那个账号的窗口
-					// 补授权，草稿保持原样。
-					if need, ok := authNeedFromError(err); ok {
-						a.replyToast("以 @" + identity.Name + " 回复失败：" + need.Message +
-							"请先打开该账号的窗口完成授权后再试。")
-					} else {
-						a.replyToast("以 @" + identity.Name + " 回复失败：" + friendlyError(err))
-					}
-				} else {
-					// 缺 write:comment 时先补授权，回调成功后按同样的内容与父
-					// 评论重发一次，用户不用重新输入。
-					a.handleAuthErrorFor(a.replyAuthTarget(), err)
-					a.replyToast(friendlyError(err))
-				}
+				// 缺 write:comment 时先补授权，回调成功后按同样的内容与父
+				// 评论重发一次，用户不用重新输入。
+				a.handleAuthErrorFor(a.replyAuthTarget(), err)
+				a.replyToast(friendlyError(err))
 				// 发送失败（网络抖动、超时）后马上把草稿落盘：这段时间里用户
 				// 可能关窗或进程被动结束，不能只等 800ms 防抖，否则草稿会丢。
 				a.flushDrafts()
@@ -3683,10 +3633,10 @@ func (a *app) submitReply() {
 				return
 			}
 			if created.Author == "" || created.Author == "匿名" {
-				if u := identity.Auth.username(); u != "" {
+				if u := a.auth.username(); u != "" {
 					created.Author = u
 					if created.Avatar == "" {
-						created.Avatar = identity.Auth.avatarURL()
+						created.Avatar = a.auth.avatarURL()
 					}
 				}
 			}

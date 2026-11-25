@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -15,27 +16,48 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 「接收测试版」默认关；打开后重新读回还是打开，重置回到默认。
+// 「稳定渠道」默认关，也就是默认接收全部版本；打开后重新读回还是打开，
+// 重置回到默认（接收测试版）。
 func TestUpdateChannelStorePersist(t *testing.T) {
 	dir := t.TempDir()
 	s := newUpdateChannelStore(dir)
-	if s.prerelease() {
-		t.Fatal("默认不该接收测试版")
+	if s.stable() || !s.prerelease() {
+		t.Fatal("默认该接收全部版本（含测试版）")
 	}
-	if err := s.setPrerelease(true); err != nil {
+	if err := s.setStable(true); err != nil {
 		t.Fatal(err)
 	}
-	if again := newUpdateChannelStore(dir); !again.prerelease() {
-		t.Errorf("重新读回的选择不是「接收测试版」")
+	if again := newUpdateChannelStore(dir); !again.stable() {
+		t.Error("重新读回的选择不是「稳定渠道」")
 	}
 	if err := s.Reset(); err != nil {
 		t.Fatal(err)
 	}
-	if s.prerelease() {
-		t.Errorf("重置后仍在接收测试版")
+	if s.stable() || !s.prerelease() {
+		t.Error("重置后没有回到默认通道")
 	}
-	if again := newUpdateChannelStore(dir); again.prerelease() {
-		t.Errorf("重置没有落盘：%v", again.prerelease())
+	if again := newUpdateChannelStore(dir); again.stable() {
+		t.Error("重置没有落盘")
+	}
+}
+
+// 老版本落盘的 prerelease 字段按反选读回，保留用户之前的通道选择。
+func TestUpdateChannelLegacyConfig(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct {
+		prerelease bool
+		wantStable bool
+	}{
+		{true, false},
+		{false, true},
+	} {
+		if err := writeJSONFile(filepath.Join(dir, "update_channel.json"),
+			updateChannelConfig{Prerelease: &c.prerelease}); err != nil {
+			t.Fatal(err)
+		}
+		if got := newUpdateChannelStore(dir).stable(); got != c.wantStable {
+			t.Errorf("prerelease=%v 读回稳定渠道=%v，期望 %v", c.prerelease, got, c.wantStable)
+		}
 	}
 }
 
@@ -55,8 +77,9 @@ func TestApplyUpdateChannelSetsUpdater(t *testing.T) {
 	}
 }
 
-// 设置窗口「更新」一块的开关：点一下立即落盘，并同步到更新器。
-func TestUpdateSettingsPrereleaseToggle(t *testing.T) {
+// 设置窗口「更新」一块的开关：默认接收全部版本，点一下打开稳定渠道，
+// 立即落盘并同步到更新器；再点一下回到默认。
+func TestUpdateSettingsStableToggle(t *testing.T) {
 	old := mygo.Updater.Prereleases()
 	t.Cleanup(func() { mygo.Updater.SetPrereleases(old) })
 
@@ -64,29 +87,35 @@ func TestUpdateSettingsPrereleaseToggle(t *testing.T) {
 	a.settingsTab = settingsTabGeneral
 	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1400)
 	st.Frame()
-	if !st.HasText("接收测试版") {
-		t.Fatalf("设置窗口没有接收测试版开关：%q", st.Texts())
+	if !st.HasText("稳定渠道") {
+		t.Fatalf("设置窗口没有稳定渠道开关：%q", st.Texts())
 	}
-	if err := st.Click("接收测试版"); err != nil {
+	if !a.updateChannel.prerelease() {
+		t.Fatal("默认该接收全部版本")
+	}
+	if err := st.Click("稳定渠道"); err != nil {
 		t.Fatal(err)
 	}
 	st.Frame()
-	if !a.updateChannel.prerelease() || !mygo.Updater.Prereleases() {
-		t.Fatalf("点开关没有打开测试版通道：prefs=%v updater=%v",
-			a.updateChannel.prerelease(), mygo.Updater.Prereleases())
+	if !a.updateChannel.stable() || mygo.Updater.Prereleases() {
+		t.Fatalf("点开关没有打开稳定渠道：prefs=%v updater=%v",
+			a.updateChannel.stable(), mygo.Updater.Prereleases())
 	}
-	if again := newUpdateChannelStore(a.updateChannel.dir); !again.prerelease() {
-		t.Errorf("测试版通道没有落盘")
+	if again := newUpdateChannelStore(a.updateChannel.dir); !again.stable() {
+		t.Error("稳定渠道没有落盘")
 	}
-	if !st.HasText("检查更新也会提供测试版（Beta）") {
+	if !st.HasText("检查更新只获取正式版 Release") {
 		t.Errorf("打开后没有提示：%q", st.Texts())
 	}
-	if err := st.Click("接收测试版"); err != nil {
+	if err := st.Click("稳定渠道"); err != nil {
 		t.Fatal(err)
 	}
 	st.Frame()
-	if a.updateChannel.prerelease() || mygo.Updater.Prereleases() {
-		t.Errorf("再点一下没有关回正式版")
+	if a.updateChannel.stable() || !mygo.Updater.Prereleases() {
+		t.Error("再点一下没有回到接收全部版本")
+	}
+	if !st.HasText("接收全部版本（含 Beta），并强制开启闲时自动下载") {
+		t.Errorf("关掉后没有提示：%q", st.Texts())
 	}
 }
 
@@ -128,7 +157,7 @@ func TestUpdateFeedURLLatest(t *testing.T) {
 	}
 }
 
-// 打开「接收测试版」且选了下载加速时，镜像源先用 GitHub API 挑出版本最高的
+// 接收测试版（默认）且选了下载加速时，镜像源先用 GitHub API 挑出版本最高的
 // release（跳过 draft），再取那个 tag 的 manifest。
 func TestUpdateMirrorSourcePrereleaseManifest(t *testing.T) {
 	var apiPath, feedPath atomic.Value
@@ -189,7 +218,7 @@ func TestUpdateMirrorSourcePrereleaseManifest(t *testing.T) {
 	}
 }
 
-// 仓库里只有正式版时，测试版通道挑到的是最新的那个；一个都没有就报错。
+// 仓库里只有正式版时，接收测试版挑到的是最新的那个；一个都没有就报错。
 func TestUpdateHighestTag(t *testing.T) {
 	var body atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

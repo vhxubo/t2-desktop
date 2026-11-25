@@ -29,7 +29,7 @@ type followState struct {
 	following bool
 	known     bool   // 是否已从服务端确认关注状态
 	busy      bool   // 正在提交关注 / 取关
-	viewer    string // 状态属于哪个登录账号；换账号后重新读取
+	viewer    string // 状态属于哪个登录账号；重新登录后重新读取
 }
 
 // userPath 是用户主页路径。username 是公开标识，必须转义，避免昵称里的

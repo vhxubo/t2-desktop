@@ -15,10 +15,9 @@ import (
 // 「退出应用」，并把选择记到配置目录的 window.json 里，下次启动沿用。记住
 // 之后不再询问，想改回来就在设置窗口的「窗口」一块里选。
 //
-// 多账号时每个账号一个主窗口：这里的「关闭窗口」只关这个账号的窗口（它退回
-// 账号面板，账号仍挂着，未读角标与登录状态照常），所有窗口都关掉时应用才
-// 结束；「收进托盘」把这个窗口藏起来，应用继续在后台跑；「退出应用」则是关
-// 一次窗口就结束整个应用。
+// 这里的「关闭窗口」只关当前窗口，其它窗口照常留着，登录状态不变；「收进
+// 托盘」把窗口藏起来，应用继续在后台跑；「退出应用」则是关一次窗口就结束
+// 整个应用。
 const (
 	closeAsk    = iota // 每次关闭都询问
 	closeWindow        // 只关掉这个窗口（最后一个窗口关掉时应用退出）
@@ -55,8 +54,7 @@ func newCloseModeStore(dir string) *closeModeStore {
 func parseCloseMode(s string) int {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "quit":
-		// 旧版本里 "quit" 是「关闭即退出应用」。那时只有一个窗口，现在按
-		// 「只关这个窗口」处理：单账号时结果一样，多账号时不会误关别人的窗口。
+		// 旧版本里 "quit" 是「关闭即退出应用」，现在按「只关这个窗口」处理。
 		return closeWindow
 	case "tray":
 		return closeToTray
@@ -219,51 +217,21 @@ func (a *app) hideAllWindowsToTray() {
 	a.closeAllDetailWindows()
 }
 
-// hasOpenMainWindow 报告是否还有一扇开着的主窗口。收全部窗口时主窗口只 Hide
-// 不 Destroy，必须留这么一扇当锚点，否则附属窗口一关完，mygo 会因为「最后一
-// 扇窗口关了」直接退出应用。
-func (b *accountBook) hasOpenMainWindow() bool {
-	for _, acc := range b.snapshotAccounts() {
-		if acc.app != nil && !acc.app.mainClosed && acc.app.win != nil {
-			return true
-		}
+// closeAllWindowsToTray 是托盘「关闭全部」的动作：把主窗口连同附属窗口一起
+// 收进托盘。主窗口只 Hide 不 Destroy，窗口对象还在，应用不会因为「最后一个
+// 窗口关了」退出；点托盘图标就能回来。只在主线程调用（托盘菜单的 Click 回调
+// 本就在主线程）。
+func (b *desktop) closeAllWindowsToTray() {
+	a := b.app
+	if a == nil {
+		return
 	}
-	if guest := b.guest; guest != nil && !guest.mainClosed && guest.win != nil {
-		return true
+	// 主窗口关着、只剩详情等附属窗口时，先开一扇主窗口当锚点。否则下面关掉
+	// 最后一扇附属窗口就会退出应用 —— 那就和「退出」重复了。
+	if a.mainClosed || a.win == nil {
+		a.openMainWindow()
 	}
-	return false
-}
-
-// closeAllWindowsToTray 是托盘「关闭全部」的动作：把每个账号的主窗口连同
-// 附属窗口一起收进托盘，未登录窗口、账号面板与内置授权窗口也一并关掉。主窗口
-// 只 Hide 不 Destroy，窗口对象还在，应用不会因为「最后一个窗口关了」退出；
-// 点托盘图标就能回到最近用过的账号。
-// 只在主线程调用（托盘菜单的 Click 回调本就在主线程）。
-func (b *accountBook) closeAllWindowsToTray() {
-	// 主窗口都关着、只剩详情等附属窗口时，先开一扇主窗口当锚点。否则下面
-	// 关掉最后一扇附属窗口就会退出应用 —— 那就和「退出」重复了。
-	if !b.hasOpenMainWindow() {
-		accounts := b.snapshotAccounts()
-		if len(accounts) > 0 {
-			id := b.activeAccountID()
-			if b.account(id) == nil {
-				id = accounts[0].ID
-			}
-			b.openWindowNow(id)
-		} else {
-			b.openGuestWindowNow()
-		}
-	}
-	for _, acc := range b.snapshotAccounts() {
-		if acc.app != nil {
-			acc.app.hideAllWindowsToTray()
-		}
-	}
-	if guest := b.guest; guest != nil {
-		guest.hideAllWindowsToTray()
-	}
-	b.closePanelWindow()
-	b.closeLoginWindow()
+	a.hideAllWindowsToTray()
 }
 
 // closePromptDialog 是关闭主窗口时的询问框。放在主窗口里而不是另开一个
@@ -280,9 +248,9 @@ func (a *app) closePromptDialog(c *ui.Context) {
 		NoFooter: true,
 	}, func() {
 		ui.Column(c).FillWidth().Gap(10).Children(func() {
-			ui.Text(c, "只关这个窗口的话，账号会挂回账号面板，未读角标与登录状态照常；"+
+			ui.Text(c, "只关这个窗口的话，登录状态照常，其它窗口不受影响；"+
 				"收进托盘则应用继续在后台接收通知，点托盘图标就能回到窗口；"+
-				"退出应用会关掉所有账号的窗口。").
+				"退出应用会关掉所有窗口。").
 				TextColor(t.TextMuted).MaxLines(4)
 			ui.Checkbox(c, &a.closeRemember, "记住我的选择，可在设置里修改")
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {

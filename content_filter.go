@@ -321,11 +321,7 @@ func (a *app) contentFilterCacheKey() string {
 	if a.auth == nil || !a.auth.loggedIn() {
 		return ""
 	}
-	scope := a.persistableScope()
-	if scope == "" || scope == anonymousScope {
-		return ""
-	}
-	return contentFilterCachePrefix + scope
+	return contentFilterCachePrefix + a.persistableScope()
 }
 
 // loadContentFilterCache 同步摆上首帧底稿：有缓存时名单瞬间可用，首页不必
@@ -356,7 +352,7 @@ func (a *app) writeContentFilterCache(d contentFilterDTO) {
 	logCacheWriteError(a.kv.put(key, contentFilterCache{DTO: cloneFilterDTO(d), SavedAt: time.Now()}, time.Now()))
 }
 
-// resetContentFilter 在换账号 / 退出时整体重建：名单是账号数据，绝不能让
+// resetContentFilter 在重新登录 / 退出时整体重建：名单是账号数据，绝不能让
 // 下一个账号继承上一个账号的快照。磁盘缓存仍按新账号作用域重新读。
 func (a *app) resetContentFilter() {
 	a.contentFilter = newContentFilterState()

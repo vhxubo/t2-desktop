@@ -154,7 +154,7 @@ func (a *app) beginAvatarCrop(ps *profileState, path string) {
 	}()
 }
 
-// closeAvatarCrop 收起裁剪框并释放原图。上传成功、取消与切换账号都走这里。
+// closeAvatarCrop 收起裁剪框并释放原图。上传成功、取消与切重新登录都走这里。
 func (a *app) closeAvatarCrop(ps *profileState) {
 	if ps == nil {
 		return

@@ -28,7 +28,7 @@ func TestCommandPaletteOpensOnClick(t *testing.T) {
 			t.Errorf("命令面板里找不到「%s」：%q", label, tt.Texts())
 		}
 	}
-	// 未登录窗口给「登录」，不给「退出登录」。
+	// 未登录状态给「登录」，不给「退出登录」。
 	if _, ok := tt.Find("命令 登录"); !ok {
 		t.Error("未登录时命令面板缺少「登录」")
 	}

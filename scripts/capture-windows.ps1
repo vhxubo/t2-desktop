@@ -1,7 +1,6 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$ExePath,
-    [string]$Account,
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\docs\images'),
     [ValidateRange(1, 60)][int]$TimeoutSeconds = 8,
     [ValidateRange(0, 10000)][int]$SettleMilliseconds = 900,
@@ -93,8 +92,8 @@ function Get-MainWindows {
     foreach ($process in Get-Processes) {
         foreach ($handle in [T2Capture.Native]::Windows($process.Id)) {
             $title = [T2Capture.Native]::Title($handle)
-            if ($title -match '^T2 Desktop · (.+)$' -and (-not $Account -or $Matches[1] -ceq $Account)) {
-                [pscustomobject]@{ Handle = $handle; ProcessId = $process.Id; Account = $Matches[1] }
+            if ($title -match '^T2 Desktop · (.+)$') {
+                [pscustomobject]@{ Handle = $handle; ProcessId = $process.Id; Name = $Matches[1] }
             }
         }
     }
@@ -104,7 +103,7 @@ function Resolve-App {
     $mainWindows = @(Get-MainWindows)
     if ($mainWindows.Count -eq 0) {
         if (Get-Processes) {
-            throw '应用已运行，但找不到匹配的已登录主窗口。请从托盘恢复窗口，并检查 -Account。'
+            throw '应用已运行，但找不到已登录的主窗口。请从托盘恢复窗口。'
         }
         $launchPath = $ExePath
         if (-not $launchPath) {
@@ -125,14 +124,14 @@ function Resolve-App {
         Start-Process -FilePath $launchPath
         $mainWindows = @(Wait-Result { Get-MainWindows } '没有出现已登录的主窗口；请先在应用中完成登录。')
     }
-    if ($mainWindows.Count -ne 1) { throw '找到多个已登录主窗口，请用 -Account 指定账号昵称。' }
+    if ($mainWindows.Count -ne 1) { throw '找到多个已登录主窗口，请先关闭多余的窗口。' }
     return $mainWindows[0]
 }
 
 function Find-Window([string]$Title) {
     foreach ($handle in [T2Capture.Native]::Windows($app.ProcessId)) {
         $name = [T2Capture.Native]::Title($handle)
-        if ($name -ceq "$Title · $($app.Account)" -or ($singleMain -and $name -ceq $Title)) { return $handle }
+        if ($name -ceq "$Title · $($app.Name)") { return $handle }
     }
 }
 
@@ -284,7 +283,6 @@ if ($ExePath) {
 $processName = if ($ExePath) { [IO.Path]::GetFileNameWithoutExtension($ExePath) } else { 't2-desktop' }
 $app = Resolve-App
 if ([T2Capture.Native]::IsIconic($app.Handle)) { [void][T2Capture.Native]::ShowWindowAsync($app.Handle, 9) }
-$singleMain = @([T2Capture.Native]::Windows($app.ProcessId) | Where-Object { [T2Capture.Native]::Title($_) -match '^T2 Desktop · ' }).Count -eq 1
 $runDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
 [void][IO.Directory]::CreateDirectory($runDirectory)
 $results = [Collections.Generic.List[object]]::new()
@@ -296,9 +294,7 @@ try {
         foreach ($window in [T2Capture.Native]::Windows($app.ProcessId)) {
             if ($window -eq $app.Handle) { continue }
             $title = [T2Capture.Native]::Title($window)
-            if ($title -eq '登录另一个账号') { continue }
-            if (($singleMain -and $title -notmatch '^T2 Desktop') -or
-                $title -eq '账号' -or $title.EndsWith(" · $($app.Account)", [StringComparison]::Ordinal)) {
+            if ($title -notmatch '^T2 Desktop') {
                 Capture-Scene ('window-{0:d2}' -f (++$index)) { $window }
             }
         }
@@ -318,7 +314,6 @@ try {
             $value.SetValue('')
             $app.Handle
         }
-        Capture-Panel 'accounts' '账号' '账号'
         Capture-Panel 'about' '关于' '关于'
         Capture-Panel 'settings' '设置' '设置' ([ordered]@{
             general='通用'; network='网络'; images='图片'; reading='阅读与评论'; notifications='通知'; shortcuts='快捷键'
@@ -391,7 +386,7 @@ try {
             $candidate = Wait-Result {
                 foreach ($handle in @([T2Capture.Native]::Windows($app.ProcessId) | Sort-Object { $_ -in $before })) {
                     $title = [T2Capture.Native]::Title($handle)
-                    if (($handle -eq $app.Handle -or $singleMain -or $title.EndsWith(" · $($app.Account)", [StringComparison]::Ordinal)) -and
+                    if (($handle -eq $app.Handle -or $title.EndsWith(" · $($app.Name)", [StringComparison]::Ordinal)) -and
                         (Get-NamedControls $handle '评论区')) { return $handle }
                 }
             } '没有检测到帖子详情。'

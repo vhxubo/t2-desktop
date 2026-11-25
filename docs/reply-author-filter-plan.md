@@ -19,7 +19,7 @@
 ## 2. 非目标
 
 - 不做服务端过滤参数（`GET /v1/topics/:short_id/replies` 没有作者筛选参数）。
-- 不按账号持久化过滤对象：这是「这篇帖子的临时视角」，不是账号习惯。
+- 不持久化过滤对象：这是「这篇帖子的临时视角」，关掉即丢弃。
 - 不把过滤结果用于「只看某人的所有帖子」；那是用户资料卡已有的能力。
 - 不改评论树的数据结构、不改 `replyList` 本体，只在显示层过滤。
 
@@ -141,7 +141,7 @@ func (d *detailState) matchesAuthorFilter(r replyItem) bool {
 - `openNotificationTarget`：设置 `focusID` 时同时 `clearAuthorFilter`，否则目标可能被过滤。
 - `openDetail`：新帖一律不过滤。
 - 视图切换（楼层 / 扁平）：保留 `authorFilter`，清空列表后重新拉第一页，过滤继续生效；
-  `d.flat` 仍按账号落盘（`reply_view.go:95-104`），过滤不影响视图偏好。
+  `d.flat` 仍落盘到本地（`reply_view.go:95-104`），过滤不影响视图偏好。
 - 刷新评论：保留过滤，重新拉第一页。
 - 插入新评论：`insertReply` 后 `rebuildDisplay` 会重新过滤；不是过滤对象的新评论不显示，
   但 `replyTotal` 由服务端返回，不手动 +1，避免计数漂移。

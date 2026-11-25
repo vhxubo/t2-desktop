@@ -102,7 +102,7 @@ func TestRateLimitProactiveHeaderThrottle(t *testing.T) {
 	}
 }
 
-// 多个账号窗口与后台轮询共用同一份代理管理器，一个被限流，其它都跳过。
+// 多个客户端共用同一份代理管理器，一个被限流，其它都跳过。
 func TestRateLimitGateSharedAcrossClients(t *testing.T) {
 	p := newProxyManager(t.TempDir())
 	var firstCalls, secondCalls int32

@@ -12,7 +12,7 @@ import (
 // 正文立刻可读，不再先给用户一页"加载失败"。
 //
 // 缓存按账号作用域分开（见 offline_cache.go 的 detailCacheKey）：同一个
-// 账号的窗口之间可以共用，换账号后不会读到上一个账号的正文与个人状态。
+// 账号的窗口之间可以共用，重新登录后不会读到上一个账号的正文与个人状态。
 // 每个作用域只保留最近打开的若干篇；清空阅读历史时整组删除。
 //
 // 受限内容的付费正文不落盘：写入前把 Restricted.Content 剥掉，只留门槛
@@ -116,7 +116,7 @@ func (a *app) saveCachedDetail(d *detailState) {
 		log.Printf("帖子正文缓存写入失败：%v", err)
 		return
 	}
-	a.kv.prune(detailScopePrefix(a.accountScope()), detailCacheMax)
+	a.kv.prune(detailScopePrefix(a.cacheScope()), detailCacheMax)
 }
 
 // cacheableTopic 是写进本地缓存的正文副本。受限内容的付费正文（解锁后才

@@ -887,7 +887,7 @@ func (a *app) toggleUserCardFollow(follow bool) {
 }
 
 // userCardFollowing 报告关注按钮该显示「已关注」还是「关注ta」。只认属于
-// 当前登录账号的状态：换账号后、新状态回来之前按未关注展示。
+// 当前登录账号的状态：重新登录后、新状态回来之前按未关注展示。
 func (a *app) userCardFollowing() bool {
 	cs := a.userCard
 	if cs == nil || !a.auth.loggedIn() || !cs.follow.known {

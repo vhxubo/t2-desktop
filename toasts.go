@@ -129,8 +129,8 @@ func (a *app) drainToasts(c *ui.Context, claims func(toastTarget) bool) {
 	for _, text := range show {
 		feedback.ShowToast(c, feedback.ToastProps{Title: text})
 	}
-	// 底部居中，沿用原来 mygo toast 的位置：右下角会压住详情页的回复身份
-	// 标签等控件，弹提示时用户就点不到了。
+	// 底部居中，沿用原来 mygo toast 的位置：右下角会压住底部按钮等控件，
+	// 弹提示时用户就点不到了。
 	feedback.ToastHost(c, feedback.ToastHostProps{Placement: feedback.ToastBottom})
 }
 

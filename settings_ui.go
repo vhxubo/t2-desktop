@@ -3,7 +3,10 @@ package main
 import (
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/updater"
@@ -176,7 +179,6 @@ func (a *app) settingsWindowView(c *ui.Context) {
 				AlignItems(ui.Center).Children(func() {
 				ui.Icon(c, lucide.Settings()).Size(16, 16).TextColor(tk.Primary)
 				display.Text(c, "设置", display.TextProps{Strong: true, FontSize: 13, Rows: 1})
-				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.settingsWin; win != nil {
@@ -234,6 +236,7 @@ func (a *app) settingsWindowView(c *ui.Context) {
 					a.windowSettingsSection(c)
 					a.autoSignSettingsSection(c)
 					a.updateSettingsSection(c)
+					a.diagnosticsSettingsSection(c)
 					a.resetSettingsSection(c)
 				}
 			})
@@ -359,18 +362,37 @@ func updateMirrorSelectOptions() []field.SelectOption {
 	return options
 }
 
-// updateSettingsSection 是「更新」一块：应用每天在后台自动检查一次，这里给
-// 想立即确认版本的人一个入口；「接收测试版」默认关，打开后检查更新也提供
-// GitHub 上的 prerelease；下载加速入口默认不选，选了镜像后检查更新与更新包
-// 下载都会经它转发（测试版同样适用），选回首项即清空。
+// updateSettingsSection 是「更新」一块：后台按可配置的间隔（默认 6 小时）检查，
+// 默认还会在闲时直接下载安装新版本（需点标题栏「重启更新」才生效），这里给想
+// 立即确认版本的人一个入口；默认接收全部版本（含 Beta / Pre-release），只有打开「稳定渠道」才只
+// 获取 release；接收测试版时强制开启闲时自动下载。下载加速入口默认不选，选了
+// 镜像后检查更新与更新包下载都会经它转发（测试版同样适用），选回首项即清空。
 func (a *app) updateSettingsSection(c *ui.Context) {
 	settingsSection(c, "更新", func() {
-		settingsDescription(c, "应用每天自动检查一次 GitHub Release；检查更新和下载更新包都会走「网络代理」里设置的代理。GitHub 连不上或下载太慢时可以选一个加速入口，选完立即生效。", 3)
-		if v := settingsCheckbox(c, "接收测试版", a.updateChannel.prerelease()); v != a.updateChannel.prerelease() {
-			a.setUpdatePrereleases(v)
+		settingsDescription(c, "后台按设定的间隔检查 GitHub Release；检查更新和下载更新包都会走「网络代理」里设置的代理。GitHub 连不上或下载太慢时可以选一个加速入口，选完立即生效。", 3)
+		idx := a.updateIntervalPrefs.index()
+		if v := settingsChoice(c, "检查更新间隔", updateIntervalOptions, idx); v != idx {
+			a.setUpdateInterval(v)
 		}
-		settingsDescription(c, "打开后检查更新也会提供 Beta / Pre-release 版本；"+
-			"测试版可能不稳定，遇到问题关掉即可，下一次正式版发布后照常升级。", 2)
+		settingsDescription(c, "默认 6 小时；切换后下一次检查立即按新间隔计时。下载的更新包不会自动安装，需要点标题栏「重启更新」。", 2)
+		if v := settingsCheckbox(c, "稳定渠道", a.updateChannel.stable()); v != a.updateChannel.stable() {
+			a.setUpdateStable(v)
+		}
+		settingsDescription(c, "默认接收全部版本（含 Beta / Pre-release）；"+
+			"打开后只获取正式版 Release，测试版可能不稳定，随时可以关回来。", 2)
+		on := a.idleAutoDownload()
+		if v := settingsCheckbox(c, "闲时自动下载更新", on); v != on {
+			if a.updateChannel.prerelease() {
+				a.toast(toastSettings, "接收测试版时强制开启闲时自动下载更新")
+			} else {
+				a.setIdleAutoDownload(v)
+			}
+		}
+		settingsDescription(c, "后台检查到新版本时直接下载安装，下次启动生效；"+
+			"关闭后仍可点「检查更新」手动升级。", 2)
+		if a.updateChannel.prerelease() {
+			settingsDescription(c, "接收测试版时强制开启；打开「稳定渠道」后恢复你的选择。", 2)
+		}
 		mirror := ""
 		if a.updateMirror != nil {
 			mirror = a.updateMirror.current()
@@ -395,21 +417,69 @@ func (a *app) updateSettingsSection(c *ui.Context) {
 	})
 }
 
-// setUpdatePrereleases 开关「接收测试版」：立即落盘并接到更新器上，结果用
-// 窗口内 toast 说明。通道是进程级的，publish 让所有窗口下一帧按新状态重建。
-func (a *app) setUpdatePrereleases(on bool) {
-	if a.updateChannel == nil || a.updateChannel.prerelease() == on {
+// setUpdateStable 开关「稳定渠道」：立即落盘并接到更新器上，结果用窗口内
+// toast 说明。通道是进程级的，publish 让所有窗口下一帧按新状态重建。
+func (a *app) setUpdateStable(on bool) {
+	if a.updateChannel == nil || a.updateChannel.stable() == on {
 		return
 	}
-	if err := a.updateChannel.setPrerelease(on); err != nil {
+	if err := a.updateChannel.setStable(on); err != nil {
 		a.toast(toastSettings, err.Error())
 		return
 	}
-	applyUpdateChannel(on)
+	applyUpdateChannel(!on)
+	// 接收测试版时强制开启闲时自动下载，打开稳定渠道后恢复用户原来的选择。
+	a.applyIdleAutoDownload()
 	if on {
-		a.toast(toastSettings, "检查更新也会提供测试版（Beta）")
+		a.toast(toastSettings, "检查更新只获取正式版 Release")
 	} else {
-		a.toast(toastSettings, "检查更新只提供正式版")
+		a.toast(toastSettings, "接收全部版本（含 Beta），并强制开启闲时自动下载")
+	}
+	a.publish(func() {})
+}
+
+// setUpdatePrereleases 是 setUpdateStable 的反选写法，保留给按旧语义调用的入口。
+func (a *app) setUpdatePrereleases(on bool) { a.setUpdateStable(!on) }
+
+// setUpdateInterval 切换检查间隔：立即落盘并让后台循环重新计时。间隔是进程级
+// 的，publish 让所有窗口下一帧按新档位重建。
+func (a *app) setUpdateInterval(index int) {
+	if a.updateIntervalPrefs == nil || index < 0 || index >= len(updateIntervalHours) {
+		return
+	}
+	hours := updateIntervalHours[index]
+	if a.updateIntervalPrefs.interval() == time.Duration(hours)*time.Hour {
+		return
+	}
+	if err := a.updateIntervalPrefs.setHours(hours); err != nil {
+		a.toast(toastSettings, err.Error())
+		return
+	}
+	if a.desktop != nil {
+		a.desktop.signalUpdateInterval()
+	}
+	if a.onUpdateInterval != nil {
+		a.onUpdateInterval(hours)
+	}
+	a.toast(toastSettings, fmt.Sprintf("检查更新间隔已改为 %d 小时", hours))
+	a.publish(func() {})
+}
+
+// setIdleAutoDownload 开关「闲时自动下载更新」：立即落盘并接到更新插件上，
+// 结果用窗口内 toast 说明。接收测试版时调用方不应进到这里（强制开启）。
+func (a *app) setIdleAutoDownload(on bool) {
+	if a.updateIdlePrefs == nil || a.updateIdlePrefs.on() == on {
+		return
+	}
+	if err := a.updateIdlePrefs.setEnabled(on); err != nil {
+		a.toast(toastSettings, err.Error())
+		return
+	}
+	a.applyIdleAutoDownload()
+	if on {
+		a.toast(toastSettings, "新版本会在闲时自动下载，下次启动生效")
+	} else {
+		a.toast(toastSettings, "已关闭闲时自动下载更新")
 	}
 	a.publish(func() {})
 }
@@ -434,6 +504,60 @@ func (a *app) setUpdateMirror(m string) {
 }
 
 /* ------------------------------------------------------------------
+   诊断一块：导出脱敏诊断包
+-------------------------------------------------------------- */
+
+// diagnosticsSettingsSection 是「诊断」一块：把本机日志、网络记录与配置摘要
+// 打成一个 zip 交给维护者。只写本机文件，不会自动上传；网络记录默认包含，
+// 导出前可以取消。
+func (a *app) diagnosticsSettingsSection(c *ui.Context) {
+	settingsSection(c, "诊断", func() {
+		settingsDescription(c, "遇到问题时可导出诊断包：包含本机运行日志、网络记录与脱敏后的配置摘要。"+
+			"诊断包只保存在你选择的位置，不会自动上传。", 3)
+		if v := settingsCheckbox(c, "包含网络请求记录", a.diagnosticsIncludeNetLog); v != a.diagnosticsIncludeNetLog {
+			a.diagnosticsIncludeNetLog = v
+			a.publish(func() {})
+		}
+		settingsDescription(c, "网络记录会包含请求地址、状态码以及帖子标题与正文片段；取消勾选则不导出。", 2)
+		if v := settingsCheckbox(c, "包含偏好原文", a.diagnosticsIncludePrefs); v != a.diagnosticsIncludePrefs {
+			a.diagnosticsIncludePrefs = v
+			a.publish(func() {})
+		}
+		settingsDescription(c, "默认只记录偏好项的数量与大小；勾选后写入通知关键词等原文。", 2)
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			label := "导出诊断包"
+			if a.diagnosticsExporting {
+				label = "正在打包…"
+			}
+			if action.Button(c, label, action.ButtonProps{Variant: action.Primary}).
+				Disabled(a.diagnosticsExporting).Clicked() {
+				a.startDiagnosticsExport(diagnosticsOptions{
+					IncludeNetLog: a.diagnosticsIncludeNetLog,
+					IncludePrefs:  a.diagnosticsIncludePrefs,
+				})
+			}
+			if action.Button(c, "打开日志目录", action.ButtonProps{}).Clicked() {
+				a.openLogsDir()
+			}
+			ui.Spacer(c).Grow(1)
+		})
+	})
+}
+
+// openLogsDir 在系统文件管理器里打开 <配置目录>/logs；目录不存在时先建出来，
+// 免得用户点开发现什么都没有。
+func (a *app) openLogsDir() {
+	dir := filepath.Join(a.draftDir, diagnosticsDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		a.toast(toastSettings, "打开日志目录失败："+err.Error())
+		return
+	}
+	if err := mygo.Shell.OpenPath(dir); err != nil {
+		a.toast(toastSettings, "打开日志目录失败："+err.Error())
+	}
+}
+
+/* ------------------------------------------------------------------
    窗口一块：关闭主窗口时退出还是收进托盘
 --------------------------------------------------------------- */
 
@@ -442,8 +566,7 @@ func (a *app) setUpdateMirror(m string) {
 // 所以直接说明它会按退出处理。
 func (a *app) windowSettingsSection(c *ui.Context) {
 	settingsSection(c, "窗口", func() {
-		settingsDescription(c, "多账号时每个账号一个窗口：关掉某个账号的窗口只是把它挂回账号面板，"+
-			"未读数照样更新、随时点开；所有窗口都关掉才结束应用。"+
+		settingsDescription(c, "关掉主窗口时，其它窗口照常留着，登录状态不变，随时可以再打开。"+
 			"收进托盘则应用继续在后台接收通知，点托盘图标回到窗口；"+
 			"退出应用会在关窗口时结束整个应用。", 4)
 		if sel := settingsChoice(c, "关闭主窗口时",
@@ -720,7 +843,7 @@ func (a *app) notificationSettingsSection(c *ui.Context) {
 	p := a.notifPrefs()
 	settingsSection(c, "通知", func() {
 		settingsDescription(c, "这里只管桌面弹窗：关掉通知后消息仍会进通知窗口、未读数照常更新。"+
-			"多账号共用这份设置，改完所有窗口立即生效。", 3)
+			"这份设置进程级共享，改完立即生效。", 3)
 
 		if v := settingsCheckbox(c, "桌面通知", p.notificationEnabled()); v != p.notificationEnabled() {
 			a.saveNotifyPref(toastSettings, func() error { return p.setEnabled(v) })

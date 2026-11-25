@@ -218,7 +218,9 @@ func TestDetailCollectionNeighborShortcuts(t *testing.T) {
 	a := detailAppWithReplies(t)
 	a.client.Base = srv.URL + "/api"
 	a.client.HTTP = srv.Client()
-	a.autoLoad = true
+	// 不自动加载：这篇帖子的正文与相邻入口都直接摆在 detail 上，后台拉取只会
+	// 让离线缓存写入跑到测试目录清理之后。
+	a.autoLoad = false
 	topic, err := decodeTopic([]byte(`{"short_id":"T1","title":"帖子",
 		"post_collection":{"id":"c1","name":"社区相关","post_count":6,
 			"prev":{"short_id":"LoFrwAQ","node_slug":"forum-function","title":"评论消耗计算"},

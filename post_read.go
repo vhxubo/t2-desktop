@@ -13,8 +13,7 @@ import (
 //
 // 点开一篇帖子或一条评论就算读过：列表里把读过的那一行置灰，读过的不再和
 // 新内容抢注意力。状态只记在本机（cache/offline.json 的 read:<scope>），
-// 服务端没有已读接口，也不去改动服务端数据。作用域与阅读记录相同（见
-// accountScope）：换账号后不会把上一个账号读过的东西置灰。
+// 服务端没有已读接口，也不去改动服务端数据。作用域固定在本机（见 cacheScope）。
 //
 // 只保留最近 postReadLimit 条：记录本身很小，但没有上限会一直增长；超过
 // 上限时丢掉最早读过的那些，它们最多重新显示为未读。
@@ -36,7 +35,7 @@ type postReadData struct {
 // loadPostReads 确保内存里的已读表属于当前账号。作用域没变时直接返回；
 // 新启动、登录 / 退出后从 cache/offline.json 读一次。
 func (a *app) loadPostReads() {
-	scope := a.accountScope()
+	scope := a.cacheScope()
 	if a.readLoaded && a.readFor == scope {
 		return
 	}

@@ -136,7 +136,7 @@ func TestUpdateMirrorSourceGoesThroughMirrorAndProxy(t *testing.T) {
 	}
 }
 
-// 打开「接收测试版」并选了加速入口时，新增的 GitHub API 请求同样走「网络
+// 接收测试版（默认）并选了加速入口时，新增的 GitHub API 请求同样走「网络
 // 代理」里配置的代理；API 不经镜像（镜像只转发 github.com 上的文件）。假代理
 // 不开隧道，只记下 CONNECT 的主机。
 func TestUpdatePrereleaseAPIUsesConfiguredProxy(t *testing.T) {

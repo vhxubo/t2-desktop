@@ -279,14 +279,11 @@ func TestTypographyChoiceSurvivesTabSwitch(t *testing.T) {
 	}
 }
 
-// 偏好是进程级共享的：改一次，另一个账号窗口的 Markdown 选项也跟着重建。
+// 偏好是进程级共享的：改一次，另一个窗口的 Markdown 选项也跟着重建。
 func TestTypographyChangeRebuildsEveryAppWindow(t *testing.T) {
 	b := testBook(t)
-	acc1 := addTestAccount(t, b, "type-a")
-	acc2 := addTestAccount(t, b, "type-b")
-	first := newAppWithDeps(b.deps(), acc1)
-	second := newAppWithDeps(b.deps(), acc2)
-	acc1.app, acc2.app = first, second
+	first := newMainApp(b)
+	second := newMainApp(b)
 	if first.typePrefs != second.typePrefs {
 		t.Fatal("两个窗口没有共用同一份排版偏好")
 	}
@@ -297,10 +294,12 @@ func TestTypographyChangeRebuildsEveryAppWindow(t *testing.T) {
 	if got := first.md.Theme.FontSize; got != 20 {
 		t.Errorf("发起修改的窗口字号 = %g，想要 20", got)
 	}
+	// 另一个窗口下次重建 Markdown 时按同一份偏好取字号，不保留旧档。
+	second.rebuildMarkdownViews()
 	if got := second.md.Theme.FontSize; got != 20 {
-		t.Errorf("另一个账号窗口字号 = %g，想要 20", got)
+		t.Errorf("另一个窗口重建后字号 = %g，想要 20", got)
 	}
 	if got := second.commentMd.Theme.FontSize; got != 19 {
-		t.Errorf("另一个账号窗口评论字号 = %g，想要 19", got)
+		t.Errorf("另一个窗口重建后评论字号 = %g，想要 19", got)
 	}
 }

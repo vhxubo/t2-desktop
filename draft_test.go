@@ -90,14 +90,14 @@ func TestDraftStoreScopedByAccount(t *testing.T) {
 
 func TestDraftStoreCorruptFileFallsBack(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "drafts", "guest.json")
+	path := filepath.Join(dir, "drafts", "local.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s := newDraftStore(dir, "guest")
+	s := newDraftStore(dir, "local")
 	if s.count() != 0 {
 		t.Errorf("坏文件应按空草稿处理：%+v", s.rows())
 	}
@@ -109,7 +109,7 @@ func TestDraftStoreCorruptFileFallsBack(t *testing.T) {
 func TestDraftStorePrunesOldestReply(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Now().UTC().Add(-time.Hour)
-	s := newDraftStore(dir, "guest")
+	s := newDraftStore(dir, "local")
 	for i := 0; i < draftMaxReply+1; i++ {
 		e := testDraftEntry(draftKindReply, base.Add(time.Duration(i)*time.Second))
 		e.ID = "reply-" + e.ShortID + "-" + e.ID
@@ -118,7 +118,7 @@ func TestDraftStorePrunesOldestReply(t *testing.T) {
 	if err := s.save(); err != nil {
 		t.Fatal(err)
 	}
-	rows := newDraftStore(dir, "guest").rows()
+	rows := newDraftStore(dir, "local").rows()
 	if len(rows) != draftMaxReply {
 		t.Fatalf("回复草稿应截到 %d 条，得到 %d", draftMaxReply, len(rows))
 	}
@@ -441,15 +441,15 @@ func TestLegacyEmptyReplyDroppedOnLoad(t *testing.T) {
 	empty := testDraftEntry(draftKindReply, now)
 	empty.Text, empty.ReplyTo = "", draftTarget{ID: "cmt-88", Floor: 12, Author: "老王"}
 	real := testDraftEntry(draftKindReply, now.Add(-time.Hour))
-	path := filepath.Join(dir, "drafts", "guest.json")
+	path := filepath.Join(dir, "drafts", "local.json")
 	if err := writeJSONFile(path, &draftFile{
-		Version: draftVersion, Account: "guest",
+		Version: draftVersion, Account: "local",
 		Entries: []draftEntry{empty, real},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	s := newDraftStore(dir, "guest")
+	s := newDraftStore(dir, "local")
 	if s.count() != 1 {
 		t.Fatalf("旧版空回复草稿不该再出现在箱子里：%+v", s.rows())
 	}
@@ -485,15 +485,15 @@ func TestLegacyEmptyComposeDroppedOnLoad(t *testing.T) {
 	empty.Modules = &composeDraftModules{Vote: &composeDraftVote{Title: "投票"}}
 	real := testDraftEntry(draftKindCompose, now.Add(-time.Hour))
 	reply := testDraftEntry(draftKindReply, now.Add(-2*time.Hour))
-	path := filepath.Join(dir, "drafts", "guest.json")
+	path := filepath.Join(dir, "drafts", "local.json")
 	if err := writeJSONFile(path, &draftFile{
-		Version: draftVersion, Account: "guest",
+		Version: draftVersion, Account: "local",
 		Entries: []draftEntry{empty, real, reply},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	s := newDraftStore(dir, "guest")
+	s := newDraftStore(dir, "local")
 	if s.count() != 2 {
 		t.Fatalf("旧版空草稿不该再出现在箱子里：%+v", s.rows())
 	}
@@ -506,7 +506,7 @@ func TestLegacyEmptyComposeDroppedOnLoad(t *testing.T) {
 	if err := s.save(); err != nil {
 		t.Fatal(err)
 	}
-	reopened := newDraftStore(dir, "guest")
+	reopened := newDraftStore(dir, "local")
 	if _, ok := reopened.find(empty.ID); ok {
 		t.Error("旧版空草稿又被写回磁盘")
 	}

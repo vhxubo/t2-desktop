@@ -396,7 +396,7 @@ type pandoraState struct {
 	busy string
 
 	// owner 是这份状态属于哪个账号。重新授权（同一个账号补权限）时保留状态，
-	// 用户重新点重抽才能接着用原来的 box_instance_id；换账号 / 退出则整体丢弃。
+	// 用户重新点重抽才能接着用原来的 box_instance_id；重新登录 / 退出则整体丢弃。
 	owner string
 }
 

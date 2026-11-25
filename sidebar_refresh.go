@@ -67,7 +67,7 @@ func (s *sidebarRefreshScheduler) hasPending() bool {
 	return s.pending != nil
 }
 
-// cancel 清掉排队中的请求（换账号、窗口收尾、测试收尾），免得迟到的定时器
+// cancel 清掉排队中的请求（重新登录、窗口收尾、测试收尾），免得迟到的定时器
 // 拿旧会话去发请求。
 func (s *sidebarRefreshScheduler) cancel() {
 	s.mu.Lock()

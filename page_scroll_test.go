@@ -41,7 +41,7 @@ func TestWatchLaterPageScrolls(t *testing.T) {
 			AddedAt: base.Add(time.Duration(i) * time.Minute),
 		})
 	}
-	a.laterLoaded, a.laterFor = true, a.accountScope()
+	a.laterLoaded, a.laterFor = true, a.cacheScope()
 	a.showWatchLater()
 	assertEmbeddedPageScrolls(t, a, "待读第 00 项", "待读第 39 项")
 }
@@ -56,7 +56,7 @@ func TestReadingHistoryPageScrolls(t *testing.T) {
 			OpenedAt: base.Add(time.Duration(i) * time.Minute),
 		})
 	}
-	a.readingLoaded, a.readingFor = true, a.accountScope()
+	a.readingLoaded, a.readingFor = true, a.cacheScope()
 	a.laterTab = 1
 	a.showWatchLater()
 	assertEmbeddedPageScrolls(t, a, "浏览第 00 项", "浏览第 39 项")

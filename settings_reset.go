@@ -82,6 +82,10 @@ func (a *app) resetAllSettings() {
 	if a.updateChannel != nil {
 		fail(a.updateChannel.Reset())
 	}
+	if a.updateIdlePrefs != nil {
+		fail(a.updateIdlePrefs.Reset())
+	}
+	fail(a.updateIntervalPrefs.Reset())
 	if a.commentCostPrefs != nil {
 		fail(a.commentCostPrefs.Reset())
 	}
@@ -115,10 +119,14 @@ func (a *app) resetAllSettings() {
 	a.stopShortcutRecording()
 	a.shortcutConflict = ""
 
-	// 运行时状态跟着偏好切换：撤掉更新镜像、关回正式版通道、重连通知流、
-	// 清掉默认模式里不再有意义的已读标记。
+	// 运行时状态跟着偏好切换：撤掉更新镜像、恢复默认版本通道（接收全部
+	// 版本）、恢复闲时自动下载、重连通知流、清掉默认模式里不再有意义的已读标记。
 	applyUpdateMirror("")
-	applyUpdateChannel(false)
+	applyUpdateChannel(true)
+	a.applyIdleAutoDownload()
+	if a.desktop != nil {
+		a.desktop.signalUpdateInterval()
+	}
 	a.applyNotificationStreamPref()
 	a.clearWatchLaterReadMarks()
 	a.redrawWatchLaterPage()

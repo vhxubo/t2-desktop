@@ -45,7 +45,7 @@ const reactionEmojiMax = 12
 const reactionTopic = "topic"
 
 // favoriteState 是详情页收藏按钮的状态。只在 UI 线程读写；网络结果通过
-// app.publish 回来。viewer 记录这份状态属于哪个登录账号，换账号后重新读。
+// app.publish 回来。viewer 记录这份状态属于哪个登录账号，重新登录后重新读。
 type favoriteState struct {
 	known     bool // 服务端是否明确给过收藏状态
 	favorited bool

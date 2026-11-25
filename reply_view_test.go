@@ -104,40 +104,9 @@ func TestReplyViewPersistsAndRestores(t *testing.T) {
 	}
 }
 
-// 记忆按账号隔离：匿名时存的评论记忆，登录后读不到；退出回到匿名又能读回。
-func TestReplyViewIsPerAccount(t *testing.T) {
-	a := testApp(t)
-	d := &detailState{shortID: "X", collapsed: map[string]bool{"r1": true}}
-	a.saveReplyView(d)
-	if _, ok := a.loadReplyView("X"); !ok {
-		t.Fatal("匿名状态没有存下评论记忆")
-	}
-
-	if err := a.auth.storeToken(tokenData{
-		AccessToken: "tok",
-		TokenType:   "Bearer",
-		Username:    "jimmy",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := a.loadReplyView("X"); ok {
-		t.Error("登录后读到了匿名账号的评论记忆（未按账号隔离）")
-	}
-	// 登录账号存一条再退出，匿名那一条应仍在。
-	a.saveReplyView(d)
-	a.auth.Logout()
-	mem, ok := a.loadReplyView("X")
-	if !ok {
-		t.Error("退出后没有回到匿名账号的评论记忆")
-	}
-	if len(mem.Collapsed) != 1 {
-		t.Error("退出后读回的折叠集合不对")
-	}
-}
-
-// 视图模式按账号记、与帖子无关：在一篇帖子里切到扁平，换一篇打开也还是
-// 扁平；换账号读不到别人的偏好。
-func TestReplyViewModeFollowsAccountNotTopic(t *testing.T) {
+// 视图模式是全局的、与帖子无关：在一篇帖子里切到扁平，换一篇打开也还是
+// 扁平。
+func TestReplyViewModeFollowsAppNotTopic(t *testing.T) {
 	a := testApp(t)
 	if _, ok := a.loadReplyViewMode(); ok {
 		t.Fatal("没有任何记录时不应读回视图偏好")
@@ -168,21 +137,4 @@ func TestReplyViewModeFollowsAccountNotTopic(t *testing.T) {
 		t.Errorf("定位评论不应改写账号的视图偏好：flat=%v ok=%v", flat, ok)
 	}
 	a.closeDetail()
-
-	// 换账号：读不到匿名（或上一个账号）的视图偏好。
-	if err := a.auth.storeToken(tokenData{
-		AccessToken: "tok",
-		TokenType:   "Bearer",
-		Username:    "jimmy",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := a.loadReplyViewMode(); ok {
-		t.Error("登录后读到了匿名账号的视图偏好（未按账号隔离）")
-	}
-	a.saveReplyViewMode(true)
-	a.auth.Logout()
-	if flat, ok := a.loadReplyViewMode(); !ok || flat {
-		t.Errorf("退出后应回到匿名账号的楼层视图偏好：flat=%v ok=%v", flat, ok)
-	}
 }

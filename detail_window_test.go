@@ -8,7 +8,7 @@ import (
 )
 
 // 无头测试里没有原生窗口：openDetailWindow 会把每扇窗口的状态摆好就返回，
-// view 由 ui.NewTester 直接渲染。这样多开、合并、关一扇的记账都能断言。
+// view 由 ui.NewTester 直接渲染。这样同时打开多扇、合并、关一扇的记账都能断言。
 
 func detailWindowsApp(t *testing.T) *app {
 	t.Helper()

@@ -106,6 +106,24 @@ func TestCommentPictureHeightLimited(t *testing.T) {
 	}
 }
 
+// 比栏窄的配图在评论区里左右居中，不贴左边。
+func TestCommentPictureCentered(t *testing.T) {
+	_, tt := commentPicture(t, 400, 1200, "看图：\n\n![配图](PIC)\n\n结尾标记XYZ。")
+	r, ok := tt.Access("配图")
+	if !ok {
+		t.Fatalf("找不到评论配图：%q", tt.Texts())
+	}
+	pane, ok := tt.Access("评论区")
+	if !ok {
+		t.Fatalf("找不到评论区：%q", tt.Texts())
+	}
+	imgCenter := r.Bounds.X + r.Bounds.W/2
+	paneCenter := pane.Bounds.X + pane.Bounds.W/2
+	if imgCenter < paneCenter-2 || imgCenter > paneCenter+2 {
+		t.Errorf("评论配图中心 x=%g，评论区中心 x=%g：%+v / %+v", imgCenter, paneCenter, r.Bounds, pane.Bounds)
+	}
+}
+
 // 文字与图片写在同一段时也走同一个限高逻辑。
 func TestCommentMixedPictureHeightLimited(t *testing.T) {
 	_, tt := commentPicture(t, 400, 1200, "前文\n![配图](PIC)\n后文")
@@ -130,6 +148,25 @@ func TestBodyPictureKeepsFullHeight(t *testing.T) {
 	}
 	if r.Bounds.H <= commentImageMaxH {
 		t.Errorf("正文配图被评论上限误伤，高 %g：%+v", r.Bounds.H, r.Bounds)
+	}
+}
+
+// 正文里比栏窄的配图也在正文栏内左右居中：正文栏从窗口左边缘铺到评论区
+// 左边缘，中心就是评论区左边缘的一半。
+func TestBodyPictureCentered(t *testing.T) {
+	_, tt := bodyPicture(t, 400, 1200, "看图：\n\n![配图](PIC)\n\n结束")
+	r, ok := tt.Access("配图")
+	if !ok {
+		t.Fatalf("找不到正文配图：%q", tt.Texts())
+	}
+	pane, ok := tt.Access("评论区")
+	if !ok {
+		t.Fatalf("找不到评论区：%q", tt.Texts())
+	}
+	imgCenter := r.Bounds.X + r.Bounds.W/2
+	bodyCenter := pane.Bounds.X / 2
+	if imgCenter < bodyCenter-2 || imgCenter > bodyCenter+2 {
+		t.Errorf("正文配图中心 x=%g，正文栏中心 x=%g：%+v", imgCenter, bodyCenter, r.Bounds)
 	}
 }
 
@@ -167,7 +204,7 @@ func TestCommentPicturePlaceholderMatchesLoaded(t *testing.T) {
 	if !ok {
 		t.Fatalf("配图到达后找不到图片：%q", tt.Texts())
 	}
-	if loaded.Bounds.H != ph.Bounds.H || loaded.Bounds.W != ph.Bounds.W {
+	if loaded.Bounds != ph.Bounds {
 		t.Errorf("占位 %+v 与成图 %+v 边界不一致", ph.Bounds, loaded.Bounds)
 	}
 }

@@ -141,7 +141,6 @@ func (a *app) followsWindowView(c *ui.Context) {
 					ui.Textf(c, "%s 人", followPageLabel(l)).FontSize(11).
 						TextColor(t.TextMuted).SingleLine()
 				}
-				a.accountWindowTag(c)
 			})
 			titleBarButton(c, titleMinimize, "最小化", func() {
 				if win := a.followsWin; win != nil {

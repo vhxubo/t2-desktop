@@ -149,14 +149,24 @@ func TestComposeModuleDialogCloseIsIconButton(t *testing.T) {
 	}
 }
 
-// 图片面板和表情面板一样，右上角有一个收起用的叉号图标。
+// 图片面板和表情面板一样，右上角有一个收起用的叉号图标。这个入口按
+// AGENTS.md 不额外加 Tooltip，只核对无障碍名与图标宽度。
 func TestEditorImagePanelCloseIsIconButton(t *testing.T) {
 	a := testApp(t)
 	composeReady(a)
 	a.compose.imageOpen = true
 	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
 	tt.Frame()
-	assertIconAction(t, tt, "收起图片")
+	info, ok := tt.Access("收起图片")
+	if !ok {
+		t.Fatalf("找不到收起图片按钮：%q", tt.Texts())
+	}
+	if info.Role != ui.RoleButton {
+		t.Errorf("收起图片的角色 = %v，期望按钮", info.Role)
+	}
+	if info.Bounds.W > iconActionMaxWidth {
+		t.Errorf("收起图片的宽度 = %v，图标按钮不该占这么宽", info.Bounds.W)
+	}
 	if err := tt.Click("收起图片"); err != nil {
 		t.Fatalf("点收起图片失败：%v：%q", err, tt.Texts())
 	}

@@ -235,7 +235,7 @@ type coinState struct {
 	sign     coinSignStatus
 	signErr  string
 	signBusy bool   // 正在提交签到；按钮据此禁用，避免连点
-	signGen  uint64 // 丢弃过期的签到结果（刷新、重授权、换账号）
+	signGen  uint64 // 丢弃过期的签到结果（刷新、重授权、重新登录）
 
 	// 账号菜单打开时按需同步的签到状态：signSyncedDate 是最近一次成功读到
 	// 状态的自然日（coinTodayDate），同一天不再重复请求；signSyncing 防止

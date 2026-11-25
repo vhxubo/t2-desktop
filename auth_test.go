@@ -362,29 +362,6 @@ func TestWrapAuthErrorShowsProxyAndFallback(t *testing.T) {
 	}
 }
 
-// requestedScopesList 是这次授权地址里真正申请过的 scope：默认范围加上补
-// 的那几项。登录窗口用它展示「本次申请」，finishLogin 用它对比服务端实际
-// 授予了什么（申请了但没授予要能看出来）。
-// redirect_mode 只给内置浏览器的 webview 用：app 让自定义协议直接 302，
-// 系统浏览器仍走落地页默认行为，去掉参数后必须能回到原始地址。
-func TestRedirectModeHelpers(t *testing.T) {
-	raw := "https://2libra.com/oauth/authorize?client_id=c&scope=read&state=s"
-	embedded := embeddedAuthorizeURL(raw)
-	u, err := url.Parse(embedded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := u.Query().Get("redirect_mode"); got != "app" {
-		t.Errorf("内置浏览器地址 redirect_mode = %q，期望 app", got)
-	}
-	if got := u.Query().Get("state"); got != "s" || u.Query().Get("scope") != "read" {
-		t.Errorf("加 redirect_mode 时丢了其它参数：%s", embedded)
-	}
-	if got := systemAuthorizeURL(embedded); got != raw {
-		t.Errorf("去掉 redirect_mode 后 = %q，期望 %q", got, raw)
-	}
-}
-
 func TestRequestedScopesIncludeExtraScopes(t *testing.T) {
 	m := newAuthManager(t.TempDir())
 	if _, err := m.BeginScopes(context.Background(), []string{"write:topic"}); err != nil {

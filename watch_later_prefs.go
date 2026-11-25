@@ -11,7 +11,7 @@ import (
 //	keep_after_open=true           打开后留在列表里并标为已读，未读在前、已读置灰，
 //	                               当长期待读清单用。
 //
-// 记录本身按账号隔离（见 watch_later.go），这份开关只是本机的阅读习惯，多账号
+// 记录本身存在本机（见 watch_later.go），这份开关也是本机的阅读习惯，所有窗口
 // 共用一份。
 type watchLaterPrefsStore struct {
 	dir  string

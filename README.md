@@ -18,8 +18,8 @@
 说明。
 
 基于 [mygo](https://github.com/egoist/mygo) 的原生 UI，用 Go 编写，
-支持 Windows / macOS / Linux。界面全部是原生控件：唯一用到 webview 的地方是多账号
-时做授权的内置浏览器窗口（见下方「多账号」）。
+支持 Windows / macOS / Linux。界面全部是原生控件，不使用 WebView；登录走系统浏览器
+与深链回调。
 所有内容数据来自
 [2Libra 开放 API v1](https://r2.2libra.com/openapi/v1/index.md)，并严格遵守其
 [第三方接入条款](https://r2.2libra.com/openapi/v1/terms.md)（v1.1）。
@@ -39,7 +39,7 @@
 - 声明在应用内可见位置（**首次启动声明弹窗**、**登录页**与**「关于」窗口**）始终
   展示，可随时在 2Libra 的「授权应用」页面撤销本应用授权——**撤销后下一个请求即
   失效**，无需改密码。
-- 首次启动声明弹窗只出现一次，确认后记在本机；多账号窗口同时打开也只弹一次。
+- 首次启动声明弹窗只出现一次，确认后记在本机。
 
 ### 品牌与商标
 
@@ -80,9 +80,10 @@
 ### 数据安全
 
 - 本应用是**公开客户端**（原生桌面端），**不持有 `client_secret`**，仅用 PKCE 完成授权。
-- 每个已登录账号的令牌单独一条，保存在**操作系统凭据库**（Windows 凭据管理器 / macOS
-  钥匙串 / Linux Secret Service）；凭据库不可用时才退回本机配置文件（权限 `0600`，
-  目录 `0700`），并在控制台说明原因。令牌不在日志或崩溃报告中明文外传，也不与第三方共享。
+- 令牌只保存一条，放在**操作系统凭据库**（Windows 凭据管理器 / macOS 钥匙串 /
+  Linux Secret Service）；凭据库不支持或数据超过 `mygo.MaxSecretSize` 时才退回本机
+  配置文件（权限 `0600`，目录 `0700`），并在控制台说明原因。令牌不在日志或崩溃报告中
+  明文外传，也不与第三方共享。
 - 撤销授权后，本地保存的令牌与相关数据会及时删除。
 - 发现令牌或用户数据泄露时，开发者会按条款在 72 小时内通过条款公布的联系方式告知 2Libra。
 
@@ -104,17 +105,9 @@
   「播放」在浏览器打开原页面。设置里可关闭自动加载图片与动图自动播放。
 - **互动**：收藏帖子、给评论加书签（详情与「我的」两处都能删）、把自己的帖子归入或
   移出合集（可直接新建合集；别人的帖子不显示该入口）。
-- **登录 2Libra**：浏览器 OAuth（PKCE）+ 自定义协议深链回调；未关联协议时
-  可手动粘贴回调链接。
-- **多账号**：可以同时挂多个账号，每个账号一个独立主窗口（各自登录、各自收通知），
-  启动时只自动打开最近使用的那个账号，其余账号从账号面板随时打开、重新登录或退出；
-  未激活账号的未读角标与令牌刷新在后台进行，切换不用重新授权。多账号时每扇窗口
-  （通知、设置、金币、发帖……）的标题栏都写明属于哪个账号。
-- **浏览器登录**：账号数不超过 1 时，新增账号、重新登录与补权限都直接走系统浏览器；
-  本机挂了多个账号时，授权页开在应用内的独立浏览器窗口里（临时会话，不共用系统
-  浏览器的登录状态），不用先去网页端退出登录。系统没有 webview 时自动退回系统浏览器。
-- **消息中心**：未读角标、SSE 长连接、系统通知与已读批量管理，可按关键词搜索通知；
-  多账号时系统通知写明是哪个账号收到的，点开只落到那个账号的窗口。
+- **登录 2Libra**：系统浏览器 OAuth（PKCE）+ 自定义协议深链回调；未关联协议时
+  可手动粘贴回调链接。未登录时主窗口直接显示登录页，重新登录与补权限走同一条链路。
+- **消息中心**：未读角标、SSE 长连接、系统通知与已读批量管理，可按关键词搜索通知。
 - **命令中心**：全局命令面板与可配置快捷键，可搜索命令、帖子和用户。
 - **金币**：余额、今日明细、流水、统计与排行各自独立加载，未开通的能力只降级
   对应模块；标题栏金币数实时联动，兑换码点开即领。
@@ -127,7 +120,7 @@
   还有「稍后再看」清单；帖子可设置登录 / 等级 / D20 属性可见范围与隐藏内容解锁
   门槛（Pro / 打赏 / 属性检定 / 竞拍），作者之后能在编辑窗口改或清除；不选节点时
   由站点 AI 自动分区，详情页显示「节点寻找中…」，分好后自动换成正式节点与原文链接，
-  发帖 10 分钟内也能直接改节点；多账号时可临时切换回复身份。
+  发帖 10 分钟内也能直接改节点。
 - **图床（图库）**：内置 Imgur / Tikolu / MJJ.Today / ImgBB / Skyimg /
   111666.best / StarDots，官方图床仅对 Pro 会员与守护者开放。
 - **搜索与节点**：全文搜索、热门标签、节点级联选择与快捷选择。
@@ -157,7 +150,7 @@
 | 项 | 说明 |
 | --- | --- |
 | 语言 | Go 1.27.3+ |
-| UI | `github.com/egoist/mygo` 原生 UI 包 `ui` + `lobe-mygo` 组件；仅多账号授权页放进内置浏览器窗口 |
+| UI | `github.com/egoist/mygo` 原生 UI 包 `ui` + `lobe-mygo` 组件；全部原生控件，不用 WebView |
 | 构建工具 | `mygo`（`go tool mygo build`） |
 | 网络 | `golang.org/x/net` |
 | 包标识 | `com.vhxubo.t2-desktop` |
@@ -211,8 +204,8 @@ gofmt -l .                      # 不应输出任何文件
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\capture-windows.ps1
 ```
 
-脚本复用已运行的窗口，或自动启动本机安装的程序，不读取或复制登录令牌。多账号时用
-`-Account '昵称'` 选定主窗口；便携版用 `-ExePath 'D:\Apps\t2-desktop.exe'` 指定程序。
+脚本复用已运行的窗口，或自动启动本机安装的程序，不读取或复制登录令牌。便携版用
+`-ExePath 'D:\Apps\t2-desktop.exe'` 指定程序。
 PNG 和 `manifest.json` 默认直接写到仓库的 `docs/images`，不受运行目录影响。
 同名文件会更新，未重新捕获的旧 PNG 会保留；以本次 `manifest.json` 为准。
 可用 `-OutputDirectory` 改位置。运行时不要同时操作应用，也不要把截图当作界面开发依据。
@@ -243,13 +236,12 @@ PNG 和 `manifest.json` 默认直接写到仓库的 `docs/images`，不受运行
 
 | 模块 | 主要文件 |
 | --- | --- |
-| 入口与主窗口 | `main.go`、`app_window.go` |
-| 授权 / 令牌 | `auth.go`、`auth_ui.go`、`auth_gate.go`、`login_window.go` |
-| 多账号 | `accounts.go`、`accounts_ui.go` |
+| 入口与主窗口 | `main.go`、`desktop.go`、`app_window.go` |
+| 授权 / 令牌 | `auth.go`、`auth_ui.go`、`auth_gate.go` |
 | 列表与解码 | `api.go`、`rows.go`、`post_read.go`、`rate_limit.go` |
 | 帖子详情 | `detail.go`、`detail_ui.go`、`detail_window.go`、`detail_cache.go`、`article_render.go` |
 | 媒体预览 | `media.go`、`image_viewer.go`、`animated.go`、`image_source.go`、`image_prefs.go` |
-| 发帖 / 动态 / 评论 | `compose.go`、`compose_ui.go`、`compose_title_tag.go`、`compose_suggest.go`、`comments.go`、`reply_view.go`、`reply_window.go`、`reply_identity.go`、`edit.go`、`edit_window.go`、`editor_core.go`、`editor_ui.go` |
+| 发帖 / 动态 / 评论 | `compose.go`、`compose_ui.go`、`compose_title_tag.go`、`compose_suggest.go`、`comments.go`、`reply_view.go`、`reply_window.go`、`reply_surface.go`、`edit.go`、`edit_window.go`、`editor_core.go`、`editor_ui.go` |
 | 草稿 / 稍后再看 | `draft.go`、`draft_ui.go`、`watch_later.go`、`watch_later_ui.go` |
 | 交互（投票 / 表态 / 关注） | `vote.go`、`interact.go`、`follow.go` |
 | 书签 / 合集 | `bookmarks.go`、`collections.go`、`collection_browse.go` |
@@ -259,7 +251,7 @@ PNG 和 `manifest.json` 默认直接写到仓库的 `docs/images`，不受运行
 | 通知 | `notifications.go`、`notifications_ui.go`、`stream.go`（SSE）、`notify.go` |
 | 搜索 / 节点 | `search.go`、`search_ui.go`、`tags.go`、`nodes.go`、`node_catalog.go`、`node_edit.go`、`cascader.go`、`node_filter.go` |
 | 个人主页 / 资料卡 | `profile.go`、`profile_ui.go`、`attributes.go`（六维属性）、`badges.go`（徽章墙）、`user_card.go`、`user_card_ui.go`、`about_edit.go`、`avatar.go`、`avatar_crop.go` |
-| 评分榜 / Pro 标识 | `scores.go`、`scores_ui.go`、`pro_badge.go`、`account_badge.go` |
+| 评分榜 / Pro 标识 | `scores.go`、`scores_ui.go`、`pro_badge.go` |
 | 内容过滤 / 访问门槛 | `content_filter.go`、`content_filter_ui.go`、`restricted.go`、`restricted_ui.go` |
 | 图床 / 编辑器上传 | `image_hosts.go`、`image_hosts_adapters.go`、`editor_upload.go` |
 | 代理 / 网络调试 | `proxy.go`、`proxy_ui.go`、`netlog.go`、`netlog_ui.go`、`netstatus.go`、`netstatus_ui.go` |

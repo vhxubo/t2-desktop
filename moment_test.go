@@ -132,12 +132,9 @@ func TestMomentMissingScopeAsksForWriteTopic(t *testing.T) {
 	defer srv.Close()
 
 	b := testBook(t)
-	acc := addTestAccount(t, b, "jimmy")
-	var authorizeURL string
-	b.openURL = func(u string) error { authorizeURL = u; return nil }
-	a := newAppWithDeps(b.deps(), acc)
+	auth := addTestAccount(t, b, "jimmy")
+	a := newAppWithDeps(b.deps(), auth)
 	a.autoLoad = false
-	acc.app = a
 	a.client.Base = srv.URL + "/api"
 	a.client.HTTP = srv.Client()
 	a.compose = newComposeState()
@@ -150,12 +147,15 @@ func TestMomentMissingScopeAsksForWriteTopic(t *testing.T) {
 		t.Fatalf("授权弹窗登记的 scope = %v，期望 write:topic", got)
 	}
 
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
 	a.authorizeGate()
-	t.Cleanup(func() { b.cancelLogin(); a.auth.Cancel() })
-	if authorizeURL == "" {
-		t.Fatal("没有打开授权页")
+	t.Cleanup(a.auth.Cancel)
+	urls := tt.OpenedURLs()
+	if len(urls) != 1 {
+		t.Fatalf("没有打开授权页：%v", urls)
 	}
-	u, err := url.Parse(authorizeURL)
+	u, err := url.Parse(urls[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,12 +175,9 @@ func TestMomentMissingScopeWithoutRequiredScopeStillAsksWriteTopic(t *testing.T)
 	defer srv.Close()
 
 	b := testBook(t)
-	acc := addTestAccount(t, b, "jimmy")
-	var authorizeURL string
-	b.openURL = func(u string) error { authorizeURL = u; return nil }
-	a := newAppWithDeps(b.deps(), acc)
+	auth := addTestAccount(t, b, "jimmy")
+	a := newAppWithDeps(b.deps(), auth)
 	a.autoLoad = false
-	acc.app = a
 	a.client.Base = srv.URL + "/api"
 	a.client.HTTP = srv.Client()
 	a.compose = newComposeState()
@@ -193,12 +190,15 @@ func TestMomentMissingScopeWithoutRequiredScopeStillAsksWriteTopic(t *testing.T)
 		t.Fatalf("授权弹窗登记的 scope = %v，期望 write:topic", got)
 	}
 
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
 	a.authorizeGate()
-	t.Cleanup(func() { b.cancelLogin(); a.auth.Cancel() })
-	if authorizeURL == "" {
-		t.Fatal("没有打开授权页")
+	t.Cleanup(a.auth.Cancel)
+	urls := tt.OpenedURLs()
+	if len(urls) != 1 {
+		t.Fatalf("没有打开授权页：%v", urls)
 	}
-	u, err := url.Parse(authorizeURL)
+	u, err := url.Parse(urls[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,11 +210,7 @@ func TestMomentMissingScopeWithoutRequiredScopeStillAsksWriteTopic(t *testing.T)
 // 未登录时打开动态窗口：登录授权一次就要把 write:topic 一起申请，登录回来
 // 不用再补第二次授权。
 func TestMomentLoginAsksWriteTopicUpFront(t *testing.T) {
-	b := testBook(t)
-	b.afterReady = true
-	var authorizeURL string
-	b.openURL = func(u string) error { authorizeURL = u; return nil }
-	a := newGuestApp(b)
+	a := testApp(t)
 	a.autoLoad = false
 
 	a.compose = newComposeState()
@@ -226,12 +222,15 @@ func TestMomentLoginAsksWriteTopicUpFront(t *testing.T) {
 	if got := a.authGate.need.Scopes; len(got) != 1 || got[0] != "write:topic" {
 		t.Fatalf("登录前登记的 scope = %v，期望 write:topic", got)
 	}
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
 	a.authorizeGate()
-	t.Cleanup(b.cancelLogin)
-	if authorizeURL == "" {
-		t.Fatal("没有打开授权页")
+	t.Cleanup(a.auth.Cancel)
+	urls := tt.OpenedURLs()
+	if len(urls) != 1 {
+		t.Fatalf("没有打开授权页：%v", urls)
 	}
-	u, err := url.Parse(authorizeURL)
+	u, err := url.Parse(urls[0])
 	if err != nil {
 		t.Fatal(err)
 	}

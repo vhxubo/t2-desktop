@@ -166,8 +166,8 @@ type AuthManager struct {
 	// proxy 只在登录链路用来把「当前生效的代理线路」写进网络错误提示，
 	// 让用户一眼看出令牌请求走的是哪条线、该去设置里改成直连还是放行。
 	proxy *proxyManager
-	// key 是这个会话在本机存储里的账号键（见 accounts.go）。空键是旧版单
-	// 账号会话的键；添加账号时先用空键，拿到用户名后才换成正式账号 id。
+	// key 是这个会话在本机存储里的键。只有一个会话，固定使用 legacyTokenKey，
+	// 保留字段是为了测试能注入独立的凭据存储。
 	key string
 	// store persists the session. Production uses the OS credential store
 	// (mygo.Secrets); tests inject a file-backed store via tokenStoreFactory.
@@ -177,8 +177,8 @@ type AuthManager struct {
 	// 登录时用账号已有的令牌 scope 初始化，窗口里就能核对这次补到了哪些。
 	requestedScopes string
 	// knownScopes 是最近一次令牌携带的 scope。令牌被服务端拒绝清掉之后仍然
-	// 留着（账号索引也会存一份）：2Libra 的重新授权是替换而不是累加，重新
-	// 登录时必须把以前按需开通的 scope 一起申请，否则就等于撤掉它们。
+	// 留着：2Libra 的重新授权是替换而不是累加，重新登录时必须把以前按需开通
+	// 的 scope 一起申请，否则就等于撤掉它们。
 	knownScopes []string
 }
 
@@ -195,8 +195,8 @@ func newAuthManagerAt(dir string, proxy *proxyManager) *AuthManager {
 	return newAuthManagerFor(dir, proxy, legacyTokenKey)
 }
 
-// newAuthManagerFor 建一个账号的会话：令牌从它自己的凭据里读，存储键是
-// 账号 id（见 accounts.go）。
+// newAuthManagerFor 建一个会话：令牌从自己的凭据里读。key 只用于区分测试
+// 里的独立存储，生产环境固定是 legacyTokenKey。
 func newAuthManagerFor(dir string, proxy *proxyManager, key string) *AuthManager {
 	if dir == "" {
 		dir = configDir()
@@ -222,9 +222,8 @@ func newAuthManagerFor(dir string, proxy *proxyManager, key string) *AuthManager
 	return m
 }
 
-// setKnownScopes 记下这个账号上一份授权范围（账号索引里存的），与当前已知
-// 的合并：索引可能落后于刚拿到的令牌，也可能记着令牌里已经丢掉、但重新
-// 授权时要恢复的按需权限。
+// setKnownScopes 记下上一份授权范围，与当前已知的合并：记住的范围可能记着
+// 令牌里已经丢掉、但重新授权时要恢复的按需权限。
 func (m *AuthManager) setKnownScopes(scopes []string) {
 	if len(scopes) == 0 {
 		return
@@ -258,18 +257,15 @@ var errNoToken = errors.New("no stored token")
 // without a credential store, where secureTokenStore transparently falls back
 // to it.
 //
-// 多账号：一个账号一份凭据，键是账号在本机存储里的 id（见 accounts.go）。
-// 旧版本只有一个账号、一份凭据，那个账号的键是空串，仍按旧名读写；升级后
-// 第一次启动会把它迁移成正式账号（见 accountBook.migrateLegacySession）。
+// 本机只有一份凭据，键是 legacyTokenKey，沿用旧名读写，升级后不需要迁移。
 type tokenStore interface {
 	load() (*tokenData, error) // errNoToken when nothing is saved
 	save(t *tokenData) error
 	delete() error
 }
 
-// legacyTokenKey 是旧版单账号会话的存储键：没有账号册的时代本机只有一个
-// 登录态，令牌存在 session-token / token.json 里。空键让升级后的第一次
-// 启动还能读到老会话，再迁移到它自己的账号键上。
+// legacyTokenKey 是本机唯一会话的存储键：令牌存在 session-token / token.json
+// 里。空键沿用旧名，老版本的会话升级后仍能直接读到。
 const legacyTokenKey = ""
 
 const (
@@ -277,7 +273,7 @@ const (
 	tokenSecretPrefix = "session-token/"
 )
 
-// tokenSecretKey 是某个账号在 OS 凭据库里的条目名。旧键保持原名。
+// tokenSecretKey 是会话在 OS 凭据库里的条目名。旧键保持原名。
 func tokenSecretKey(key string) string {
 	if key == "" {
 		return legacyTokenSecret
@@ -293,9 +289,8 @@ func tokenFilePath(dir, key string) string {
 	return filepath.Join(dir, "token-"+storageKey(key)+".json")
 }
 
-// storageKey 把账号 id 变成可以做文件名、凭据键的片段：只保留字母、数字、
-// 点、下划线与连字符，其余换成下划线。账号 id 由 accountIDFor 生成，本来
-// 就合规；这里再兜一次，免得以后改 id 规则时把路径拼出配置目录。
+// storageKey 把键变成可以做文件名、凭据键的片段：只保留字母、数字、点、
+// 下划线与连字符，其余换成下划线，避免把路径拼出配置目录。
 func storageKey(id string) string {
 	var b strings.Builder
 	for _, r := range id {
@@ -313,9 +308,7 @@ func storageKey(id string) string {
 	return b.String()
 }
 
-// memoryTokenStore 只在内存里保存会话：添加账号时还不知道授权回来的会是
-// 哪个账号，令牌先留在这里，拿到用户名、定了账号 id 之后才换进它自己的
-// 凭据（见 accountBook.adoptLogin）。
+// memoryTokenStore 只在内存里保存会话，供无头测试注入独立的凭据存储。
 type memoryTokenStore struct {
 	mu sync.Mutex
 	t  *tokenData
@@ -356,7 +349,7 @@ var tokenStoreFactory = func(dir, key string) tokenStore {
 
 // fileTokenStore keeps the session as token.json, the pre-Secrets behaviour.
 // It is the fallback when no credential store is available and the store used
-// by tests. 多账号时每个账号是 token-<id>.json，旧账号仍是 token.json。
+// by tests. 生产环境固定用 token.json。
 type fileTokenStore struct{ path string }
 
 func newFileTokenStore(dir, key string) tokenStore {
@@ -533,8 +526,23 @@ func (m *AuthManager) requestedScopePreview(extra []string) []string {
 	return strings.Fields(mergeScopes(extra))
 }
 
+// scopeLabels 是 scope 的中文说明。profile.go 的「我的 · 权限与账号」与授权
+// 弹窗的待申请清单共用这一份；未列出的 scope 原样展示，新 scope 上线时不会
+// 显示成空白，也不会假装认识它。
+var scopeLabels = map[string]string{
+	"profile":       "读取个人资料与头像",
+	"read":          "读取公开内容",
+	"read:me":       "读取我的内容（收藏 / 书签 / 通知）",
+	"read:economy":  "读取金币余额、流水与签到状态",
+	"write:comment": "发表评论",
+	"write:topic":   "发表帖子、动态与投票",
+	"write:economy": "金币变动（签到 / 打赏 / 解锁）",
+	"interact":      "收藏、关注、佩戴徽章等互动",
+	"upload":        "上传图片",
+}
+
 // scopeLabel 是 scope 在界面上的中文说明。profile.go 的「我的 · 权限与账号」
-// 与登录窗口的待申请清单共用这一份，文案两边一致。
+// 与授权弹窗的待申请清单共用这一份，文案两边一致。
 func scopeLabel(scope string) string {
 	if label, ok := scopeLabels[scope]; ok {
 		return label
@@ -583,8 +591,7 @@ func (m *AuthManager) setAvatar(url string) {
 // late browser redirect cannot sign the session back in.
 func (m *AuthManager) Cancel() { m.cancelPending("已取消登录") }
 
-// awaitingLogin 报告这个会话正在等一次授权回调。多账号时回调只带 code 与
-// state，账号册靠它认出该把链接交给哪一个窗口。
+// awaitingLogin 报告这个会话正在等一次授权回调。
 func (m *AuthManager) awaitingLogin() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -681,25 +688,6 @@ func (m *AuthManager) clearToken() error {
 	return m.store.delete()
 }
 
-// rekey 把这个会话换到另一个账号的凭据上，并把当前令牌写过去。添加账号时
-// 授权回来的账号在拿到用户名之前并不确定，令牌先放在内存里；确定之后才
-// 换到它自己的存储键。
-func (m *AuthManager) rekey(store tokenStore, key string) error {
-	m.mu.Lock()
-	m.store = store
-	m.key = key
-	var snapshot *tokenData
-	if m.token != nil {
-		cp := *m.token
-		snapshot = &cp
-	}
-	m.mu.Unlock()
-	if snapshot == nil {
-		return nil
-	}
-	return store.save(snapshot)
-}
-
 // expiry 返回访问令牌的过期时间。令牌没记得到期信息时返回零值，调用方据此
 // 跳过提前刷新。
 func (m *AuthManager) expiry() time.Time {
@@ -711,9 +699,8 @@ func (m *AuthManager) expiry() time.Time {
 	return time.Unix(m.token.ObtainedAt, 0).Add(time.Duration(m.token.ExpiresIn) * time.Second)
 }
 
-// refreshIfExpiring 在令牌 within 之内就要过期时提前刷新一次。多账号挂在
-// 后台时靠它保持登录：窗口没开的账号也不会等到用户点开才开始换令牌。
-// 令牌还早着、或根本没登录时直接返回。
+// refreshIfExpiring 在令牌 within 之内就要过期时提前刷新一次。令牌还早着、
+// 或根本没登录时直接返回。
 func (m *AuthManager) refreshIfExpiring(ctx context.Context, within time.Duration) error {
 	cur := m.accessToken()
 	if cur == "" {
@@ -810,34 +797,6 @@ func (m *AuthManager) authorizeURL(p *pendingLogin, scope string) string {
 	v.Set("code_challenge", p.challenge)
 	v.Set("code_challenge_method", "S256")
 	return m.webBase() + "/oauth/authorize?" + v.Encode()
-}
-
-// embeddedAuthorizeURL 给内置浏览器的原生授权加 redirect_mode=app：自定义协议
-// 回调直接 302，webview 能在导航发生前拦下链接并拿到 code，不必停在落地页等
-// 用户再点一次「打开应用」（oauth.md 第四节 ④）。系统浏览器不能用它 —— 没有
-// 用户手势时浏览器会拒绝唤起外部协议，页面会停在「处理中」。
-func embeddedAuthorizeURL(raw string) string {
-	return withRedirectMode(raw, "app")
-}
-
-// systemAuthorizeURL 去掉 redirect_mode，回到系统浏览器要的落地页默认行为。
-func systemAuthorizeURL(raw string) string {
-	return withRedirectMode(raw, "")
-}
-
-func withRedirectMode(raw, mode string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return raw
-	}
-	q := u.Query()
-	if mode == "" {
-		q.Del("redirect_mode")
-	} else {
-		q.Set("redirect_mode", mode)
-	}
-	u.RawQuery = q.Encode()
-	return u.String()
 }
 
 // mergeScopes unions the default scopes with the ones a failed call asked for,

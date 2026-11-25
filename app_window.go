@@ -7,14 +7,16 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 一个窗口（= 一个账号）的生命周期
+// 主窗口的生命周期
 //
-// 多账号时每个账号一个主窗口：窗口关掉只丢弃这个窗口的界面状态，账号本身
-// 仍留在账号册里（见 accounts.go），随时可以再打开；本机缓存（阅读记录、
-// 已读、金币缓存、正文缓存）都在磁盘上按账号隔离，重开就回来。
+// 应用只有一个主窗口：关掉它只丢弃这一份界面状态，本机缓存（阅读记录、
+// 已读、金币缓存、正文缓存）都在磁盘上，重开就回来。
 
-// windowTitle 是窗口标题：带上账号名，任务栏与 Alt+Tab 里才分得清哪个窗口
-// 是哪个账号。昵称还没读到时就是应用名。
+// subWindowTitle 是附属窗口的标题。集中在这里，是给所有弹窗一个统一的
+// 取名入口；应用只有一个账号，标题不需要再加身份前缀。
+func (a *app) subWindowTitle(base string) string { return base }
+
+// windowTitle 是主窗口标题，昵称读到时带上它，方便任务栏与 Alt+Tab 辨认。
 func (a *app) windowTitle() string {
 	if name := a.auth.username(); name != "" {
 		return "T2 Desktop · " + name
@@ -37,13 +39,8 @@ func (a *app) windowView(fn func(*ui.Context)) func(*ui.Context) {
 	}
 }
 
-// windowStateKey 是窗口位置与大小的记忆键：每个账号一份，重开时回到原处。
-func (a *app) windowStateKey() string {
-	if a.accountID == "" {
-		return "main"
-	}
-	return "main-" + a.accountID
-}
+// windowStateKey 是窗口位置与大小的记忆键，重开时回到原处。
+func (a *app) windowStateKey() string { return "main" }
 
 // openMainWindow 建这个窗口的主窗口并接上关闭钩子。只在应用就绪后的主线程
 // 调用：无头测试不经过这里，它们直接渲染 view。
@@ -69,15 +66,8 @@ func (a *app) openMainWindow() {
 		TitleBarStyle:     mygo.TitleBarHidden, // 隐藏原生标题栏
 		HideWindowButtons: true,                // 连系统按钮也隐藏，完全自绘最小化/最大化/关闭
 	}
-	// 同时开出多个账号窗口时错开位置：默认全叠在屏幕中央的话，看起来就像
-	// 只开了一个。用户自己调整过的位置由 mygo 的窗口状态记忆覆盖。
-	if a.book != nil {
-		if x, y := a.book.windowOrigin(a.accountID); x != 0 || y != 0 {
-			opts.X, opts.Y = x, y
-		}
-	}
 	a.win = a.newAppWindow(opts, toastMain)
-	// 首次启动声明只认领一次：几个账号窗口接连打开时也只由第一扇弹。
+	// 首次启动声明只认领一次。
 	if a.disclaimer.claim() {
 		a.disclaimerOpen = true
 	}
@@ -121,9 +111,6 @@ func (a *app) afterMainWindowOpen() {
 			a.ensureAvatar()
 			if a.win != nil {
 				a.win.SetTitle(a.windowTitle())
-			}
-			if a.book != nil && a.accountID != "" {
-				a.book.noteAuthChanged(a.accountID)
 			}
 		})
 	}()
@@ -218,9 +205,8 @@ func (a *app) hasLiveWindow() bool {
 	return false
 }
 
-// finalizeAccountWindow 是这个账号所有窗口都没了之后的收尾：通知长连接、
-// 界面状态都交回账号册（账号本身仍挂在账号册里）。late 的窗口回调可能再
-// 走到这里，finalized 保证只收一次。
+// finalizeAccountWindow 是所有窗口都没了之后的收尾：停掉长连接与定时器和
+// 落盘草稿。迟到的窗口回调可能再走到这里，finalized 保证只收一次。
 func (a *app) finalizeAccountWindow() {
 	if a.finalized {
 		return
@@ -229,9 +215,8 @@ func (a *app) finalizeAccountWindow() {
 	// 最后一扇窗口也没了：没有帧尾能再算草稿指纹，先同步落盘并停掉定时器。
 	a.flushDrafts()
 	a.stopDraftTimer()
-	// 后台刷新跟着账号的生命周期：只要还有一扇窗口开着，通知长连接就继续
-	// 更新；最后一扇关掉才停。金币数只在展开账号菜单时请求，这里只丢弃在途
-	// 的余额请求。
+	// 后台刷新跟着窗口生命周期：只要还有一扇窗口开着，通知长连接就继续
+	// 更新；最后一扇关掉才停。金币数只在展开菜单时请求，这里丢弃在途请求。
 	a.stopCoinTagWatch()
 	a.stopNotificationWatch()
 	if a.netStatusUnwatch != nil {
@@ -239,19 +224,10 @@ func (a *app) finalizeAccountWindow() {
 		a.netStatusUnwatch = nil
 	}
 	a.win = nil
-	if a.book == nil {
-		return
-	}
-	if a.accountID != "" {
-		a.book.windowClosed(a)
-		return
-	}
-	a.book.guestWindowClosed(a)
 }
 
-// closeAllWindows 关掉这个窗口的全部窗口：先收附属窗口，再销毁主窗口。
-// 退出账号、以及「未登录窗口让位给第一个账号窗口」都走这里。用 Destroy
-// 而不是 Close：这时不该再弹「退出还是收进托盘」（见 window_mode.go）。
+// closeAllWindows 关掉全部窗口：先收附属窗口，再销毁主窗口。用 Destroy 而不是
+// Close：这时不该再弹「退出还是收进托盘」（见 window_mode.go）。
 func (a *app) closeAllWindows() {
 	a.stopCoinTagWatch()
 	a.stopNotificationWatch()
@@ -280,12 +256,4 @@ func (a *app) closeAllWindows() {
 	if win != nil {
 		win.Destroy()
 	}
-	if a.book == nil {
-		return
-	}
-	if a.accountID != "" {
-		a.book.windowClosed(a)
-		return
-	}
-	a.book.guestWindowClosed(a)
 }

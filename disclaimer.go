@@ -11,7 +11,7 @@ type disclaimerConfig struct {
 }
 
 // disclaimerStore 进程级共享：首次启动弹一次 T2 声明，确认后落盘，之后不再弹。
-// claimed 保证同一时刻只有一扇主窗口负责展示——多账号一起开时也只弹一次。
+// claimed 保证同一时刻只有一扇主窗口负责展示——应用启动时只弹一次。
 // 只在主线程读写。
 type disclaimerStore struct {
 	dir     string
