@@ -16,6 +16,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"github.com/lobehub/lobe-mygo/pkg/field"
+	"github.com/lobehub/lobe-mygo/pkg/form"
 	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	"github.com/lobehub/lobe-mygo/pkg/nav"
@@ -64,8 +65,8 @@ func (a *app) showSettings() {
 // 并开始统计图片缓存大小，首帧里显示的就是当前状态。
 func (a *app) showSettingsWindow() {
 	a.reloadProxyDraft()
-	// 通知偏好在别处也可能被改（通知窗口的快捷开关、另一个账号窗口），打开
-	// 设置时同步一次输入框草稿，别把上次没保存的半截文字带回来。
+	// 通知偏好在别处也可能被改（例如通知窗口的快捷开关），打开设置时同步
+	// 一次输入框草稿，别把上次没保存的半截文字带回来。
 	a.notifyKeywordDraft = a.notifPrefs().keywordText()
 	// 打开设置就把缓存大小重新统计一遍；统计在后台跑，结果回到主线程。
 	a.startCacheStats()
@@ -116,8 +117,8 @@ func (a *app) reloadImageHostSettings() {
 	a.hostMaxFor = ""
 }
 
-// closeSettingsWindow 关掉设置窗口：主窗口关闭时调用，别留下一个没有主窗口
-// 的孤岛。只在主线程调用。
+// closeSettingsWindow 关掉设置窗口：用户关窗、退出登录或「关闭全部」时调用。
+// 设置窗口自成一个 mygo 窗口，关主窗口不影响它。只在主线程调用。
 func (a *app) closeSettingsWindow() {
 	win := a.settingsWin
 	if win == nil {
@@ -324,17 +325,6 @@ func settingsChoice(c *ui.Context, label string, options []string, index int) in
 		}
 	}
 	return index
-}
-
-// settingsNumber 画一列紧凑的 Lobe 数字输入框：标签在上、输入在下。两列并排
-// 放在一行里，五个数值只占三行，同页的其它设置才不会被挤出默认高度的窗口。
-// InputNumber 只接受 float64，改完返回当前值；调用方换算后落盘。
-func settingsNumber(c *ui.Context, label, accessible string, value *float64, p field.InputNumberProps) float64 {
-	ui.Column(c).Grow(1).MinWidth(0).Gap(5).AlignItems(ui.Stretch).Children(func() {
-		display.Text(c, label, display.TextProps{FontSize: 12, Rows: 1})
-		field.InputNumber(c, value, p).Label(accessible)
-	})
-	return *value
 }
 
 // settingsCheckbox 画一整行的 Lobe 开关，返回这一帧勾选的状态。绑定在局部值上，
@@ -566,16 +556,15 @@ func (a *app) openLogsDir() {
 // 所以直接说明它会按退出处理。
 func (a *app) windowSettingsSection(c *ui.Context) {
 	settingsSection(c, "窗口", func() {
-		settingsDescription(c, "关掉主窗口时，其它窗口照常留着，登录状态不变，随时可以再打开。"+
-			"收进托盘则应用继续在后台接收通知，点托盘图标回到窗口；"+
-			"退出应用会在关窗口时结束整个应用。", 4)
+		settingsDescription(c, "收进托盘则应用继续在后台接收通知，点托盘图标回到窗口；"+
+			"退出应用会关掉所有窗口并结束程序。", 3)
 		if sel := settingsChoice(c, "关闭主窗口时",
-			[]string{"每次询问", "关闭窗口", "收进托盘", "退出应用"}, a.closeMode.mode,
+			[]string{"每次询问", "收进托盘", "退出应用"}, a.closeMode.mode,
 		); sel != a.closeMode.mode {
 			a.setCloseMode(sel)
 		}
-		if !a.trayReady {
-			display.Text(c, "系统托盘当前不可用，关闭窗口只能直接关掉。",
+		if !a.trayIsReady() {
+			display.Text(c, "系统托盘当前不可用，收进托盘会按退出应用处理。",
 				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
 		}
 	})
@@ -622,11 +611,38 @@ func (a *app) appearanceSettingsSection(c *ui.Context) {
    阅读排版一块：字号 / 行距 / 页宽 / 列表密度
  --------------------------------------------------------------- */
 
-// readingTypographySection 是「阅读与评论」页顶部的排版块：每组设置先给常用
-// 档位快选，再用 lobeui 数字输入框做精确控制。两项都写同一份数值，档位只是
+// typographyField 用 Lobe Form 的横向排版画一行设置：标签在左，档位与数值在右，
+// 整行上下居中。这里只借 Form 的对齐，字段不挂名字，不引入校验状态。
+func typographyField(c *ui.Context, f *form.Form[int], label string, control func()) {
+	// 每层给一个独立 Key：Form 的 Field 不挂 Name 时会用空 key，同层四个字段
+	// 会撞在一起。套一层有名字的列既不引入字段状态，也不改变对齐。
+	ui.Column(c.Key(label)).FillWidth().Children(func() {
+		form.Field(c, f, form.FieldProps{
+			Label: label, Layout: form.Horizontal, MinWidth: 316,
+		}, func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				control()
+			})
+		})
+	})
+}
+
+// typographyNumber 画一个没有上方标签的数值框，让输入和档位按钮落在同一条水平
+// 中心线上。返回这一帧的值，调用方与初值比较判断用户是否改过这一项。
+func typographyNumber(c *ui.Context, accessible string, initial float64,
+	p field.InputNumberProps, width float32) float64 {
+	v := initial
+	ui.Row(c).Width(width).AlignItems(ui.Center).Children(func() {
+		field.InputNumber(c, &v, p).Label(accessible)
+	})
+	return v
+}
+
+// readingTypographySection 是「阅读与评论」页顶部的排版块：每项设置占一行，
+// 可见设置名后面紧挨着常用档位快选和精确数值框。两项都写同一份数值，档位只是
 // 数值命中预设时的快捷入口；数值不在预设里就不高亮任何档位。改动立即落盘，
-// 重建本窗口与所有账号窗口的 Markdown 选项并让它们下一帧重画；写盘失败时
-// 撤回内存值，界面停在旧值。列表字号、系统 UI 与编辑器不受影响。
+// 重建所有已开窗口的 Markdown 选项并让它们下一帧重画；写盘失败时撤回内存
+// 值，界面停在旧值。列表字号、系统 UI 与编辑器不受影响。
 func (a *app) readingTypographySection(c *ui.Context) {
 	if a.typePrefs == nil {
 		a.typePrefs = newTypographyStore(a.draftDir)
@@ -644,63 +660,91 @@ func (a *app) readingTypographySection(c *ui.Context) {
 	}
 
 	settingsSection(c, "阅读排版", func() {
-		settingsDescription(c, "只改正文与评论的阅读字号、行距、页宽和行密度；档位是常用值，下方数字框可微调。列表字号与系统界面不变。", 2)
+		settingsDescription(c, "只改正文与评论的阅读字号、行距、页宽和行密度；每行的档位与数值排在同一条水平中心线上。列表字号与系统界面不变。", 2)
 
-		body := typographyOptionIndex(typographyBodySizes, p.bodySize())
-		if sel := settingsChoice(c, "正文字号", typographyBodyOptions, body); sel >= 0 && sel != body {
-			v := typographyOptionValue(typographyBodySizes, sel)
-			change(func() error { return p.setBodySize(v) })
-		}
-		line := typographyOptionIndex(typographyLineHeights, p.lineHeight())
-		if sel := settingsChoice(c, "行距", typographyLineOptions, line); sel >= 0 && sel != line {
-			v := typographyOptionValue(typographyLineHeights, sel)
-			change(func() error { return p.setLineHeight(v) })
-		}
-		width := typographyOptionIndex(typographyPageWidths, p.pageWidth())
-		if sel := settingsChoice(c, "页宽", typographyWidthOptions, width); sel >= 0 && sel != width {
-			v := typographyOptionValue(typographyPageWidths, sel)
-			change(func() error { return p.setPageWidth(v) })
-		}
-		density := p.density()
-		if sel := settingsChoice(c, "列表密度", typographyDensityNames, density); sel >= 0 && sel != density {
-			change(func() error { return p.setDensity(sel) })
-		}
+		// Form 只用来对齐标签和控件，不挂字段名字，因此不需要在 app 里保存表单状态。
+		f := form.New(0)
+		form.View(c, f, form.Props[int]{
+			Variant: form.Borderless, Layout: form.Horizontal, Gap: 2,
+		}, func() {
+			body := typographyOptionIndex(typographyBodySizes, p.bodySize())
+			typographyField(c, f, "正文字号 (DIP)", func() {
+				selected := settingsChoice(c, "正文字号", typographyBodyOptions, body)
+				initial := float64(p.bodySize())
+				v := typographyNumber(c, "正文字号数值", initial,
+					field.InputNumberProps{Min: typographyBodyMin, Max: typographyBodyMax, Step: 1,
+						Precision: 0, Size: lobetheme.Small}, 112)
+				if selected >= 0 && selected != body {
+					n := typographyOptionValue(typographyBodySizes, selected)
+					change(func() error { return p.setBodySize(n) })
+				}
+				if v != initial {
+					n := int(math.Round(v))
+					change(func() error { return p.setBodySize(n) })
+				}
+			})
 
-		bodyNum := float64(p.bodySize())
-		lineNum := float64(p.lineHeight()) / 10
-		widthNum := float64(p.pageWidth())
-		padNum := float64(p.rowPadY())
-		gapNum := float64(p.rowGap())
-		ui.Row(c).FillWidth().Gap(8).Children(func() {
-			if v := int(math.Round(settingsNumber(c, "正文字号（DIP）", "正文字号数值", &bodyNum,
-				field.InputNumberProps{Min: typographyBodyMin, Max: typographyBodyMax, Step: 1,
-					Precision: 0, Size: lobetheme.Small}))); v != p.bodySize() {
-				change(func() error { return p.setBodySize(v) })
-			}
-			if v := int(math.Round(settingsNumber(c, "行距（倍）", "行距数值", &lineNum,
-				field.InputNumberProps{Min: 1.2, Max: 2.4, Step: 0.1,
-					Precision: 1, Size: lobetheme.Small}) * 10)); v != p.lineHeight() {
-				change(func() error { return p.setLineHeight(v) })
-			}
+			line := typographyOptionIndex(typographyLineHeights, p.lineHeight())
+			typographyField(c, f, "行距 (倍)", func() {
+				selected := settingsChoice(c, "行距", typographyLineOptions, line)
+				initial := float64(p.lineHeight()) / 10
+				v := typographyNumber(c, "行距数值", initial,
+					field.InputNumberProps{Min: 1.2, Max: 2.4, Step: 0.1,
+						Precision: 1, Size: lobetheme.Small}, 112)
+				if selected >= 0 && selected != line {
+					n := typographyOptionValue(typographyLineHeights, selected)
+					change(func() error { return p.setLineHeight(n) })
+				}
+				if v != initial {
+					n := int(math.Round(v * 10))
+					change(func() error { return p.setLineHeight(n) })
+				}
+			})
+
+			width := typographyOptionIndex(typographyPageWidths, p.pageWidth())
+			typographyField(c, f, "页宽 (DIP)", func() {
+				selected := settingsChoice(c, "页宽", typographyWidthOptions, width)
+				initial := float64(p.pageWidth())
+				v := typographyNumber(c, "页宽数值", initial,
+					field.InputNumberProps{Min: typographyWidthMin, Max: typographyWidthMax, Step: 1,
+						Precision: 0, Size: lobetheme.Small}, 112)
+				if selected >= 0 && selected != width {
+					n := typographyOptionValue(typographyPageWidths, selected)
+					change(func() error { return p.setPageWidth(n) })
+				}
+				if v != initial {
+					n := int(math.Round(v))
+					change(func() error { return p.setPageWidth(n) })
+				}
+			})
+
+			density := p.density()
+			typographyField(c, f, "列表密度", func() {
+				selected := settingsChoice(c, "列表密度", typographyDensityNames, density)
+				padInitial := float64(p.rowPadY())
+				display.Text(c, "留白", display.TextProps{FontSize: 12, Rows: 1})
+				pad := typographyNumber(c, "行留白数值", padInitial,
+					field.InputNumberProps{Min: typographyPadMin, Max: typographyPadMax, Step: 1,
+						Precision: 0, Size: lobetheme.Small}, 72)
+				gapInitial := float64(p.rowGap())
+				display.Text(c, "间距", display.TextProps{FontSize: 12, Rows: 1})
+				gap := typographyNumber(c, "行内间距数值", gapInitial,
+					field.InputNumberProps{Min: typographyGapMin, Max: typographyGapMax, Step: 1,
+						Precision: 0, Size: lobetheme.Small}, 72)
+				if selected >= 0 && selected != density {
+					n := selected
+					change(func() error { return p.setDensity(n) })
+				}
+				if pad != padInitial {
+					n := int(math.Round(pad))
+					change(func() error { return p.setRowPadY(n) })
+				}
+				if gap != gapInitial {
+					n := int(math.Round(gap))
+					change(func() error { return p.setRowGap(n) })
+				}
+			})
 		})
-		ui.Row(c).FillWidth().Gap(8).Children(func() {
-			if v := int(math.Round(settingsNumber(c, "页宽（DIP）", "页宽数值", &widthNum,
-				field.InputNumberProps{Min: typographyWidthMin, Max: typographyWidthMax, Step: 1,
-					Precision: 0, Size: lobetheme.Small}))); v != p.pageWidth() {
-				change(func() error { return p.setPageWidth(v) })
-			}
-			if v := int(math.Round(settingsNumber(c, "行留白（DIP）", "行留白数值", &padNum,
-				field.InputNumberProps{Min: typographyPadMin, Max: typographyPadMax, Step: 1,
-					Precision: 0, Size: lobetheme.Small}))); v != p.rowPadY() {
-				change(func() error { return p.setRowPadY(v) })
-			}
-		})
-		settingsNumber(c, "行内间距（DIP）", "行内间距数值", &gapNum,
-			field.InputNumberProps{Min: typographyGapMin, Max: typographyGapMax, Step: 1,
-				Precision: 0, Size: lobetheme.Small})
-		if v := int(math.Round(gapNum)); v != p.rowGap() {
-			change(func() error { return p.setRowGap(v) })
-		}
 
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			btn := action.Button(c, "恢复默认排版", action.ButtonProps{Size: lobetheme.Small})
@@ -768,7 +812,7 @@ func typographyOptionValue(values []int, i int) int {
  --------------------------------------------------------------- */
 
 // commentSettingsSection 是「评论」一块：两枚开关都立即落盘，进程级共享，
-// 所有账号窗口的评论框下一帧就按新状态画（见 comment_cost_prefs.go）。
+// 所有已开窗口的评论框下一帧就按新状态画（见 comment_cost_prefs.go）。
 func (a *app) commentSettingsSection(c *ui.Context) {
 	settingsSection(c, "评论", func() {
 		settingsDescription(c, "控制评论框里的金币消耗提示与徽章切换入口。", 2)
@@ -787,13 +831,13 @@ func (a *app) commentSettingsSection(c *ui.Context) {
    阅读一块：浏览历史与稍后再看
   --------------------------------------------------------------- */
 
-// readingSettingsSection 是「阅读」一块：浏览历史与稍后再看都存在本机、按
-// 账号隔离，这里只提供「打开后保留」这一个行为开关。清空入口在稍后再看
-// 页的两段顶部，按当前账号清，不和服务端收藏混在一起。
+// readingSettingsSection 是「阅读」一块：浏览历史与稍后再看都存在本机，这里
+// 只提供「打开后保留」这一个行为开关。清空入口在稍后再看页的两段顶部，只清
+// 本机记录，不和服务端收藏混在一起。
 func (a *app) readingSettingsSection(c *ui.Context) {
 	p := a.watchLaterPrefs
 	settingsSection(c, "阅读记录", func() {
-		settingsDescription(c, "浏览历史与稍后再看只存在本机，并按账号隔离。", 1)
+		settingsDescription(c, "浏览历史与稍后再看只存在本机。", 1)
 
 		if v := settingsCheckbox(c, "打开后保留在稍后再看", p.keepAfterOpen()); v != p.keepAfterOpen() {
 			a.setKeepWatchLater(v)
@@ -1165,7 +1209,7 @@ func cacheRow(c *ui.Context, label, value string, strong bool) {
 ---------------------------------------------------------------- */
 
 // imageSettingsSection 是「图片」一块：正文与评论里的配图怎么加载、动图放不
-// 放。两枚开关都立即落盘、进程级共享，所有账号窗口下一帧就按新状态重建。
+// 放。两枚开关都立即落盘、进程级共享，所有已开窗口下一帧就按新状态重建。
 func (a *app) imageSettingsSection(c *ui.Context) {
 	p := a.imagePrefs
 	settingsSection(c, "图片", func() {

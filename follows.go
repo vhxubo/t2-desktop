@@ -27,7 +27,7 @@ import (
 // 列表里用它决定按钮是「回关」还是「已关注」。
 //
 // 未读数按 last_read_at 计算：不传时服务端恒回 0，所以上次读取时间记在
-// 本机（cache/offline.json 的 follows:read:<scope>），打开「动态」时更新。
+// 本机（cache/offline.json 的 follows:read:local），打开「动态」时更新。
 // 未读数作为侧边栏「动态」一项的角标显示。
 
 const followsPageSize = 50
@@ -209,7 +209,7 @@ func (a *app) ensureFollowsLoaded() {
 		return
 	}
 	if fs.viewer != a.auth.username() {
-		// 重新登录：上一个账号的名单不能再展示。
+		// 重新登录：上一次登录的名单不能再展示。
 		*fs = followsState{tab: fs.tab, viewer: a.auth.username()}
 	}
 	l := fs.list(fs.tab)
@@ -393,11 +393,7 @@ type followsReadRecord struct {
 }
 
 func (a *app) followsReadKey() string {
-	scope := a.cacheScope()
-	if scope == "" {
-		return ""
-	}
-	return followsReadPrefix + scope
+	return followsReadPrefix + localCacheSegment
 }
 
 // followsReadAt 读本机记下的上次读取时间。没有记录时返回零值：第一次用

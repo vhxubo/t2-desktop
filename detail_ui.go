@@ -61,8 +61,8 @@ type detailState struct {
 	replyTotalPages       int
 	replyNoMore           bool // 评论已到底（空页 / 无新增），停止无限滚动续拉
 	replyGen              uint64
-	// flat 是评论区的视图：false 楼层视图、true 扁平时间序。它是账号级偏好，
-	// 切换时按账号落盘（见 reply_view.go 的 saveReplyViewMode），与具体帖子
+	// flat 是评论区的视图：false 楼层视图、true 扁平时间序。它是本机偏好，
+	// 切换时立即落盘（见 reply_view.go 的 saveReplyViewMode），与具体帖子
 	// 无关，打开别的帖子也沿用。
 	flat bool
 	// 评论楼层视图的本地记忆（见 reply_view.go）。viewMem 是这次打开读到的
@@ -543,7 +543,7 @@ func (a *app) loadDetail(d *detailState, it Item) {
 			}
 		}
 	}
-	// 视图模式是账号级偏好，不跟帖子走。
+	// 视图模式是本机偏好，不跟帖子走。
 	if it.CommentID == "" {
 		if flat, ok := a.loadReplyViewMode(); ok {
 			d.flat = flat
@@ -2009,7 +2009,7 @@ func (a *app) replyComposerToolBar(c *ui.Context, d *detailState) {
 				d.focusTries = 0
 				d.focusMiss = false
 				a.loadReplies(1)
-				// 视图偏好按账号立即落盘：换一篇帖子打开也沿用（见 reply_view.go）。
+				// 视图偏好立即落盘：换一篇帖子打开也沿用（见 reply_view.go）。
 				a.saveReplyViewMode(d.flat)
 				// 过滤继续生效，但换视图重新拉第一页，续拉预算从头算。
 				d.filterAutoPages = 0

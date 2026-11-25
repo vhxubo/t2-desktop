@@ -425,7 +425,7 @@ func (a *app) submitBet(d *detailState, optionID string) {
 				return
 			}
 			d.bet.busy = false
-			// 请求期间换了账号 / 退出登录：这一笔不属于当前会话。
+			// 请求期间登录态变了：这一笔不属于当前会话。
 			if !a.auth.loggedIn() || a.auth.username() != actor {
 				return
 			}

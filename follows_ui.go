@@ -95,8 +95,8 @@ func (a *app) setFollowsWindowShown(shown bool) {
 	}
 }
 
-// closeFollowsWindow 关掉窗口：退出登录、主窗口关闭或收进托盘时调用，
-// 别把上一个账号的名单留在屏幕上。只在主线程调用。
+// closeFollowsWindow 关掉窗口：退出登录或「关闭全部」时调用，别把上一次
+// 会话的名单留在屏幕上。关主窗口或只收起它不碰这扇窗口。只在主线程调用。
 func (a *app) closeFollowsWindow() {
 	win := a.followsWin
 	if win == nil {

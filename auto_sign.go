@@ -10,7 +10,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
 )
 
-// 打开应用自动签到。每个账号的主窗口打开时静默尝试一次：已经签过不弹任何
+// 打开应用自动签到。主窗口打开时静默尝试一次：已经签过不弹任何
 // 提示，真正签到成功才在主窗口内容顶部画一条明显的 Lobe 成功 Alert。失败
 // 一律静默，不让后台能力打扰用户。
 
@@ -91,7 +91,7 @@ func (a *app) maybeAutoSignIn() {
 }
 
 // setAutoSignEnabled 开关「打开应用时自动签到」并立即落盘。偏好是进程级共享的，
-// publish 让其它账号窗口的设置页下一帧按新状态重建。
+// publish 让其它窗口的设置页下一帧按新状态重建。
 func (a *app) setAutoSignEnabled(on bool) {
 	if a.autoSignPrefs == nil || a.autoSignPrefs.on() == on {
 		return

@@ -13,20 +13,26 @@ import (
 )
 
 // sidebarWidth 是左侧导航栏的宽度，与 view 里的布局一致（见 main.go 的
-// navSidebarWidth）。底部的设置与账号入口都得待在这条带子里，不能溢到右侧
-// 内容区。
+// navSidebarWidth）。底部的设置入口也得待在这条带子里，不能溢到右侧内容区。
 const sidebarWidth = navSidebarWidth
 
-// 设置入口在主页左侧 Lobe 导航轨里，登录 / 注册再往下；退出登录已收进标题栏
-// 账号菜单的气泡。标题栏只留搜索、铃铛和登录后的头像昵称。外观三档已收进设置
-// 窗口。
+// 设置入口在主页左侧 Lobe 导航轨里，登录 / 注册再往下；账号入口已移除，退出
+// 登录等账号操作收进标题栏账号菜单的气泡。标题栏只留搜索、铃铛和登录后的头像
+// 昵称。外观三档已收进设置窗口。
 const logoutLabel = "退出登录"
 const loginLabel = "登录 2Libra"
 
-func TestSidebarFooterHoldsSettingsAndAccount(t *testing.T) {
+func TestSidebarFooterHoldsSettings(t *testing.T) {
 	a := testApp(t)
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
+
+	// 侧边栏底部不再有账号入口，账号操作只留在标题栏气泡里。
+	for _, item := range a.sidebarFooterItems() {
+		if item.Key == "accounts" || item.Label == "账号" {
+			t.Fatalf("侧边栏底部不该再有账号入口：%q", tt.Texts())
+		}
+	}
 
 	set, ok := tt.Find("设置")
 	if !ok {
@@ -652,7 +658,7 @@ func TestSidebarExpandedRowsHaveLeftInset(t *testing.T) {
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
 
-	for _, name := range []string{"首页", "设置", "账号"} {
+	for _, name := range []string{"首页", "设置"} {
 		row, ok := tt.Access(name)
 		if !ok {
 			t.Fatalf("展开态缺少 %q：%q", name, tt.Texts())
@@ -673,7 +679,7 @@ func TestSidebarCollapsedIconsShowTooltips(t *testing.T) {
 	if a.navExpanded {
 		t.Fatal("前置条件：默认应是折叠态")
 	}
-	for _, name := range []string{"首页", "设置", "账号", "展开侧边栏"} {
+	for _, name := range []string{"首页", "设置", "展开侧边栏"} {
 		info, ok := tt.Access(name)
 		if !ok {
 			t.Fatalf("折叠态缺少 %q：%q", name, tt.Texts())

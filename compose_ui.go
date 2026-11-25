@@ -67,7 +67,7 @@ func (a *app) showCompose() {
 	a.publish(func() {
 		if a.compose == nil {
 			// 表单是空的：续写最近编辑的一条帖子草稿；一条都没有才开空白表单。
-			if e, ok := a.draftsForCurrent().latestCompose(composeModePost); ok {
+			if e, ok := latestComposeDraft(a.drafts, composeModePost); ok {
 				a.compose = newComposeState()
 				a.applyComposeDraft(a.compose, e)
 			} else {
@@ -86,7 +86,7 @@ func (a *app) showMomentCompose() {
 
 func (a *app) showMomentComposeWindow() {
 	if a.compose == nil {
-		if e, ok := a.draftsForCurrent().latestCompose(composeModeMoment); ok {
+		if e, ok := latestComposeDraft(a.drafts, composeModeMoment); ok {
 			a.compose = newComposeState()
 			a.applyComposeDraft(a.compose, e)
 		} else {

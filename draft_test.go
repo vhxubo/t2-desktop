@@ -44,14 +44,14 @@ func TestDraftStoreRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	want := []draftEntry{testDraftEntry(draftKindCompose, now), testDraftEntry(draftKindReply, now.Add(-time.Hour))}
-	s := newDraftStore(dir, "alice-1a2b3c")
+	s := newDraftStore(dir)
 	for _, e := range want {
 		s.put(e)
 	}
 	if err := s.save(); err != nil {
 		t.Fatal(err)
 	}
-	got := newDraftStore(dir, "alice-1a2b3c").rows()
+	got := newDraftStore(dir).rows()
 	// rows 按 UpdatedAt 倒序
 	if len(got) != 2 || !reflect.DeepEqual(got[0], want[0]) || !reflect.DeepEqual(got[1], want[1]) {
 		t.Fatalf("草稿读写不一致：\n got %+v\nwant %+v", got, want)
@@ -64,27 +64,23 @@ func TestDraftStoreRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDraftStoreScopedByAccount(t *testing.T) {
+func TestDraftStoreUsesFixedFile(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().UTC()
-	a := newDraftStore(dir, "alice-1a2b3c")
-	b := newDraftStore(dir, "bob-4d5e6f")
-	a.put(testDraftEntry(draftKindCompose, now))
-	if err := a.save(); err != nil {
+	s := newDraftStore(dir)
+	path := filepath.Join(dir, "drafts", draftFileName)
+	if s.path != path {
+		t.Fatalf("草稿路径 = %q，期望 %q", s.path, path)
+	}
+	s.put(testDraftEntry(draftKindCompose, now))
+	if err := s.save(); err != nil {
 		t.Fatal(err)
 	}
-	if b.count() != 0 {
-		t.Fatalf("bob 不该看到 alice 的草稿：%+v", b.rows())
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("固定草稿文件没有写出：%v", err)
 	}
-	b.put(testDraftEntry(draftKindReply, now))
-	if err := b.save(); err != nil {
-		t.Fatal(err)
-	}
-	if a.count() != 1 || newDraftStore(dir, "alice-1a2b3c").count() != 1 {
-		t.Errorf("写 bob 不该影响 alice：a=%d", a.count())
-	}
-	if _, err := os.Stat(filepath.Join(dir, "drafts", "alice-1a2b3c.json")); err != nil {
-		t.Errorf("alice 的草稿文件不在：%v", err)
+	if got := newDraftStore(dir).count(); got != 1 {
+		t.Errorf("重开草稿文件后条数 = %d，期望 1", got)
 	}
 }
 
@@ -97,7 +93,7 @@ func TestDraftStoreCorruptFileFallsBack(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s := newDraftStore(dir, "local")
+	s := newDraftStore(dir)
 	if s.count() != 0 {
 		t.Errorf("坏文件应按空草稿处理：%+v", s.rows())
 	}
@@ -109,7 +105,7 @@ func TestDraftStoreCorruptFileFallsBack(t *testing.T) {
 func TestDraftStorePrunesOldestReply(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Now().UTC().Add(-time.Hour)
-	s := newDraftStore(dir, "local")
+	s := newDraftStore(dir)
 	for i := 0; i < draftMaxReply+1; i++ {
 		e := testDraftEntry(draftKindReply, base.Add(time.Duration(i)*time.Second))
 		e.ID = "reply-" + e.ShortID + "-" + e.ID
@@ -118,7 +114,7 @@ func TestDraftStorePrunesOldestReply(t *testing.T) {
 	if err := s.save(); err != nil {
 		t.Fatal(err)
 	}
-	rows := newDraftStore(dir, "local").rows()
+	rows := newDraftStore(dir).rows()
 	if len(rows) != draftMaxReply {
 		t.Fatalf("回复草稿应截到 %d 条，得到 %d", draftMaxReply, len(rows))
 	}
@@ -443,13 +439,13 @@ func TestLegacyEmptyReplyDroppedOnLoad(t *testing.T) {
 	real := testDraftEntry(draftKindReply, now.Add(-time.Hour))
 	path := filepath.Join(dir, "drafts", "local.json")
 	if err := writeJSONFile(path, &draftFile{
-		Version: draftVersion, Account: "local",
+		Version: draftVersion,
 		Entries: []draftEntry{empty, real},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	s := newDraftStore(dir, "local")
+	s := newDraftStore(dir)
 	if s.count() != 1 {
 		t.Fatalf("旧版空回复草稿不该再出现在箱子里：%+v", s.rows())
 	}
@@ -487,13 +483,13 @@ func TestLegacyEmptyComposeDroppedOnLoad(t *testing.T) {
 	reply := testDraftEntry(draftKindReply, now.Add(-2*time.Hour))
 	path := filepath.Join(dir, "drafts", "local.json")
 	if err := writeJSONFile(path, &draftFile{
-		Version: draftVersion, Account: "local",
+		Version: draftVersion,
 		Entries: []draftEntry{empty, real, reply},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	s := newDraftStore(dir, "local")
+	s := newDraftStore(dir)
 	if s.count() != 2 {
 		t.Fatalf("旧版空草稿不该再出现在箱子里：%+v", s.rows())
 	}
@@ -506,7 +502,7 @@ func TestLegacyEmptyComposeDroppedOnLoad(t *testing.T) {
 	if err := s.save(); err != nil {
 		t.Fatal(err)
 	}
-	reopened := newDraftStore(dir, "local")
+	reopened := newDraftStore(dir)
 	if _, ok := reopened.find(empty.ID); ok {
 		t.Error("旧版空草稿又被写回磁盘")
 	}

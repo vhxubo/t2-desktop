@@ -135,8 +135,8 @@ func (a *app) setProfileWindowShown(shown bool) {
 	}
 }
 
-// closeProfileWindow 关掉窗口：退出登录或主窗口关闭时调用，别让上一个账号
-// 的资料留在屏幕上。只在主线程调用。
+// closeProfileWindow 关掉窗口：退出登录或「关闭全部」时调用，别让上一次
+// 会话的资料留在屏幕上。关主窗口不碰它。只在主线程调用。
 func (a *app) closeProfileWindow() {
 	win := a.profileWin
 	if win == nil {
@@ -1296,7 +1296,7 @@ func (a *app) submitRenameCollection() {
 				return
 			}
 			ps.collBusy = ""
-			// 请求期间换了账号 / 退出登录：这次结果不属于当前会话。
+			// 请求期间登录态变了：这次结果不属于当前会话。
 			if !a.auth.loggedIn() || a.auth.username() != actor {
 				return
 			}

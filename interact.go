@@ -408,7 +408,7 @@ func (a *app) toggleFavorite(d *detailState) {
 				return
 			}
 			d.fav.busy = false
-			// 请求期间换了账号 / 退出了登录：这次结果不属于当前会话。
+			// 请求期间登录态变了：这次结果不属于当前会话。
 			if !a.auth.loggedIn() || a.auth.username() != actor {
 				d.fav.known = false
 				d.fav.favorited = false
@@ -713,7 +713,7 @@ func (a *app) favoriteButton(c *ui.Context, d *detailState) {
 		return
 	}
 	tk := lobetheme.TokensOf(c)
-	// 换了登录账号：上一个账号的收藏状态不能继续用，按未知展示。
+	// 退出或重新登录：上一次会话的收藏状态不能继续用，按未知展示。
 	viewer := a.auth.username()
 	if a.auth.loggedIn() && d.fav.known && d.fav.viewer != viewer {
 		d.fav.known = false

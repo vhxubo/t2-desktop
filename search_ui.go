@@ -79,7 +79,8 @@ func (a *app) showSearchWindow() {
 	})
 }
 
-// closeSearchWindow 关掉搜索窗口：退出登录、收进托盘与退出前调用。
+// closeSearchWindow 关掉搜索窗口：退出登录、「关闭全部」与退出前调用；
+// 只收起主窗口时搜索结果照旧留着。
 func (a *app) closeSearchWindow() {
 	a.stopSearchTimer()
 	win := a.searchWin

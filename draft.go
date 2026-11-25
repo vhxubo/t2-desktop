@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// 本地草稿：发帖 / 动态、评论 / 回复的输入内容按账号落在磁盘上。进程异常退出
+// 本地草稿：发帖 / 动态、评论 / 回复的输入内容落在本机磁盘上。进程异常退出
 // （崩溃、断电、任务管理器结束）后，重新打开能从草稿箱原样恢复，包括「发一条
 // 新评论」还是「回复某一层楼」。
 //
@@ -30,6 +30,9 @@ const (
 	draftMaxReply    = 200
 	draftMaxCompose  = 50
 	draftMaxFileSize = 4 << 20 // 4 MiB
+	// draftFileName 沿用单账号版本的固定文件名。旧版按账号分文件；升级后
+	// 读到的是 local 那一份，不需要迁移，也不会把草稿留在看不见的目录里。
+	draftFileName = "local.json"
 	// draftDebounce 是停手后落盘的延迟；draftMaxDelay 是连续打字时距上次改动
 	// 的最长落盘间隔，保证崩溃最多丢 5 秒内容。
 	draftDebounce = 800 * time.Millisecond
@@ -168,24 +171,20 @@ type draftEntry struct {
 
 type draftFile struct {
 	Version int          `json:"version"`
-	Account string       `json:"account"`
 	Entries []draftEntry `json:"entries"`
 }
 
-// draftStore 是本机一份草稿集合。目录与文件名固定在
-// 生成，字符集是 [a-z0-9_-]，不需要再转义。每个账号窗口各自持有一份实例。
+// draftStore 是本机唯一的一份草稿集合。文件名固定，进程内只有一份实例。
 type draftStore struct {
 	mu      sync.Mutex
-	dir     string
-	scope   string
 	path    string
 	entries []draftEntry
 }
 
-func newDraftStore(dir, scope string) *draftStore {
-	s := &draftStore{dir: dir, scope: scope}
+func newDraftStore(dir string) *draftStore {
+	s := &draftStore{}
 	if dir != "" {
-		s.path = filepath.Join(dir, "drafts", scope+".json")
+		s.path = filepath.Join(dir, "drafts", draftFileName)
 	}
 	s.load()
 	return s
@@ -233,7 +232,7 @@ func (s *draftStore) save() error {
 		return nil
 	}
 	s.pruneLocked()
-	f := draftFile{Version: draftVersion, Account: s.scope, Entries: s.entries}
+	f := draftFile{Version: draftVersion, Entries: s.entries}
 	if err := writeJSONFile(s.path, &f); err != nil {
 		return err
 	}
@@ -244,7 +243,7 @@ func (s *draftStore) save() error {
 			if len(s.entries) == 0 || !s.hasKindLocked(draftKindReply) {
 				s.dropOldestLocked("")
 			}
-			if err := writeJSONFile(s.path, &draftFile{Version: draftVersion, Account: s.scope, Entries: s.entries}); err != nil {
+			if err := writeJSONFile(s.path, &draftFile{Version: draftVersion, Entries: s.entries}); err != nil {
 				return err
 			}
 			info, statErr = os.Stat(s.path)
@@ -389,10 +388,6 @@ func (s *draftStore) dropOldestLocked(kind string) {
 		s.entries = append(s.entries[:idx], s.entries[idx+1:]...)
 	}
 }
-
-// draftScope 是草稿文件在本机的作用域。只有一个会话，固定用 local；退出登录
-// 也不换文件，草稿留着，下次登录回来还在。
-func draftScope(*app) string { return "local" }
 
 // stripUploadPlaceholders 剥掉未完成的图片上传占位符。上传任务不跨进程，留着
 // 会让恢复后的草稿永远发不出去（payload 会一直报「还有 N 张图片未处理完」）。
@@ -852,26 +847,18 @@ func (a *app) scheduleDraftTimer(now time.Time) {
 	})
 }
 
-// draftsForCurrent 在作用域变化（登录 / 退出 / 重新登录）时换一份 store。旧 store
-// 已经在强制落盘点保存过，这里只切引用。
-func (a *app) draftsForCurrent() *draftStore {
-	scope := draftScope(a)
-	if a.drafts != nil && a.drafts.scope == scope {
-		return a.drafts
+// latestComposeDraft 在草稿箱不可用时按没有草稿处理，界面仍能开空白表单。
+func latestComposeDraft(store *draftStore, mode int) (draftEntry, bool) {
+	if store == nil {
+		return draftEntry{}, false
 	}
-	a.drafts = newDraftStore(a.draftDir, scope)
-	return a.drafts
+	return store.latestCompose(mode)
 }
 
 // flushDrafts 把改动的运行态写成 DTO 并落盘。只在 UI 线程读写运行态；定时器
 // 回调经 publish 回到这里。空条目直接删，不留一条空草稿。
 func (a *app) flushDrafts() {
-	a.flushDraftsInto(a.draftsForCurrent())
-}
-
-// flushDraftsInto 把改动写进指定的 store。退出时 auth 状态可能已经变了，显式
-// 传入 store，确保内容写进当前这份草稿文件。
-func (a *app) flushDraftsInto(store *draftStore) {
+	store := a.drafts
 	if store == nil {
 		return
 	}
@@ -964,7 +951,10 @@ func (a *app) stopDraftTimer() {
 // deleteDraft 删一条草稿，并同步清掉对应的 live 状态，否则下一次自动保存会把
 // 刚删的内容又写回去。
 func (a *app) deleteDraft(id string) {
-	store := a.draftsForCurrent()
+	store := a.drafts
+	if store == nil {
+		return
+	}
 	store.delete(id)
 	// 清 live：发帖草稿按 id 对齐，回复草稿按 short_id 对齐。
 	if st := a.compose; st != nil && st.draftID == id {
@@ -984,8 +974,8 @@ func (a *app) deleteDraft(id string) {
 	a.draftPending = false
 }
 
-// clearLiveDrafts 只清运行态并对齐指纹，不碰 store。登录态切换时先 flush 进旧
-// 作用域，再把 live 状态清掉，免得下一帧按新作用域把旧内容又写一份。
+// clearLiveDrafts 只清运行态并对齐指纹，不碰 store。退出登录时先 flush，再把
+// live 状态清掉，免得下一帧又把旧内容写回磁盘。
 func (a *app) clearLiveDrafts() {
 	if st := a.compose; st != nil {
 		mode := st.mode
@@ -1002,10 +992,13 @@ func (a *app) clearLiveDrafts() {
 	a.draftPending = false
 }
 
-// clearAllDrafts 清空当前账号的全部草稿，并清掉 live 状态。删完立刻落盘，别等
+// clearAllDrafts 清空本机的全部草稿，并清掉 live 状态。删完立刻落盘，别等
 // 下一次 tick 把内容又写回来。
 func (a *app) clearAllDrafts() (int, error) {
-	store := a.draftsForCurrent()
+	store := a.drafts
+	if store == nil {
+		return 0, nil
+	}
 	n := store.count()
 	store.clear()
 	a.clearLiveDrafts()

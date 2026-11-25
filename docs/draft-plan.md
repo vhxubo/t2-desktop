@@ -52,25 +52,18 @@
 | 本地落盘工具 | `auth.go` 的 `readJSONFile` / `writeJSONFile`（先 `.tmp` 再改名） | 直接复用，不引入数据库 |
 | 离线缓存 | `offline_store.go` 的 `localKV` | **不复用**：它是一份 `cache/offline.json`，里面装着正文与评论缓存，逐键打字整份重写代价太大 |
 | 窗口与会话生命周期 | `app_window.go` 的窗口收尾，`main.go` 的退出与登录状态切换 | 收尾前落盘；退出登录不删草稿文件 |
-| 草稿作用域 | `draft.go` 的 `draftScope` | 本机固定一份 |
 
 ## 4. 数据模型
 
-### 4.1 文件与作用域
+### 4.1 文件位置
 
 ```text
-<配置目录>/drafts/<scope>.json
+<配置目录>/drafts/local.json
 ```
 
-`scope` 固定为 `local`：
-
-| 场景 | scope | 说明 |
-| --- | --- | --- |
-| 主窗口 | `local` | 登录前后共用一份草稿，未登录也能写（发帖窗口会先要求授权） |
-
-- 文件名固定，不需要转义。
+- 文件名固定为 `local.json`，不需要转义；登录前后共用一份草稿，未登录也能写（发帖窗口会先要求授权）。
 - 进程内只有一份 `draftStore`，不存在两个实例写同一个文件的情况；`draftStore` 内部仍加 `sync.Mutex` 并复用 `writeJSONFile` 的原子写，防止定时器与退出路径同时落盘。
-- 文件损坏（半截 JSON、手工改坏）时另存为 `<scope>.json.bad`，从空草稿继续，只记日志——草稿读不出来不该让应用起不来。
+- 文件损坏（半截 JSON、手工改坏）时另存为 `local.json.bad`，从空草稿继续，只记日志——草稿读不出来不该让应用起不来。
 
 ### 4.2 文件结构
 
@@ -413,7 +406,7 @@ a.flushDrafts()：把改动写成 DTO、删掉空条目、a.drafts.save() 落盘
 
 新增：
 
-- `draft.go`：`draftEntry` / `draftTarget` / `composeDraftModules` 及各自块结构、`draftStore`（load / save / put / delete / clear / rows / count）、`draftScope`、`stripUploadPlaceholders`、两个 `draftFingerprint`、`a.draftTick` / `a.flushDrafts` / `a.clearAllDrafts` / `a.deleteDraft` / `a.restoreDraft`、`liveDetailStates`。
+- `draft.go`：`draftEntry` / `draftTarget` / `composeDraftModules` 及各自块结构、`draftStore`（load / save / put / delete / clear / rows / count）、`stripUploadPlaceholders`、两个 `draftFingerprint`、`a.draftTick` / `a.flushDrafts` / `a.clearAllDrafts` / `a.deleteDraft` / `a.restoreDraft`、`liveDetailStates`。
 - `draft_ui.go`：`a.draftsBody`（页头 / 分组 / 行 / 空态）、`a.draftRow`、`a.draftsClearDialog`、`a.showDrafts`、`a.newComposeDraft`。
 - `draft_test.go`、`draft_ui_test.go`。
 
@@ -435,8 +428,8 @@ a.flushDrafts()：把改动写成 DTO、删掉空条目、a.drafts.save() 落盘
 
 ### 阶段 1：存储层
 
-- `draftEntry` 与各组件 DTO、`draftStore` 的读写 / 上限 / 损坏兜底 / 作用域。
-- `stripUploadPlaceholders`、`draftScope`。
+- `draftEntry` 与各组件 DTO、`draftStore` 的读写 / 上限 / 损坏兜底。
+- `stripUploadPlaceholders`。
 - 验收：读写往返一致；进程内共用一份；坏文件不崩；上限按最旧丢。
 
 ### 阶段 2：发帖草稿
@@ -469,7 +462,7 @@ a.flushDrafts()：把改动写成 DTO、删掉空条目、a.drafts.save() 落盘
 ### 单元测试（`draft_test.go`）
 
 - `TestDraftStoreRoundTrip`：写读一致，字段一个不少（含组件块与 `reply_to`）。
-- `TestDraftStoreSingleScope`：本机固定 scope，读写落到同一份文件。
+- `TestDraftStoreUsesFixedFile`：读写固定落到 `drafts/local.json`。
 - `TestDraftStoreCorruptFileFallsBack`：坏 JSON → 空草稿 + `.bad` 副本，不 panic。
 - `TestDraftStorePrunesOldestReply`：第 201 条挤掉最旧的，`updated_at` 顺序正确。
 - `TestDraftStripUploadPlaceholders`：`![x](upload:3)` 被剥离，正常图片链接保留。

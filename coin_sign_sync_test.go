@@ -123,7 +123,7 @@ func TestAccountMenuSignSyncBacksOffOnFailure(t *testing.T) {
 	}
 }
 
-// 签到状态写进按账号隔离的本地缓存，但只对同一自然日有效；隔天不能把昨天
+// 签到状态写进本机缓存，但只对同一自然日有效；隔天不能把昨天
 // 的「已签到」带到新的一天。
 func TestCoinSignCacheRestoredOnlyForToday(t *testing.T) {
 	dir := t.TempDir()

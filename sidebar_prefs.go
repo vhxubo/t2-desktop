@@ -15,7 +15,7 @@ import (
 
 // 侧边栏导航自定义：首页到「节点」分组之前的所有入口都可以单独显示 / 隐藏并
 // 拖动排序。偏好是进程级的（见 appDeps），所有窗口共用同一份，落盘在
-// sidebar.json；底部账号 / 设置 / 关于入口与节点快捷入口不在这里。
+// sidebar.json；底部设置 / 关于入口与节点快捷入口不在这里。
 
 const sidebarPrefsFileName = "sidebar.json"
 
@@ -262,7 +262,7 @@ func (a *app) sidebarSettingsSection(c *ui.Context) {
 		a.sidebarPrefs = newSidebarPrefsStore("")
 	}
 	settingsSection(c, "侧边栏导航", func() {
-		settingsDescription(c, "拖动左侧手柄排序，勾选框控制显示。首页到「节点」分组之前的入口都能改；节点快捷入口与底部账号 / 设置 / 关于入口不在这里。", 2)
+		settingsDescription(c, "拖动左侧手柄排序，勾选框控制显示。首页到「节点」分组之前的入口都能改；节点快捷入口与底部设置 / 关于入口不在这里。", 2)
 		before := a.sidebarPrefs.order()
 		visibleChanged := false
 

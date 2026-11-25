@@ -14,8 +14,7 @@ import (
 //   - 稍后再看是本文件：用户主动标记「等会儿再读」的帖子，挂在侧边栏入口上，
 //     不依赖服务端的收藏 / 书签。
 //
-// 两页都按当前账号隔离（见 cacheScope）：重新登录后看不到上一个账号读过、
-// 攒过什么；未登录时记在 anonymous 下。清空也只清当前账号。
+// 两页的数据都只存在本机，清空也只清本机记录。
 //
 // 打开一篇稍后再看的帖子之后怎么处理，由 watch_later_prefs.go 的偏好决定：
 // 默认「打开即移除」；打开「保留」后留在列表里并标成已读，已读与未读分开
@@ -42,14 +41,12 @@ type watchLaterData struct {
 	Records []watchLaterRecord `json:"records"`
 }
 
-// loadWatchLater 确保内存里的稍后再看属于当前账号。作用域没变时直接返回；
-// 新启动、登录 / 退出后从 cache/offline.json 读一次。
+// loadWatchLater 确保内存里的稍后再看已经载入；新启动时从
+// cache/offline.json 读一次。
 func (a *app) loadWatchLater() {
-	scope := a.cacheScope()
-	if a.laterLoaded && a.laterFor == scope {
+	if a.laterLoaded {
 		return
 	}
-	a.laterFor = scope
 	a.laterLoaded = true
 	a.later = nil
 	a.laterList.ScrollTo(0, ui.Start)
@@ -373,7 +370,7 @@ func (a *app) clearWatchLaterReadMarks() {
 	a.redrawWatchLaterPage()
 }
 
-// clearWatchLater 清空当前账号的稍后再看，只清本机数据。
+// clearWatchLater 清空本机的稍后再看，只清本机数据。
 func (a *app) clearWatchLater() {
 	a.later = nil
 	a.laterLoaded = true

@@ -11,9 +11,8 @@ import (
 // 历史或列表再打开时先显示缓存，网络请求回来后再覆盖。弱网 / 无网时
 // 正文立刻可读，不再先给用户一页"加载失败"。
 //
-// 缓存按账号作用域分开（见 offline_cache.go 的 detailCacheKey）：同一个
-// 账号的窗口之间可以共用，重新登录后不会读到上一个账号的正文与个人状态。
-// 每个作用域只保留最近打开的若干篇；清空阅读历史时整组删除。
+// 缓存只有本机一份（见 offline_cache.go 的 detailCacheKey）：所有窗口共用。
+// 每个键只保留最近打开的若干篇；清空阅读历史时整组删除。
 //
 // 受限内容的付费正文不落盘：写入前把 Restricted.Content 剥掉，只留门槛
 // 信息。解锁后的正文必须每次向服务端重新读取，不能留在本机让别人翻到。
@@ -116,12 +115,12 @@ func (a *app) saveCachedDetail(d *detailState) {
 		log.Printf("帖子正文缓存写入失败：%v", err)
 		return
 	}
-	a.kv.prune(detailScopePrefix(a.cacheScope()), detailCacheMax)
+	a.kv.prune(detailCachePrefix, detailCacheMax)
 }
 
 // cacheableTopic 是写进本地缓存的正文副本。受限内容的付费正文（解锁后才
 // 由服务端下发的 Restricted.Content）不能落盘：这里只保留门槛信息，把正文
-// 清空；其余字段仍按账号作用域共享。
+// 清空；其余字段原样保留。
 func cacheableTopic(t topicDetail) topicDetail {
 	out := t
 	if r := t.Restricted; r != nil {

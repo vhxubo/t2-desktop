@@ -240,8 +240,8 @@ contentFilter *contentFilterState
 成功：替换快照 + 写回缓存；失败：保留缓存，记退避
 ```
 
-- 缓存键：`content-filter:<scope>`，`scope` 用 `a.persistableScope()`
-  （未登录 / 还没拿到昵称时不落盘，见 `offline_cache.go`）。
+- 缓存键：`content-filter:local`（未登录 / 还没拿到昵称时不落盘，
+  见 `offline_cache.go`）。
 - 缓存值：
 
 ```go
@@ -683,7 +683,7 @@ func (c *Client) saveContentFilter(ctx context.Context, body contentFilterDTO) (
 | `user_card.go` / `user_card_ui.go` | 资料头右侧的「屏蔽 / 已屏蔽」按钮；`setUserBlocked` 调用；提交中与失败状态；本人不显示 |
 | `profile.go` | 新标签常量与 `profileTabLabels`；`showProfileTab`；切到该标签时强制刷新名单 |
 | `profile_ui.go` | 第 7 个标签的图标与页面挂载；个人菜单气泡新增「内容屏蔽」行 |
-| `offline_cache.go` | 复用 `persistableScope`，不改逻辑 |
+| `offline_cache.go` | 复用固定的本机缓存段，不改逻辑 |
 | 测试 | `content_filter_test.go`、`content_filter_ui_test.go`、`user_card_test.go`、`profile_test.go`、`main_test.go` / `detail_ui_test.go` 增补、`proxy_test.go` 增补 |
 
 ## 11. 测试计划
@@ -737,7 +737,7 @@ func (c *Client) saveContentFilter(ctx context.Context, body contentFilterDTO) (
 - 三块各自显示 `n/50`；添加重复项（大小写不同）不新增；空项不能添加。
 - 删除一项后出现「未保存」，点「撤销改动」恢复；点「保存」发出 PUT。
 - 超过 50 条 / 超长单项 / 超过 3500 字节时保存按钮禁用并给出原因。
-- 保存成功后用响应覆盖本地，缓存写入 `content-filter:<scope>`。
+- 保存成功后用响应覆盖本地，缓存写入 `content-filter:local`。
 - 个人菜单「内容屏蔽」行：有名单时显示「N 项」，点击打开「我的」窗口并落在该标签。
 - 名单 GET 失败：显示原因与「重试」，保存禁用。
 

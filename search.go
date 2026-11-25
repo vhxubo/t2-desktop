@@ -451,8 +451,8 @@ func searchCanLoadMore(st *searchState) bool {
 	return st.totalPages == 0 || st.page < st.totalPages
 }
 
-// resetSearchResults 丢弃当前结果并作废在途请求：登录态变化后，属于上一个
-// 账号的「收藏」结果不能再留着。关键词与类型保留，用户重新输入即可。
+// resetSearchResults 丢弃当前结果并作废在途请求：登录态变化后，属于上一次
+// 登录的「收藏」结果不能再留着。关键词与类型保留，用户重新输入即可。
 func (a *app) resetSearchResults() {
 	st := a.search
 	if st == nil {

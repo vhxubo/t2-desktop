@@ -92,8 +92,8 @@ func (a *app) submitFollow(fs *followState, follow bool, target toastTarget, cur
 				return
 			}
 			fs.busy = false
-			// 请求期间换了账号 / 退出了登录：这次结果不属于当前会话，
-			// 按未知处理，当前账号下次渲染时会重新读取。
+			// 请求期间登录态变了：这次结果不属于当前会话，按未知处理，
+			// 下次渲染时会重新读取。
 			if !a.auth.loggedIn() || a.auth.username() != actor {
 				fs.known = false
 				fs.following = false

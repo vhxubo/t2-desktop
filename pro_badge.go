@@ -41,7 +41,7 @@ var (
 	proMarkStatic ui.ImageSource
 )
 
-// embeddedProMark 把内置 PNG 解码一次，之后所有账号窗口共用同一份位图。
+// embeddedProMark 把内置 PNG 解码一次，之后所有窗口共用同一份位图。
 func embeddedProMark() ui.ImageSource {
 	proMarkOnce.Do(func() {
 		src, err := ui.DecodeImage(proMarkPNG)

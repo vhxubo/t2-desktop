@@ -16,9 +16,9 @@ import (
 // 内容区的一个页面（pageName = "watchlater"），共用标题栏与侧边栏，不新开
 // mygo 窗口。
 //
-// 两页的数据都只在本机、按账号隔离（见 watch_later.go 与 reading_history.go）：
-// 重新登录窗口时各自重新载入，清空只清当前账号。稍后再看的打开行为由设置窗口
-// 「阅读」页决定：默认打开即移除，打开「保留」后留在列表里并区分已读未读。
+// 两页的数据都只在本机（见 watch_later.go 与 reading_history.go）：清空只清
+// 本机记录。稍后再看的打开行为由设置窗口「阅读」页决定：默认打开即移除，
+// 打开「保留」后留在列表里并区分已读未读。
 //
 // 界面走 Lobe UI：分段、按钮、Tag、空状态、滚动区分别由 action / display /
 // feedback 提供，颜色取 TokensOf(c)，和主窗口其它页面同一套观感。
@@ -48,8 +48,7 @@ func (a *app) redrawWatchLaterPage() {
 --------------------------------------------------------------- */
 
 func (a *app) watchLaterPage(c *ui.Context) {
-	// 每帧确认内存里的两份列表属于当前账号：重新登录、重新登录后自动换成
-	// 新的作用域，不会把上一个账号的记录画出来。
+	// 每帧确认内存里的两份列表已经载入。
 	a.loadWatchLater()
 	a.loadReadingHistory()
 

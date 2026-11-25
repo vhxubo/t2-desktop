@@ -14,8 +14,7 @@ import (
 // 最前面。它不依赖网络，也不属于服务端接口；离线时列表照样可读，已缓存
 // 过正文的帖子还能直接打开。
 //
-// 记录按当前账号隔离（见 cacheScope）。未登录时记在 anonymous 下；重新登录
-// 后不会把上一个账号读过什么展示出来。
+// 记录只存在本机，与登录态无关。
 
 const readingHistoryLimit = 200
 
@@ -36,14 +35,12 @@ type readingHistoryData struct {
 	Records []readingRecord `json:"records"`
 }
 
-// loadReadingHistory 确保内存里的阅读历史属于当前账号。作用域没变时
-// 直接返回；新启动、登录 / 退出后从 cache/offline.json 读一次。
+// loadReadingHistory 确保内存里的阅读历史已经载入；新启动时从
+// cache/offline.json 读一次。
 func (a *app) loadReadingHistory() {
-	scope := a.cacheScope()
-	if a.readingLoaded && a.readingFor == scope {
+	if a.readingLoaded {
 		return
 	}
-	a.readingFor = scope
 	a.readingLoaded = true
 	a.reading = nil
 	a.readingList.ScrollTo(0, ui.Start)
@@ -259,7 +256,7 @@ func (a *app) prefetchReadingAvatars() {
 	a.prefetchAvatars(urls...)
 }
 
-// clearReadingHistory 清空当前账号的阅读记录，以及随之失效的正文缓存。
+// clearReadingHistory 清空本机的阅读记录，以及随之失效的正文缓存。
 // 只清本机数据，不影响服务端的收藏 / 书签。target 决定结果提示出现在哪扇
 // 窗口（稍后再看窗口的浏览历史页、设置窗口的缓存页各用各的）。
 func (a *app) clearReadingHistory(target toastTarget) {

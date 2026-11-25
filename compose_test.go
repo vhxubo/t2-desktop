@@ -1489,8 +1489,8 @@ func TestComposeWindowLifecycle(t *testing.T) {
 	if a.compose == nil {
 		t.Fatal("打开发帖窗口后应当有草稿状态")
 	}
-	a.compose.title = "上一个账号的草稿"
-	// 退出登录：草稿属于上一个账号，一并丢弃。
+	a.compose.title = "上一次登录的草稿"
+	// 退出登录：草稿一并丢弃。
 	a.onAuthChanged(nil)
 	if a.compose != nil {
 		t.Errorf("退出登录后应当丢弃草稿：%+v", a.compose)

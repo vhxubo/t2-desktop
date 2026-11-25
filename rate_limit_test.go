@@ -131,7 +131,7 @@ func TestRateLimitGateSharedAcrossClients(t *testing.T) {
 		t.Fatalf("另一个窗口应被共享闸门拦掉，得到 %v", err)
 	}
 	if got := atomic.LoadInt32(&secondCalls); got != 0 {
-		t.Errorf("退避期内其它账号窗口还发出去 %d 个请求", got)
+		t.Errorf("退避期内另一个窗口还发出去 %d 个请求", got)
 	}
 }
 

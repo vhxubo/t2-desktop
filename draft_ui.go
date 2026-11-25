@@ -41,7 +41,10 @@ func (a *app) newComposeDraft() {
 // draftsBody 画草稿箱页面：页头 + 两组列表（发帖与动态、回复），空箱子走空态。
 func (a *app) draftsBody(c *ui.Context) {
 	tk := lobetheme.TokensOf(c)
-	store := a.draftsForCurrent()
+	store := a.drafts
+	if store == nil {
+		return
+	}
 	rows := store.rows()
 	composeRows, replyRows := splitDraftRows(rows)
 
@@ -212,10 +215,13 @@ func (a *app) draftsClearDialog(c *ui.Context) {
 	if !a.draftsClearOpen {
 		return
 	}
-	rows := a.draftsForCurrent().rows()
+	if a.drafts == nil {
+		return
+	}
+	rows := a.drafts.rows()
 	cp, cm, cr := draftCounts(rows)
-	body := fmt.Sprintf("将删除当前账号的 %d 条草稿（发帖 %d、动态 %d、回复 %d），"+
-		"删除后无法恢复。其它账号的草稿不受影响。", len(rows), cp, cm, cr)
+	body := fmt.Sprintf("将删除本机的 %d 条草稿（发帖 %d、动态 %d、回复 %d），"+
+		"删除后无法恢复。", len(rows), cp, cm, cr)
 	ok := feedback.Modal(c, &a.draftsClearOpen, feedback.ModalProps{
 		Title: "清空所有草稿？", Width: 420, OkText: "清空草稿", CancelText: "取消",
 	}, func() {

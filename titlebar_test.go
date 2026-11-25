@@ -329,15 +329,16 @@ func TestTitleBarWindowButtonsPaintTheirGlyphs(t *testing.T) {
 		t.Error("关闭图标的中心没有画出叉")
 	}
 
-	// 图标必须落在各自的按钮里：搜索框与标题栏右侧的控件（更新按钮、通知铃铛、
-	// 账号区）之间不能出现窗口图标的墨迹。文字与输入框本身当然会有墨迹，所以
-	// 扫描范围从搜索框右缘之后开始，右边界取最左侧那个控件的左边，而不是写死 700。
+	// 图标必须落在各自的按钮里：搜索框与标题栏右侧的控件（通知铃铛、账号区）
+	// 之间不能出现窗口图标的墨迹。更新按钮默认不露出，只在发现新版本等状态出现。
+	// 文字与输入框本身当然会有墨迹，所以扫描范围从搜索框右缘之后开始，右边界取
+	// 最左侧那个控件的左边，而不是写死 700。
 	start := 200
 	if r, ok := tt.Find("搜索关键词"); ok && int(r.X+r.W)+4 > start {
 		start = int(r.X+r.W) + 4
 	}
 	limit := 700
-	for _, name := range []string{"检查更新", "通知"} {
+	for _, name := range []string{"通知"} {
 		if r, ok := tt.Find(name); ok && int(r.X)-6 < limit {
 			limit = int(r.X) - 6
 		}

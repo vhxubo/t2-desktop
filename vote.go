@@ -322,7 +322,7 @@ func (a *app) submitVote(d *detailState, optionIDs []string, multi bool) {
 				return
 			}
 			d.vote.busy = false
-			// 请求期间换了账号 / 退出登录：这一票不属于当前会话。
+			// 请求期间登录态变了：这一票不属于当前会话。
 			if !a.auth.loggedIn() || a.auth.username() != actor {
 				a.notifyInteractDone(err)
 				return

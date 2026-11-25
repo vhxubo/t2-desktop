@@ -19,7 +19,7 @@ import (
 //   - 列表保留接口原始行（tabState.raw），可见行（tabState.items）由名单派生；
 //     在资料卡上屏蔽 / 取消后立刻重算，不重新请求。
 //   - 评论不在数据层删，渲染时判定并压成一行提示，展开态只在内存里。
-//   - 名单是账号级数据：一个账号窗口一份快照，缓存按账号作用域落盘。
+//   - 名单属于当前会话：内存里只保留一份快照，缓存只落本机一份。
 //   - 失败 fail-open：不隐藏任何内容，管理页显示原因并可重试。
 
 const (
@@ -321,7 +321,7 @@ func (a *app) contentFilterCacheKey() string {
 	if a.auth == nil || !a.auth.loggedIn() {
 		return ""
 	}
-	return contentFilterCachePrefix + a.persistableScope()
+	return contentFilterCachePrefix + localCacheSegment
 }
 
 // loadContentFilterCache 同步摆上首帧底稿：有缓存时名单瞬间可用，首页不必
@@ -352,8 +352,8 @@ func (a *app) writeContentFilterCache(d contentFilterDTO) {
 	logCacheWriteError(a.kv.put(key, contentFilterCache{DTO: cloneFilterDTO(d), SavedAt: time.Now()}, time.Now()))
 }
 
-// resetContentFilter 在重新登录 / 退出时整体重建：名单是账号数据，绝不能让
-// 下一个账号继承上一个账号的快照。磁盘缓存仍按新账号作用域重新读。
+// resetContentFilter 在登录态变化时整体重建：名单属于当前会话，不能让上一次
+// 登录的快照留在内存里。磁盘缓存按本机一份重新读。
 func (a *app) resetContentFilter() {
 	a.contentFilter = newContentFilterState()
 	a.loadContentFilterCache()

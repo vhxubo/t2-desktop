@@ -552,7 +552,7 @@ func (a *app) pandoraAction(kind string) {
 				return
 			}
 			st.busy = ""
-			// 请求期间换了账号 / 退出了登录：这次结果不属于当前会话。
+			// 请求期间登录态变了：这次结果不属于当前会话。
 			if !a.auth.loggedIn() || a.auth.username() != actor {
 				return
 			}

@@ -40,7 +40,7 @@ func TestReplyDraftSurvivesOfflineSendFailure(t *testing.T) {
 		t.Errorf("发送失败后草稿被清掉了：%q", a.detail.draft)
 	}
 	// 从磁盘重新读：发送失败后草稿必须已经在本机文件里，不能只留在内存。
-	disk := newDraftStore(dir, draftScope(a))
+	disk := newDraftStore(dir)
 	if e, ok := disk.find(replyDraftID("JBYGf2A")); !ok || e.Text != "断网也要保住" {
 		t.Errorf("发送失败后草稿没有落盘：%+v", disk.rows())
 	}
@@ -90,7 +90,7 @@ func TestComposeDraftSavedAfterOfflinePostFailure(t *testing.T) {
 	if a.compose.title != "断网也要保住标题" || a.compose.body != "断网也要保住正文" {
 		t.Errorf("发帖失败后表单被清掉了：%+v", a.compose)
 	}
-	disk := newDraftStore(dir, draftScope(a))
+	disk := newDraftStore(dir)
 	e, ok := disk.latestCompose(composeModePost)
 	if !ok || e.Title != "断网也要保住标题" || e.Body != "断网也要保住正文" {
 		t.Errorf("发帖失败后草稿没有落盘：%+v", disk.rows())

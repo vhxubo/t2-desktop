@@ -753,7 +753,7 @@ func TestProStatusCachedWithToken(t *testing.T) {
 	}
 	b.auth.Logout()
 	if _, known := b.auth.officialHostAccess(); known {
-		t.Error("退出登录后不该还留着上一个账号的权限")
+		t.Error("退出登录后不该还留着上一次登录的权限")
 	}
 }
 

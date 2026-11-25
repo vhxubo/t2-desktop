@@ -24,8 +24,8 @@ import (
 
 // 网络调试窗口类似 Chrome DevTools 的 Network 面板：上半是请求列表（最新
 // 在最上面），下半是选中请求的详情（参数、请求头、请求体、响应头、响应体）。
-// 数据来自进程级的 netRecorder（见 netlog.go）：不管从哪个账号窗口发出的
-// 请求都记在同一份缓冲里，窗口只是它的查看器。
+// 数据来自进程级的 netRecorder（见 netlog.go）：不管从哪个窗口发出的请求
+// 都记在同一份缓冲里，窗口只是它的查看器。
 const (
 	netLogWindowWidth  = 960
 	netLogWindowHeight = 660

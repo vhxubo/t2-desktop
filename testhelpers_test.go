@@ -15,7 +15,7 @@ func testBook(t *testing.T) *desktop {
 // 令牌，返回这份会话供窗口使用。
 func addTestAccount(t *testing.T, b *desktop, name string) *AuthManager {
 	t.Helper()
-	m := newAuthManagerFor(b.dir, b.proxy, legacyTokenKey)
+	m := newAuthManagerAt(b.dir, b.proxy)
 	m.store = &memoryTokenStore{}
 	if err := m.storeToken(tokenData{
 		AccessToken:  "tok-" + name,

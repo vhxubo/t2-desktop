@@ -12,13 +12,13 @@ import (
 // 按键（包括字母键，OnShortcut 只能收到已声明的组合）。
 
 // shortcutSettingsSection 画命令键位列表。修改立即落盘并通过 publish 让其它
-// 账号窗口重画：注册表偏好是进程级共享的。
+// 窗口重画：注册表偏好是进程级共享的。
 func (a *app) shortcutSettingsSection(c *ui.Context) {
 	tk := lobetheme.TokensOf(c)
 	settingsSection(c, "快捷键", func() {
 		settingsDescription(c, "给命令录制组合键，在命令面板与窗口里都能直接触发。"+
 			"必须带 Ctrl / Alt / ⌘ 中的一个修饰键，单独的方向键与字母键不会占用输入。"+
-			"修改立即保存，对所有账号窗口生效。", 3)
+			"修改立即保存，对所有已开窗口生效。", 3)
 
 		if a.shortcutConflict != "" {
 			row := ui.Row(c).FillWidth().Padding(6, 8).Radius(tk.BorderRadiusSM).

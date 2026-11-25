@@ -2,26 +2,42 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
 
-// 标题栏的更新按钮：空闲显示「检查更新」，下载中显示进度，装完只提示
-// 「重启更新」，且重启只由用户点击触发。
+// 标题栏的更新按钮默认不露出；发现新版本后才出现一枚圆角图标按钮，下载中用
+// 自绘的描边圆环显示进度，装完只提示「重启更新」，且重启只由用户点击触发。
 func TestTitleBarUpdateButtonStates(t *testing.T) {
 	a := testApp(t)
-	var restarts int
+	var restarts, checks int
 	d := &desktop{updateMgr: newUpdateManager()}
 	d.updateMgr.relaunch = func() { restarts++ }
 	a.desktop = d
+	a.onUpdateCheck = func() { checks++ }
 
 	tt := ui.NewTester(a.view, 1080, 720)
 	tt.Frame()
-	if !tt.HasText("检查更新") {
-		t.Fatalf("标题栏没有更新按钮：%q", tt.Texts())
+	if _, ok := tt.Find("有新版本"); ok {
+		t.Fatalf("空闲时不该露出更新按钮：%q", tt.Texts())
 	}
-	if r, ok := tt.Find("检查更新"); !ok || r.Y > titleBarHeight {
-		t.Fatalf("更新按钮不在标题栏内：%+v %v", r, ok)
+	d.setUpdateStatus(updateStatus{Phase: updateChecking})
+	tt.Frame()
+	if _, ok := tt.Find("有新版本"); ok {
+		t.Fatal("检查中不该露出更新按钮")
+	}
+
+	d.setUpdateStatus(updateStatus{Phase: updateDetected, Version: "9.9.9"})
+	tt.Frame()
+	if r, ok := tt.Find("有新版本"); !ok || r.Y > titleBarHeight {
+		t.Fatalf("有新版本时按钮不在标题栏内：%+v %v", r, ok)
+	}
+	if err := tt.Click("有新版本"); err != nil {
+		t.Fatal(err)
+	}
+	if checks != 1 {
+		t.Errorf("点「有新版本」没有打开更新详情：%d", checks)
 	}
 
 	d.setUpdateStatus(updateStatus{Phase: updateDownloading, Version: "9.9.9", Percent: 45})
@@ -43,6 +59,41 @@ func TestTitleBarUpdateButtonStates(t *testing.T) {
 	}
 	if restarts != 1 {
 		t.Errorf("点「重启更新」没有触发重启：%d", restarts)
+	}
+}
+
+// 下载中的进度环由 drawUpdateRing 自绘：45% 时正上方应是主色描边，正下方只剩
+// 轨道色，从而看出画的是一段圆弧而不是整圈实心。
+func TestTitleBarUpdateDrawsProgressRing(t *testing.T) {
+	a := testApp(t)
+	d := &desktop{updateMgr: newUpdateManager()}
+	a.desktop = d
+
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	d.setUpdateStatus(updateStatus{Phase: updateDownloading, Version: "9.9.9", Percent: 45})
+	tt.Frame()
+	// 按钮的底色 / 图标色带 Lobe 的过渡动画，等它走完再看环的像素。
+	tt.Advance(250 * time.Millisecond)
+	r, ok := tt.Find("下载中 45%")
+	if !ok {
+		t.Fatalf("下载中没有更新按钮：%q", tt.Texts())
+	}
+	cx, cy := int(r.X+r.W/2), int(r.Y+r.H/2)
+	rad := int(r.W/2) - 2
+	im := tt.Image()
+	tk := lobeCfg.Tokens(false)
+	top := im.RGBAAt(cx, cy-rad)
+	bottom := im.RGBAAt(cx, cy+rad)
+	if top.R != tk.Primary.R || top.G != tk.Primary.G || top.B != tk.Primary.B {
+		t.Errorf("进度环正上方 = #%02x%02x%02x，期望主色 %s", top.R, top.G, top.B, hexToken(tk.Primary))
+	}
+	if bottom.R == tk.Primary.R && bottom.G == tk.Primary.G && bottom.B == tk.Primary.B {
+		t.Errorf("45%% 时进度环正下方不该是主色，实际 %+v", bottom)
+	}
+	// 轨道色是带低透明度的黑，画在浅底上会合成浅灰，不能直接和 token 的 RGB 比。
+	if bottom.R < 200 || bottom.G < 200 || bottom.B < 200 {
+		t.Errorf("进度环正下方应是浅色轨道，实际 #%02x%02x%02x", bottom.R, bottom.G, bottom.B)
 	}
 }
 

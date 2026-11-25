@@ -16,8 +16,8 @@ import (
 // 无关，单独记一份（见下面的 replyViewMode）。在一篇帖子里切到扁平，打开别的
 // 帖子也还是扁平。
 //
-// 状态只记在本机（cache/offline.json 的 replyview:<scope>:<shortID> 与
-// replyview-mode:<scope>），服务端没有这类接口，也不去改动服务端数据。
+// 状态只记在本机（cache/offline.json 的 replyview:local:<shortID> 与
+// replyview-mode:local），服务端没有这类接口，也不去改动服务端数据。
 
 const (
 	replyViewPrefix     = "replyview:"
@@ -44,11 +44,10 @@ type replyViewMemory struct {
 // replyViewKey 是某篇帖子评论记忆的存储键。没有 shortID 时返回空，调用方据此
 // 跳过读写。
 func (a *app) replyViewKey(shortID string) string {
-	scope := a.persistableScope()
-	if scope == "" || shortID == "" {
+	if shortID == "" {
 		return ""
 	}
-	return replyViewPrefix + scope + ":" + shortID
+	return replyViewPrefix + localCacheSegment + ":" + shortID
 }
 
 // replyViewMode 是评论区的视图偏好：flat=false 楼层视图，flat=true 扁平
@@ -62,11 +61,7 @@ type replyViewMode struct {
 // replyViewModeKey 是视图偏好的存储键。键里没有 shortID：偏好属于这个人，
 // 不属于哪一篇帖子。
 func (a *app) replyViewModeKey() string {
-	scope := a.persistableScope()
-	if scope == "" {
-		return ""
-	}
-	return replyViewModePrefix + scope
+	return replyViewModePrefix + localCacheSegment
 }
 
 // loadReplyViewMode 读回当前账号的视图偏好。没有记录或损坏时返回 ok=false，
@@ -118,7 +113,7 @@ func (a *app) loadReplyView(shortID string) (replyViewMemory, bool) {
 
 // saveReplyView 把当前评论区的浏览状态落盘。状态都从 detailState 现成的
 // 字段收集：实时停留位置与折叠集合；离开时间取现在。视图模式不在这里，
-// 切换时就按账号存了（见 saveReplyViewMode）。只写本机，不影响服务端。
+// 切换时就存了（见 saveReplyViewMode）。只写本机，不影响服务端。
 func (a *app) saveReplyView(d *detailState) {
 	if d == nil || d.shortID == "" || a.kv == nil {
 		return

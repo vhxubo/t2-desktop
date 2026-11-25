@@ -39,6 +39,13 @@ func TestCloseModeDefaultsToAskAndPersists(t *testing.T) {
 	if got := newCloseModeStore(dir).mode; got != closeAsk {
 		t.Errorf("无法识别的关闭行为 = %d，期望退回每次询问", got)
 	}
+	// 旧版本写下的 quit 就是「关窗口即退出」，合并后仍要认作退出应用。
+	if err := os.WriteFile(filepath.Join(dir, "window.json"), []byte(`{"close":"quit"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := newCloseModeStore(dir).mode; got != closeApp {
+		t.Errorf("旧版 quit 配置应映射到退出应用，得到 %d", got)
+	}
 }
 
 // 只有「选了收进托盘 + 托盘真的建出来了 + 不是正在退出」三个条件同时成立
@@ -59,9 +66,80 @@ func TestHideOnCloseNeedsTrayAndNoQuit(t *testing.T) {
 		t.Fatal("正在退出时不该把退出拦成收进托盘")
 	}
 	a.quitting = false
-	a.closeMode.mode = closeWindow
+	a.closeMode.mode = closeApp
 	if a.hideOnClose() {
-		t.Fatal("选了只关窗口时不该拦截关闭")
+		t.Fatal("选了退出应用时不该拦截关闭")
+	}
+}
+
+// 生产里 app 比托盘先建好：托盘要等应用就绪（startTray）才创建，退出时还会
+// 销毁。关闭行为必须实时查进程级状态，不能拿构建时的快照 —— 否则 app 里的
+// 托盘标记永远是 false，「收进托盘」按下去窗口直接关掉，等于这个选项失效。
+func TestCloseBehaviourUsesLiveDesktopTrayState(t *testing.T) {
+	b := testBook(t)
+	a := newAppWithDeps(b.deps(), nil)
+	b.app = a
+
+	// 构建 app 时托盘还没建出来：两种模式都按「没有托盘」处理。
+	a.closeMode.mode = closeToTray
+	if a.hideOnClose() {
+		t.Fatal("托盘还没建出来，不该收进托盘")
+	}
+	early := &mygo.CloseEvent{}
+	a.onMainWindowClose(early)
+	if early.DefaultPrevented() {
+		t.Fatal("托盘未就绪时关闭不该被拦下")
+	}
+
+	// 模拟 startTray 成功：只改进程级状态，app 侧不做任何重新赋值。
+	b.trayReady = true
+	if !a.hideOnClose() {
+		t.Fatal("托盘就绪后应直接收进托盘")
+	}
+	next := &mygo.CloseEvent{}
+	a.onMainWindowClose(next)
+	if !next.DefaultPrevented() {
+		t.Fatal("托盘就绪后关主窗口应被拦下收进托盘")
+	}
+	if a.closePromptOpen {
+		t.Error("已记住收进托盘，不该再弹提示")
+	}
+
+	// 「每次询问」同样跟着托盘的实时状态走。
+	a.closeMode.mode = closeAsk
+	b.trayReady = false
+	if a.askOnClose() {
+		t.Fatal("托盘未就绪时不该询问")
+	}
+	b.trayReady = true
+	if !a.askOnClose() {
+		t.Fatal("托盘就绪后关主窗口该先问一句")
+	}
+}
+
+// 收起主窗口只藏主窗口本体：每扇弹窗都是独立的 mygo 窗口，不跟着关；
+// 只有托盘「关闭全部」才统一收掉。原生隐藏换成记录调用，不碰主循环。
+func TestHideMainWindowToTrayKeepsOtherWindows(t *testing.T) {
+	a := testApp(t)
+	mainWindow := new(mygo.Window)
+	popup := new(mygo.Window)
+	a.win = mainWindow
+	a.notifWin = popup
+	a.settingsWin = popup
+	a.composeWin = popup
+
+	old := hideNativeWindow
+	var hidden []*mygo.Window
+	hideNativeWindow = func(w *mygo.Window) { hidden = append(hidden, w) }
+	t.Cleanup(func() { hideNativeWindow = old })
+
+	a.hideMainWindowToTray()
+
+	if len(hidden) != 1 || hidden[0] != mainWindow {
+		t.Fatalf("只该收起主窗口，实际隐藏了 %d 扇", len(hidden))
+	}
+	if a.notifWin != popup || a.settingsWin != popup || a.composeWin != popup {
+		t.Fatal("收起主窗口不该关掉其它窗口")
 	}
 }
 
@@ -98,12 +176,14 @@ func TestMainWindowCloseAsksOnceUntilRemembered(t *testing.T) {
 		t.Fatal("记住之后不该再弹提示")
 	}
 
-	// 选了只关窗口：之后的关闭照常放行，由窗口自己关掉。
-	a.closeMode.mode = closeWindow
+	// 记住「退出应用」：之后的关闭直接走退出流程。
+	a.closeMode.mode = closeApp
+	quits := 0
+	a.quitApp = func() { quits++ }
 	quit := &mygo.CloseEvent{}
 	a.onMainWindowClose(quit)
-	if quit.DefaultPrevented() {
-		t.Fatal("记住只关窗口后，关闭应放行")
+	if !quit.DefaultPrevented() || quits != 1 {
+		t.Fatalf("记住退出应用后，关闭应拦下并退出，实际 quits=%d", quits)
 	}
 
 	// 退出流程里的关闭一律放行，否则应用退不掉。
@@ -132,14 +212,12 @@ func TestClosePromptForgetsWithoutRemember(t *testing.T) {
 	}
 }
 
-// 提示框里三个选项都点得动：退出应用走应用自己的退出流程，收进托盘收起窗口，
-// 只关窗口则把这个窗口关掉、别的账号不受影响。
+// 提示框里两个选项都点得动：退出应用走应用自己的退出流程，收进托盘收起窗口。
 func TestClosePromptButtons(t *testing.T) {
 	for _, tc := range []struct {
 		button string
 		mode   int
 	}{
-		{"只关窗口", closeWindow},
 		{"退出应用", closeApp},
 		{"收进托盘", closeToTray},
 	} {
@@ -151,10 +229,13 @@ func TestClosePromptButtons(t *testing.T) {
 			a.openClosePrompt()
 			tt := ui.NewTester(a.view, 1100, 760)
 			tt.Frame()
-			for _, want := range []string{"关闭主窗口", "记住我的选择", "只关窗口", "退出应用", "收进托盘"} {
+			for _, want := range []string{"关闭主窗口", "记住我的选择", "退出应用", "收进托盘"} {
 				if !tt.HasText(want) {
 					t.Fatalf("关闭提示缺少 %q：%q", want, tt.Texts())
 				}
+			}
+			if tt.HasText("只关窗口") {
+				t.Error("合并后不该再出现「只关窗口」")
 			}
 			if err := tt.Click(tc.button); err != nil {
 				t.Fatal(err)
@@ -166,7 +247,7 @@ func TestClosePromptButtons(t *testing.T) {
 				t.Errorf("点「退出应用」调用了 %d 次退出，期望 1 次", quits)
 			}
 			if tc.mode != closeApp && quits != 0 {
-				t.Error("点「只关窗口」「收进托盘」都不该退出应用")
+				t.Error("点「收进托盘」不该退出应用")
 			}
 		})
 	}
@@ -183,10 +264,13 @@ func TestSettingsWindowCloseBehaviourSavesChoice(t *testing.T) {
 	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1400)
 	st.Frame()
 
-	for _, want := range []string{"窗口", "每次询问", "关闭窗口", "收进托盘", "退出应用", "关闭主窗口时"} {
+	for _, want := range []string{"窗口", "每次询问", "收进托盘", "退出应用", "关闭主窗口时"} {
 		if !st.HasText(want) {
 			t.Fatalf("设置窗口缺少 %q：%q", want, st.Texts())
 		}
+	}
+	if st.HasText("关闭窗口") {
+		t.Error("合并后设置里不该再出现「关闭窗口」")
 	}
 
 	if err := st.Click("收进托盘"); err != nil {
@@ -235,5 +319,20 @@ func TestSettingsWindowExplainsUnavailableTray(t *testing.T) {
 	st.Frame()
 	if st.HasText("系统托盘当前不可用") {
 		t.Errorf("托盘可用时不该再提示不可用：%q", st.Texts())
+	}
+
+	// 生产里 app 比托盘先建好：设置里同样要读实时状态，而不是构建时的快照。
+	b := testBook(t)
+	a2 := newAppWithDeps(b.deps(), nil)
+	a2.settingsTab = settingsTabGeneral
+	st2 := ui.NewTester(a2.settingsWindowView, settingsWindowWidth, 1400)
+	st2.Frame()
+	if !st2.HasText("系统托盘当前不可用") {
+		t.Error("托盘还没建出来时设置里该说明不可用")
+	}
+	b.trayReady = true
+	st2.Frame()
+	if st2.HasText("系统托盘当前不可用") {
+		t.Error("托盘就绪后不该再提示不可用")
 	}
 }

@@ -106,8 +106,8 @@ func (a *app) setCoinWindowShown(shown bool) {
 	}
 }
 
-// closeCoinWindow 关掉金币窗口：退出登录或主窗口关闭时调用，别把上一个账号
-// 的余额或者一个没有主窗口的孤岛留在屏幕上。只在主线程调用。
+// closeCoinWindow 关掉金币窗口：退出登录或「关闭全部」时调用，别把上一次
+// 会话的余额留在屏幕上。关主窗口不碰它。只在主线程调用。
 func (a *app) closeCoinWindow() {
 	win := a.coinWin
 	if win == nil {
@@ -129,8 +129,8 @@ func (a *app) redrawCoinWindow() {
    账号菜单金币数的按需刷新
 ---------------------------------------------------------------- */
 
-// stopCoinTagWatch 让还在路上的余额请求结果直接被丢弃：退出登录、主窗口关闭
-// 时调用。金币数是展开账号菜单时才请求的，这里只负责收尾，不再有定时器。
+// stopCoinTagWatch 让还在路上的余额请求结果直接被丢弃：退出登录或全部窗口
+// 收掉时调用。金币数是展开账号菜单时才请求的，这里只负责收尾，不再有定时器。
 func (a *app) stopCoinTagWatch() {
 	a.coinTagSeq++
 	a.coinTagLoading = false

@@ -42,7 +42,7 @@ func TestSecretsRoundTrip(t *testing.T) {
 // 凭据超过凭据库体积上限时，secureTokenStore 应退回文件存储且不丢数据。
 func TestSecureTokenStoreFallsBackToFileWhenOversize(t *testing.T) {
 	dir := t.TempDir()
-	s := newSecureTokenStore(dir, legacyTokenKey)
+	s := newSecureTokenStore(dir)
 	big := &tokenData{
 		AccessToken: strings.Repeat("a", mygo.MaxSecretSize+100),
 		TokenType:   "Bearer",

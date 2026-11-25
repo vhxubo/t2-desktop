@@ -50,14 +50,14 @@ func (a *app) openPandoraModal() {
 		return
 	}
 	// 从金币窗口点进来时主窗口可能关着：弹窗画在主窗口里，得先把那扇
-	// 真正的主窗口拉起来（raiseMainWindow 会处理「只关窗口」的情况）。
+	// 真正的主窗口拉起来（raiseMainWindow 会处理主窗口已关、只剩附属窗口的情况）。
 	a.raiseMainWindow()
 	if a.win != nil {
 		a.win.Invalidate()
 	}
 }
 
-// closePandora 关掉抽卡弹窗：退出登录或主窗口收尾时调用，别把上一个账号的
+// closePandora 关掉抽卡弹窗：退出登录或主窗口收尾时调用，别把上一次会话的
 // 抽奖结果留在屏幕上。只在主线程调用。
 func (a *app) closePandora() {
 	st := a.pandora

@@ -11,9 +11,9 @@ import (
 // 和转圈；网络请求照常发起，成功后再覆盖缓存。请求失败时如果手里有缓存，
 // 页面继续显示缓存内容，并在顶部说明"显示的是哪个时间的本地数据"。
 //
-// 缓存只属于当前登录账号（见 cacheScope）；未登录或还没拿到昵称时不写盘。
+// 缓存只存在本机；未登录或还没拿到昵称时不写盘。
 
-// coinCacheData 是 coin:<账号> 里保存的一份金币页快照。
+// coinCacheData 是 coin:local 里保存的一份金币页快照。
 type coinCacheData struct {
 	SavedAt      time.Time `json:"saved_at"`
 	TodayDate    string    `json:"today_date,omitempty"`

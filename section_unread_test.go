@@ -147,7 +147,7 @@ func TestNavBadgeNeutralGrayInBothThemes(t *testing.T) {
 	}
 }
 
-// 打开分区页推进读取基线并清掉角标；基线按账号作用域落盘，下次读得回来。
+// 打开分区页推进读取基线并清掉角标；基线落盘，下次读得回来。
 func TestMarkTabReadClearsSectionBadge(t *testing.T) {
 	a := testApp(t)
 	a.sectionUnread = notificationUnreadCounts{Home: 5, Community: 7}

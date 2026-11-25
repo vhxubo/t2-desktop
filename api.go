@@ -305,7 +305,7 @@ type Client struct {
 // 放进 Client；这份全局锁只保护首次赋值，不挡真正的请求。
 var clientRateMu sync.Mutex
 
-// rateGate 返回这个客户端用的限流闸门：生产里所有账号窗口共用代理管理
+// rateGate 返回这个客户端用的限流闸门：生产里所有窗口共用代理管理
 // 器上的那一份，因此一个窗口被限流，其它窗口与后台轮询都跟着退避。
 func (c *Client) rateGate() *rateLimitGate {
 	if g := c.Proxy.rateLimitGate(); g != nil {

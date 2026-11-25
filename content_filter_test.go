@@ -223,6 +223,6 @@ func TestContentFilterCacheRoundTrip(t *testing.T) {
 	a.auth.Logout()
 	a.onAuthChanged(nil)
 	if a.contentFilter.filter != nil || a.contentFilterCacheKey() != "" {
-		t.Fatal("退出后不应沿用上一个账号的名单快照")
+		t.Fatal("退出后不应沿用上一次登录的名单快照")
 	}
 }

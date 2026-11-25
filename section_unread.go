@@ -6,7 +6,7 @@ import (
 
 // 分区未读角标：通知未读数接口的 home / community 分项以「上次读取时间」为基线
 // 计算（参数 home_last_read_at / community_last_read_at），所以基线记在本机
-// offline.json，按账号作用域区分，打开对应分区时推进，角标随之清零。
+// offline.json 的 section:read:<分区>:local，打开对应分区时推进，角标随之清零。
 // 关注流「动态」有自己的专用端点与基线（见 follows.go），这里不重复拉。
 const (
 	sectionHome       = "home"
@@ -20,11 +20,7 @@ type sectionReadRecord struct {
 }
 
 func (a *app) sectionReadKey(section string) string {
-	scope := a.cacheScope()
-	if scope == "" {
-		return ""
-	}
-	return sectionReadPrefix + section + ":" + scope
+	return sectionReadPrefix + section + ":" + localCacheSegment
 }
 
 func (a *app) sectionLastRead(section string) time.Time {

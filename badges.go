@@ -330,7 +330,7 @@ func (a *app) reloadProfileBadges() {
 // refreshBadgesAfterToggle 在一次佩戴 / 取消佩戴成功后重新读回数据。本地只改了
 // Equipped 标记；徽章列表与资料头的徽章展示（图、天气 / 状态）都以服务端为准，
 // 重新读一次才能把两处和真正的佩戴状态对齐。actor 是发起这次操作的账号名，
-// 请求期间换过账号就不该拿新数据覆盖别人的资料。
+// 请求期间登录态变了就不该拿新数据覆盖旧的资料。
 func (a *app) refreshBadgesAfterToggle(actor string) {
 	a.loadProfileBadges()
 	if actor != "" {
@@ -384,7 +384,7 @@ func (a *app) toggleProfileBadge(badgeID, name string, equip bool, key string) {
 				return
 			}
 			ps.badgeBusyID = ""
-			// 请求期间换了账号 / 退出了登录：这次结果不属于当前会话。
+			// 请求期间登录态变了：这次结果不属于当前会话。
 			if !a.auth.loggedIn() || a.auth.username() != actor {
 				return
 			}

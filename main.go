@@ -271,31 +271,28 @@ type app struct {
 	// kv 是离线缓存（见 offline_store.go）：金币页的余额与资产曲线、阅读
 	// 记录，以及每篇帖子缓存的正文。只读写本机文件，不发请求。
 	kv *localKV
-	// reading 是当前账号的阅读历史（最近打开的帖子），readingFor 是它所属
-	// 的作用域。未登录时记在 anonymous 下，重新登录时整体重新载入。
+	// reading 是本机的阅读历史（最近打开的帖子）。启动后从本机缓存懒加载
+	// 一次，与登录态无关。
 	reading       []readingRecord
-	readingFor    string
 	readingLoaded bool
 	readingList   ui.ListState
-	// later 是当前账号的稍后再看（见 watch_later.go），laterFor 是它所属的
-	// 作用域；watchLaterPrefs 决定打开后移除还是保留。laterTab 是页面里的
+	// later 是本机的稍后再看（见 watch_later.go）；watchLaterPrefs 决定打开
+	// 后移除还是保留。laterTab 是页面里的
 	// 分段（0 稍后再看 / 1 浏览历史），lastLaterTab 用来接住分段切换并复位
 	// 两个列表的滚动位置，laterList 是列表状态。页面见 watch_later_ui.go，
 	// 和首页、草稿箱一样内嵌在主窗口，都只在主线程读写。
 	later           []watchLaterRecord
-	laterFor        string
 	laterLoaded     bool
 	laterList       ui.ListState
 	laterTab        int
 	lastLaterTab    int
 	watchLaterPrefs *watchLaterPrefsStore
-	// readAt / commentReadAt 是当前账号在本机读过的帖子与评论（id → 首次打开
-	// 时间），列表据此把读过的行置灰（见 post_read.go）。两者和阅读记录一样
-	// 按账号作用域懒加载，存在同一个 read:<scope> 缓存里，只记本机，不向
-	// 服务端同步。只在 UI 线程读写。
+	// readAt / commentReadAt 是本机读过的帖子与评论（id → 首次打开时间），
+	// 列表据此把读过的行置灰（见 post_read.go）。两者和阅读记录一样懒加载，
+	// 存在同一个 read:local 缓存里，只记本机，不向服务端同步。只在 UI 线程
+	// 读写。
 	readAt        map[string]time.Time
 	commentReadAt map[string]time.Time
-	readFor       string
 	readLoaded    bool
 	// toasts 是等着显示的窗口内提示（见 toasts.go）：操作结果先排队，等到
 	// 对应窗口下一次重建时再交给 Lobe 的 feedback.ShowToast。可能由后台 goroutine（经 publish）
@@ -310,7 +307,7 @@ type app struct {
 	authGate     authGate
 	lastAuthHost toastTarget
 	// contentFilter 是当前账号的内容屏蔽名单与运行状态（见 content_filter.go）。
-	// 一个账号窗口一份，不放进 appDeps：名单是账号数据，不能进程级共享。
+	// 只在当前会话里保留一份，不放进 appDeps：名单不能进程级共享。
 	contentFilter *contentFilterState
 
 	// coins 是金币页的聚合状态：余额、今日明细、流水、统计与排行各自独立
@@ -336,11 +333,11 @@ type app struct {
 
 	// commentCost 是评论框上方那条「发评金币与徽章」状态栏的数据：我的徽章
 	// （含 attributes）、佩戴状态与正在切换的那一枚（见 comment_cost.go）。
-	// 它是账号级的，与具体帖子无关，所以挂在这里而不是 detailState 上。
+	// 它属于当前会话，与具体帖子无关，所以挂在这里而不是 detailState 上。
 	commentCost *commentCostState
 	// commentCostPrefs 是评论费用相关的两个开关（见 comment_cost_prefs.go）：
 	// 金币消耗与徽章切换状态栏、发送按钮上的消耗金币数。进程级共享，
-	// 所有账号窗口的评论框据此决定要不要画状态栏与数字。只在 UI 线程读写。
+	// 所有已开窗口的评论框据此决定要不要画状态栏与数字。只在 UI 线程读写。
 	commentCostPrefs *commentCostPrefsStore
 	// imagePrefs 是图片显示的两项偏好（见 image_prefs.go）：默认不加载图片时
 	// 正文与评论里的配图先画占位、点一下才下载；动图自动播放决定 gif / apng
@@ -430,8 +427,8 @@ type app struct {
 	// 都只在主线程读写；关窗口后草稿保留，退出登录时丢弃。
 	composeWin *mygo.Window
 	compose    *composeState
-	// 本地草稿箱（见 draft.go / draft_ui.go）：drafts 是当前账号的草稿文件，
-	// draftDir 是配置目录（与 appDeps.dir 一致，按账号隔离存到 drafts/<scope>.json）。
+	// 本地草稿箱（见 draft.go / draft_ui.go）：drafts 是本机唯一的草稿集合，
+	// draftDir 是配置目录（与 appDeps.dir 一致，固定存在 drafts/local.json）。
 	// draftsList / draftsClearOpen 是草稿页的列表状态与清空确认弹窗；
 	// draftPending / draftDirtySince / draftTimer 是 800ms 防抖 + 5s 上限的落盘节奏。
 	// 都只在主线程读写；定时器回调经 publish 回来。
@@ -535,8 +532,9 @@ type app struct {
 	// tray 是系统托盘图标（见 tray.go）：应用就绪后创建，退出前销毁；
 	// 无头测试保持 nil，不会碰到原生托盘。只在主线程读写。
 	tray *mygo.Tray
-	// trayReady 表示托盘图标真的建出来了：没建出来时「收进托盘」不能让窗口
-	// 藏起来，否则用户既没有图标也回不到窗口。
+	// trayReady 只在无头测试里手动模拟托盘可用性。生产里托盘是进程级资源，
+	// 由 desktop 在应用就绪后才创建（晚于 app 构建），窗口必须实时查 desktop
+	// 的托盘状态，不能用构建时的快照（见 window_mode.go 的 trayIsReady）。
 	trayReady bool
 	// closeMode 是「关闭主窗口时」的偏好（见 window_mode.go），落盘在
 	// window.json。只在主线程读写。
@@ -550,12 +548,9 @@ type app struct {
 	// 也不会让主窗口跟着画一遍。只在主线程读写。
 	aboutDisclaimerOpen bool
 	// closePromptOpen / closeRemember 是关闭提示弹窗的状态：是否正在询问
-	// 「只关窗口 / 收进托盘 / 退出应用」，以及这次要不要记住选择。只在主线程读写。
+	// 「收进托盘 / 退出应用」，以及这次要不要记住选择。只在主线程读写。
 	closePromptOpen bool
 	closeRemember   bool
-	// closingAfterPrompt 表示这次关闭是弹窗里刚选的「只关这个窗口」：放行一次，
-	// 不再重复询问（见 window_mode.go 的 chooseCloseMode）。
-	closingAfterPrompt bool
 	// quitting 表示已经在退出流程里：这时主窗口的 OnClose 不能再把退出拦成
 	// 「收进托盘」。由 OnBeforeQuit 与托盘的「退出」置位。
 	quitting bool
@@ -773,14 +768,14 @@ func newAppWithDeps(d appDeps, auth *AuthManager) *app {
 	a.syncNotifyDrafts()
 	// 草稿启动时就读进内存，侧边栏角标与草稿页首帧就是对的（文件不存在或
 	// 损坏都按空草稿处理）。
-	a.drafts = newDraftStore(d.dir, draftScope(a))
+	a.drafts = newDraftStore(d.dir)
 	if d.desktop != nil {
-		// 这几项是进程级的：回调协议是否注册成功、更新插件装没装、托盘建没
-		// 建出来、以及怎么真正退出应用。窗口只是照着用。
+		// 这几项是进程级的：回调协议是否注册成功、更新插件装没装、以及怎么
+		// 真正退出应用。窗口只是照着用。托盘不在这里拍快照：它要等应用就绪
+		// 才创建，晚于 app 构建，只能实时查（见 trayIsReady）。
 		a.schemeWarn = d.desktop.schemeWarning()
 		a.updates = d.desktop.updates
 		a.notify = d.desktop.notify
-		a.trayReady = d.desktop.trayIsReady()
 		a.quitApp = d.desktop.quitProgram
 	}
 	// 托盘的「退出」与窗口关闭走同一条退出流程；测试里换成记录调用，无头
@@ -1553,7 +1548,6 @@ func (a *app) onAuthChanged(err error) {
 		a.flushDrafts()
 		a.clearLiveDrafts()
 		a.stopDraftTimer()
-		a.drafts = nil
 		// 发帖窗口退出后一并关掉并丢弃。
 		a.closeComposeWindow()
 		a.compose = nil
@@ -1907,13 +1901,12 @@ func (a *app) selectTab(idx int) {
 	}
 }
 
-// sidebarFooterItems 是底部常驻入口的数据：账号/设置/关于，未登录时再加登录
-// 与注册。退出登录已收进标题栏账号菜单的气泡里，外观三档也在设置窗口的
-// 「外观」页，侧边栏不再单独占这些行。评分榜入口在导航列表「动态」之后
-// （见 sidebarNavItems），和草稿箱、稍后再看一样是内嵌页，不在这里。
+// sidebarFooterItems 是底部常驻入口的数据：设置/关于，未登录时再加登录
+// 与注册。账号入口已移除，账号操作收在标题栏账号菜单的气泡里，外观三档也在
+// 设置窗口的「外观」页，侧边栏不再单独占这些行。评分榜入口在导航列表「动态」
+// 之后（见 sidebarNavItems），和草稿箱、稍后再看一样是内嵌页，不在这里。
 func (a *app) sidebarFooterItems() []display.ListItem {
 	items := []display.ListItem{
-		{Key: "accounts", Label: "账号", Icon: lucide.UsersRound()},
 		{Key: "settings", Label: "设置", Icon: lucide.Settings()},
 		{Key: "about", Label: "关于", Icon: lucide.Info()},
 	}

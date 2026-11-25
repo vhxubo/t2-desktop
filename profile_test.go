@@ -887,7 +887,7 @@ func TestAccountMenuLogout(t *testing.T) {
 	}
 }
 
-// 账号切换 / 退出时账号菜单要收起，不能把上一个账号的入口留在气泡里。
+// 退出登录时账号菜单要收起，不能把上一次会话的入口留在气泡里。
 func TestAccountMenuClosesOnAuthChange(t *testing.T) {
 	a := profileWindowApp(t)
 	a.profileMenuOpen = true
@@ -898,7 +898,7 @@ func TestAccountMenuClosesOnAuthChange(t *testing.T) {
 	}
 }
 
-// 退出登录后「我的」窗口的状态整体丢弃：不能把上一个账号的资料留给下一个人。
+// 退出登录后「我的」窗口的状态整体丢弃：不能把上一次会话的资料留在内存里。
 func TestProfileResetOnLogout(t *testing.T) {
 	a := profileWindowApp(t)
 	a.auth.Logout()

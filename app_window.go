@@ -87,7 +87,7 @@ func (a *app) afterMainWindowOpen() {
 	if !a.auth.loggedIn() {
 		return
 	}
-	// 打开应用（账号窗口）时静默签到一次：已签到不提示，新签到才在内容顶部
+	// 打开应用主窗口时静默签到一次：已签到不提示，新签到才在内容顶部
 	// 弹一条明显的结果。偏好关掉或本窗口已经试过时是空操作。
 	a.maybeAutoSignIn()
 	a.refreshUnread()
@@ -226,11 +226,11 @@ func (a *app) finalizeAccountWindow() {
 	a.win = nil
 }
 
-// closeAllWindows 关掉全部窗口：先收附属窗口，再销毁主窗口。用 Destroy 而不是
-// Close：这时不该再弹「退出还是收进托盘」（见 window_mode.go）。
-func (a *app) closeAllWindows() {
-	a.stopCoinTagWatch()
-	a.stopNotificationWatch()
+// closeAuxiliaryWindows 关掉除主窗口外的每一扇弹窗。所有 mygo 窗口两两独立，
+// 只有「关闭全部」和退出这类明确要收掉一切的入口才调用它；关主窗口本身绝不
+// 走这里。新增弹窗窗口必须加进 auxiliaryWindows 和这里，免得漏收。
+// 只在主线程调用。
+func (a *app) closeAuxiliaryWindows() {
 	a.closeNotificationWindow()
 	a.closeSettingsWindow()
 	a.closeProfileWindow()
@@ -247,6 +247,14 @@ func (a *app) closeAllWindows() {
 	a.closeUserCardWindow()
 	a.closeViewerWindow()
 	a.closeAllDetailWindows()
+}
+
+// closeAllWindows 关掉全部窗口：先收弹窗，再销毁主窗口。用 Destroy 而不是
+// Close：这时不该再弹「退出还是收进托盘」（见 window_mode.go）。
+func (a *app) closeAllWindows() {
+	a.stopCoinTagWatch()
+	a.stopNotificationWatch()
+	a.closeAuxiliaryWindows()
 	if a.netStatusUnwatch != nil {
 		a.netStatusUnwatch()
 		a.netStatusUnwatch = nil

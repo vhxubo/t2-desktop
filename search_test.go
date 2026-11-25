@@ -301,7 +301,7 @@ func TestSearchRateLimited(t *testing.T) {
 	}
 }
 
-// 登录态变化后，属于上一个账号的收藏结果要被丢掉。
+// 登录态变化后，属于上一次登录的收藏结果要被丢掉。
 func TestResetSearchResults(t *testing.T) {
 	a := testApp(t)
 	a.showSearchWindow()

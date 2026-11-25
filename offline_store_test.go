@@ -14,10 +14,10 @@ func TestLocalKVWritesEachShardSeparately(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "cache")
 	path := filepath.Join(dir, localKVLegacyName)
 	kv := newLocalKV(path)
-	if err := kv.put(detailScopePrefix("user:jimmy")+"A", "正文", time.Now()); err != nil {
+	if err := kv.put(detailCachePrefix+"A", "正文", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := kv.put("coin:user:jimmy", 12, time.Now()); err != nil {
+	if err := kv.put("coin:local", 12, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -32,11 +32,11 @@ func TestLocalKVWritesEachShardSeparately(t *testing.T) {
 
 	other := newLocalKV(path)
 	var text string
-	if _, ok := other.get(detailScopePrefix("user:jimmy")+"A", &text); !ok || text != "正文" {
+	if _, ok := other.get(detailCachePrefix+"A", &text); !ok || text != "正文" {
 		t.Fatalf("详情分组没有读回来：%q %v", text, ok)
 	}
 	var n int
-	if _, ok := other.get("coin:user:jimmy", &n); !ok || n != 12 {
+	if _, ok := other.get("coin:local", &n); !ok || n != 12 {
 		t.Fatalf("金币分组没有读回来：%d %v", n, ok)
 	}
 }
@@ -47,13 +47,13 @@ func TestLocalKVClearsPrefixes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cache", localKVLegacyName)
 	kv := newLocalKV(path)
 	for i := 0; i < 20; i++ {
-		if err := kv.put("coin:user:jimmy", i, time.Now()); err != nil {
+		if err := kv.put("coin:local", i, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}
 	other := newLocalKV(path)
 	var n int
-	if _, ok := other.get("coin:user:jimmy", &n); !ok || n != 19 {
+	if _, ok := other.get("coin:local", &n); !ok || n != 19 {
 		t.Fatalf("连续写入应以最后一次为准：%d %v", n, ok)
 	}
 
@@ -62,7 +62,7 @@ func TestLocalKVClearsPrefixes(t *testing.T) {
 		t.Fatalf("清理结果 = %d / %v", removed, err)
 	}
 	other = newLocalKV(path)
-	if _, ok := other.get("coin:user:jimmy", &n); ok {
+	if _, ok := other.get("coin:local", &n); ok {
 		t.Error("clearPrefixes 返回后文件里不该还有这个键")
 	}
 }
@@ -73,8 +73,8 @@ func TestOfflineKVMigratesLegacyFile(t *testing.T) {
 	cacheDir := filepath.Join(dir, "cache")
 	legacy := filepath.Join(cacheDir, localKVLegacyName)
 	raw, err := json.Marshal(localKVFile{Version: localKVVersion, Entries: map[string]localKVEntry{
-		"coin:user:jimmy": {UpdatedAt: time.Now(), Value: json.RawMessage(`28`)},
-		"read:user:jimmy": {UpdatedAt: time.Now(), Value: json.RawMessage(`{"a":true}`)},
+		"coin:local": {UpdatedAt: time.Now(), Value: json.RawMessage(`28`)},
+		"read:local": {UpdatedAt: time.Now(), Value: json.RawMessage(`{"a":true}`)},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +88,7 @@ func TestOfflineKVMigratesLegacyFile(t *testing.T) {
 
 	kv := newOfflineKV(dir)
 	var n int
-	if _, ok := kv.get("coin:user:jimmy", &n); !ok || n != 28 {
+	if _, ok := kv.get("coin:local", &n); !ok || n != 28 {
 		t.Fatalf("迁移后的金币缓存读不到：%d %v", n, ok)
 	}
 	for _, name := range []string{"coin.json", "read.json"} {

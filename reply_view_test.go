@@ -123,7 +123,7 @@ func TestReplyViewModeFollowsAppNotTopic(t *testing.T) {
 	// 换一篇帖子：偏好跟着账号走，不跟着上一篇的记忆走。
 	a.openDetail(Item{ShortID: "TOPIC2"})
 	if !a.detail.flat {
-		t.Error("打开另一篇帖子时没有沿用账号的扁平视图偏好")
+		t.Error("打开另一篇帖子时没有沿用扁平视图偏好")
 	}
 	a.closeDetail()
 

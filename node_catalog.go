@@ -10,7 +10,7 @@ import (
 // storeNodeCache）已有一层；这里再加一层「单飞」：同一时刻最多一个请求，
 // 失败后冷却一分钟，视图每帧调用也不会对着失败的服务端反复重试。
 
-// nodeCatalog 是进程内某账号窗口的节点表状态，只在 UI 线程读写。
+// nodeCatalog 是进程内当前窗口的节点表状态，只在 UI 线程读写。
 type nodeCatalog struct {
 	nodes    []composeNode
 	at       time.Time

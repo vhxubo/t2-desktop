@@ -190,8 +190,8 @@ func (a *app) hideNotificationWindow() {
 	}
 }
 
-// closeNotificationWindow 关掉通知窗口：退出登录或主窗口关闭时调用，别让
-// 上一个账号的消息、或者一个没有主窗口的孤岛留在屏幕上。只在主线程调用。
+// closeNotificationWindow 关掉通知窗口：退出登录或「关闭全部」时调用，
+// 别让退出前的消息留在屏幕上。关主窗口不碰它。只在主线程调用。
 func (a *app) closeNotificationWindow() {
 	win := a.notifWin
 	if win == nil {

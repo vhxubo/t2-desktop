@@ -528,7 +528,7 @@ func (a *app) loadRestricted(d *detailState, kind string, auto bool) {
 				return
 			}
 			st.loading = false
-			// 请求期间换了账号 / 退出登录，结果不属于当前会话。
+			// 请求期间登录态变了，结果不属于当前会话。
 			if !a.auth.loggedIn() || a.auth.username() != actor {
 				return
 			}

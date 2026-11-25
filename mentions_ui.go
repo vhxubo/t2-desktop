@@ -269,7 +269,7 @@ func (a *app) mentionRows(d *detailState, data mentionResult) []mentionRow {
 		if all := buildMentions(data.Participants, exclude, data.Slots); all != "" &&
 			data.Total <= mentionNotifyLimit && mentionQuickHit("@所有人", query) {
 			out = append(out, mentionRow{Key: "quick:all", Label: "@所有人",
-				Icon: accountsIcon, Text: all})
+				Icon: groupIcon, Text: all})
 		}
 		if random := pickRandomMention(data.Guardians, exclude); random != "" &&
 			mentionQuickHit("@随机守护者", query) {

@@ -216,7 +216,7 @@ func TestDraftsRowReusesOpenDetailWindow(t *testing.T) {
 		Text: "恢复出来的回复", ReplyTo: draftTarget{ID: "cmt-88", Floor: 12, Author: "老王"},
 		UpdatedAt: time.Now().UTC(),
 	}
-	a.draftsForCurrent().put(e)
+	a.drafts.put(e)
 	a.restoreReplyDraft(e)
 	if a.detail != d {
 		t.Fatal("已打开的详情被换掉了")
@@ -296,7 +296,7 @@ func TestDraftsClearAllRemovesEverything(t *testing.T) {
 	}
 }
 
-// 页头只留标题与条数：账号范围、保存位置这类文案说明不该占一行。
+// 页头只留标题与条数：保存范围、保存位置这类文案说明不该占一行。
 func TestDraftsHeaderHasNoScopeDescription(t *testing.T) {
 	a := testDraftsApp(t)
 	a.compose = newComposeState()
@@ -308,7 +308,7 @@ func TestDraftsHeaderHasNoScopeDescription(t *testing.T) {
 	tt.Frame()
 	for _, text := range tt.Texts() {
 		if strings.Contains(text, "保存在这台电脑上") {
-			t.Fatalf("草稿箱页头不该有账号范围说明：%q", tt.Texts())
+			t.Fatalf("草稿箱页头不该有保存范围说明：%q", tt.Texts())
 		}
 	}
 }

@@ -1,11 +1,74 @@
 package main
 
 import (
+	"math"
 	"path/filepath"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
 )
+
+// 每项的档位快捷按钮、可见设置名和数值框必须在同一条水平中心线上，否则几个
+// 分段按钮挨在一起，既分不清哪一项在被调整，也会上下错位。
+func TestTypographyChoicesSitWithTheirValues(t *testing.T) {
+	a := testApp(t)
+	a.settingsTab = settingsTabReading
+	st := ui.NewTester(a.settingsWindowView, settingsWindowWidth, 1600)
+	st.Frame()
+
+	centerY := func(r ui.Rect) float32 { return r.Y + r.H/2 }
+	aligned := func(a, b ui.Rect) bool {
+		return math.Abs(float64(centerY(a)-centerY(b))) <= 4
+	}
+	check := func(label, button, value string) {
+		t.Helper()
+		choice, ok := st.Access(button)
+		if !ok {
+			t.Fatalf("找不到档位按钮 %q：%q", button, st.Texts())
+		}
+		num, ok := st.Access(value)
+		if !ok {
+			t.Fatalf("找不到数值框 %q：%q", value, st.Texts())
+		}
+		name, ok := st.Find(label)
+		if !ok {
+			t.Fatalf("找不到可见标签 %q：%q", label, st.Texts())
+		}
+		if !aligned(choice.Bounds, num.Bounds) {
+			t.Errorf("%s 的档位按钮和数值框没有上下居中对齐：%v / %v", label, choice.Bounds, num.Bounds)
+		}
+		if !aligned(name, choice.Bounds) {
+			t.Errorf("%s 的标签没有和档位按钮上下居中对齐：%v / %v", label, name, choice.Bounds)
+		}
+		if !(name.X < choice.Bounds.X && choice.Bounds.X < num.Bounds.X) {
+			t.Errorf("%s 的标签 / 档位 / 数值没有依次从左到右排列：%v / %v / %v",
+				label, name, choice.Bounds, num.Bounds)
+		}
+	}
+	check("正文字号 (DIP)", "特大", "正文字号数值")
+	check("行距 (倍)", "宽松", "行距数值")
+	check("页宽 (DIP)", "宽", "页宽数值")
+
+	// 列表密度档位改的是留白和间距，两个数值也跟它上下居中对齐。
+	pad, ok := st.Access("行留白数值")
+	if !ok {
+		t.Fatalf("找不到留白数值框：%q", st.Texts())
+	}
+	var density ui.Rect
+	for _, info := range st.AccessAll() {
+		if info.Name == "宽松" && aligned(info.Bounds, pad.Bounds) {
+			density = info.Bounds
+			break
+		}
+	}
+	if density == (ui.Rect{}) {
+		t.Fatalf("列表密度的档位按钮没和留白数值上下居中对齐：%q", st.Texts())
+	}
+	gap, ok := st.Access("行内间距数值")
+	if !ok || !aligned(density, gap.Bounds) {
+		t.Errorf("间距数值没和列表密度档位上下居中对齐")
+	}
+}
 
 // 阅读与评论页顶部有四项排版选择与恢复入口，默认全部落在标准档。
 func TestReadingTypographySectionDefaultsAndLabels(t *testing.T) {

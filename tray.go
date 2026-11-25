@@ -10,8 +10,9 @@ import (
 )
 
 // 系统托盘：Windows 是任务栏通知区域，macOS 是菜单栏。左键点图标把主窗口
-// 带回前台；右键弹出菜单，提供登录 / 退出、注册、关闭全部（收进托盘，应用
-// 继续在后台跑）与退出。
+// 带回前台；右键弹出菜单。未登录时提供登录、注册；登录后顶部显示当前账号，
+// 下面接发帖、发动态、设置。退出登录不放在托盘里，去「我的」或命令中心。
+// 两种状态都有「关闭全部」（收进托盘，应用继续在后台跑）与「退出」。
 //
 // 托盘是进程级资源：菜单每次右键现建一份，弹出的菜单挂着时左键也会弹出
 // 菜单，所以弹出后立刻用 SetMenu(nil) 摘掉。
@@ -27,8 +28,10 @@ const (
 	trayToolTip = "T2 Desktop"
 
 	trayLoginID    = "tray-login"
-	trayLogoutID   = "tray-logout"
 	traySignupID   = "tray-signup"
+	trayPostID     = "tray-post"
+	trayMomentID   = "tray-moment"
+	traySettingsID = "tray-settings"
 	trayCloseAllID = "tray-close-all"
 	trayQuitID     = "tray-quit"
 )
@@ -39,7 +42,9 @@ const (
 var (
 	trayLoginMI    *mygo.MenuIcon
 	traySignupMI   *mygo.MenuIcon
-	trayLogoutMI   *mygo.MenuIcon
+	trayPostMI     *mygo.MenuIcon
+	trayMomentMI   *mygo.MenuIcon
+	traySettingsMI *mygo.MenuIcon
 	trayCloseAllMI *mygo.MenuIcon
 	trayQuitMI     *mygo.MenuIcon
 )
@@ -54,7 +59,10 @@ func init() {
 	}
 	trayLoginMI = makeMI(loginIcon)
 	traySignupMI = makeMI(signupIcon)
-	trayLogoutMI = makeMI(lucide.LogOut())
+	// 与命令中心里的发帖 / 发动态 / 设置用同一组图标。
+	trayPostMI = makeMI(lucide.SquarePen())
+	trayMomentMI = makeMI(lucide.PenLine())
+	traySettingsMI = makeMI(lucide.Settings())
 	trayCloseAllMI = makeMI(collapseIcon)
 	trayQuitMI = makeMI(closeIcon)
 }
@@ -122,38 +130,60 @@ func (d *desktop) destroyTray() {
 	tray.Destroy()
 }
 
-// trayMenu 建右键菜单：登录状态、登录 / 退出、注册、关闭全部与退出。
+// trayMenu 建右键菜单。顶部一行只读的账号状态：未登录提示「未登录」，登录后
+// 露出当前账号；再按状态给登录 / 注册或发帖 / 发动态 / 设置。关闭全部与退出
+// 是窗口管理动作，两种状态都在。
 func (d *desktop) trayMenu() *mygo.Menu {
-	loggedIn := d.app != nil && d.app.auth != nil && d.app.auth.loggedIn()
-	items := []*mygo.MenuItem{
-		&mygo.MenuItem{ID: "tray-state", Label: trayStateLabel(loggedIn), Disabled: true},
+	a := d.app
+	var auth *AuthManager
+	if a != nil {
+		auth = a.auth
 	}
-	if loggedIn {
-		items = append(items, &mygo.MenuItem{
-			ID:    trayLogoutID,
-			Label: "退出登录",
-			Icon:  trayLogoutMI,
-			Click: func(*mygo.MenuItem, *mygo.Window) { d.app.logoutAccount() },
-		})
-	} else {
-		items = append(items, &mygo.MenuItem{
-			ID:    trayLoginID,
-			Label: "登录",
-			Icon:  trayLoginMI,
-			Click: func(*mygo.MenuItem, *mygo.Window) {
-				if d.app != nil {
-					d.app.startLogin()
-				}
+	items := []*mygo.MenuItem{
+		{ID: "tray-state", Label: trayStateLabel(auth), Disabled: true},
+	}
+	if auth != nil && auth.loggedIn() {
+		items = append(items,
+			&mygo.MenuItem{
+				ID:    trayPostID,
+				Label: "发帖",
+				Icon:  trayPostMI,
+				Click: func(*mygo.MenuItem, *mygo.Window) { d.trayOpenApp(a.showCompose) },
 			},
-		})
+			&mygo.MenuItem{
+				ID:    trayMomentID,
+				Label: "发动态",
+				Icon:  trayMomentMI,
+				Click: func(*mygo.MenuItem, *mygo.Window) { d.trayOpenApp(a.showMomentCompose) },
+			},
+			&mygo.MenuItem{
+				ID:    traySettingsID,
+				Label: "设置",
+				Icon:  traySettingsMI,
+				Click: func(*mygo.MenuItem, *mygo.Window) { d.trayOpenApp(a.showSettings) },
+			},
+		)
+	} else {
+		items = append(items,
+			&mygo.MenuItem{
+				ID:    trayLoginID,
+				Label: "登录",
+				Icon:  trayLoginMI,
+				Click: func(*mygo.MenuItem, *mygo.Window) {
+					if d.app != nil {
+						d.app.startLogin()
+					}
+				},
+			},
+			&mygo.MenuItem{
+				ID:    traySignupID,
+				Label: "注册",
+				Icon:  traySignupMI,
+				Click: func(*mygo.MenuItem, *mygo.Window) { _ = d.openURL(signupURL) },
+			},
+		)
 	}
 	items = append(items,
-		&mygo.MenuItem{
-			ID:    traySignupID,
-			Label: "注册",
-			Icon:  traySignupMI,
-			Click: func(*mygo.MenuItem, *mygo.Window) { _ = d.openURL(signupURL) },
-		},
 		mygo.Separator(),
 		&mygo.MenuItem{
 			ID:    trayCloseAllID,
@@ -172,9 +202,27 @@ func (d *desktop) trayMenu() *mygo.Menu {
 	return mygo.NewMenu(items)
 }
 
-func trayStateLabel(loggedIn bool) string {
-	if loggedIn {
-		return "已登录"
+// trayOpenApp 从托盘打开功能窗口。发帖与设置窗口都以主窗口作 UI 队列出口；
+// 窗口收进托盘或关掉后 a.win 可能为空，直接调用会被跳过，先把主窗口带回来。
+func (d *desktop) trayOpenApp(open func()) {
+	a := d.app
+	if a == nil {
+		return
 	}
-	return "未登录"
+	if a.mainClosed || a.win == nil {
+		a.openMainWindow()
+	} else {
+		a.raiseMainWindow()
+	}
+	open()
+}
+
+func trayStateLabel(auth *AuthManager) string {
+	if auth == nil || !auth.loggedIn() {
+		return "未登录"
+	}
+	if name := auth.username(); name != "" {
+		return "已登录：" + name
+	}
+	return "已登录"
 }

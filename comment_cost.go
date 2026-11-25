@@ -640,7 +640,7 @@ func activityGainTip(b badgeWallEntry) string {
 --------------------------------------------------------------- */
 
 // commentCostState 是状态栏的数据：我的徽章（含 attributes）与佩戴状态。
-// 两者都是账号级的，与具体帖子无关，所以挂在 app 上而不是 detailState 上；
+// 两者都属于当前会话，与具体帖子无关，所以挂在 app 上而不是 detailState 上；
 // 只在 UI 线程读写，网络结果经 publish 回来。
 type commentCostState struct {
 	seq     uint64
@@ -866,7 +866,7 @@ func (a *app) setCommentCostBadge(badge badgeWallEntry, equip bool, key string) 
 				return
 			}
 			st.busyID = ""
-			// 请求期间换了账号 / 退出了登录：这次结果不属于当前会话。
+			// 请求期间登录态变了：这次结果不属于当前会话。
 			if !a.auth.loggedIn() || a.auth.username() != actor {
 				return
 			}
