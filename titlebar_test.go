@@ -2,7 +2,11 @@ package main
 
 import (
 	"image"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -468,5 +472,94 @@ func TestTitleBarAccountTagScalesWithBar(t *testing.T) {
 	}
 	if want := userAvatarSize(12); avatar.W < want-0.5 {
 		t.Errorf("标题栏头像宽 %.0f，期望至少 %.0f", avatar.W, want)
+	}
+}
+
+// 标题栏头像由标题栏自己的渲染触发拉取，不挂在某一页的数据加载上：刚开始
+// 加载就切到别的页面，这次请求仍会跑到完成。地址为空（用户没有头像）时
+// 不发起请求，继续画生成图案。
+func TestTitleBarAvatarKeepsLoadingAcrossPages(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/me.png" {
+			return
+		}
+		atomic.AddInt32(&hits, 1)
+		// 慢一点回包，保证切页发生在加载中途。
+		time.Sleep(50 * time.Millisecond)
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(solidPNG(t, 8, 8, marker))
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	a.autoLoad = true
+	a.client = &Client{HTTP: srv.Client()}
+	avatar := srv.URL + "/me.png"
+	if err := a.auth.storeToken(tokenData{
+		AccessToken: "tok", Username: "jimmy", Avatar: avatar,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 预置列表为已加载，避免这一帧真的去拉信息流。
+	a.tabs[a.tab].loaded = true
+
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	// 切到一个同样带标题栏的页面：头像请求不跟着上一页结束。
+	a.pageName = "drafts"
+	tt.Frame()
+
+	waitForSource(t, a, avatar)
+	waitForDisk(t, a.images, avatar, imageCacheStable)
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("头像请求了 %d 次，期望 1 次", got)
+	}
+	if a.avatarBitmap(avatar) == nil {
+		t.Error("切页后标题栏头像没有就位")
+	}
+}
+
+// 账号头像在内存缓存里被淘汰后，下一次画标题栏要能从磁盘缓存重新接上，
+// 不能一直停在生成图案上。
+func TestTitleBarAvatarReloadsFromDisk(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(solidPNG(t, 8, 8, marker))
+	}))
+	defer srv.Close()
+
+	a := testApp(t)
+	a.autoLoad = true
+	a.client = &Client{HTTP: srv.Client()}
+	avatar := srv.URL + "/me.png"
+	if err := a.auth.storeToken(tokenData{
+		AccessToken: "tok", Username: "jimmy", Avatar: avatar,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.tabs[a.tab].loaded = true
+
+	tt := ui.NewTester(a.view, 1080, 720)
+	tt.Frame()
+	waitForSource(t, a, avatar)
+	waitForDisk(t, a.images, avatar, imageCacheStable)
+
+	// 模拟内存缓存淘汰：条目从内存里消失，磁盘缓存还在。
+	a.images.mu.Lock()
+	a.images.entries = make(map[string]*imageEntry)
+	a.images.bytes = 0
+	a.images.mu.Unlock()
+	if a.avatarBitmap(avatar) != nil {
+		t.Fatal("清理内存条目后不该还能取到位图")
+	}
+
+	// 再画一帧标题栏：重新登记并读盘，不再走网络。
+	tt.Frame()
+	waitForSource(t, a, avatar)
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("重新读盘时又下载了头像：请求 %d 次", got)
 	}
 }

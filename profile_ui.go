@@ -191,6 +191,11 @@ func (a *app) profileTagIdentity(c *ui.Context, name string) {
 	tk := lobetheme.TokensOf(c)
 	size := userAvatarSize(12)
 	pro, _ := a.auth.proStatus()
+	// 每一帧都确认账号头像在加载：切到别的页面、详情窗口盖住主窗口，或在
+	// 内存缓存里被淘汰之后，下一次画标题栏都会重新把这次加载接上。预取按
+	// 地址去重，这里重复调用不会多发请求；头像地址为空表示用户没有头像，
+	// 直接画生成图案。
+	a.ensureAvatar()
 	ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 		if name == "" {
 			// 昵称还没读到（身份接口慢或失败）：仍然给一个可点的头像位，

@@ -156,6 +156,32 @@ func TestImageCacheRetriesFailedItemWithLimit(t *testing.T) {
 	}
 }
 
+// 常驻头像忽略普通预取的重试次数上限：失败几次后只要冷却期过了还会继续
+// 重试，直到真正取到图。普通图片仍守上限，避免坏链无限重试。
+func TestImageCachePersistentRetryIgnoresLimit(t *testing.T) {
+	c := newImageCache(t.TempDir())
+	u := "https://example.com/me.png"
+	e, created := c.begin(u)
+	if !created {
+		t.Fatal("第一次登记没有返回 created")
+	}
+	for i := 0; i <= imageRetryLimit; i++ {
+		e.set(nil)
+	}
+	backdate := func() {
+		e.mu.Lock()
+		e.failedAt = time.Now().Add(-imageRetryCooldown - time.Second)
+		e.mu.Unlock()
+	}
+	backdate()
+	if _, retry := c.begin(u); retry {
+		t.Errorf("普通预取在失败 %d 次后不该再重试", e.failures)
+	}
+	if _, retry := c.beginPersistent(u); !retry {
+		t.Error("常驻头像应当忽略失败次数上限继续重试")
+	}
+}
+
 // 头像、表情和帖子配图共用一份全局缓存：同一个地址不管从哪条路径来，
 // 都只下载一次。
 func TestGlobalImageCacheDownloadsEachURLOnce(t *testing.T) {

@@ -71,7 +71,8 @@ const imageCacheTTL = 7 * 24 * time.Hour
 // 失败头像的有限重试：网络抖动或刚切换代理时，头像可能下载失败一次。以前
 // 失败项永久不再下载，同一会话里这张头像一直是按昵称生成的图案，直到换地址或清
 // 缓存。现在允许在数据再次到达（重新打开窗口、刷新列表）时重试，但设上限
-// 与冷却，避免每批数据都重发请求，或对永久坏链无限重试。
+// 与冷却，避免每批数据都重发请求，或对永久坏链无限重试。标题栏的账号头像
+// 例外：它常驻界面，走 prefetchPersistent，只受冷却限制。
 const (
 	imageRetryLimit    = 2               // 首次失败后最多再试的次数
 	imageRetryCooldown = 3 * time.Second // 两次尝试之间的最短间隔
@@ -358,26 +359,38 @@ func (c *imageCache) get(raw string) *imageEntry {
 // 失败项默认不再下载，但冷却期过后、未超重试上限时会被重新拉起一次，让
 // 网络抖动 / 切代理造成的偶发失败有机会在下一批数据到达时恢复。
 func (c *imageCache) begin(raw string) (*imageEntry, bool) {
+	return c.beginFor(raw, false)
+}
+
+// beginPersistent 与 begin 相同，但忽略失败次数上限：只有冷却期仍生效。
+// 给长期挂在界面上的账号头像用——一次网络抖动不该让它整个会话都停在生成
+// 图案上，只有地址为空才算「用户没有头像」。
+func (c *imageCache) beginPersistent(raw string) (*imageEntry, bool) {
+	return c.beginFor(raw, true)
+}
+
+func (c *imageCache) beginFor(raw string, persistent bool) (*imageEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e, ok := c.entries[raw]; ok {
-		return e, e.maybeRetry()
+		return e, e.maybeRetry(persistent)
 	}
 	e := &imageEntry{state: imageLoading, cache: c, key: raw}
 	c.entries[raw] = e
 	return e, true
 }
 
-// maybeRetry 判断一个失败项是否该再下载一次：仅在失败态、未超上限、且距
-// 上次失败已过冷却期时返回 true，并把状态改回加载中。加载中与已成功的项
-// 一律返回 false，保持"同一地址只下一次"。调用方持有 c.mu。
-func (e *imageEntry) maybeRetry() bool {
+// maybeRetry 判断一个失败项是否该再下载一次：仅在失败态、且距上次失败已过
+// 冷却期时返回 true，并把状态改回加载中。persistent 为 false 时还要求未超
+// 重试上限；为 true 时只看冷却。加载中与已成功的项一律返回 false，保持
+// "同一地址只下一次"。调用方持有 c.mu。
+func (e *imageEntry) maybeRetry(persistent bool) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.state != imageFailed {
 		return false
 	}
-	if e.failures > imageRetryLimit {
+	if !persistent && e.failures > imageRetryLimit {
 		return false
 	}
 	if time.Since(e.failedAt) < imageRetryCooldown {
@@ -1174,12 +1187,29 @@ type imageJob struct {
 // prefetch 登记一张图并排进后台队列。同一个地址只下一次：成功、失败还是
 // 仍在下载都记在缓存项的 state 里，不会因为每帧渲染而重发。
 func (c *imageCache) prefetch(raw string, cat imageCategory, f imageFetcher) {
+	c.prefetchFor(raw, cat, f, false)
+}
+
+// prefetchPersistent 与 prefetch 相同，但失败后不设次数上限，冷却期一过就
+// 继续重试，直到真正取到图。只给长期显示在界面上的账号头像使用：它不能因为
+// 一次网络抖动就整个会话停在生成图案上。
+func (c *imageCache) prefetchPersistent(raw string, cat imageCategory, f imageFetcher) {
+	c.prefetchFor(raw, cat, f, true)
+}
+
+func (c *imageCache) prefetchFor(raw string, cat imageCategory, f imageFetcher, persistent bool) {
 	// 界面查状态用的是 trim 过的地址，登记缓存项也用同一个键。
 	raw = strings.TrimSpace(raw)
 	if _, err := parseImageURL(raw); err != nil {
 		return
 	}
-	if _, created := c.begin(raw); !created {
+	created := false
+	if persistent {
+		_, created = c.beginPersistent(raw)
+	} else {
+		_, created = c.begin(raw)
+	}
+	if !created {
 		return
 	}
 	c.enqueue(imageJob{raw: raw, cat: cat, f: f})

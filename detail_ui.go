@@ -485,10 +485,18 @@ func fetchImageBytes(hc *http.Client, raw string) ([]byte, error) {
 	return data, nil
 }
 
-// ensureAvatar 预取当前登录账号的头像。userTag 在标题栏和登录页读同一份
-// 头像缓存；图片没到之前先画按昵称生成的图案。
+// ensureAvatar 保证当前登录账号的头像始终在加载。账号头像长期挂在标题栏，
+// 不受页面切换影响：只要还有地址就继续重试（见 prefetchPersistent），
+// 地址为空表示用户没有头像，退回按昵称生成的图案。可以在每帧渲染时调用。
 func (a *app) ensureAvatar() {
-	a.prefetchAvatars(a.auth.avatarURL())
+	raw := normalizeAvatarURL(a.auth.avatarURL())
+	if raw == "" {
+		return
+	}
+	if !a.autoLoad {
+		return // headless 测试不碰网络
+	}
+	a.images.prefetchPersistent(raw, imageCacheStable, a.imageFetcher())
 }
 
 // openDetail 是打开一篇帖子的统一入口：有主窗口时开独立的详情窗口（同一篇
