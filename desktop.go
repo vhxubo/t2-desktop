@@ -65,8 +65,6 @@ type desktop struct {
 	updates    bool
 	// mainLoop 表示应用主循环已经跑起来：只有这时才能把工作投到主线程。
 	mainLoop bool
-	// afterReady 表示 mygo 应用已经就绪，可以创建原生窗口了。
-	afterReady bool
 
 	// icons 管应用与托盘图标的深浅切换（见 app_icon.go）。进程级一份，
 	// 只在主线程读写。

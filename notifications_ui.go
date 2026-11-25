@@ -402,7 +402,7 @@ func (a *app) notificationActions(c *ui.Context, st *tabState) {
 		}
 		a.smallRefreshButton(c, st.loading, func() { a.reloadNotifications() })
 		switch {
-		case a.notify == nil:
+		case a.nativeNotifier() == nil:
 			display.Text(c, "原生通知不可用", display.TextProps{
 				Type: display.TextSecondary, FontSize: 11, Rows: 1,
 			})

@@ -745,6 +745,27 @@ func TestLoginPageReportsSchemeRegistrationFailure(t *testing.T) {
 	}
 }
 
+// 回调协议在 app 构建之后才注册，登录页必须实时读进程级结果：注册失败时
+// 不能再沿用构造时的空快照，否则用户只看到授权后没有任何反应。
+func TestSchemeWarningReadAfterRegistration(t *testing.T) {
+	b := testBook(t)
+	a := newMainApp(b)
+	b.app = a
+	if got := a.schemeWarning(); got != "" {
+		t.Fatalf("注册前不该有警告：%q", got)
+	}
+	const warn = "系统未把回调协议关联到本应用"
+	b.schemeWarn = warn
+	if got := a.schemeWarning(); got != warn {
+		t.Fatalf("注册失败后没读到警告：%q", got)
+	}
+	a.pageName = "login"
+	tt := ui.NewTester(a.view, 1100, 760)
+	if !tt.HasText(warn) {
+		t.Errorf("登录页没有显示协议注册失败的说明：%q", tt.Texts())
+	}
+}
+
 // 登录回退页也要给未登录用户一条注册出路：除了「打开浏览器授权」之外，
 // 还摆着「注册账号」，点它只打开带邀请码的注册页，不进入授权等待、不跳页。
 func TestLoginPageOffersSignup(t *testing.T) {

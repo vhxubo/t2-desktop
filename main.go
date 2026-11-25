@@ -299,6 +299,7 @@ type app struct {
 	toastMu sync.Mutex
 	// schemeWarn 是「系统没有把回调协议关联到本应用」的说明，仅在这种情况下
 	// 非空：它决定了浏览器授权后能不能自动跳回，得让用户在登录页看见。
+	// 生产里实时读 desktop；这个字段只给无头测试注入（见 schemeWarning）。
 	schemeWarn string
 	// authGate 是全局授权弹窗：任何缺少权限的调用都收敛到这里，授权成功后
 	// 重跑被中断的调用。
@@ -527,9 +528,6 @@ type app struct {
 	search    *searchState
 	// palette 是标题栏搜索框的命令面板状态（开合与高亮项）。
 	palette paletteState
-	// tray 是系统托盘图标（见 tray.go）：应用就绪后创建，退出前销毁；
-	// 无头测试保持 nil，不会碰到原生托盘。只在主线程读写。
-	tray *mygo.Tray
 	// trayReady 只在无头测试里手动模拟托盘可用性。生产里托盘是进程级资源，
 	// 由 desktop 在应用就绪后才创建（晚于 app 构建），窗口必须实时查 desktop
 	// 的托盘状态，不能用构建时的快照（见 window_mode.go 的 trayIsReady）。
@@ -564,10 +562,7 @@ type app struct {
 	notifTimer    *time.Timer
 	// notifPollTimer 是关掉实时长连接后的兜底轮询：定时刷新未读数、列表与
 	// 桌面通知。开着 SSE 时始终为 nil，两者不会同时跑。
-	notifPollTimer *time.Timer
-	// notify 是平台通知函数；在应用就绪后才装上，headless 测试保持 nil，
-	// 因此不会触碰真实的系统通知。
-	notify            func(nativeNotice) error
+	notifPollTimer    *time.Timer
 	notificationPrefs *notificationPrefsStore // 通知偏好，进程级共享并落盘
 	// notifyKeywordDraft 是设置窗口「提醒关键词」输入框的草稿，点保存才落盘。
 	notifyKeywordDraft string
@@ -722,6 +717,18 @@ func newMainApp(d *desktop) *app {
 	return a
 }
 
+// schemeWarning 返回回调协议的注册结果。注册晚于 app 构建，所以有进程级
+// 单例时必须实时查；无头测试没有单例，用 app 上注入的字段。
+func (a *app) schemeWarning() string {
+	if a == nil {
+		return ""
+	}
+	if a.desktop != nil {
+		return a.desktop.schemeWarning()
+	}
+	return a.schemeWarn
+}
+
 // updatesEnabled 报告更新插件是否已安装。这个标记在 mygo.Use 之后才由 main
 // 立起来，晚于 newMainApp，所以窗口不能构造时快照一次就一直用：否则设置页
 // 的「检查更新」会以为插件没装而直接返回，点了没反应。托盘同理，都实时查。
@@ -775,12 +782,9 @@ func newAppWithDeps(d appDeps, auth *AuthManager) *app {
 	// 损坏都按空草稿处理）。
 	a.drafts = newDraftStore(d.dir)
 	if d.desktop != nil {
-		// 这几项是进程级的：回调协议是否注册成功，以及怎么真正退出应用。
-		// 窗口只是照着用。托盘和更新插件标记都晚于 app 构建才就绪：托盘要等
-		// 应用就绪才创建（见 trayIsReady），更新插件在 mygo.Use 之后才装上，
-		// 所以这里不能拍快照，必须实时查（见 updatesEnabled）。
-		a.schemeWarn = d.desktop.schemeWarning()
-		a.notify = d.desktop.notify
+		// 退出动作建单例时就有。回调协议注册、原生通知、托盘和更新插件都
+		// 晚于 app 构建才就绪，窗口必须实时查 desktop（见 schemeWarning /
+		// nativeNotifier / trayIsReady / updatesEnabled），不能在这里拍快照。
 		a.quitApp = d.desktop.quitProgram
 	}
 	// 托盘的「退出」与窗口关闭走同一条退出流程；测试里换成记录调用，无头
@@ -2732,8 +2736,8 @@ func (a *app) loginView(c *ui.Context) {
 			}
 		})
 		ui.Divider(c)
-		if a.schemeWarn != "" {
-			ui.Text(c, a.schemeWarn).FontSize(12).TextColor(t.Danger).MaxLines(4)
+		if warn := a.schemeWarning(); warn != "" {
+			ui.Text(c, warn).FontSize(12).TextColor(t.Danger).MaxLines(4)
 		}
 		if a.loginMsg != "" {
 			ui.Text(c, a.loginMsg).TextColor(t.TextMuted).MaxLines(4)
@@ -2958,7 +2962,6 @@ func main() {
 		}
 		// 从这里开始才有主循环：后台结果可以投到 UI 线程。
 		d.mainLoop = true
-		d.afterReady = true
 		// 图片缓存是进程级的一份，清理循环也只起一次。
 		d.startImageCacheMaintenance()
 		// 后台更新循环：间隔可在设置里即时切换，装完只标记待重启。

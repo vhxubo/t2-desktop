@@ -640,6 +640,35 @@ func TestNotificationBellShowsUnreadCount(t *testing.T) {
 	}
 }
 
+// 通知函数由 WhenReady 在 app 构建之后才装上；窗口与发送路径必须实时读它，
+// 否则正式启动会误报不可用，新消息也弹不出系统通知。
+func TestNativeNotifierInstalledAfterAppConstruction(t *testing.T) {
+	b := testBook(t)
+	a := newMainApp(b)
+	b.app = a
+
+	if a.nativeNotifier() != nil {
+		t.Fatal("应用就绪前不该有平台通知函数")
+	}
+
+	var shown []nativeNotice
+	b.notify = func(n nativeNotice) error {
+		shown = append(shown, n)
+		return nil
+	}
+	if a.nativeNotifier() == nil {
+		t.Fatal("就绪后装上的通知函数没有传到界面状态")
+	}
+
+	a.showNotices([]nativeNotice{{ID: "N1", Title: "新回复", Target: "topic:1"}})
+	if len(shown) != 1 || shown[0].ID != "N1" {
+		t.Fatalf("系统通知没有送达：%+v", shown)
+	}
+	if got := a.noticeTarget("N1"); got != "topic:1" {
+		t.Fatalf("通知点击目标没记住：%q", got)
+	}
+}
+
 // 通知窗口的 view 就是消息中心：标题栏、未读数、操作行、分段筛选与列表
 // 全在这一个独立窗口里。
 func TestNotificationWindowView(t *testing.T) {

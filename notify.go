@@ -20,6 +20,16 @@ const noticeTargetKeep = 200
 // 新消息，又不至于给 API 太多压力（限流闸门仍然共用）。
 const notificationFallbackInterval = 60 * time.Second
 
+// nativeNotifier 返回当前可用的平台通知函数。它在应用就绪后才装上，晚于
+// app 构建，所以窗口与发送路径都实时查 desktop，不能拿构造时的快照。
+// 无头测试没有进程级单例时返回 nil，不会触碰真实系统通知。
+func (a *app) nativeNotifier() func(nativeNotice) error {
+	if a == nil || a.desktop == nil {
+		return nil
+	}
+	return a.desktop.notify
+}
+
 // showNativeNotice is the production notifier: a real desktop notification
 // through the platform (Windows notification-area balloon, macOS Notification
 // Center, Linux notification daemon). It is installed only once the app is
@@ -409,7 +419,8 @@ func (a *app) openNotificationTarget(target, notifID string) {
 }
 
 func (a *app) showNotices(notices []nativeNotice) {
-	if len(notices) == 0 || a.notify == nil {
+	notify := a.nativeNotifier()
+	if len(notices) == 0 || notify == nil {
 		return
 	}
 	for _, n := range notices {
@@ -418,14 +429,14 @@ func (a *app) showNotices(notices []nativeNotice) {
 	if a.win == nil {
 		// 无头测试：同步送达，便于断言。
 		for _, n := range notices {
-			_ = a.notify(n)
+			_ = notify(n)
 		}
 		return
 	}
 	// 平台通知可能等待授权，不能卡住 UI 线程。
 	go func() {
 		for _, n := range notices {
-			_ = a.notify(n)
+			_ = notify(n)
 		}
 	}()
 }
