@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -364,6 +365,55 @@ func TestArticlePictureShowsFailureAfterDownloadError(t *testing.T) {
 	}
 	if hasImageSpinner(tt) {
 		t.Error("失败后转圈没有退场")
+	}
+}
+
+// 失败的配图点一下要重新请求：第一次 500，点占位后第二次返回图片，
+// 失败文案与重试提示一起退场。
+func TestArticlePictureRetriesOnClick(t *testing.T) {
+	var hits atomic.Int32
+	pixels := solidPNG(t, 200, 100, marker)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(pixels)
+	}))
+	t.Cleanup(srv.Close)
+	picURL := srv.URL + "/retry.png"
+
+	a := loadingDetailApp(t, srv, picURL)
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	deadline := time.Now().Add(3 * time.Second)
+	for a.images.state(picURL) != imageFailed {
+		if time.Now().After(deadline) {
+			t.Fatal("配图没有进入失败状态")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	tt.Frame()
+	if !tt.HasText(imageRetryText) {
+		t.Fatalf("失败占位没有重试提示：%q", tt.Texts())
+	}
+	if n := countMarker(tt.Image()); n != 0 {
+		t.Fatalf("重试前就画出了图片：%d 个绿色像素", n)
+	}
+	if err := tt.Click(imageRetryText); err != nil {
+		t.Fatalf("点重试失败：%v（%q）", err, tt.Texts())
+	}
+	for hits.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("点重试后没有再次请求：%d 次", hits.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	waitForMarker(t, tt, "重试后的配图")
+	tt.Frame()
+	if tt.HasText(imageFailedText) || tt.HasText(imageRetryText) {
+		t.Errorf("重试成功后仍显示失败占位：%q", tt.Texts())
 	}
 }
 

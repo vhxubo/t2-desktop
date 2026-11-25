@@ -353,6 +353,7 @@ func articleSegmentEmpty(in []parser.Inline, from, to int) bool {
 const (
 	imageLoadingText                     = "图片加载中…"
 	imageFailedText                      = "图片加载失败"
+	imageRetryText                       = "点击重试"
 	imageLazyText                        = "点一下加载图片"
 	imageUnknownSizePlaceholderH float32 = 72
 	// imageVideoCardMaxH 是正文里视频封面卡片的高度上限：再宽的一栏也不该让
@@ -385,7 +386,7 @@ func imageBoxWidth(w, h, maxH float32) float32 {
 //
 // pictures 是这份正文的全部配图（见 articlePictures），点开预览时按它在整
 // 组里翻页。还在加载或加载失败的占位也能点：加载中点一下先记下，图片到位后
-// 直接开预览窗口；失败的只留说明，点了什么也不会发生。
+// 直接开预览窗口；失败后点一下重新下载这张图（见 retryImage）。
 func (a *app) articlePicture(c *ui.Context, dest, alt string, pictures []articlePicture, imageMaxH float32) {
 	th := markdown.DefaultTheme(c.Theme())
 	if alt == "" {
@@ -439,7 +440,7 @@ func (a *app) articlePicture(c *ui.Context, dest, alt string, pictures []article
 // articlePicturePending 画「加载中」或「加载失败」的配图占位。尺寸已知时仍
 // 按真实宽高留白，图片到达后下面的文字不会跳；评论区的高度上限也按同一套
 // 宽度换算，保证占位与成图边界一致。尺寸未知时用固定高度的空框。
-// 失败态不转圈也不重发请求，只说明是哪张图没加载出来。
+// 加载态不重发请求，转圈说明进度；失败态不转圈，点一下重新下载并回到加载态。
 //
 // 占位框只设 Label、不设 RoleImage：mygo 会把显式 RoleImage 盒的子树在访问树
 // 里压平，导致里面的转圈（RoleProgress）无法被读取；加载完成后真正的
@@ -458,24 +459,24 @@ func (a *app) articlePicturePending(c *ui.Context, dest, alt string, w, h float3
 	}
 	box.Label(alt)
 	loading := a.images.state(dest) == imageLoading
-	// 加载中与加载失败的占位都按 articlePicture 的同一套点击处理：加载中点
-	// 一下先记下，图片到位后自动弹出预览（见 wantImage）。
-	box.OnClick(func() { a.wantImageGroup(pictures, dest) })
 	if loading {
+		// 加载中点一下先记下，图片到位后自动弹出预览（见 wantImage）。
+		box.OnClick(func() { a.wantImageGroup(pictures, dest) })
 		box.Busy(true)
+	} else {
+		// 失败的图会一直停在占位里，点整块占位重新下载（见 retryImage）。
+		box.Cursor(ui.CursorPointer)
+		box.OnClick(func() { a.retryImage(dest, imageCacheTemporary) })
 	}
 	box.Children(func() {
 		ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
 			if loading {
 				lobeSpin(c, feedback.SpinProps{CustomSize: 16}).Label("图片加载中")
-			}
-			text := imageFailedText
-			if loading {
-				text = imageLoadingText
-			}
-			ui.Text(c, text).FontSize(12).TextColor(th.Muted).SingleLine()
-			if !loading {
+				ui.Text(c, imageLoadingText).FontSize(12).TextColor(th.Muted).SingleLine()
+			} else {
+				ui.Text(c, imageFailedText).FontSize(12).TextColor(th.Muted).SingleLine()
 				ui.Text(c, alt).FontSize(11).TextColor(th.Muted).MaxLines(2)
+				ui.Text(c, imageRetryText).FontSize(11).TextColor(th.Muted).SingleLine()
 			}
 		})
 	})
@@ -506,6 +507,17 @@ func (a *app) revealImage(dest string) {
 	}
 	a.revealedImages[dest] = true
 	a.prefetchImage(dest, imageCacheTemporary)
+	a.publish(func() {})
+}
+
+// retryImage 是失败配图占位的点击动作：失败项被自动重试的冷却期与次数上限
+// 挡着，显式点击直接复位并重新入队；重复点在缓存项已回到加载态时不会重复
+// 下载。重建一次界面，让占位立刻换成加载中的转圈。
+func (a *app) retryImage(raw string, cat imageCategory) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || !a.images.retry(raw, cat, a.imageFetcher()) {
+		return
+	}
 	a.publish(func() {})
 }
 

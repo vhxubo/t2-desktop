@@ -182,6 +182,52 @@ func TestImageCachePersistentRetryIgnoresLimit(t *testing.T) {
 	}
 }
 
+// 用户点「重试」是显式动作：失败次数超过上限、冷却期未满也该重新下载一次；
+// 加载中再点不会重复入队，成功后照常清掉失败计数。
+func TestImageCacheExplicitRetryIgnoresCooldownAndLimit(t *testing.T) {
+	c := newImageCache(t.TempDir())
+	t.Cleanup(func() { waitForImageWorkers(t, c) })
+	u := "https://example.com/retry.png"
+	e, created := c.begin(u)
+	if !created {
+		t.Fatal("第一次登记没有返回 created")
+	}
+	for i := 0; i <= imageRetryLimit+1; i++ {
+		e.set(nil)
+	}
+	if _, retry := c.begin(u); retry {
+		t.Error("失败次数超限且冷却期未满，普通预取不该重试")
+	}
+
+	f := imageFetcher{
+		fetch:  func(string) ([]byte, error) { return solidPNG(t, 8, 8, marker), nil },
+		redraw: func() {},
+	}
+	if !c.retry(u, imageCacheTemporary, f) {
+		t.Fatal("显式重试没有让失败项重新入队")
+	}
+	if got := c.state(u); got != imageLoading {
+		t.Errorf("重试后状态 = %v，期望 imageLoading", got)
+	}
+	if c.retry(u, imageCacheTemporary, f) {
+		t.Error("加载中再点重试不该重复入队")
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for c.source(u) == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("重试后图片没有在 3 秒内加载完成")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := c.state(u); got != imageLoaded {
+		t.Errorf("重试成功后状态 = %v，期望 imageLoaded", got)
+	}
+	if e.failures != 0 {
+		t.Errorf("重试成功后失败次数没有清零：%d", e.failures)
+	}
+}
+
 // 头像、表情和帖子配图共用一份全局缓存：同一个地址不管从哪条路径来，
 // 都只下载一次。
 func TestGlobalImageCacheDownloadsEachURLOnce(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -626,6 +627,58 @@ func TestImageViewerOpensWhenPendingImageArrives(t *testing.T) {
 	}
 	if viewerLine(vt, 1, 2) == "" {
 		t.Errorf("自动打开时应停在点的那张：%q", vt.Texts())
+	}
+}
+
+// 预览空态要区分加载中与失败：失败时点一下重新取图，且不会把预览窗口关掉。
+func TestViewerEmptyStateRetriesOnClick(t *testing.T) {
+	var hits atomic.Int32
+	pixels := solidPNG(t, 200, 120, marker)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(pixels)
+	}))
+	t.Cleanup(srv.Close)
+	raw := srv.URL + "/viewer-retry.png"
+
+	a := testApp(t)
+	t.Cleanup(func() { waitForImageWorkers(t, a.images) })
+	a.client = &Client{HTTP: srv.Client()}
+	a.autoLoad = true
+	a.viewer.group = imageViewerGroup{Items: []articlePicture{{URL: raw, Alt: "失败图"}}}
+	a.viewer.open = true
+	// 预览档与正文档都记成失败，舞台才会进入失败空态。
+	for _, key := range []string{viewerCacheKey(raw), raw} {
+		e, _ := a.images.begin(key)
+		e.set(nil)
+	}
+
+	vt := newViewerTester(a)
+	vt.Frame()
+	if !vt.HasText(imageFailedText) || !vt.HasText(imageRetryText) {
+		t.Fatalf("失败空态没有重试提示：%q", vt.Texts())
+	}
+	if vt.HasText(imageViewerEmpty) {
+		t.Errorf("失败后仍显示加载中：%q", vt.Texts())
+	}
+	if err := vt.Click(imageRetryText); err != nil {
+		t.Fatalf("点预览重试失败：%v（%q）", err, vt.Texts())
+	}
+	if !a.viewer.open {
+		t.Fatal("点重试把预览窗口关掉了")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for hits.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("点重试后没有重新请求图片")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	waitForMarker(t, vt, "重试后的预览图")
+	vt.Frame()
+	if vt.HasText(imageFailedText) || vt.HasText(imageRetryText) {
+		t.Errorf("重试成功后仍显示失败空态：%q", vt.Texts())
 	}
 }
 

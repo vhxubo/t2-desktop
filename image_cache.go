@@ -400,6 +400,21 @@ func (e *imageEntry) maybeRetry(persistent bool) bool {
 	return true
 }
 
+// restartFailed 是用户显式点「重试」时的状态复位：失败项直接回到加载态，
+// 清掉失败次数与冷却时间，以后再失败还能由用户再点一次。非失败项不动，
+// 因此连点也只会有一次下载。调用方持有 c.mu。
+func (e *imageEntry) restartFailed() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.state != imageFailed {
+		return false
+	}
+	e.state = imageLoading
+	e.failures = 0
+	e.failedAt = time.Time{}
+	return true
+}
+
 // adjustMemory 把一张图解码后的占用变化记进总量，超出预算时顺手淘汰。
 // 条目在解码期间可能已被淘汰：那时它不再是表里那一个，这笔占用没有主人，
 // 直接丢掉，否则 c.bytes 只涨不落，淘汰会越跑越无效。
@@ -1213,6 +1228,28 @@ func (c *imageCache) prefetchFor(raw string, cat imageCategory, f imageFetcher, 
 		return
 	}
 	c.enqueue(imageJob{raw: raw, cat: cat, f: f})
+}
+
+// restartFailed 把一个已登记失败的地址复位成加载态，返回是否真的复位。
+// 预览档的后台取图不走通用队列（它用 raw+"|preview" 当键，自己解码与写盘），
+// 所以那里先用这个方法清掉失败态，再启动自己的下载。
+func (c *imageCache) restartFailed(raw string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e := c.entries[strings.TrimSpace(raw)]
+	return e != nil && e.restartFailed()
+}
+
+// retry 重新下载一张用户显式要求重试的失败图：与 begin 的自动有限重试不同，
+// 这里不受冷却期与失败次数限制。只有登记过的失败项会入队，加载中或已成功
+// 的图不会被重复下载。
+func (c *imageCache) retry(raw string, cat imageCategory, f imageFetcher) bool {
+	raw = strings.TrimSpace(raw)
+	if !c.restartFailed(raw) {
+		return false
+	}
+	c.enqueue(imageJob{raw: raw, cat: cat, f: f})
+	return true
 }
 
 // enqueue 把任务放到对应优先级队列，并按排队数量补 worker。队列没有上限：

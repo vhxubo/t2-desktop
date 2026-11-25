@@ -932,6 +932,7 @@ func (a *app) viewerIconButton(c *ui.Context, icon *ui.SVG, label, tip string, d
 // 再按 panX / panY 平移；放大到超出舞台时四周被裁掉，按住左键拖动可以挪着看，
 // 指针停在图上时给出抓手光标。动图（gif / apng）在「动图自动播放」打开时用
 // 播放器逐帧播放，否则只显示首帧。视频是一张封面卡片，点一下在浏览器里播放。
+// 图还没出来时空态分加载中与失败：失败时整块可点，重新下载这张图。
 func (a *app) imageViewerStage(c *ui.Context, v *imageViewer, p articlePicture, src ui.ImageSource, iw, ih float32, lay viewerLayout, zoom float32) {
 	t := c.Theme()
 	stage := ui.Box(c).Grow(1).FillWidth().MinHeight(0).Center().Clip()
@@ -940,12 +941,27 @@ func (a *app) imageViewerStage(c *ui.Context, v *imageViewer, p articlePicture, 
 		return
 	}
 	pl := a.viewerPlayer(v, p)
+	// 空态分两种：还在下载时转圈，已经失败时给出可点的重试。预览档与正文档
+	// 任有一张失败都算失败——它们都取不到图时舞台才空着（见 viewerImage）。
+	pending := src == nil && pl == nil
+	failed := pending && (a.images.state(viewerCacheKey(p.URL)) == imageFailed ||
+		a.images.state(p.URL) == imageFailed)
+	if failed {
+		stage.Cursor(ui.CursorPointer).OnClick(func() { a.retryViewerImage(p.URL) })
+	}
 	stage.Children(func() {
-		if src == nil && pl == nil {
-			ui.Column(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				lobeSpin(c, feedback.SpinProps{CustomSize: 20}).Label("图片加载中")
-				ui.Text(c, imageViewerEmpty).FontSize(13).TextColor(t.TextMuted)
-			})
+		if pending {
+			if failed {
+				ui.Column(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, imageFailedText).FontSize(13).TextColor(t.TextMuted)
+					ui.Text(c, imageRetryText).FontSize(12).TextColor(t.TextMuted)
+				})
+			} else {
+				ui.Column(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					lobeSpin(c, feedback.SpinProps{CustomSize: 20}).Label("图片加载中")
+					ui.Text(c, imageViewerEmpty).FontSize(13).TextColor(t.TextMuted)
+				})
+			}
 			return
 		}
 		px, py := viewerPan(v.panX, v.panY, iw, ih, zoom, lay)
@@ -1078,9 +1094,22 @@ func (a *app) loadViewerImage(raw string) {
 	if raw == "" || !a.autoLoad {
 		return
 	}
+	a.loadViewerImageFor(raw, false)
+}
+
+// loadViewerImageFor 是预览档取图的实现：force 为真时调用方已经把失败项复位
+// （见 retryViewerImage），这里直接启动下载；否则由 begin 保证同一地址只下
+// 一次。用户显式点重试不受 autoLoad 限制。
+func (a *app) loadViewerImageFor(raw string, force bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return
+	}
 	key := viewerCacheKey(raw)
-	if _, created := a.images.begin(key); !created {
-		return // 已经取过，或正在取
+	if !force {
+		if _, created := a.images.begin(key); !created {
+			return // 已经取过，或正在取
+		}
 	}
 	gen := a.images.generation()
 	go func() {
@@ -1109,6 +1138,22 @@ func (a *app) loadViewerImage(raw string) {
 		e.set(src)
 		a.redrawViewerWindow()
 	}()
+}
+
+// retryViewerImage 是预览空态点「重试」的动作：预览档自己走后台下载，先用
+// restartFailed 清掉失败态再启动；正文那一份也一起重试，预览取不到时仍能
+// 退回按栏宽解出的图。最后重建界面，让空态立刻换成加载中。
+func (a *app) retryViewerImage(raw string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return
+	}
+	restarted := a.images.restartFailed(viewerCacheKey(raw))
+	a.images.retry(raw, imageCacheTemporary, a.imageFetcher())
+	if restarted {
+		a.loadViewerImageFor(raw, true)
+	}
+	a.publish(func() {})
 }
 
 // viewerCacheKey 是预览档解码结果在图片缓存里登记的名字：与正文那张图分开
