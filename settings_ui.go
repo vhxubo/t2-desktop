@@ -135,16 +135,20 @@ func (a *app) redrawSettingsWindow() {
 	}
 }
 
+// checkForUpdatesForApp 是更新插件的手动检查入口，单独抽一层给测试替换，
+// 免得无头用例真的打开原生更新窗口。
+var checkForUpdatesForApp = updater.CheckForUpdates
+
 // checkForUpdates 是设置窗口里的「检查更新」：真实应用里交给 updater 插件，
 // 它会打开更新窗口说明结果；无头测试与未装插件的构建只触发测试钩子。
 func (a *app) checkForUpdates() {
 	if a.onUpdateCheck != nil {
 		a.onUpdateCheck()
 	}
-	if a.win == nil || !a.updates {
+	if !a.updatesEnabled() {
 		return
 	}
-	updater.CheckForUpdates()
+	checkForUpdatesForApp()
 }
 
 /* ------------------------------------------------------------------

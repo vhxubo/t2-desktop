@@ -77,7 +77,7 @@ func (a *app) applyIdleAutoDownload() {
 	if a.onIdleAutoDownload != nil {
 		a.onIdleAutoDownload(on)
 	}
-	if !a.updates {
+	if !a.updatesEnabled() {
 		return
 	}
 	updater.SetAutomaticDownloads(on)

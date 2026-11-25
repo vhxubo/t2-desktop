@@ -219,9 +219,6 @@ type app struct {
 	diagnosticsIncludePrefs  bool
 	diagnosticsPathHook      func() (string, error)
 	onDiagnosticsExported    func(path string, err error)
-	// updates 表示更新插件已安装（main 里 mygo.Use 之后置 true）。无头
-	// 测试不装插件，点「检查更新」只走测试钩子，不会碰 updater 的主循环。
-	updates bool
 	// onSettingsOpen / onUpdateCheck / onCoinsOpen / onPandoraOpen /
 	// onProfileOpen / onSignIn 是测试钩子：无窗口时用来确认按钮确实接上了
 	// 动作。生产为 nil。
@@ -724,6 +721,13 @@ func newMainApp(d *desktop) *app {
 	return a
 }
 
+// updatesEnabled 报告更新插件是否已安装。这个标记在 mygo.Use 之后才由 main
+// 立起来，晚于 newMainApp，所以窗口不能构造时快照一次就一直用：否则设置页
+// 的「检查更新」会以为插件没装而直接返回，点了没反应。托盘同理，都实时查。
+func (a *app) updatesEnabled() bool {
+	return a != nil && a.desktop != nil && a.desktop.updates
+}
+
 func newAppWithDeps(d appDeps, auth *AuthManager) *app {
 	if auth == nil {
 		auth = newAuthManagerAt(d.dir, d.proxy)
@@ -770,11 +774,11 @@ func newAppWithDeps(d appDeps, auth *AuthManager) *app {
 	// 损坏都按空草稿处理）。
 	a.drafts = newDraftStore(d.dir)
 	if d.desktop != nil {
-		// 这几项是进程级的：回调协议是否注册成功、更新插件装没装、以及怎么
-		// 真正退出应用。窗口只是照着用。托盘不在这里拍快照：它要等应用就绪
-		// 才创建，晚于 app 构建，只能实时查（见 trayIsReady）。
+		// 这几项是进程级的：回调协议是否注册成功，以及怎么真正退出应用。
+		// 窗口只是照着用。托盘和更新插件标记都晚于 app 构建才就绪：托盘要等
+		// 应用就绪才创建（见 trayIsReady），更新插件在 mygo.Use 之后才装上，
+		// 所以这里不能拍快照，必须实时查（见 updatesEnabled）。
 		a.schemeWarn = d.desktop.schemeWarning()
-		a.updates = d.desktop.updates
 		a.notify = d.desktop.notify
 		a.quitApp = d.desktop.quitProgram
 	}

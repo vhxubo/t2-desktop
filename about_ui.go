@@ -206,7 +206,7 @@ func (a *app) aboutHero(c *ui.Context) {
 				}
 			})
 			// 上一次检查若发现有新版本，这里提示一下，点「检查更新」看详情。
-			if a.updates {
+			if a.updatesEnabled() {
 				if v := updater.AvailableVersion(); v != "" {
 					feedback.Alert(c, "发现新版本 "+v, feedback.AlertProps{
 						Type: feedback.Info, Variant: feedback.Soft,
