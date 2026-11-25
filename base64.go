@@ -156,7 +156,7 @@ func (a *app) base64CommentBlock(c *ui.Context, d *detailState, token, key strin
 	if !ok {
 		// splitBase64Segments 已经验过一遍；这里再兜一次，免得将来别的入口
 		// 直接调本函数时画出一个解不开的块。
-		ui.Text(c, token).FontSize(commentFontSize).MaxLines(4)
+		ui.Text(c, token).FontSize(a.typeSizes().comment).MaxLines(4)
 		return
 	}
 	if d.base64Revealed(key) {
@@ -202,7 +202,7 @@ func (a *app) base64DecodedBlock(c *ui.Context, d *detailState, plain, key strin
 		Background(commentHelperBlockBg(t))
 	box.Children(func() {
 		ui.Column(c).FillWidth().Gap(6).Children(func() {
-			ui.Text(c, plain).FontSize(commentFontSize).TextColor(t.Text).
+			ui.Text(c, plain).FontSize(a.typeSizes().comment).TextColor(t.Text).
 				Selectable().MinWidth(0)
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				if ui.Button(c, "复制").Background(ui.Transparent).

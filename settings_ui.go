@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/egoist/mygo"
@@ -15,6 +16,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
 	"github.com/lobehub/lobe-mygo/pkg/nav"
+	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
@@ -220,6 +222,7 @@ func (a *app) settingsWindowView(c *ui.Context) {
 					a.imageCacheSection(c)
 					a.imageHostsSection(c)
 				case settingsTabReading:
+					a.readingTypographySection(c)
 					a.commentSettingsSection(c)
 					a.readingSettingsSection(c)
 				case settingsTabNotify:
@@ -294,10 +297,15 @@ func settingsDescription(c *ui.Context, text string, rows int) {
 // 一枚游标滑过 240ms，紧接着点另一档会落在旧游标上（无头测试里尤其明显），
 // 而设置里的几档只是普通选项，按钮自己的高亮就够了。
 func settingsChoice(c *ui.Context, label string, options []string, index int) int {
-	if index < 0 || index >= len(options) {
+	if index >= len(options) {
 		index = 0
 	}
-	selected := []string{options[index]}
+	// index 为 -1 表示精确数值不在预设档位里：这一帧不预选任何档位，
+	// 用户点某一档再返回它的序号（ToggleGroup 会把选中项写回 selected）。
+	selected := []string{}
+	if index >= 0 {
+		selected = append(selected, options[index])
+	}
 	items := make([]choice.ToggleItem, 0, len(options))
 	for _, option := range options {
 		items = append(items, choice.ToggleItem{Value: option, Label: option})
@@ -313,6 +321,17 @@ func settingsChoice(c *ui.Context, label string, options []string, index int) in
 		}
 	}
 	return index
+}
+
+// settingsNumber 画一列紧凑的 Lobe 数字输入框：标签在上、输入在下。两列并排
+// 放在一行里，五个数值只占三行，同页的其它设置才不会被挤出默认高度的窗口。
+// InputNumber 只接受 float64，改完返回当前值；调用方换算后落盘。
+func settingsNumber(c *ui.Context, label, accessible string, value *float64, p field.InputNumberProps) float64 {
+	ui.Column(c).Grow(1).MinWidth(0).Gap(5).AlignItems(ui.Stretch).Children(func() {
+		display.Text(c, label, display.TextProps{FontSize: 12, Rows: 1})
+		field.InputNumber(c, value, p).Label(accessible)
+	})
+	return *value
 }
 
 // settingsCheckbox 画一整行的 Lobe 开关，返回这一帧勾选的状态。绑定在局部值上，
@@ -474,6 +493,151 @@ func (a *app) appearanceSettingsSection(c *ui.Context) {
 			a.saveThemeChoice()
 		}
 	})
+}
+
+/* ------------------------------------------------------------------
+   阅读排版一块：字号 / 行距 / 页宽 / 列表密度
+ --------------------------------------------------------------- */
+
+// readingTypographySection 是「阅读与评论」页顶部的排版块：每组设置先给常用
+// 档位快选，再用 lobeui 数字输入框做精确控制。两项都写同一份数值，档位只是
+// 数值命中预设时的快捷入口；数值不在预设里就不高亮任何档位。改动立即落盘，
+// 重建本窗口与所有账号窗口的 Markdown 选项并让它们下一帧重画；写盘失败时
+// 撤回内存值，界面停在旧值。列表字号、系统 UI 与编辑器不受影响。
+func (a *app) readingTypographySection(c *ui.Context) {
+	if a.typePrefs == nil {
+		a.typePrefs = newTypographyStore(a.draftDir)
+	}
+	p := a.typePrefs
+	change := func(set func() error) {
+		before := p.snapshot()
+		if err := set(); err != nil {
+			p.restore(before)
+			a.toast(toastSettings, err.Error())
+			return
+		}
+		a.toast(toastSettings, "已应用阅读排版")
+		a.applyTypographyChange()
+	}
+
+	settingsSection(c, "阅读排版", func() {
+		settingsDescription(c, "只改正文与评论的阅读字号、行距、页宽和行密度；档位是常用值，下方数字框可微调。列表字号与系统界面不变。", 2)
+
+		body := typographyOptionIndex(typographyBodySizes, p.bodySize())
+		if sel := settingsChoice(c, "正文字号", typographyBodyOptions, body); sel >= 0 && sel != body {
+			v := typographyOptionValue(typographyBodySizes, sel)
+			change(func() error { return p.setBodySize(v) })
+		}
+		line := typographyOptionIndex(typographyLineHeights, p.lineHeight())
+		if sel := settingsChoice(c, "行距", typographyLineOptions, line); sel >= 0 && sel != line {
+			v := typographyOptionValue(typographyLineHeights, sel)
+			change(func() error { return p.setLineHeight(v) })
+		}
+		width := typographyOptionIndex(typographyPageWidths, p.pageWidth())
+		if sel := settingsChoice(c, "页宽", typographyWidthOptions, width); sel >= 0 && sel != width {
+			v := typographyOptionValue(typographyPageWidths, sel)
+			change(func() error { return p.setPageWidth(v) })
+		}
+		density := p.density()
+		if sel := settingsChoice(c, "列表密度", typographyDensityNames, density); sel >= 0 && sel != density {
+			change(func() error { return p.setDensity(sel) })
+		}
+
+		bodyNum := float64(p.bodySize())
+		lineNum := float64(p.lineHeight()) / 10
+		widthNum := float64(p.pageWidth())
+		padNum := float64(p.rowPadY())
+		gapNum := float64(p.rowGap())
+		ui.Row(c).FillWidth().Gap(8).Children(func() {
+			if v := int(math.Round(settingsNumber(c, "正文字号（DIP）", "正文字号数值", &bodyNum,
+				field.InputNumberProps{Min: typographyBodyMin, Max: typographyBodyMax, Step: 1,
+					Precision: 0, Size: lobetheme.Small}))); v != p.bodySize() {
+				change(func() error { return p.setBodySize(v) })
+			}
+			if v := int(math.Round(settingsNumber(c, "行距（倍）", "行距数值", &lineNum,
+				field.InputNumberProps{Min: 1.2, Max: 2.4, Step: 0.1,
+					Precision: 1, Size: lobetheme.Small}) * 10)); v != p.lineHeight() {
+				change(func() error { return p.setLineHeight(v) })
+			}
+		})
+		ui.Row(c).FillWidth().Gap(8).Children(func() {
+			if v := int(math.Round(settingsNumber(c, "页宽（DIP）", "页宽数值", &widthNum,
+				field.InputNumberProps{Min: typographyWidthMin, Max: typographyWidthMax, Step: 1,
+					Precision: 0, Size: lobetheme.Small}))); v != p.pageWidth() {
+				change(func() error { return p.setPageWidth(v) })
+			}
+			if v := int(math.Round(settingsNumber(c, "行留白（DIP）", "行留白数值", &padNum,
+				field.InputNumberProps{Min: typographyPadMin, Max: typographyPadMax, Step: 1,
+					Precision: 0, Size: lobetheme.Small}))); v != p.rowPadY() {
+				change(func() error { return p.setRowPadY(v) })
+			}
+		})
+		settingsNumber(c, "行内间距（DIP）", "行内间距数值", &gapNum,
+			field.InputNumberProps{Min: typographyGapMin, Max: typographyGapMax, Step: 1,
+				Precision: 0, Size: lobetheme.Small})
+		if v := int(math.Round(gapNum)); v != p.rowGap() {
+			change(func() error { return p.setRowGap(v) })
+		}
+
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			btn := action.Button(c, "恢复默认排版", action.ButtonProps{Size: lobetheme.Small})
+			btn.Label("恢复默认排版")
+			lobeoverlay.Popover(c, btn, &a.typographyConfirmOpen, lobeoverlay.PopoverProps{
+				Placement: lobeoverlay.Top,
+			}, func() {
+				a.typographyResetPanel(c)
+			})
+		})
+	})
+}
+
+// typographyResetPanel 是「恢复默认排版」的二次确认：只重置四项排版，
+// 评论开关与阅读记录都不动。确认弹窗沿用「一键重置所有设置」的样式。
+func (a *app) typographyResetPanel(c *ui.Context) {
+	ui.Column(c).Width(240).Gap(10).Children(func() {
+		display.Text(c, "确定恢复默认阅读排版？", display.TextProps{
+			Strong: true, FontSize: 12, Rows: 2,
+		})
+		display.Text(c, "只重置字号、行距、页宽与列表密度，不影响评论设置和阅读记录。",
+			display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 3})
+		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Spacer(c).Grow(1)
+			if action.Button(c, "取消", action.ButtonProps{Size: lobetheme.Small}).Clicked() {
+				a.typographyConfirmOpen = false
+			}
+			if action.Button(c, "确认恢复", action.ButtonProps{
+				Size: lobetheme.Small, Variant: action.Primary,
+			}).Clicked() {
+				a.typographyConfirmOpen = false
+				before := a.typePrefs.snapshot()
+				if err := a.typePrefs.Reset(); err != nil {
+					a.typePrefs.restore(before)
+					a.toast(toastSettings, err.Error())
+					return
+				}
+				a.toast(toastSettings, "已恢复默认排版")
+				a.applyTypographyChange()
+			}
+		})
+	})
+}
+
+// typographyOptionIndex 找不到预设值时返回 -1：精确数值不落在档位上，
+// 任何档位都不该显示为选中。
+func typographyOptionIndex(values []int, v int) int {
+	for i, x := range values {
+		if x == v {
+			return i
+		}
+	}
+	return -1
+}
+
+func typographyOptionValue(values []int, i int) int {
+	if i >= 0 && i < len(values) {
+		return values[i]
+	}
+	return values[0]
 }
 
 /* ------------------------------------------------------------------

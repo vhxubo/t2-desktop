@@ -478,6 +478,7 @@ func applyBet(d *detailState, optionID string, coins int, actor string) {
 // 主动发起的只读查询（见 loadBets）。
 func (a *app) betSection(c *ui.Context, d *detailState) {
 	t := c.Theme()
+	ts := a.typeSizes()
 	b := betDisplay(d)
 	if b == nil {
 		return
@@ -489,11 +490,11 @@ func (a *app) betSection(c *ui.Context, d *detailState) {
 		if b.Title != "" {
 			title += " · " + b.Title
 		}
-		ui.Text(c, title).FontSize(commentFontSize).Bold()
+		ui.Text(c, title).FontSize(ts.comment).Bold()
 		if b.ParticipateDeadline != "" {
 			if tm, ok := betTime(b.ParticipateDeadline); ok {
 				ui.Textf(c, "参与截止 %s", tm.Format("01-02 15:04")).
-					FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+					FontSize(ts.metaSmall).TextColor(t.TextMuted)
 			}
 		}
 		closed := betParticipationClosed(b)
@@ -509,7 +510,7 @@ func (a *app) betSection(c *ui.Context, d *detailState) {
 			if betSettled(b) && o.ID == b.SettledOptionID {
 				label += " · 已中签"
 			}
-			row := ui.Button(c, label).FontSize(metaFontSize).FillWidth().
+			row := ui.Button(c, label).FontSize(ts.meta).FillWidth().
 				Disabled(closed || d.bet.busy || o.ID == "")
 			if !closed && row.Clicked() {
 				a.openBetPanel(d, o.ID)
@@ -570,11 +571,12 @@ func (a *app) betDialog(c *ui.Context, d *detailState) {
 // 扣币」说清楚。
 func (a *app) betPanel(c *ui.Context, d *detailState, o betOption) {
 	t := c.Theme()
+	ts := a.typeSizes()
 	ui.Column(c).FillWidth().Gap(6).Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.NumberInput(c, &d.bet.amount, betCoinsMin, betCoinsMax, 1).
 				Label("投入金币").Width(120).Disabled(d.bet.busy)
-			ui.Text(c, "金币").FontSize(metaFontSize).TextColor(t.TextMuted)
+			ui.Text(c, "金币").FontSize(ts.meta).TextColor(t.TextMuted)
 			if a.coins != nil && a.coins.balanceOK {
 				ui.Textf(c, "余额 %s", coinThousands(a.coins.balance)).
 					FontSize(11).TextColor(t.TextMuted).SingleLine()

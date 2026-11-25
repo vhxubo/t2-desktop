@@ -266,20 +266,6 @@ func (d *detailState) originURL() string {
 	return d.fallbackURL
 }
 
-// 详情页的字号阶梯。详情页是用来读长文的地方，整体比列表页大一档：
-// 正文 16 DIP 配 1.7 倍行高，中文长段落才读得下去；评论比正文小一号但仍
-// 明显大于列表摘要。元信息只降到 12，不再出现 9～10 这种要凑近看的字号。
-const (
-	postTitleFontSize    float32 = 26 // 帖子标题：整页唯一的大字
-	postBodyFontSize     float32 = 16 // 帖子正文
-	postAuthorFontSize   float32 = 14 // 帖子作者：比评论作者高半档
-	commentFontSize      float32 = 15 // 评论正文
-	sectionTitleFontSize float32 = 16 // 「评论」这类区块标题
-	metaFontSize         float32 = 13 // 作者名、分类、标签、引用、行内动作
-	metaSmallFontSize    float32 = 12 // 时间、楼层、浏览数、计数
-	noticeFontSize       float32 = 12 // 页面顶部的一行状态说明
-)
-
 // 楼主回复上那枚「OP」标签的配色：站点网页用 #00d3bb 的青绿底配
 // oklch(38% .063 188.416) 的深青字。这套颜色不跟主题的强调色走——强调色
 // 已经用来表示「当前账号的回复」与置顶 / 定位，OP 要自己是一眼可辨的标记。
@@ -329,15 +315,9 @@ type mdTextStyle struct {
 	imageMaxH               float32
 }
 
-// 正文与评论是两种阅读节奏：正文行距更松、段距更大，评论更紧凑但仍比
-// 旧版宽松；个人简介夹在资料卡里，比两者都紧。评论的图片要限高，否则一张
-// 竖图就能占满整个评论区；正文保留撑栏宽的阅读体验。
-var (
-	postTextStyle    = mdTextStyle{size: postBodyFontSize, line: 1.7, block: 0.85, item: 0.35}
-	commentTextStyle = mdTextStyle{size: commentFontSize, line: 1.65, block: 0.7, item: 0.3,
-		imageMaxH: commentImageMaxH}
-	bioTextStyle = mdTextStyle{size: userCardBioFontSize, line: 1.6, block: 0.6}
-)
+// 个人简介夹在资料卡里，比正文与评论都紧，也不跟随阅读排版缩放。正文与
+// 评论的排版见 typography.go 的 mdStyles：字号与行距都按偏好现算。
+var bioTextStyle = mdTextStyle{size: userCardBioFontSize, line: 1.6, block: 0.6}
 
 // newMarkdownOptions 造一套 Markdown 渲染选项。颜色、字体等未写的字段由
 // Markdown 默认主题按窗口外观补齐（见 markdown.Theme 的合并规则）。
@@ -365,12 +345,12 @@ func newMarkdownOptions(a *app, st mdTextStyle, mentions bool) *markdown.Options
 }
 
 // newCommentMarkdownOptions 造评论正文的 Markdown 选项：与正文同一套渲染，
-// 字号更小。light 为真时把引用 / 代码 / 表格这些辅助块统一成 commentHelperBG，并
-// 接管引用块的画法（见 commentQuoteBlock）；false 时与原来的选项完全一致，
-// 深色主题照旧由 Markdown 默认主题按外观给色。两份都在启动时建好，渲染时
-// 按窗口外观二选一，避免复制带 sync.Map 的 Options。
-func (a *app) newCommentMarkdownOptions(light bool) *markdown.Options {
-	o := newMarkdownOptions(a, commentTextStyle, true)
+// 字号与行距由调用方按偏好传入。light 为真时把引用 / 代码 / 表格这些辅助块
+// 统一成 commentHelperBG，并接管引用块的画法（见 commentQuoteBlock）；false
+// 时深色主题照旧由 Markdown 默认主题按外观给色。两份一起重建，渲染时按窗口
+// 外观二选一，避免复制带 sync.Map 的 Options。
+func (a *app) newCommentMarkdownOptions(st mdTextStyle, light bool) *markdown.Options {
+	o := newMarkdownOptions(a, st, true)
 	if light {
 		o.Theme.CodeBackground = commentHelperBG
 		o.Theme.CodeBlockBackground = commentHelperBG
@@ -1495,6 +1475,7 @@ func (a *app) detailRefreshButton(c *ui.Context, d *detailState) {
 func (a *app) topicBody(c *ui.Context, d *detailState) {
 	t := c.Theme()
 	tk := lobetheme.TokensOf(c)
+	ts := a.typeSizes()
 	// 评论定位、离线缓存与内联浏览层级原来占着页头的一整行；现在收进
 	// 正文顶部，只在有话说时才占一点点高度。
 	a.topicNotice(c, d)
@@ -1503,7 +1484,7 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 		return
 	}
 	if d.topicErr != "" {
-		ui.Text(c, "正文加载失败").FontSize(sectionTitleFontSize).Bold()
+		ui.Text(c, "正文加载失败").FontSize(ts.section).Bold()
 		ui.Text(c, d.topicErr).TextColor(t.Danger).MaxLines(4)
 		if ui.Button(c, "重试").Clicked() {
 			a.loadTopic()
@@ -1513,7 +1494,7 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 	p := d.topic
 	if p == nil {
 		// 正文还没到时仍以帖子编号占位：内联跳转后能看出当前是哪一帖。
-		ui.Text(c, "帖子 "+d.shortID).FontSize(metaFontSize).Bold().SingleLine()
+		ui.Text(c, "帖子 "+d.shortID).FontSize(ts.meta).Bold().SingleLine()
 		ui.Text(c, "暂无正文").TextColor(t.TextMuted)
 		return
 	}
@@ -1554,7 +1535,7 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 		if ps.CreatedAt != "" {
 			label += " · " + relativeTime(ps.CreatedAt)
 		}
-		ui.Text(c, label).FontSize(metaFontSize).Bold()
+		ui.Text(c, label).FontSize(ts.meta).Bold()
 		postEmojis := mergeEmojiMaps(a.emojis, p.Emojis, ps.Emojis)
 		a.markdownView(c, replaceEmoji(ps.Content, postEmojis, true), a.md)
 	}
@@ -1865,12 +1846,13 @@ func (a *app) topicAuthorLine(c *ui.Context, d *detailState) {
 		return
 	}
 	tk := lobetheme.TokensOf(c)
+	ts := a.typeSizes()
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 		// 作者身份在左侧自己的区域里换行，窄窗口也不会把收藏挤出这一行。
 		ui.Row(c).Grow(1).MinWidth(0).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 			if strings.TrimSpace(p.Author) != "" {
 				a.userTag(c, userTagSpec{
-					Name: p.Author, Avatar: p.Avatar, Size: postAuthorFontSize, Bold: true,
+					Name: p.Author, Avatar: p.Avatar, Size: ts.author, Bold: true,
 					Badges: p.Badges, Pro: p.AuthorIsPro,
 					UserMenu: func(identity ui.Element) {
 						a.detailAvatarMenu(c, identity, d, p.Author, p.AuthorID)
@@ -2496,6 +2478,7 @@ func paintReplyRails(c *ui.Context, row ui.Element, r replyItem, tree replyTreeG
 func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID string, isNew bool) {
 	t := c.Theme()
 	tk := lobetheme.TokensOf(c)
+	ts := a.typeSizes()
 	focused := focusID != "" && r.ID != "" && r.ID == focusID
 	mine := a.isMine(r.Author)
 	// 头像右键菜单要用构建这一帧的详情：内联浏览换层后 a.detail 会变，
@@ -2542,7 +2525,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 				collapsed := a.detail.collapsed[r.ID]
 				fold := ui.Button(c, "").
 					Background(ui.Transparent).Border(0, t.Border).
-					TextColor(t.TextMuted).FontSize(metaSmallFontSize).Padding(0, 0).Radius(4)
+					TextColor(t.TextMuted).FontSize(ts.metaSmall).Padding(0, 0).Radius(4)
 				if collapsed {
 					fold.Children(func() {
 						ui.Icon(c, chevronRightIcon).Size(13, 13).TextColor(t.TextMuted)
@@ -2577,7 +2560,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 			a.userTag(c, userTagSpec{
 				Name:   name,
 				Avatar: r.Avatar,
-				Size:   metaFontSize,
+				Size:   ts.meta,
 				Bold:   true,
 				Badges: r.Badges,
 				Pro:    r.AuthorIsPro,
@@ -2673,7 +2656,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 			} else {
 				ui.Column(c).Padding(4, 8, 4, 0).Radius(tk.BorderRadius).
 					Background(commentHelperBlockBg(t)).Children(func() {
-					ui.Text(c, label).FontSize(metaFontSize).TextColor(t.TextMuted).MaxLines(2)
+					ui.Text(c, label).FontSize(ts.meta).TextColor(t.TextMuted).MaxLines(2)
 				})
 			}
 		}
@@ -2696,7 +2679,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 			n := a.detail.hiddenCount[r.ID]
 			expand := ui.Button(c, fmt.Sprintf("展开 %d 条回复", n)).
 				Background(ui.Transparent).Border(0, t.Border).
-				TextColor(t.Accent).FontSize(metaFontSize).Padding(2, 6).Radius(5)
+				TextColor(t.Accent).FontSize(ts.meta).Padding(2, 6).Radius(5)
 			expand.Tooltip("展开楼中楼")
 			if expand.Clicked() {
 				if a.detail.collapsed == nil {
@@ -2737,6 +2720,7 @@ func (a *app) replyRow(c *ui.Context, r replyItem, tree replyTreeGuide, focusID 
 func (a *app) blockedReplyRow(c *ui.Context, r replyItem, tree replyTreeGuide, reason blockReason) {
 	t := c.Theme()
 	tk := lobetheme.TokensOf(c)
+	ts := a.typeSizes()
 	row := ui.Column(c).FillWidth().Height(32).Padding(0, 12, 0,
 		12+float32(r.Depth)*replyTreeIndent)
 	row.Background(ui.Transparent)
@@ -2746,12 +2730,12 @@ func (a *app) blockedReplyRow(c *ui.Context, r replyItem, tree replyTreeGuide, r
 	paintReplyRails(c, row, r, tree, false, false)
 	row.Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, reason.text()).FontSize(metaFontSize).
+			ui.Text(c, reason.text()).FontSize(ts.meta).
 				TextColor(tk.TextDescription).MaxLines(1)
 			ui.Spacer(c).Grow(1)
 			expand := ui.Button(c, "展开").Background(ui.Transparent).
 				Border(0, tk.BorderSecondary).TextColor(t.Accent).
-				FontSize(metaFontSize).Padding(2, 6).Radius(5)
+				FontSize(ts.meta).Padding(2, 6).Radius(5)
 			if expand.Clicked() {
 				if a.detail != nil {
 					if a.detail.revealed == nil {
@@ -2952,6 +2936,7 @@ func replyQuoteTarget(d *detailState, r replyItem) (replyItem, bool) {
 func (a *app) parentJump(c *ui.Context, label, parentID string, at int) {
 	t := c.Theme()
 	tk := lobetheme.TokensOf(c)
+	ts := a.typeSizes()
 	// ButtonBase 默认把子元素居中；这条引用是正文的一部分，必须和下面的
 	// 评论正文左对齐。光靠 Column 的拉伸只会让按钮变宽，里面的文字仍然
 	// 居中，所以显式从行首开始排。左侧 padding 留 0，引用文字才不会相对
@@ -2963,7 +2948,7 @@ func (a *app) parentJump(c *ui.Context, label, parentID string, at int) {
 		color = t.Accent
 	}
 	b.Children(func() {
-		ui.Text(c, label).FontSize(metaFontSize).TextColor(color).MaxLines(2)
+		ui.Text(c, label).FontSize(ts.meta).TextColor(color).MaxLines(2)
 	})
 	b.Tooltip("跳到被回复的评论")
 	if b.Clicked() && a.detail != nil {
@@ -3006,7 +2991,7 @@ func (a *app) replyAction(c *ui.Context, label string, onClick func()) {
 		Background(ui.Transparent).
 		Border(0, c.Theme().Border).
 		TextColor(c.Theme().Accent).
-		FontSize(metaFontSize).
+		FontSize(a.typeSizes().meta).
 		Padding(2, 7).
 		Radius(6)
 	if btn.Clicked() {
@@ -3373,12 +3358,13 @@ func (a *app) replyComposerStats(c *ui.Context, d *detailState) {
 func (a *app) replyDetachedHint(c *ui.Context, d *detailState) {
 	t := c.Theme()
 	tk := lobetheme.TokensOf(c)
+	ts := a.typeSizes()
 	// 提示条走平面样式：不画圆角与整圈描边，靠一层浅底和旁边内容分开。
 	row := ui.Row(c).FillWidth().Padding(6, 8).Gap(8).AlignItems(ui.Center).
 		Background(tk.FillQuaternary)
 	row.Children(func() {
 		ui.Icon(c, expandIcon).Size(14, 14).TextColor(t.Accent)
-		ui.Text(c, "正在独立窗口里写评论，可以一边看帖一边写").FontSize(metaFontSize).
+		ui.Text(c, "正在独立窗口里写评论，可以一边看帖一边写").FontSize(ts.meta).
 			TextColor(t.TextMuted).SingleLine().Grow(1).MinWidth(0)
 		if ui.Button(c, "收回评论区").
 			Tooltip("把草稿收回页面里的评论框，已经写好的文字不变").Clicked() {
@@ -3396,7 +3382,9 @@ func (a *app) replyTextArea(c *ui.Context, d *detailState, host replySurface, mo
 	// 三个模式都 Grow(1)：输入框占满整条，不再给行尾的动作让位。
 	// OnPaste 让直接粘进来的图片自动上传（见 pasteIntoEditor），文字仍按
 	// 原样插入。
-	area := ui.TextArea(c, &d.draft).Label("写评论").FontSize(commentFontSize).
+	// 输入场景不跟随阅读字号：评论框按基准字号画，锚点排版（mentions /
+	// emoji 补全）也用同一个基准，改排版不会让正在打的字忽然挪位。
+	area := ui.TextArea(c, &d.draft).Label("写评论").FontSize(typeBase.comment).
 		MinHeight(0).Background(ui.Transparent).
 		Border(0, t.Border).
 		OnPaste(func(text string) bool {

@@ -19,12 +19,13 @@ func (a *app) restrictedSection(c *ui.Context, d *detailState) {
 	}
 	unlocked := restrictedUnlocked(d)
 	t := c.Theme()
+	ts := a.typeSizes()
 	ui.Divider(c)
 	ui.Column(c).FillWidth().Padding(12, 14).Gap(6).Radius(10).
 		Background(t.Surface).Border(1, t.Border).Children(func() {
-		ui.Text(c, "受限内容").FontSize(commentFontSize).Bold()
+		ui.Text(c, "受限内容").FontSize(ts.comment).Bold()
 		for _, line := range gate.gateLines() {
-			ui.Text(c, line).FontSize(metaFontSize).TextColor(t.TextMuted)
+			ui.Text(c, line).FontSize(ts.meta).TextColor(t.TextMuted)
 		}
 		// 正文以 GET /restricted 读到的为准；详情自带正文时也能直接画。
 		var body string
@@ -37,7 +38,7 @@ func (a *app) restrictedSection(c *ui.Context, d *detailState) {
 			a.markdownView(c, body, a.md)
 		} else if unlocked {
 			ui.Text(c, "已解锁。若正文没有显示，请到原文查看。").
-				FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+				FontSize(ts.metaSmall).TextColor(t.TextMuted)
 		}
 
 		// 三个只读入口。详情打开时已经自动拉取过，这里是手动重试 / 重新读取：
@@ -113,19 +114,20 @@ func (a *app) restrictedUnlockDialog(c *ui.Context, d *detailState) {
 
 func (a *app) restrictedAuctionView(c *ui.Context, auc *auctionInfo) {
 	t := c.Theme()
+	ts := a.typeSizes()
 	ui.Column(c).FillWidth().Gap(3).Padding(8, 10).Radius(8).
 		Background(t.SurfaceHover).Children(func() {
-		ui.Text(c, "竞拍状态").FontSize(metaFontSize).Bold()
+		ui.Text(c, "竞拍状态").FontSize(ts.meta).Bold()
 		if auc.PriceKnown {
 			ui.Textf(c, "当前价 %s 金币", coinThousands(auc.Price)).
-				FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+				FontSize(ts.metaSmall).TextColor(t.TextMuted)
 		}
 		if auc.RemainKnown {
 			ui.Textf(c, "剩余 %d 秒", auc.RemainSeconds).
-				FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+				FontSize(ts.metaSmall).TextColor(t.TextMuted)
 		} else if tm, ok := betTime(auc.EndAt); ok {
 			ui.Textf(c, "截止 %s", tm.Format("01-02 15:04")).
-				FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+				FontSize(ts.metaSmall).TextColor(t.TextMuted)
 		}
 		for _, row := range auc.Top {
 			label := "领先"
@@ -135,21 +137,22 @@ func (a *app) restrictedAuctionView(c *ui.Context, auc *auctionInfo) {
 			if row.CoinsKnown {
 				label += " · " + coinThousands(row.Coins) + " 金币"
 			}
-			ui.Text(c, label).FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+			ui.Text(c, label).FontSize(ts.metaSmall).TextColor(t.TextMuted)
 		}
 	})
 }
 
 func (a *app) restrictedBidsView(c *ui.Context, bids *auctionBids) {
 	t := c.Theme()
+	ts := a.typeSizes()
 	ui.Column(c).FillWidth().Gap(3).Padding(8, 10).Radius(8).
 		Background(t.SurfaceHover).Children(func() {
-		ui.Text(c, "出价记录").FontSize(metaFontSize).Bold()
+		ui.Text(c, "出价记录").FontSize(ts.meta).Bold()
 		if !bids.Known {
 			return
 		}
 		if len(bids.Rows) == 0 {
-			ui.Text(c, "暂无出价记录").FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+			ui.Text(c, "暂无出价记录").FontSize(ts.metaSmall).TextColor(t.TextMuted)
 			return
 		}
 		for _, row := range bids.Rows {
@@ -164,7 +167,7 @@ func (a *app) restrictedBidsView(c *ui.Context, bids *auctionBids) {
 			if tm, ok := betTime(row.At); ok {
 				line += " · " + tm.Format("01-02 15:04")
 			}
-			ui.Text(c, line).FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+			ui.Text(c, line).FontSize(ts.metaSmall).TextColor(t.TextMuted)
 		}
 	})
 }
@@ -174,10 +177,11 @@ func (a *app) restrictedBidsView(c *ui.Context, bids *auctionBids) {
 // 写结论，结果由 submitRestrictedUnlock 用 toast 报告。
 func (a *app) restrictedUnlockPanel(c *ui.Context, d *detailState, price int) {
 	t := c.Theme()
+	ts := a.typeSizes()
 	ui.Column(c).FillWidth().Gap(6).Padding(8, 10).Radius(8).
 		Background(t.SurfaceHover).Children(func() {
 		ui.Textf(c, "此次解锁将扣除 %d 金币，确认后不可撤销。", price).
-			FontSize(metaSmallFontSize).TextColor(t.TextMuted).MaxLines(2)
+			FontSize(ts.metaSmall).TextColor(t.TextMuted).MaxLines(2)
 		if a.coins != nil && a.coins.balanceOK {
 			ui.Textf(c, "余额 %s", coinThousands(a.coins.balance)).
 				FontSize(11).TextColor(t.TextMuted).SingleLine()

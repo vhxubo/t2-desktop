@@ -172,6 +172,8 @@ type app struct {
 	settingsTab int
 	// resetConfirmOpen 是「一键重置所有设置」二次确认气泡的开合。
 	resetConfirmOpen bool
+	// typographyConfirmOpen 是「恢复默认排版」二次确认气泡的开合。
+	typographyConfirmOpen bool
 	// commands 是这个窗口的命令注册表。定义随窗口注册（Run 闭包要绑到本
 	// 窗口），绑定 / 收藏 / 最近使用的偏好来自进程级共享的 commands.json。
 	commands *commandRegistry
@@ -332,6 +334,9 @@ type app struct {
 	// 正文与评论里的配图先画占位、点一下才下载；动图自动播放决定 gif / apng
 	// 在正文与预览里是动图还是首帧。进程级共享，只在本窗口的界面里读。
 	imagePrefs *imagePrefsStore
+	// typePrefs 是阅读排版的四项偏好（见 typography.go）：正文与评论的字号、
+	// 行距、列表页宽与列表密度。进程级共享，只在 UI 线程读写。
+	typePrefs *typographyStore
 	// updateMirror 是更新包下载加速入口的选择（见 update_mirror.go）：默认
 	// 不选、走「网络代理」里配置的代理。进程级共享，只在本窗口的界面里读。
 	updateMirror *updateMirrorStore
@@ -618,6 +623,8 @@ type appDeps struct {
 	// imagePrefs 是图片显示的两项偏好：默认不加载图片、动图自动播放，
 	// 进程级一份（见 image_prefs.go）。
 	imagePrefs *imagePrefsStore
+	// typePrefs 是阅读排版的四项偏好（见 typography.go），进程级一份。
+	typePrefs *typographyStore
 	// updateMirror 是更新包下载加速入口的选择，进程级一份（见 update_mirror.go）。
 	updateMirror *updateMirrorStore
 	// updateChannel 是「接收测试版」的选择，进程级一份（见 update_channel.go）。
@@ -653,6 +660,7 @@ func newAppDeps(dir string) appDeps {
 		notificationPrefs: newNotificationPrefsStore(dir),
 		watchLaterPrefs:   newWatchLaterPrefsStore(dir),
 		imagePrefs:        newImagePrefsStore(dir),
+		typePrefs:         newTypographyStore(dir),
 		updateMirror:      newUpdateMirrorStore(dir),
 		updateChannel:     newUpdateChannelStore(dir),
 		autoSignPrefs:     newAutoSignPrefsStore(dir),
@@ -675,6 +683,7 @@ func (b *accountBook) deps() appDeps {
 		notificationPrefs: b.notificationPrefs,
 		watchLaterPrefs:   b.watchLaterPrefs,
 		imagePrefs:        b.imagePrefs,
+		typePrefs:         b.typePrefs,
 		updateMirror:      b.updateMirror,
 		updateChannel:     b.updateChannel,
 		autoSignPrefs:     b.autoSignPrefs,
@@ -730,6 +739,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 		notificationPrefs: d.notificationPrefs,
 		watchLaterPrefs:   d.watchLaterPrefs,
 		imagePrefs:        d.imagePrefs,
+		typePrefs:         d.typePrefs,
 		updateMirror:      d.updateMirror,
 		updateChannel:     d.updateChannel,
 		autoSignPrefs:     d.autoSignPrefs,
@@ -792,10 +802,7 @@ func newAppWithDeps(d appDeps, acc *account) *app {
 	a.loadNodePrefs()
 	a.bindAuth()
 	a.bindNetworkStatus()
-	a.md = newMarkdownOptions(a, postTextStyle, false)
-	a.commentMd = a.newCommentMarkdownOptions(false)
-	a.commentMdLight = a.newCommentMarkdownOptions(true)
-	a.bioMd = newMarkdownOptions(a, bioTextStyle, false)
+	a.rebuildMarkdownViews()
 	a.viewer = &imageViewer{}
 	a.registerBuiltinCommands()
 	return a
@@ -891,6 +898,60 @@ func (a *app) publish(fn func()) {
 			h.invalidate()
 		}
 	})
+}
+
+// rebuildMarkdownViews 按当前排版偏好重建四套 Markdown 选项。Options 带
+// sync.Map，不能复制也不能原地改：这里只整体替换指针。只在 UI 线程调用。
+func (a *app) rebuildMarkdownViews() {
+	post, comment, bio := a.mdStyles()
+	a.md = newMarkdownOptions(a, post, false)
+	a.commentMd = a.newCommentMarkdownOptions(comment, false)
+	a.commentMdLight = a.newCommentMarkdownOptions(comment, true)
+	a.bioMd = newMarkdownOptions(a, bio, false)
+}
+
+// invalidateReadingWindows 让本账号所有会显示阅读内容或分段选项的窗口
+// 下一帧重画。不改状态、不重建页面；只在 UI 线程调用。
+func (a *app) invalidateReadingWindows() {
+	if a == nil {
+		return
+	}
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+	for _, h := range a.detailWindows {
+		h.invalidate()
+	}
+	for _, win := range []*mygo.Window{
+		a.notifWin, a.settingsWin, a.profileWin, a.userCardWin, a.searchWin, a.followsWin,
+	} {
+		if win != nil {
+			win.Invalidate()
+		}
+	}
+}
+
+// applyTypographyChange 把新排版推给所有账号窗口：每个窗口的 Markdown 选项
+// 都绑着自己的 app，必须各自重建，然后一起重画。只在 UI 线程调用。
+func (a *app) applyTypographyChange() {
+	a.rebuildMarkdownViews()
+	a.invalidateReadingWindows()
+	if a.book == nil {
+		return
+	}
+	others := make([]*app, 0, len(a.book.snapshotAccounts())+1)
+	for _, acc := range a.book.snapshotAccounts() {
+		if acc.app != nil && acc.app != a {
+			others = append(others, acc.app)
+		}
+	}
+	if guest := a.book.guest; guest != nil && guest != a {
+		others = append(others, guest)
+	}
+	for _, other := range others {
+		other.rebuildMarkdownViews()
+		other.invalidateReadingWindows()
+	}
 }
 
 // redrawNotificationWindow asks the notification window, when it is open, for
@@ -2263,13 +2324,15 @@ func feedRowSurface(c *ui.Context) ui.Element {
 	return row
 }
 
-// feedInset 是正文栏两侧的留白：内容区宽于 feedMaxWidth 时把多余空间等分
-// 到两边，让文字栏居中；窗口本身更窄时退回 24 DIP 的最小边距。
-func feedInset(c *ui.Context) float32 {
+// feedInset 是正文栏两侧的留白：内容区宽于偏好里的页宽时把多余空间等分
+// 到两边，让文字栏居中；窗口本身更窄时退回 24 DIP 的最小边距。独立详情
+// 窗口是双栏布局，不走这里，页宽偏好不会和双栏比例打架。
+func (a *app) feedInset(c *ui.Context) float32 {
+	width := float32(a.pageWidth())
 	inset := float32(24)
 	if w, _ := c.Size(); w > 0 {
-		if avail := w - navSidebarWidth - 1; avail > feedMaxWidth {
-			inset = (avail - feedMaxWidth) / 2
+		if avail := w - navSidebarWidth - 1; avail > width {
+			inset = (avail - width) / 2
 		}
 	}
 	return inset
@@ -2281,7 +2344,7 @@ func feedInset(c *ui.Context) float32 {
 func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
 	tk := lobetheme.TokensOf(c)
 	ui.Column(c).FillWidth().Shrink(0).
-		Padding(24, feedInset(c)+16, 14, feedInset(c)+16).Children(func() {
+		Padding(24, a.feedInset(c)+16, 14, a.feedInset(c)+16).Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(24).Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 				ui.Text(c, spec.Label).FontSize(tk.FontSizeHeading4).FontWeight(600).
@@ -2438,7 +2501,7 @@ func (a *app) body(c *ui.Context) {
 	a.feedHeader(c, spec, st)
 	ui.List(c, &st.list, len(rows), func(i int) {
 		a.foldRowView(c, rows[i])
-	}).Grow(1).Padding(0, feedInset(c), 10, feedInset(c)).Gap(0)
+	}).Grow(1).Padding(0, a.feedInset(c), 10, a.feedInset(c)).Gap(0)
 	a.loadMoreFooter(c, st.moreErr, st.loading, func() {
 		a.load(a.tab, st.page)
 	})
@@ -2464,7 +2527,7 @@ func (a *app) loadMoreFooter(c *ui.Context, errText string, loading bool, retry 
 		return
 	}
 	tk := lobetheme.TokensOf(c)
-	ui.Row(c).FillWidth().Padding(8, composeFabInset, 8, feedInset(c)).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Padding(8, composeFabInset, 8, a.feedInset(c)).Gap(8).AlignItems(ui.Center).Children(func() {
 		if errText != "" {
 			ui.Text(c, "加载更多失败："+errText).FontSize(tk.FontSizeSM).
 				TextColor(tk.Error).MaxLines(2).Grow(1)
@@ -2503,13 +2566,13 @@ func (a *app) rowWithOptions(c *ui.Context, it Item, open func(Item), watchLater
 	tk := lobetheme.TokensOf(c)
 	titleColor := postReadInk(tk, a.isPostRead(it.ShortID))
 	// 统一的 Lobe 行表面：静止透明、悬停 FillTertiary、圆角与过渡取主题。
-	// 纵向 padding 收紧到 Lobe 节奏（内容行略高于导航行的 6），横向 12 对齐 token。
-	row := feedRowSurface(c).PaddingY(10).PaddingX(12)
+	// 纵向 padding 与行内间距跟列表密度偏好走，横向 12 对齐 token，字号不变。
+	row := feedRowSurface(c).PaddingY(a.rowPadY()).PaddingX(12)
 	// 稍后再看按钮是悬浮动作：指针停在行上或键盘焦点落进行内时才出现，
 	// 平时让行尾只留回复数；浏览历史这类窗口整行不挂该按钮。
 	reveal := watchLater && (row.Hovered() || row.FocusWithin())
 	row.Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(a.rowGap()).Children(func() {
 			// 标题是这一行里唯一的重心：字号明显大于副标题和时效信息，
 			// 靠字号与颜色分层：未读用正文色，已读退到四级文字色。字号用
 			// Lobe 的 LG（16），比原先的 19 收一档，贴近 Lobe 列表的密度。

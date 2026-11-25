@@ -167,6 +167,8 @@ type accountBook struct {
 	// imagePrefs 是图片显示的两项偏好（默认不加载图片、动图自动播放），
 	// 进程级一份（见 image_prefs.go）。
 	imagePrefs *imagePrefsStore
+	// typePrefs 是阅读排版的四项偏好，进程级一份（见 typography.go）。
+	typePrefs *typographyStore
 	// updateMirror 是更新包下载加速入口的选择（默认不选、走代理），
 	// 进程级一份（见 update_mirror.go）。
 	updateMirror *updateMirrorStore
@@ -264,6 +266,7 @@ func newAccountBook(dir string) *accountBook {
 		notificationPrefs: newNotificationPrefsStore(dir),
 		watchLaterPrefs:   newWatchLaterPrefsStore(dir),
 		imagePrefs:        newImagePrefsStore(dir),
+		typePrefs:         newTypographyStore(dir),
 		updateMirror:      newUpdateMirrorStore(dir),
 		updateChannel:     newUpdateChannelStore(dir),
 		autoSignPrefs:     newAutoSignPrefsStore(dir),

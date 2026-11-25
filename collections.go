@@ -466,6 +466,7 @@ func (a *app) collectionButton(c *ui.Context, d *detailState) {
 		return
 	}
 	t := c.Theme()
+	ts := a.typeSizes()
 	label := "合集"
 	tip := "把这篇帖子归入我的合集"
 	if d.topic.CollectionKnown && d.topic.CollectionID != "" {
@@ -479,7 +480,7 @@ func (a *app) collectionButton(c *ui.Context, d *detailState) {
 	b := ui.Button(c, label).
 		Background(ui.Transparent).
 		Border(1, t.Border).
-		FontSize(metaFontSize).
+		FontSize(ts.meta).
 		Padding(4, 10).
 		Radius(999).
 		Shrink(0)
@@ -574,6 +575,7 @@ func (a *app) collectionPanel(c *ui.Context, d *detailState) {
 // collectionRow 是弹窗里的一行合集：点一下归入；当前所在的合集点一下移出。
 func (a *app) collectionRow(c *ui.Context, d *detailState, item collectionItem) {
 	t := c.Theme()
+	ts := a.typeSizes()
 	current := d.topic != nil && d.topic.CollectionKnown && d.topic.CollectionID == item.ID
 	row := ui.Row(c).FillWidth().Padding(3, 6).Radius(6).Gap(6).
 		AlignItems(ui.Center).Background(ui.Transparent)
@@ -581,7 +583,7 @@ func (a *app) collectionRow(c *ui.Context, d *detailState, item collectionItem) 
 		row.Background(t.SurfaceHover)
 	}
 	row.Children(func() {
-		ui.Text(c, item.Name).FontSize(metaFontSize).SingleLine().Grow(1)
+		ui.Text(c, item.Name).FontSize(ts.meta).SingleLine().Grow(1)
 		if item.Count > 0 {
 			ui.Textf(c, "%d", item.Count).FontSize(11).TextColor(t.TextMuted).Shrink(0)
 		}

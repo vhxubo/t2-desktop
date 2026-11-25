@@ -259,7 +259,7 @@ func (a *app) scoresPage(c *ui.Context) {
 		// 页头：图标 + 页面名 + 总数。留白照首页 feedHeader 来（左右
 		// feedInset+16），和首页正文栏是同一条居中列宽；自绘标题栏由主窗口
 		// 统一画，这里不再有拖动 / 最小化 / 关闭那一套。
-		ui.Row(c).FillWidth().Shrink(0).Padding(24, feedInset(c)+16, 14, feedInset(c)+16).
+		ui.Row(c).FillWidth().Shrink(0).Padding(24, a.feedInset(c)+16, 14, a.feedInset(c)+16).
 			Gap(10).AlignItems(ui.Center).Children(func() {
 			display.Icon(c, lucide.Trophy(), display.IconProps{Size: display.IconSmall}).
 				TextColor(tk.Primary)
@@ -285,7 +285,7 @@ func (a *app) scoresPage(c *ui.Context) {
 		}
 
 		// 列表左右同样收进 feedInset，和页头、筛选条、首页列表同一列宽。
-		ui.Column(c).Grow(1).MinHeight(0).Padding(8, feedInset(c)).Children(func() {
+		ui.Column(c).Grow(1).MinHeight(0).Padding(8, a.feedInset(c)).Children(func() {
 			a.scoresBody(c, st)
 		})
 	})
@@ -315,7 +315,7 @@ func (a *app) scoresFilters(c *ui.Context, st *scoresState) {
 	// 筛选条和首页正文栏同宽：外层吃掉 feedInset，内层只留 padding。这里不套
 	// Block 卡片——静止透明、不描边、不画圆角，和首页页头的筛选条一样靠留白
 	// 分层；宽窗口里不会横贯整屏，最小窗口下仍按 24 DIP 收边。
-	ui.Row(c).FillWidth().Padding(0, feedInset(c)).Children(func() {
+	ui.Row(c).FillWidth().Padding(0, a.feedInset(c)).Children(func() {
 		ui.Column(c).FillWidth().Padding(10, 14).Gap(8).Children(func() {
 			// 主窗口缩到最小宽度时，排序、标签、下拉与刷新挤在一行会把「评分分类」
 			// 截成「评…」。标签与下拉都不参与压缩，下拉宽度也按最小窗口留够余量，
@@ -409,11 +409,11 @@ func (a *app) scoresBody(c *ui.Context, st *scoresState) {
 // 左侧分值块，右侧对象名、分类、短评与评分人。
 // 无障碍名沿用「评分 <对象名>」，点击仍走 openScorePost 打开对应帖子。
 func (a *app) scoreRow(c *ui.Context, e scoreEntry) {
-	row := feedRowSurface(c).Padding(10, 12)
+	row := feedRowSurface(c).Padding(a.rowPadY(), 12)
 	row.Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Start).Children(func() {
 			a.scoreBadge(c, e)
-			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Gap(a.rowGap()).Children(func() {
 				ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
 					display.Text(c, e.Target, display.TextProps{
 						Strong: true, FontSize: 14, Rows: 2,

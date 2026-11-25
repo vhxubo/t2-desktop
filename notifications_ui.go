@@ -636,10 +636,10 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 	// 一条细分隔线；悬停铺 FillTertiary，整行仍是一张可点的 Block。正文不再
 	// 被卡片边框切碎，与主页列表行、账号面板同一套视觉语言。
 	card := layout.Block(c, layout.BlockProps{Clickable: true, Variant: layout.BlockBorderless}).
-		FillWidth().Padding(10, 12).Gap(4).Radius(0).
+		FillWidth().Padding(a.rowPadY(), 12).Gap(a.rowGap()).Radius(0).
 		BorderWidth(0, 0, 1, 0).BorderColor(tk.BorderSecondary)
 	card.Children(func() {
-		ui.Column(c).FillWidth().Gap(4).Children(func() {
+		ui.Column(c).FillWidth().Gap(a.rowGap()).Children(func() {
 			// 行头：勾选框（仅未读）、未读点、类型、时间，未读时右上角是
 			// 「标为已读」。这些都在行内，每行不再为它们各留一条竖带——旧
 			// 写法把勾选框和「已读」摆在行外面，正文被挤成窄窄一条。

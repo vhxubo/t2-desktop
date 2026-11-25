@@ -185,6 +185,7 @@ func (a *app) rewardPoolSection(c *ui.Context, d *detailState, p *rewardPoolInfo
 		return
 	}
 	t := c.Theme()
+	ts := a.typeSizes()
 	ended := p.Finished || p.Expired
 	coins := 0
 	if !ended && p.CoinsKnown {
@@ -194,7 +195,7 @@ func (a *app) rewardPoolSection(c *ui.Context, d *detailState, p *rewardPoolInfo
 	ui.Column(c).FillWidth().Padding(12, 14).Gap(6).Radius(10).
 		Background(t.Surface).Border(1, t.Border).Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, fmt.Sprintf("💰 %d 金币", coins)).FontSize(commentFontSize).Bold()
+			ui.Text(c, fmt.Sprintf("💰 %d 金币", coins)).FontSize(ts.comment).Bold()
 			ui.Spacer(c).Grow(1)
 			if a.canFundRewardPool(d, p) {
 				btn := ui.Button(c, "投入金币").FontSize(11).Padding(2, 8).Shrink(0)
@@ -205,9 +206,9 @@ func (a *app) rewardPoolSection(c *ui.Context, d *detailState, p *rewardPoolInfo
 			}
 		})
 		if ended {
-			ui.Text(c, rewardPoolStateText(p)).FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+			ui.Text(c, rewardPoolStateText(p)).FontSize(ts.metaSmall).TextColor(t.TextMuted)
 		}
-		ui.Text(c, rewardPoolHint).FontSize(metaFontSize).TextColor(t.TextMuted).MaxLines(3)
+		ui.Text(c, rewardPoolHint).FontSize(ts.meta).TextColor(t.TextMuted).MaxLines(3)
 	})
 }
 
@@ -259,6 +260,7 @@ func (a *app) prepareRewardPoolAmount(d *detailState) {
 // 用户填或点常用金额，按钮上写着具体数字，点下去才会扣币。
 func (a *app) rewardPoolPanel(c *ui.Context, d *detailState) {
 	t := c.Theme()
+	ts := a.typeSizes()
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		if d == nil || d.topic == nil || d.topic.RewardPool == nil {
 			return
@@ -274,7 +276,7 @@ func (a *app) rewardPoolPanel(c *ui.Context, d *detailState) {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.NumberInput(c, &d.pool.amount, rewardPoolCoinsLo, rewardPoolCoinsHi, 50).
 				Label("注资金额").Width(120)
-			ui.Text(c, "金币").FontSize(metaFontSize).TextColor(t.TextMuted)
+			ui.Text(c, "金币").FontSize(ts.meta).TextColor(t.TextMuted)
 			if a.coins != nil && a.coins.balanceOK {
 				ui.Textf(c, "余额 %s", coinThousands(a.coins.balance)).
 					FontSize(11).TextColor(t.TextMuted).SingleLine()
@@ -405,7 +407,7 @@ func (a *app) replyRewardPoolWinnings(c *ui.Context, r replyItem) {
 		return
 	}
 	t := c.Theme()
-	ui.Text(c, fmt.Sprintf("金币池 +%d", total)).FontSize(metaSmallFontSize).
+	ui.Text(c, fmt.Sprintf("金币池 +%d", total)).FontSize(a.typeSizes().metaSmall).
 		TextColor(t.Accent).
 		Tooltip("这条评论从帖子金币池里领到的金币")
 }

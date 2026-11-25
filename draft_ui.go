@@ -46,7 +46,7 @@ func (a *app) draftsBody(c *ui.Context) {
 	composeRows, replyRows := splitDraftRows(rows)
 
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-		ui.Column(c).FillWidth().Padding(24, feedInset(c)+16, 24, feedInset(c)+16).
+		ui.Column(c).FillWidth().Padding(24, a.feedInset(c)+16, 24, a.feedInset(c)+16).
 			Gap(8).Children(func() {
 			// 页头：标题与条数；右边是「写新帖」和「清空全部」。
 			ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(12).Children(func() {
@@ -144,12 +144,12 @@ func (a *app) draftRow(c *ui.Context, e draftEntry) {
 		// hover 目标，拿它判 hover 会让浮层在点击瞬间消失（见函数注释）。
 		cell := ui.Box(c).AlignSelf(ui.Stretch)
 		cell.Children(func() {
-			row := feedRowSurface(c).Padding(10, 12)
+			row := feedRowSurface(c).Padding(a.rowPadY(), 12)
 			row.Label("打开草稿：" + headline)
 			row.Children(func() {
 				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Icon(c, icon).Size(16, 16).TextColor(tk.TextSecondary).Shrink(0)
-					ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+					ui.Column(c).Grow(1).MinWidth(0).Gap(a.rowGap()).Children(func() {
 						ui.Text(c, headline).FontSize(tk.FontSizeLG).Bold().
 							MaxLines(1).TextColor(tk.Text)
 						if preview != "" {

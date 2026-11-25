@@ -453,17 +453,18 @@ func (a *app) redeemSection(c *ui.Context, d *detailState) {
 		return
 	}
 	t := c.Theme()
+	ts := a.typeSizes()
 	ui.Divider(c)
 	ui.Column(c).FillWidth().Padding(12, 14).Gap(6).Radius(10).
 		Background(t.Surface).Border(1, t.Border).Children(func() {
-		ui.Text(c, "兑换码").FontSize(commentFontSize).Bold()
+		ui.Text(c, "兑换码").FontSize(ts.comment).Bold()
 		if b.Description != "" {
-			ui.Text(c, b.Description).FontSize(metaSmallFontSize).
+			ui.Text(c, b.Description).FontSize(ts.metaSmall).
 				TextColor(t.TextMuted).MaxLines(4)
 		}
 		if b.MaxPerUserKnown && b.MaxPerUser > 0 {
 			ui.Textf(c, "每人可领 %d 个", b.MaxPerUser).
-				FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+				FontSize(ts.metaSmall).TextColor(t.TextMuted)
 		}
 		me := a.auth.username()
 		atLimit := b.MaxPerUserKnown && b.MaxPerUser > 0 && redeemMyCount(b, me) >= b.MaxPerUser
@@ -483,6 +484,7 @@ func (a *app) redeemSection(c *ui.Context, d *detailState) {
 // 只展示状态与完整码（本机领到时才知道），自己的那一条带复制按钮。
 func (a *app) redeemCodeChip(c *ui.Context, d *detailState, e *redeemCodeEntry, atLimit bool, me string) {
 	t := c.Theme()
+	ts := a.typeSizes()
 	display := e.Masked
 	if full := d.redeem.full[e.ID]; full != "" {
 		display = full
@@ -503,9 +505,9 @@ func (a *app) redeemCodeChip(c *ui.Context, d *detailState, e *redeemCodeEntry, 
 			}
 			return
 		}
-		ui.Text(c, display).FontSize(metaFontSize).Selectable().SingleLine().Shrink(1).MinWidth(0)
+		ui.Text(c, display).FontSize(ts.meta).Selectable().SingleLine().Shrink(1).MinWidth(0)
 		if mine {
-			ui.Text(c, "已领取").FontSize(metaSmallFontSize).
+			ui.Text(c, "已领取").FontSize(ts.metaSmall).
 				TextColor(t.Success).SingleLine()
 			if full := d.redeem.full[e.ID]; full != "" {
 				if iconActionButton(c, lucide.Copy(), "复制兑换码", "把完整兑换码复制到剪贴板").Clicked() {
@@ -518,7 +520,7 @@ func (a *app) redeemCodeChip(c *ui.Context, d *detailState, e *redeemCodeEntry, 
 		if who == "" {
 			who = "他人"
 		}
-		ui.Text(c, "已被 "+who+" 领取").FontSize(metaSmallFontSize).
+		ui.Text(c, "已被 "+who+" 领取").FontSize(ts.metaSmall).
 			TextColor(t.TextMuted).SingleLine()
 	})
 }

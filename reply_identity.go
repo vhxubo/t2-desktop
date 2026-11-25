@@ -281,8 +281,9 @@ type replyIdentityOption struct {
 // 这一篇生效」的说明。点一行就换过去，结果用窗口内 toast 报告。
 func (a *app) replyIdentityPanel(c *ui.Context, d *detailState, host replySurface) {
 	t := c.Theme()
+	ts := a.typeSizes()
 	ui.Column(c).Width(272).Gap(6).Children(func() {
-		ui.Text(c, "用哪个账号回复").FontSize(metaFontSize).TextColor(t.TextMuted)
+		ui.Text(c, "用哪个账号回复").FontSize(ts.meta).TextColor(t.TextMuted)
 		current := replyIdentityOption{Current: true, Name: a.currentReplyName()}
 		if a.auth != nil {
 			current.Avatar = a.auth.avatarURL()

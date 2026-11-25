@@ -42,7 +42,8 @@ func emojiShortcodeAtRect(c *ui.Context, d *detailState, padX, padY float32) ui.
 	width := max(40, field.W-padX*2)
 	st := &d.emojiShortcodes
 	if st.shape == nil || st.shapeText != d.draft || st.shapeWidth != width {
-		st.shape = ui.ShapeText(d.draft, ui.Font{Size: commentFontSize}, width)
+		// 排版锚点跟输入字号走基准值，阅读排版不改变编辑器里的字宽。
+		st.shape = ui.ShapeText(d.draft, ui.Font{Size: typeBase.comment}, width)
 		st.shapeText, st.shapeWidth = d.draft, width
 	}
 	rs := []rune(d.draft)

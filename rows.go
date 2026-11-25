@@ -38,7 +38,7 @@ func (a *app) foldRowView(c *ui.Context, row foldRow) {
 		return
 	}
 	g := *row.group
-	ui.Column(c).FillWidth().Gap(4).Children(func() {
+	ui.Column(c).FillWidth().Gap(a.rowGap()).Children(func() {
 		a.rowWith(c, row.item, a.openItem)
 		a.commentGroupToggle(c, g, row.total, row.open, func() {
 			a.tabs[a.tab].toggle(g)
@@ -109,12 +109,12 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item), watchLater bool) 
 	}
 	titleColor := postReadInk(tk, read)
 
-	// 统一的 Lobe 行表面：悬停 FillTertiary、圆角与过渡取主题；纵向 padding
-	// 收紧到 Lobe 节奏，和主页帖子行保持一致。
-	row := feedRowSurface(c).PaddingY(10).PaddingX(12)
+	// 统一的 Lobe 行表面：悬停 FillTertiary、圆角与过渡取主题；纵向留白
+	// 与行内间距跟列表密度偏好走，和主页帖子行保持一致。
+	row := feedRowSurface(c).PaddingY(a.rowPadY()).PaddingX(12)
 	reveal := watchLater && (row.Hovered() || row.FocusWithin())
 	row.Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(a.rowGap()).Children(func() {
 			// 第一行：谁做了什么 · 时间 · 楼层。整行等宽，和标题分层。
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Font(sidebarFont).Children(func() {
 				author := x.Author

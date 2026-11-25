@@ -54,9 +54,10 @@ func (a *app) profileAvatarEntry(c *ui.Context, ps *profileState) {
 // profileAvatarPanel 是换头像气泡：说明格式与大小、选择本地图片、恢复默认。
 // 上传期间只留进度，结果用 toast 报告；失败原因留在气泡里，方便原图重试。
 func (a *app) profileAvatarPanel(c *ui.Context, ps *profileState) {
+	ts := a.typeSizes()
 	ui.Column(c).Width(300).Gap(8).Children(func() {
 		display.Text(c, "换一张头像", display.TextProps{
-			Type: display.TextSecondary, FontSize: metaFontSize, Rows: 1,
+			Type: display.TextSecondary, FontSize: ts.meta, Rows: 1,
 		})
 		if !a.auth.loggedIn() {
 			a.loginHintFor(c, toastProfile, "登录后才能更换头像。")

@@ -835,6 +835,7 @@ func (a *app) reactionSummaryInfo(c *ui.Context, d *detailState, target string, 
 		return
 	}
 	t := c.Theme()
+	ts := a.typeSizes()
 	shown := visibleReactions(reactionStatsOf(d, target))
 	total := reactionTotal(shown)
 	if len(shown) > 0 {
@@ -863,7 +864,7 @@ func (a *app) reactionSummaryInfo(c *ui.Context, d *detailState, target string, 
 					ui.Text(c, emoji).FontSize(12).SingleLine()
 				})
 			}
-			ui.Textf(c, "%d", total).FontSize(metaSmallFontSize).TextColor(t.TextMuted)
+			ui.Textf(c, "%d", total).FontSize(ts.metaSmall).TextColor(t.TextMuted)
 		})
 		// 明细只读，不用登录。气泡关着时每个摘要都把 Popover 建出来，
 		// 这样点哪一条都能被 Lobe 接住；开着时只留目标那一条，免得几条
@@ -1259,7 +1260,7 @@ func (a *app) rewardBadge(c *ui.Context, rewards rewardStat) {
 	chip.Tooltip(rewardBadgeTip(rewards))
 	chip.Children(func() {
 		ui.Text(c, "💰").FontSize(12)
-		ui.Textf(c, "%d", rewards.Total).FontSize(metaSmallFontSize).TextColor(t.Warning)
+		ui.Textf(c, "%d", rewards.Total).FontSize(a.typeSizes().metaSmall).TextColor(t.Warning)
 	})
 }
 

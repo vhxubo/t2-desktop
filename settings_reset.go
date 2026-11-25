@@ -88,6 +88,9 @@ func (a *app) resetAllSettings() {
 	if a.imagePrefs != nil {
 		fail(a.imagePrefs.Reset())
 	}
+	if a.typePrefs != nil {
+		fail(a.typePrefs.Reset())
+	}
 	if a.watchLaterPrefs != nil {
 		fail(a.watchLaterPrefs.Reset())
 	}
@@ -119,6 +122,7 @@ func (a *app) resetAllSettings() {
 	a.applyNotificationStreamPref()
 	a.clearWatchLaterReadMarks()
 	a.redrawWatchLaterPage()
+	a.applyTypographyChange()
 	a.publish(func() {})
 
 	if len(errs) > 0 {

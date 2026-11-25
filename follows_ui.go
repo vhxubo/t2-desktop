@@ -278,7 +278,7 @@ func (a *app) followRowButton(c *ui.Context, fs *followsState, kind int, u follo
 	btn := ui.Button(c, text).
 		Background(ui.Transparent).
 		Border(1, t.Border).
-		FontSize(metaSmallFontSize).
+		FontSize(a.typeSizes().metaSmall).
 		Padding(3, 10).
 		Radius(999).
 		Shrink(0)

@@ -30,13 +30,14 @@ func TestImageBoxWidth(t *testing.T) {
 }
 
 func TestCommentImageStyleLimit(t *testing.T) {
-	if got := commentTextStyle.imageMaxH; got != commentImageMaxH {
+	post, comment, bio := newApp(t.TempDir()).mdStyles()
+	if got := comment.imageMaxH; got != commentImageMaxH {
 		t.Errorf("评论图片上限 = %g，想要 %g", got, commentImageMaxH)
 	}
-	if got := postTextStyle.imageMaxH; got != 0 {
+	if got := post.imageMaxH; got != 0 {
 		t.Errorf("正文不应限制图片高度，实际 = %g", got)
 	}
-	if got := bioTextStyle.imageMaxH; got != 0 {
+	if got := bio.imageMaxH; got != 0 {
 		t.Errorf("简介不应限制图片高度，实际 = %g", got)
 	}
 }

@@ -66,13 +66,13 @@ func (a *app) watchLaterPage(c *ui.Context) {
 	// 直接溢出窗口，滚轮也失效。
 	ui.Column(c).Fill().Children(func() {
 		ui.Row(c).FillWidth().Shrink(0).
-			Padding(24, feedInset(c)+16, 14, feedInset(c)+16).Children(func() {
+			Padding(24, a.feedInset(c)+16, 14, a.feedInset(c)+16).Children(func() {
 			ui.Text(c, title).FontSize(tk.FontSizeHeading4).FontWeight(600).
 				LetterSpacing(-0.4).TextColor(tk.TextHeading).SingleLine()
 		})
 		a.watchLaterTabBar(c)
 
-		ui.Column(c).Grow(1).MinHeight(0).Padding(6, feedInset(c)).Children(func() {
+		ui.Column(c).Grow(1).MinHeight(0).Padding(6, a.feedInset(c)).Children(func() {
 			if a.laterTab == 1 {
 				a.readingHistoryBody(c)
 				return
@@ -88,7 +88,7 @@ func (a *app) watchLaterPage(c *ui.Context) {
 // 和列表同一列宽。清空只清当前账号，不碰服务端的收藏 / 书签。
 func (a *app) watchLaterTabBar(c *ui.Context) {
 	tk := lobetheme.TokensOf(c)
-	ui.Row(c).FillWidth().Shrink(0).Padding(0, feedInset(c), 8, feedInset(c)).
+	ui.Row(c).FillWidth().Shrink(0).Padding(0, a.feedInset(c), 8, a.feedInset(c)).
 		Gap(8).AlignItems(ui.Center).Children(func() {
 		c.Key("watch-later-tabs")
 		// 和评分榜排序条同一套：Small 胶囊分段，绑定持久状态，切换由下面的
@@ -177,9 +177,9 @@ func (a *app) watchLaterRow(c *ui.Context, r watchLaterRecord) {
 	}
 	titleColor := postReadInk(tk, read)
 
-	row := feedRowSurface(c).PaddingY(10).PaddingX(12)
+	row := feedRowSurface(c).PaddingY(a.rowPadY()).PaddingX(12)
 	row.Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(a.rowGap()).Children(func() {
 			ui.Text(c, title).FontSize(tk.FontSizeLG).Bold().MaxLines(2).TextColor(titleColor)
 			ui.Row(c).MinWidth(0).AlignItems(ui.Center).Wrap().Font(sidebarFont).Children(func() {
 				if r.Node != "" {

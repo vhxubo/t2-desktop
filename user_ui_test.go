@@ -57,7 +57,7 @@ func TestDetailAuthorAvatarFollowsNameSize(t *testing.T) {
 	if !ok {
 		t.Fatalf("帖子作者没有头像：%q", tt.Texts())
 	}
-	if got, want := author.Bounds.W, userAvatarSize(postAuthorFontSize); got != want {
+	if got, want := author.Bounds.W, userAvatarSize(a.typeSizes().author); got != want {
 		t.Errorf("帖子作者头像宽 %.1f，期望 %.1f", got, want)
 	}
 	// 正文卡片贴着窗口左缘，头像靠卡片自己的 28px 滚动内边距留白，不再贴边。
@@ -69,7 +69,7 @@ func TestDetailAuthorAvatarFollowsNameSize(t *testing.T) {
 		if !ok {
 			t.Fatalf("评论作者 %q 没有头像：%q", name, tt.Texts())
 		}
-		if got, want := comment.Bounds.W, userAvatarSize(metaFontSize); got != want {
+		if got, want := comment.Bounds.W, userAvatarSize(a.typeSizes().meta); got != want {
 			t.Errorf("评论作者 %q 的头像宽 %.1f，期望 %.1f", name, got, want)
 		}
 	}
