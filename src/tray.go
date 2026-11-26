@@ -12,9 +12,9 @@ import (
 // 系统托盘：Windows 是任务栏通知区域，macOS 是菜单栏。左键点图标把主窗口
 // 带回前台；右键弹出菜单。未登录时顶部提示「未登录」，提供登录、注册；登录后
 // 顶部换成通知入口（铃铛 + 未读角标），下面接发帖、发动态、设置。退出登录不
-// 放在托盘里，去「我的」或命令中心。两种状态都能用「原生通知」勾选框一键切换
-// 桌面弹窗；平台不支持时那一行禁用。最后还有「关闭全部」（收进托盘，应用继续
-// 在后台跑）与「退出」。
+// 放在托盘里，去「我的」或命令中心。两种状态都能用「原生通知」一键切换桌面
+// 弹窗，开关状态写在文字里，不用勾选框；平台不支持时那一行禁用。最后还有
+// 「关闭全部」（收进托盘，应用继续在后台跑）与「退出」。
 //
 // 托盘是进程级资源：菜单每次右键现建一份，弹出的菜单挂着时左键也会弹出
 // 菜单，所以弹出后立刻用 SetMenu(nil) 摘掉。
@@ -140,21 +140,23 @@ func (d *desktop) destroyTray() {
 	tray.Destroy()
 }
 
-// trayNativeNotifyItem 是原生通知的快捷开关。勾选状态读进程级偏好（notify.json），
-// 点击走 saveNotifyPref 落盘并重画所有窗口。mygo 在 Click 前会翻一次菜单项的
-// Checked，但菜单每次右键现建，真正的状态以偏好为准，这里按当前值取反即可。
+// trayNativeNotifyItem 是原生通知的快捷开关。状态读进程级偏好（notify.json），
+// 点击走 saveNotifyPref 落盘并重画所有窗口。这一项故意不做 checkbox：原生菜单
+// 会为勾选框留一列，菜单里其它项也跟着往右偏；当前状态直接写在文字里。
 // 平台没有原生通知时不给一个点了没反应的开关，留一行禁用的说明。
 func (d *desktop) trayNativeNotifyItem() *mygo.MenuItem {
 	a := d.app
 	if a == nil || d.notify == nil {
 		return &mygo.MenuItem{ID: trayNativeNotifyID, Label: "原生通知不可用", Disabled: true}
 	}
+	label := "原生通知：关"
+	if a.notifPrefs().notificationEnabled() {
+		label = "原生通知：开"
+	}
 	return &mygo.MenuItem{
-		ID:      trayNativeNotifyID,
-		Label:   "原生通知",
-		Icon:    trayNativeNotifyMI,
-		Type:    mygo.MenuItemCheckbox,
-		Checked: a.notifPrefs().notificationEnabled(),
+		ID:    trayNativeNotifyID,
+		Label: label,
+		Icon:  trayNativeNotifyMI,
 		Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.saveNotifyPref(toastMain, func() error {
 				return a.notifPrefs().setEnabled(!a.notifPrefs().notificationEnabled())

@@ -102,8 +102,9 @@ func TestTrayNotificationBadge(t *testing.T) {
 	}
 }
 
-// 托盘的原生通知开关读写同一份 notify.json：勾选状态跟着偏好走，点一下关、
-// 再点一下开，下次右键也能看到新状态。
+// 托盘的原生通知开关读写同一份 notify.json：状态写在文字里而不是勾选框，
+// 免得原生菜单为勾选框留一列，把其它项一起挤向右边。点一下关、再点一下开，
+// 下次右键也能看到新状态。
 func TestTrayNativeNotificationToggle(t *testing.T) {
 	d := testBook(t)
 	addTestAccount(t, d, "jimmy")
@@ -114,9 +115,9 @@ func TestTrayNativeNotificationToggle(t *testing.T) {
 	if item == nil {
 		t.Fatal("托盘菜单缺少原生通知开关")
 	}
-	if item.Type != mygo.MenuItemCheckbox || item.Label != "原生通知" || !item.IsChecked() {
-		t.Fatalf("原生通知开关 = %q / %q / checked=%v，期望 checkbox / 原生通知 / true",
-			item.Type, item.Label, item.IsChecked())
+	if item.Type != mygo.MenuItemNormal || item.Label != "原生通知：开" {
+		t.Fatalf("原生通知开关 = %q / %q，期望 normal / 原生通知：开",
+			item.Type, item.Label)
 	}
 	if item.Click == nil || item.Icon == nil {
 		t.Fatal("原生通知开关应可点击且带图标")
@@ -133,8 +134,8 @@ func TestTrayNativeNotificationToggle(t *testing.T) {
 	if !cfg.Disabled {
 		t.Error("关闭后 notify.json 应写入 disabled=true")
 	}
-	if again := d.trayMenu().ItemByID(trayNativeNotifyID); again.IsChecked() {
-		t.Error("重新打开的托盘菜单应显示原生通知已关闭")
+	if again := d.trayMenu().ItemByID(trayNativeNotifyID); again.Label != "原生通知：关" {
+		t.Errorf("重新打开的托盘菜单 = %q，期望 %q", again.Label, "原生通知：关")
 	}
 
 	again := d.trayMenu().ItemByID(trayNativeNotifyID)
@@ -147,6 +148,9 @@ func TestTrayNativeNotificationToggle(t *testing.T) {
 	}
 	if cfg.Disabled {
 		t.Error("开启后 notify.json 应写入 disabled=false")
+	}
+	if again := d.trayMenu().ItemByID(trayNativeNotifyID); again.Label != "原生通知：开" {
+		t.Errorf("重新打开的托盘菜单 = %q，期望 %q", again.Label, "原生通知：开")
 	}
 }
 
