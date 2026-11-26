@@ -419,8 +419,13 @@ func (a *app) openNotificationTarget(target, notifID string) {
 }
 
 func (a *app) showNotices(notices []nativeNotice) {
+	// 老板键藏起窗口时一并屏蔽桌面通知：未读数、列表与「已见到」记账照常
+	// 更新（见 pollNotifications），只是不弹窗、不发声，也不会留下点击目标。
+	if a == nil || a.bossKeyHidden || len(notices) == 0 {
+		return
+	}
 	notify := a.nativeNotifier()
-	if len(notices) == 0 || notify == nil {
+	if notify == nil {
 		return
 	}
 	for _, n := range notices {

@@ -55,6 +55,10 @@ type desktop struct {
 	commands *commandPrefs
 	// zoomPrefs 是整页缩放偏好，进程级一份（见 zoom_prefs.go）。
 	zoomPrefs *zoomPrefsStore
+	// bossKeyPrefs 是老板键的启用状态与系统热键，进程级一份（见 boss_key.go）。
+	bossKeyPrefs *bossKeyPrefs
+	// bossKeyAcc 是真正注册成功的系统热键；空串表示没有注册。只在主线程读写。
+	bossKeyAcc string
 
 	auth *AuthManager
 	app  *app
@@ -110,6 +114,7 @@ func newDesktop(dir string) *desktop {
 		sidebarPrefs:        newSidebarPrefsStore(dir),
 		commands:            newCommandPrefs(dir),
 		zoomPrefs:           newZoomPrefsStore(dir),
+		bossKeyPrefs:        newBossKeyPrefs(dir),
 		openURL:             func(u string) error { return mygo.Shell.OpenExternal(u) },
 	}
 	d.icons = newIconTheme(d)

@@ -235,6 +235,7 @@ func (a *app) settingsWindowView(c *ui.Context) {
 				case settingsTabNotify:
 					a.notificationSettingsSection(c)
 				case settingsTabShortcuts:
+					a.bossKeySettingsSection(c)
 					a.shortcutSettingsSection(c)
 				default:
 					a.appearanceSettingsSection(c)

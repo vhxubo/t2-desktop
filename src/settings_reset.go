@@ -106,6 +106,7 @@ func (a *app) resetAllSettings() {
 	}
 	fail(a.sidebarPrefs.Reset())
 	fail(a.zoomPrefs.Reset())
+	fail(a.bossKeyPrefs.Reset())
 	fail(a.restoreImageHosts())
 	if a.commands != nil && a.commands.prefs != nil {
 		fail(a.commands.prefs.resetAll())
@@ -119,11 +120,19 @@ func (a *app) resetAllSettings() {
 	a.revealedImages = nil
 	a.stopShortcutRecording()
 	a.shortcutConflict = ""
+	a.stopBossKeyRecording()
+	a.bossKeyConflict = ""
+	// 老板键关掉后把藏起来的窗口放回来，别让用户找不到界面。
+	a.restoreBossKeyWindows()
 
 	// 运行时状态跟着偏好切换：撤掉更新镜像、恢复默认版本通道（接收全部
 	// 版本）、恢复闲时自动下载、重连通知流、清掉默认模式里不再有意义的已读标记。
 	applyUpdateMirror("")
 	applyUpdateChannel(true)
+	// 老板键偏好已回到「关闭」，把系统热键也注销掉。
+	if a.desktop != nil {
+		a.desktop.applyBossKey()
+	}
 	a.applyIdleAutoDownload()
 	if a.desktop != nil {
 		a.desktop.signalUpdateInterval()

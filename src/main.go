@@ -181,6 +181,18 @@ type app struct {
 	shortcutCapture      ui.Handle
 	shortcutCaptureFocus int
 	shortcutConflict     string
+	// bossKeyPrefs 是老板键的启用状态与系统热键，进程级一份（见 boss_key.go）。
+	bossKeyPrefs *bossKeyPrefs
+	// bossKeyRecording 表示设置页正在等用户按下老板键；bossKeyCapture /
+	// bossKeyCaptureFocus 把焦点交给录制框；bossKeyConflict 是最近的冲突说明。
+	bossKeyRecording    bool
+	bossKeyCapture      ui.Handle
+	bossKeyCaptureFocus int
+	bossKeyConflict     string
+	// bossKeyHidden 表示窗口正被老板键隐藏；bossKeyShown 记下藏起来之前可见
+	// 的窗口，再按一次只恢复这些。都只在主线程读写。
+	bossKeyHidden bool
+	bossKeyShown  []*mygo.Window
 
 	// settingsWin 是设置窗口：代理、检查更新与图片缓存都收在这一个窗口里，
 	// 不再是标题栏上的两个按钮。入口在主页侧边栏底部，见 sidebarFooter
@@ -652,7 +664,9 @@ type appDeps struct {
 	commands *commandPrefs
 	// zoomPrefs 是界面缩放偏好，进程级一份（见 zoom_prefs.go）。
 	zoomPrefs *zoomPrefsStore
-	desktop   *desktop
+	// bossKeyPrefs 是老板键的启用状态与系统热键，进程级一份（见 boss_key_prefs.go）。
+	bossKeyPrefs *bossKeyPrefs
+	desktop      *desktop
 }
 
 // newAppDeps 造一份独立的共享依赖：无头测试时每个 app 自己
@@ -682,6 +696,7 @@ func newAppDeps(dir string) appDeps {
 		sidebarPrefs:        newSidebarPrefsStore(dir),
 		commands:            newCommandPrefs(dir),
 		zoomPrefs:           newZoomPrefsStore(dir),
+		bossKeyPrefs:        newBossKeyPrefs(dir),
 	}
 }
 
@@ -708,6 +723,7 @@ func (b *desktop) deps() appDeps {
 		sidebarPrefs:        b.sidebarPrefs,
 		commands:            b.commands,
 		zoomPrefs:           b.zoomPrefs,
+		bossKeyPrefs:        b.bossKeyPrefs,
 		desktop:             b,
 	}
 }
@@ -770,6 +786,7 @@ func newAppWithDeps(d appDeps, auth *AuthManager) *app {
 		sidebarPrefs:             d.sidebarPrefs,
 		commands:                 newCommandRegistry(d.commands),
 		zoomPrefs:                d.zoomPrefs,
+		bossKeyPrefs:             d.bossKeyPrefs,
 		draftDir:                 d.dir,
 		tabs:                     make([]*tabState, len(tabSpecs)),
 		lastTab:                  -1,
@@ -2824,6 +2841,11 @@ func (a *app) handleCallbackURL(raw string) {
 // （AllowForeground），因此这次抢前台是被系统允许的。各附属窗口的「打开即拉起」
 // 用的也是这套 IsMinimized→Restore / Show / Focus / Invalidate 写法。
 func (a *app) raiseMainWindow() {
+	// 老板键藏起窗口后，用户从托盘或深链把界面叫回来：同步清掉隐藏状态，
+	// 下一次老板键才会重新隐藏，而不是先做一次无意义的恢复。
+	if a.bossKeyHidden {
+		a.restoreBossKeyWindows()
+	}
 	// 主窗口已经关了，但详情 / 其它窗口还开着：a.win 只是后台结果的出口，
 	// 不能把它当主窗口硬拉到前台。重开一扇真正的主窗口，其它窗口照旧留着。
 	if a.mainClosed {
@@ -2982,6 +3004,9 @@ func main() {
 		d.startIcons()
 		// 打开唯一的主窗口。没登录时它显示登录页，登录后显示内容。
 		a.openMainWindow()
+		// 老板键是系统级热键，应用就绪后、首扇窗口建好才注册；按保存的偏好
+		// 决定是否占用。放在窗口之后，热键早于窗口按下时不会记下空的隐藏状态。
+		d.applyBossKey()
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal("应用启动失败：", err)
