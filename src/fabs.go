@@ -5,6 +5,7 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 // 右下角的悬浮按钮（FAB）组：只用在主页列表上，画法与几何见这里。详情页
@@ -41,23 +42,30 @@ func (a *app) fabStack(c *ui.Context, buttons ...func(*ui.Context)) {
 }
 
 // fabButton 画一个 Lobe 次级 FAB：ActionIcon 的 BlockSize 给圆形直径，再按
-// 半径对半设圆角做成整圆；悬停由它自己处理，图标由调用处传 Lobe 的 lucide
-// 图标（见 listFabs）。label 是可访问名，tip 是悬停说明；loading 时禁用按钮
-// 并在图标位转圈，请求还在路上，连点不该重复发。
+// 半径对半设圆角做成整圆；图标由调用处传 Lobe 的 lucide 图标（见 listFabs）。
+// 用 Outlined 变体取 Lobe 的实色容器底色与描边，按钮浮在列表上时不会看起来
+// 只有一枚图标、透出下面的内容；悬停 / 按下由它自己加深底色。label 是可访问
+// 名，tip 是悬停说明；loading 时禁用按钮并在图标位转圈，请求还在路上，连点
+// 不该重复发。
 func (a *app) fabButton(c *ui.Context, icon *ui.SVG, label, tip string, loading bool, onClick func()) {
 	c.Key(label)
 	if loading {
-		// 请求在路上：按钮退成 Lobe ActionIcon 的禁用态——尺寸不变、同样圆，
-		// 只把图标位换成转圈，连点不会重复发。
+		// 请求在路上：按钮退成同样的圆形实底禁用态——尺寸与配色不变，只把
+		// 图标位换成转圈。关掉 Disabled 自带的半透明，免得实底又透出列表；
+		// 请求还在路上，连点不该重复发。
+		tk := lobetheme.TokensOf(c)
 		b := ui.ButtonBase(c).Size(fabCircle, fabCircle).Center().Disabled(true).
-			Radius(fabCircle/2).Background(ui.Transparent).Border(1, ui.Transparent)
+			DimDisabled(false).Radius(fabCircle/2).Background(tk.BgContainer).Border(1, tk.Border)
 		b.Label(label).Tooltip(tip)
 		b.Children(func() {
 			lobeSpin(c, feedback.SpinProps{CustomSize: 16})
 		})
 		return
 	}
-	b := action.ActionIcon(c, icon, action.ActionIconProps{BlockSize: fabCircle})
+	b := action.ActionIcon(c, icon, action.ActionIconProps{
+		Variant:   action.ActionIconOutlined,
+		BlockSize: fabCircle,
+	})
 	b.Label(label).Tooltip(tip).OnClick(onClick).Radius(fabCircle / 2)
 }
 

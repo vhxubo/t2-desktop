@@ -210,6 +210,66 @@ func TestHomeFabsAreCircular(t *testing.T) {
 	}
 }
 
+// 次级 FAB 浮在列表上：静止时就有不透明的容器底色和描边，不能只剩图标、
+// 透出下面的列表文字。发帖是主操作，仍用主色蓝（见 TestHomeFabsAreCircular）。
+func TestHomeSecondaryFabsHaveSolidSurface(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		a := testApp(t)
+		if dark {
+			a.theme.mode = themeDark
+		}
+		a.tabs[0].items = fabListItems(30)
+		a.tabs[0].loaded = true
+		a.tabs[0].total = 30
+		tt := ui.NewTester(a.view, 1100, 760)
+		tt.Frame()
+		img := tt.Image()
+		tk := lobeCfg.Tokens(dark)
+
+		check := func(name string) {
+			t.Helper()
+			r, ok := tt.Find(name)
+			if !ok {
+				t.Fatalf("找不到 %s FAB：%q", name, tt.Texts())
+			}
+			cy := int(r.Y + r.H/2)
+			// 圆内、图标外（左侧靠边处）应是实色底。
+			if got := img.RGBAAt(int(r.X)+2, cy); got.R != tk.BgContainer.R || got.G != tk.BgContainer.G || got.B != tk.BgContainer.B {
+				t.Errorf("%s FAB 底色 = %v，期望实色 BgContainer %v", name, got, tk.BgContainer)
+			}
+			// 按钮外侧仍是页面底色：按钮没有铺成一整条。
+			if got := img.RGBAAt(int(r.X)-4, cy); got.R != tk.BgLayout.R || got.G != tk.BgLayout.G || got.B != tk.BgLayout.B {
+				t.Errorf("%s FAB 外侧 = %v，期望页面底色 %v", name, got, tk.BgLayout)
+			}
+		}
+		check("刷新")
+		check("发动态")
+		tt.Scroll(500, 400, 0, 900)
+		tt.Frame()
+		img = tt.Image()
+		check("返回顶部")
+	}
+}
+
+// 刷新进行中的按钮禁用并转成转圈，但仍是同一枚有实色底的圆按钮，不会退回
+// 透明只剩一个图标。
+func TestRefreshingFabKeepsSolidSurface(t *testing.T) {
+	a := testApp(t)
+	a.tabs[0].items = fabListItems(30)
+	a.tabs[0].loading = true
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	r, ok := tt.Find("刷新")
+	if !ok {
+		t.Fatalf("找不到刷新 FAB：%q", tt.Texts())
+	}
+	tk := lobeCfg.Tokens(false)
+	got := tt.Image().RGBAAt(int(r.X)+2, int(r.Y+r.H/2))
+	if got.R != tk.BgContainer.R || got.G != tk.BgContainer.G || got.B != tk.BgContainer.B {
+		t.Errorf("刷新中按钮底色 = %v，期望实色 BgContainer %v", got, tk.BgContainer)
+	}
+}
+
 // 点「返回顶部」把列表滚动到开头，按钮随即收起；它只动滚动位置，不重发请求。
 func TestListFabBackToTopScrollsToStart(t *testing.T) {
 	a := testApp(t)
