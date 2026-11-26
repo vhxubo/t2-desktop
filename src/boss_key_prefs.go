@@ -113,33 +113,40 @@ func (p *bossKeyPrefs) Reset() error {
 ---------------------------------------------------------------- */
 
 // bossKeyAcceleratorFromShortcut 把设置页录到的按键写成 mygo 能注册的
-// accelerator。主修饰键统一写成 CmdOrCtrl：Windows 上 ui.Cmd 与 ui.Ctrl 是同一
-// 位，先取 Cmd 既覆盖 Ctrl，也能让同一份配置到 macOS 变成 ⌘。
+// accelerator。主修饰键统一写成 CmdOrCtrl：Windows / Linux 上 ui.Cmd 与 ui.Ctrl
+// 是同一位，macOS 上 ui.Cmd 与 ui.Super 是同一位。按 canonical 的顺序逐个消费
+// 修饰键位，避免同一位既写成 CmdOrCtrl 又写成 Super。
 func bossKeyAcceleratorFromShortcut(s commandShortcut) (string, bool) {
 	if !s.valid() {
 		return "", false
 	}
-	mods := make([]string, 0, 4)
-	switch {
-	case s.Mods&ui.Cmd != 0:
-		mods = append(mods, "CmdOrCtrl")
-	case s.Mods&ui.Ctrl != 0:
-		mods = append(mods, "Ctrl")
+	mods := s.Mods
+	parts := make([]string, 0, 4)
+	if mods&ui.Cmd != 0 {
+		parts = append(parts, "CmdOrCtrl")
+		mods &^= ui.Cmd
 	}
-	if s.Mods&ui.Super != 0 {
-		mods = append(mods, "Super")
+	if mods&ui.Ctrl != 0 {
+		parts = append(parts, "Ctrl")
+		mods &^= ui.Ctrl
 	}
-	if s.Mods&ui.Alt != 0 {
-		mods = append(mods, "Alt")
+	if mods&ui.Super != 0 {
+		parts = append(parts, "Super")
+		mods &^= ui.Super
 	}
-	if s.Mods&ui.Shift != 0 {
-		mods = append(mods, "Shift")
+	if mods&ui.Alt != 0 {
+		parts = append(parts, "Alt")
+		mods &^= ui.Alt
+	}
+	if mods&ui.Shift != 0 {
+		parts = append(parts, "Shift")
+		mods &^= ui.Shift
 	}
 	key, ok := bossKeyAccKey(s.Key)
-	if !ok || len(mods) == 0 {
+	if !ok || len(parts) == 0 {
 		return "", false
 	}
-	return strings.Join(append(mods, key), "+"), true
+	return strings.Join(append(parts, key), "+"), true
 }
 
 // bossKeyAccKey 把 ui.Key 换成 accelerator 的主键。字母数字写成大写单字符；

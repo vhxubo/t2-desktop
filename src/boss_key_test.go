@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -68,6 +69,17 @@ func TestBossKeyAcceleratorConversion(t *testing.T) {
 			t.Errorf("%q 没有可读标签", acc)
 		}
 	}
+	// macOS 的 ui.Super 就是 ui.Cmd，不能再额外写一组 Super，否则会注册成
+	// CmdOrCtrl+Super 两个修饰键；其它平台则是独立的 Win / Super 键。
+	aliasWant := "Super+Alt+B"
+	if runtime.GOOS == "darwin" {
+		aliasWant = bossKeyDefaultAcc
+	}
+	alias, ok := bossKeyAcceleratorFromShortcut(commandShortcut{Mods: ui.Super | ui.Alt, Key: ui.KeyB})
+	if !ok || alias != aliasWant {
+		t.Errorf("Super 组合 = %q / %v，想要 %q", alias, ok, aliasWant)
+	}
+
 	// 没有修饰键、以及 accelerator 不认识的键，都不能录成系统热键。
 	if _, ok := bossKeyAcceleratorFromShortcut(commandShortcut{Key: ui.KeyA}); ok {
 		t.Error("不带修饰键的组合不该被接受")
