@@ -14,12 +14,17 @@ mkdir -p .githooks scripts
 cp "$root/.githooks/pre-push" .githooks/
 chmod +x .githooks/pre-push
 cp "$root/scripts/release-metadata.sh" scripts/
+cp "$root/scripts/release-metadata.ps1" scripts/
 printf '%s\n' '{"version":"1.2.3"}' > mygo.json
 printf '## 1.2.3\n\n发布说明\n' > CHANGELOG.md
 printf 'pass\n' > result
 cat > scripts/check.sh <<'EOF'
 printf 'check\n'
 test "$(cat result)" = pass
+EOF
+cat > scripts/check.ps1 <<'EOF'
+Write-Output 'check'
+if ((Get-Content result -Raw).Trim() -ne 'pass') { exit 1 }
 EOF
 git add .
 git commit -qm 'test: create passing fixture'

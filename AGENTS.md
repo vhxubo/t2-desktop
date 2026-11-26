@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## 目录结构
+
+- Go 源码、嵌入资源（图标、字体）与字典数据在 `src/`；`go.mod`、`mygo.json`、脚本和文档留在仓库根目录。构建与检查命令都在根目录执行。
+
 ## 提交与文案
 
 - 提交信息只用英文，遵循 Conventional Commits：`type(scope): subject`（scope 可省略），类型用 `feat`、`fix`、`refactor`、`test`、`docs`、`chore`。标题用祈使句，约 72 字符以内，不加句号；正文可原样引用代码里的中文字符串。不写工具或代理署名，不同功能分开提交。
@@ -28,16 +32,16 @@
 
 - 加端点或改字段前，读 [开放 API v1](https://r2.2libra.com/openapi/v1/index.md) 的对应分册：[授权](https://r2.2libra.com/openapi/v1/oauth.md)、[读取](https://r2.2libra.com/openapi/v1/api-read.md)、[写入](https://r2.2libra.com/openapi/v1/api-write.md)、[经济](https://r2.2libra.com/openapi/v1/api-economy.md)。新增能力还要读[接入条款](https://r2.2libra.com/openapi/v1/terms.md)。
 - 路径、参数和字段名照文档原样使用；列表按端点取字段（见 `tabSpec.ListKey`），容错解码并忽略未知字段。文档与实测不符时，以实测为准并注明原因。
-- JSON 响应从 `{c,m,d,t}` 解包，访问令牌在 `d.access_token`；通知 SSE 例外，只用 `Authorization` 头。错误用 HTTP 状态码和 `code` 判断，不解析中文 `m`；`insufficient_scope` 交给 `auth_gate.go` 补授权并重跑。
+- JSON 响应从 `{c,m,d,t}` 解包，访问令牌在 `d.access_token`；通知 SSE 例外，只用 `Authorization` 头。错误用 HTTP 状态码和 `code` 判断，不解析中文 `m`；`insufficient_scope` 交给 `src/auth_gate.go` 补授权并重跑。
 - 只申请必要的 scope；默认能力所需的 scope 加到 `defaultScopes`，需开通的端点在应用申请时说明用途。标 🔑 的写端点必须带 `Idempotency-Key`，超时重试复用，内容改变则换键。
 - 发帖 `restricted_*` 枚举和校验参考 [2Libra 发帖规则](2libra-发帖规则.md) 与官网发帖页，不从中文文案推断。新端点先实现路径与解码，补 HTTP 测试，再接 UI。
 
 ## 媒体预览
 
-- `media.go` 统一识别媒体；只有独占一段的媒体链接才能嵌入，未知类型和行内链接仍按普通链接处理。新增类型先补识别测试，保证 `articlePictures` 按源文顺序收组，与预览渲染一一对应。
-- 视频在预览里经 `openExternal` 用系统浏览器播放，不新增 WebView 或直连流。动图沿用 `image_viewer.go` 的纯 Go 路径，动画 WebP 只显示首帧。配图懒加载只影响正文和评论，不影响头像、行内表情和徽章；图片偏好保持进程级共享。
+- `src/media.go` 统一识别媒体；只有独占一段的媒体链接才能嵌入，未知类型和行内链接仍按普通链接处理。新增类型先补识别测试，保证 `articlePictures` 按源文顺序收组，与预览渲染一一对应。
+- 视频在预览里经 `openExternal` 用系统浏览器播放，不新增 WebView 或直连流。动图沿用 `src/image_viewer.go` 的纯 Go 路径，动画 WebP 只显示首帧。配图懒加载只影响正文和评论，不影响头像、行内表情和徽章；图片偏好保持进程级共享。
 
 ## 检查与发版
 
-- 按 [CHECKS.md](CHECKS.md) 做提交前验证和发版门禁。发版操作见 [RELEASE.md](RELEASE.md)；代理只做本地准备，触发公开发布的远程推送须由人工执行。
+- 按 [CHECKS.md](CHECKS.md) 做提交前验证和发版门禁：本地用 `pwsh scripts/check.ps1` 与 `pwsh scripts/release-metadata.ps1 v<version>`，无需 Bash/WSL，CI 仍用 `.sh` 脚本。发版操作见 [RELEASE.md](RELEASE.md)；代理只做本地准备，触发公开发布的远程推送须由人工执行。
 - 推送 GitHub 远程走 gh CLI 的 HTTPS 凭据，不直接读 `~/.ssh`：`gh` 没有 `push` 子命令，先 `gh auth setup-git`，再 `git -c url."https://github.com/".insteadOf="git@github.com:" push origin <branch>`。Windows 上 gh 若不在 PATH，用 `"C:/Program Files/GitHub CLI/gh.exe"`；公开发布仍须人工确认。

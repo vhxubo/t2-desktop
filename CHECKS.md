@@ -2,11 +2,11 @@
 
 ## 提交前
 
-代码改动在仓库根目录完成以下检查（Windows 可用 Git Bash）。
+代码改动在仓库根目录完成以下检查（Windows 用 PowerShell，无需 Bash/WSL）：
 
-- `CGO_ENABLED=0 go test ./...` 通过。
-- `go tool mygo vet .` 无告警。
-- `gofmt -l .` 无输出。
+- `pwsh scripts/check.ps1` 通过：依次检查 gofmt、未完成标记、`go build ./...`、
+  `go tool mygo vet .` 与 `CGO_ENABLED=0 go test -count=1 -shuffle=on -timeout=15m ./...`。
+- 只需单项检查时用 `gofmt -l .`、`go tool mygo vet .` 与 `$env:CGO_ENABLED = '0'; go test ./...`。
 
 仅改文档时，检查链接、命令和 `git diff --check`。
 
@@ -14,15 +14,15 @@
 
 - UI：用 `ui.NewTester` 复现，按需用 `Find`、`Texts` 或 `Image` 断言行为、文案与布局。
 - API：用 `httptest` 断言路径、查询参数、请求体和错误分支。
-- 新增或改动网络请求：在 `proxy_test.go` 用假代理确认出口遵循配置。升级 mygo 时还要核对更新器仍用 `netproxy.Transport()`，并跑 `TestUpdateCheckUsesConfiguredProxy`。
+- 新增或改动网络请求：在 `src/proxy_test.go` 用假代理确认出口遵循配置。升级 mygo 时还要核对更新器仍用 `netproxy.Transport()`，并跑 `TestUpdateCheckUsesConfiguredProxy`。
 
 ## 发版前
 
-`scripts/check.sh` 禁用 CGO，检查 Go 格式、未完成标记、构建和静态检查，并运行 `go test -count=1 -shuffle=on -timeout=15m ./...`。PR、`main` 推送和发布 tag 共用这套三平台回归。本地推送钩子的安装见 [RELEASE.md](RELEASE.md#4-启用本地推送前检查每个克隆一次)。
+本地的 `scripts/check.ps1` 与 CI 的 `scripts/check.sh` 禁用 CGO，检查 Go 格式、未完成标记、构建和静态检查，并运行 `go test -count=1 -shuffle=on -timeout=15m ./...`。PR、`main` 推送和发布 tag 共用这套三平台回归。本地推送钩子的安装见 [RELEASE.md](RELEASE.md#4-启用本地推送前检查每个克隆一次)。
 
 下列项目全部通过后，才能按 [RELEASE.md](RELEASE.md#每次发布步骤) 打 tag、出包或推送更新：
 
-- [ ] `bash scripts/check.sh` 和 `bash scripts/release-metadata.sh v<version>` 均通过。
+- [ ] `pwsh scripts/check.ps1` 和 `pwsh scripts/release-metadata.ps1 v<version>` 均通过（CI 用对应的 `.sh` 脚本）。
 - [ ] 应用可启动进入主界面，窗口与托盘可用，启动及空闲时无必现崩溃；SSE 重连和代理切换断连仍有效。
 - [ ] 功能有完整的执行、错误处理和结果反馈；清理未完成占位、死代码、调试残留和已替换的实现。
 - [ ] API 名称与文档一致，UI 文案断言已同步；代理用例覆盖应用请求、检查更新与插件默认客户端。

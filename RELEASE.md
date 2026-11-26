@@ -18,7 +18,7 @@
 - 推送发布 tag 后先校验版本、更新日志与签名配置。通过三平台回归后才构建签名包；各平台
   上传 Actions 产物，最后一个作业校验六份更新清单、核对文件校验和并生成统一的 `SHA256SUMS`，
   然后上传到草稿并发布。已发布的同名版本不会被覆盖。
-- `main.go` 已 `mygo.Use(updatenative.Plugin)`；设置窗口的「检查更新」按钮调用
+- `src/main.go` 已 `mygo.Use(updatenative.Plugin)`；设置窗口的「检查更新」按钮调用
   `updater.CheckForUpdates()`，且应用每天后台自动检查一次 GitHub Release。
 
 ## 一次性准备
@@ -52,8 +52,9 @@ token**。私有仓库会返回 404，普通用户点「检查更新」永远显
 
 ### 4. 启用本地推送前检查（每个克隆一次）
 
-安装仓库所需的 Go 版本（见 `go.mod`）、Bash 和 `jq`。Windows 使用 Git Bash；Linux
-的 UI 像素测试需要系统中文字体，例如 `fonts-wqy-zenhei`。在仓库根目录执行：
+安装仓库所需的 Go 版本（见 `go.mod`）与 PowerShell（`pwsh` 或 Windows PowerShell）。
+本地检查用 PowerShell 脚本，不再需要 Bash、WSL 或 `jq`；CI 仍用 `scripts/*.sh`。
+Linux 的 UI 像素测试需要系统中文字体，例如 `fonts-wqy-zenhei`。在仓库根目录执行：
 
 ```sh
 git config --local core.hooksPath .githooks
@@ -69,7 +70,9 @@ git config --local core.hooksPath .githooks
 1. 改 `mygo.json` 的 `"version"`，例如递增至 `"0.2.0"`。
 2. 把 `CHANGELOG.md` 的「未发布」小节改为 `## 0.2.0`，在其上新开一个空的「未发布」小节，
    保留文件开头的导语。版本小节同时用于 GitHub Release 与应用内更新窗口。
-3. 通过 [CHECKS.md](CHECKS.md#发版前) 的发布门禁后再提交。**提交信息必须用英文**，如 `chore: release v0.2.0`。
+3. 本地跑 `pwsh scripts/check.ps1` 与 `pwsh scripts/release-metadata.ps1 v0.2.0`，
+   通过 [CHECKS.md](CHECKS.md#发版前) 的发布门禁后再提交。**提交信息必须用英文**，
+   如 `chore: release v0.2.0`。
 4. 打 tag，必须严格等于 `v` + version：`git tag v0.2.0`。
 5. 由人工确认后推送：`git push --atomic origin main refs/tags/v0.2.0`。如已启用 hook，
    测试失败时分支和 tag 都不会更新。推送 tag 会触发公开发布。

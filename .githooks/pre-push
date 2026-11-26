@@ -2,6 +2,13 @@
 set -eu
 
 root=$(git rev-parse --show-toplevel)
+if command -v pwsh >/dev/null 2>&1; then
+  run_check() { pwsh -NoProfile -File "$root/scripts/check.ps1"; }
+  run_metadata() { pwsh -NoProfile -File "$root/scripts/release-metadata.ps1" "$1" >/dev/null; }
+else
+  run_check() { bash "$root/scripts/check.sh"; }
+  run_metadata() { bash "$root/scripts/release-metadata.sh" "$1" >/dev/null; }
+fi
 snapshot=
 cleanup() {
   if [ -n "$snapshot" ]; then
@@ -31,8 +38,8 @@ while read -r local_ref local_oid remote_ref remote_oid; do
   printf '校验即将推送的 %s（%s）\n' "$remote_ref" "$commit"
   (
     cd "$snapshot"
-    if [ -n "$tag" ]; then bash "$root/scripts/release-metadata.sh" "$tag" >/dev/null; fi
-    if [ "$test_commit" = true ]; then bash "$root/scripts/check.sh"; fi
+    if [ -n "$tag" ]; then run_metadata "$tag"; fi
+    if [ "$test_commit" = true ]; then run_check; fi
   ) </dev/null
   cleanup
   snapshot=

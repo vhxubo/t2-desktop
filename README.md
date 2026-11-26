@@ -181,7 +181,7 @@
 需要先安装 Go 1.27.3+ 与 mygo 工具（`go install github.com/egoist/mygo/cmd/mygo@latest`，
 或依赖 `go.mod` 里的 `tool` 指令，用 `go tool mygo` 调用）。
 
-```bash
+```powershell
 # 配置好 MYGO_UPDATER_PRIVATE_KEY 后（本地构建可省略，仅影响更新包签名）
 go tool mygo build            # 构建当前平台
 go tool mygo build -platform "windows/amd64,windows/arm64"  # 交叉编译
@@ -200,11 +200,14 @@ go tool mygo build -upload    # 构建并上传到对应 release
 
 ### 常用命令
 
-```bash
-CGO_ENABLED=0 go test ./...     # 跑全部测试
-go tool mygo vet .              # mygo 静态检查
-gofmt -l .                      # 不应输出任何文件
+```powershell
+pwsh scripts/check.ps1  # 完整本地门禁：gofmt、go build、mygo vet、全量测试
+go tool mygo vet .      # 单独静态检查
+$env:CGO_ENABLED = '0'; go test ./...  # 单独跑全部测试
 ```
+
+本地检查不需要 Bash、WSL 或 `jq`；发版校验用 `pwsh scripts/release-metadata.ps1 v<version>`。
+CI 仍使用仓库里的 `.sh` 脚本。
 
 ### UI 自动化测试
 
@@ -244,11 +247,13 @@ PNG 和 `manifest.json` 默认直接写到仓库的 `docs/images`，不受运行
 - 涉及 2Libra API 的新能力，先读 [开放 API v1](https://r2.2libra.com/openapi/v1/index.md) 对应分册；路径、参数名、
   字段名原样照抄，未知字段必须忽略（v1 承诺只增字段）。
 
-代理约定见 [AGENTS.md](AGENTS.md)，验证要求见 [CHECKS.md](CHECKS.md)。
+代理约定见 [AGENTS.md](AGENTS.md)，验证要求见 [CHECKS.md](CHECKS.md)，发版步骤见 [RELEASE.md](RELEASE.md)。
 
 ---
 
 ## 项目结构（关键文件）
+
+Go 源码、嵌入资源（图标、字体）与字典数据统一放在 `src/` 目录；下表文件名均在 `src/` 下。构建与验证命令仍在仓库根目录执行，`mygo.json` 的 `main` 指向 `./src`。
 
 | 模块 | 主要文件 |
 | --- | --- |
