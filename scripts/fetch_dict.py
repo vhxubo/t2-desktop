@@ -11,7 +11,7 @@
 用法：
     python scripts/fetch_dict.py [输出路径]
 
-默认输出：data/2libra-dict.json
+默认输出：src/data/2libra-dict.json
 """
 
 import json
@@ -54,7 +54,7 @@ def get(path: str):
 
 
 def main():
-    out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("data/2libra-dict.json")
+    out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("src/data/2libra-dict.json")
 
     endpoints = [
         ("nodes", "/v1/nodes"),

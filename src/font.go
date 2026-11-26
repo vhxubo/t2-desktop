@@ -1,8 +1,8 @@
 package main
 
 // 界面字体：非 macOS 用随应用打包的鸿蒙字体，macOS 保留系统自带的苹方
-// （PingFang SC）。字体版权与授权条款见 fonts/LICENSE，随包副本见
-// resources/third_party/HarmonyOS_Sans_LICENSE.txt。
+// （PingFang SC）。字体版权与授权条款见 src/fonts/LICENSE，随包副本见
+// src/resources/third_party/HarmonyOS_Sans_LICENSE.txt。
 const appFontFamily = "HarmonyOS Sans SC"
 
 // 官方发布的简体中文静态字体，只打包常规(400)与加粗(700)两个字重，各约

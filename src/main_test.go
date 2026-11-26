@@ -454,7 +454,7 @@ func loadMoreApp(t *testing.T) *app {
 }
 
 func TestAppConfigDeclaresNativeScheme(t *testing.T) {
-	b, err := os.ReadFile("mygo.json")
+	b, err := os.ReadFile("../mygo.json")
 	if err != nil {
 		t.Fatal(err)
 	}

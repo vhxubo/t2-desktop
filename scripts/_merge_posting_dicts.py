@@ -8,7 +8,7 @@
 import json
 from pathlib import Path
 
-out = Path("data/2libra-dict.json")
+out = Path("src/data/2libra-dict.json")
 d = json.loads(out.read_text(encoding="utf-8"))
 
 d["posting_rule_dicts"] = {

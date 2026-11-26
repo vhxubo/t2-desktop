@@ -14,7 +14,7 @@ import (
 //
 // 运行时的应用图标走 mygo.App.Dock.SetIcon：Windows 上它换掉全部窗口（含以后
 // 新建的窗口）的图标，Linux 上换掉全局默认窗口图标，macOS 上换掉 Dock 图标。
-// 托盘图标走 mygo.Tray.SetIcon。构建安装包用的图标仍是 resources/icon.png。
+// 托盘图标走 mygo.Tray.SetIcon。构建安装包用的图标仍是 src/resources/icon.png。
 
 //go:embed resources/app_icon_light.png
 var appIconLightPNG []byte

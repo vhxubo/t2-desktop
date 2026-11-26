@@ -30,7 +30,7 @@ const (
 	proMarkBorderWidth = 1.5
 )
 
-// proMarkPNG 是从官网取回、随应用一起打包的 Pro 图标（resources/pro.png）。
+// proMarkPNG 是从官网取回、随应用一起打包的 Pro 图标（src/resources/pro.png）。
 // 作为静态资源，首次启动、断网或清掉图片缓存后都能照常画出来。
 //
 //go:embed resources/pro.png

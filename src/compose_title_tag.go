@@ -150,7 +150,7 @@ func composeWithReviewPrefix(title, target string, score int) string {
    工作内容前缀（求职 / 招人啦）
 ---------------------------------------------------------------- */
 
-// 节点类型与工作类型的机器取值：节点 slug 照 data/2libra-dict.json，工作类型
+// 节点类型与工作类型的机器取值：节点 slug 照 src/data/2libra-dict.json，工作类型
 // 照网页端发帖页。下拉框存这些取值，前缀生成时再换成中文片段。
 const (
 	jobNodeHunting  = "job-hunting"
