@@ -37,12 +37,14 @@ const (
 func (a *app) titleSearchField(c *ui.Context, width, height float32) (ui.Element, ui.Element) {
 	tk := lobetheme.TokensOf(c)
 	t := c.Theme()
-	box := ui.Row(c).Width(width).Height(height)
+	// 宽度跟着外层标题栏中段伸缩：缩放后窗口逻辑宽度变小，中段被挤窄时
+	// 输入框一起缩，不会溢出去盖住右侧的通知铃铛与窗口按钮。
+	box := ui.Row(c).FillWidth().MaxWidth(width).Height(height).Shrink(1).MinWidth(0)
 	var in ui.Element
 	box.Children(func() {
 		// 输入本身就是字段盒子：0 宽边框禁掉聚焦时的 Accent 描边。
 		in = ui.TextInput(c, &a.palette.text).
-			Width(width).Height(height).
+			FillWidth().MaxWidth(width).Height(height).Shrink(1).MinWidth(0).
 			Padding(0, 26, 0, titleSearchIconInset).
 			Background(tk.FillTertiary).Border(0, ui.Transparent).Radius(tk.BorderRadiusSM).
 			FocusRing(false).Label("搜索关键词")

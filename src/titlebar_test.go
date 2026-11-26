@@ -411,6 +411,58 @@ func TestTitleBarWindowButtonsClick(t *testing.T) {
 	}
 }
 
+// 缩放把窗口的逻辑宽度压小后，标题栏右侧的三枚窗口按钮仍要保持可点尺寸、
+// 留在窗口内，也不能被中段被挤窄后溢出来的搜索框盖住。登录后的账号标签与
+// 通知铃铛同样不能把它们挤出窗口。
+func TestTitleBarWindowButtonsStayVisibleWhenZoomed(t *testing.T) {
+	for _, loggedIn := range []bool{false, true} {
+		name := "未登录"
+		if loggedIn {
+			name = "已登录"
+		}
+		t.Run(name, func(t *testing.T) {
+			a := testApp(t)
+			if loggedIn {
+				if err := a.auth.storeToken(tokenData{
+					AccessToken: "tok", Username: "jimmy", TokenType: "Bearer",
+				}); err != nil {
+					t.Fatal(err)
+				}
+				a.onAuthChanged(nil)
+			}
+			view := a.windowView(a.view)
+			for _, z := range []float32{1, 1.5, 2, 3, 4, 5} {
+				if err := a.setAppZoom(z); err != nil {
+					t.Fatal(err)
+				}
+				tt := ui.NewTester(view, 1080, 720)
+				tt.Frame()
+
+				minR, ok := tt.Find("最小化")
+				if !ok {
+					t.Fatalf("缩放 %v 后找不到最小化按钮：%q", z, tt.Texts())
+				}
+				for _, label := range []string{"最小化", "最大化", "关闭"} {
+					r, ok := tt.Find(label)
+					if !ok {
+						t.Fatalf("缩放 %v 后找不到窗口按钮「%s」：%q", z, label, tt.Texts())
+					}
+					if r.X < 0 || r.Y < 0 || r.X+r.W > 1080 || r.Y+r.H > 720 {
+						t.Errorf("缩放 %v 后「%s」跑出窗口：%v", z, label, r)
+					}
+					// Find 返回的是物理像素，按钮随整页缩放一起变大。
+					if wantW, wantH := float32(titleButtonWidth)*z, float32(titleBarHeight)*z; r.W < wantW-2 || r.H < wantH-2 {
+						t.Errorf("缩放 %v 后「%s」被挤成 %v，期望至少 %.0f×%.0f", z, label, r, wantW, wantH)
+					}
+				}
+				if s, ok := tt.Find("搜索关键词"); ok && s.X+s.W > minR.X+1 {
+					t.Errorf("缩放 %v 后搜索框溢出到窗口按钮上：搜索右缘 %.0f，最小化左缘 %.0f", z, s.X+s.W, minR.X)
+				}
+			}
+		})
+	}
+}
+
 // 登录成功后标题栏显示用户名与头像，且不再回到登录页。「已登录」这三个字
 // 不再出现：头像和昵称本身就是登录状态。
 func TestTitleBarShowsAccountAfterLogin(t *testing.T) {

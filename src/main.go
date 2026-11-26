@@ -2027,6 +2027,10 @@ func tabIndexFromID(id string) (int, bool) {
 const (
 	titleBarHeight   = 32
 	titleButtonWidth = 46
+	// titleBarControlsWidth 是标题栏右侧窗口区至少占的宽度（DIP）：通知铃铛 +
+	// 间距 + 三枚窗口按钮。整页缩放会缩小窗口的逻辑宽度，这一段不能被压窄，
+	// 否则最小化 / 最大化 / 关闭按钮会被挤出窗口，点了也没反应。
+	titleBarControlsWidth = titleBarHeight + 10 + 3*titleButtonWidth
 	// titleGlyphHalf 是窗口按钮里矢量图标的半边长（DIP），10×10 的图标在
 	// 32 DIP 高的按钮里比例合适，也不会被按钮边缘裁切。
 	titleGlyphHalf = 5
@@ -2104,7 +2108,8 @@ func (a *app) titleBar(c *ui.Context) {
 			a.search = newSearchState()
 		}
 		q := a.palette.text
-		ui.Column(c).Width(searchW).Height(h).Shrink(0).
+		// 中段可缩：缩放后窗口逻辑宽度变小，先让搜索框让位给右侧窗口按钮。
+		ui.Column(c).Width(searchW).Height(h).Shrink(1).MinWidth(0).
 			AlignItems(ui.Stretch).Justify(ui.Center).Children(func() {
 			inputFocused := a.palette.input.Focused(c)
 			in, box := a.titleSearchField(c, searchW, titleBarHeight-2*titleSearchInsetY)
@@ -2176,8 +2181,9 @@ func (a *app) titleBar(c *ui.Context) {
 		// 右段：通知铃铛、账号标识与自绘窗口按钮，贴窗口右缘；与左段等宽
 		// 伸缩。金币、盲盒、「我的」与退出登录都收在账号标识的气泡里；
 		// 设置与未登录时的登录 / 注册留在侧边栏底部。
-		ui.Row(c).Grow(1).MinWidth(280).Justify(ui.End).AlignItems(ui.Stretch).Children(func() {
-			ui.Row(c).AlignItems(ui.Center).Gap(10).Padding(0, 10, 0, 0).Children(func() {
+		ui.Row(c).Grow(1).MinWidth(titleBarControlsWidth).Justify(ui.End).AlignItems(ui.Stretch).Children(func() {
+			// 铃铛与账号标识可缩：空间不够时先让窗口按钮保住可点尺寸。
+			ui.Row(c).AlignItems(ui.Center).Gap(10).Padding(0, 10, 0, 0).Shrink(1).MinWidth(0).Children(func() {
 				// 更新按钮：检查中发现新版本、下载进度与「重启更新」都收在这里。
 				a.titleBarUpdateButton(c)
 				// 通知铃铛：未读数叠在铃铛右下角，点开独立窗口（不再是侧边栏页面）。
