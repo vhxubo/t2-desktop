@@ -61,7 +61,7 @@ type favoriteState struct {
 //	rewardOpen / rewardFor   打赏弹窗（金币图标）
 //	detailsOpen / detailsFor 表情明细气泡（点摘要胶囊）
 //
-// amount 是打赏金额草稿（1～500）。rewardKey / rewardSig 是打赏的幂等键与它
+// amount 是打赏金额草稿（100～500）。rewardKey / rewardSig 是打赏的幂等键与它
 // 对应的请求签名：同一笔打赏的超时重试必须用同一个键，
 // 金额或目标变了才换新键。
 type reactionState struct {
@@ -121,7 +121,7 @@ type replyReactionBody struct {
 }
 
 // rewardBody 是 POST /v1/rewards 的请求体（打赏）。type 取 post / comment，
-// 帖子用 short_id，评论用 uuid；金额 1～500，超出服务端会拒绝。
+// 帖子用 short_id，评论用 uuid；金额 100～500，超出服务端会拒绝。
 type rewardBody struct {
 	Type      string `json:"type"`
 	Amount    int    `json:"amount"`
@@ -130,9 +130,9 @@ type rewardBody struct {
 	Path      string `json:"path,omitempty"`
 }
 
-// rewardAmountLo / rewardAmountHi 是文档给的打赏金额范围。
+// rewardAmountLo / rewardAmountHi 是打赏金额范围。
 const (
-	rewardAmountLo = 1
+	rewardAmountLo = 100
 	rewardAmountHi = 500
 )
 
@@ -512,7 +512,7 @@ func (a *app) prepareRewardPopup(d *detailState, target string) {
 	d.react.rewardFor = target
 	d.react.rewardErr = ""
 	if d.react.amount < rewardAmountLo {
-		d.react.amount = 5
+		d.react.amount = rewardAmountLo
 	}
 }
 
@@ -1096,7 +1096,7 @@ func (a *app) reactionPanel(c *ui.Context, d *detailState, target string) {
 }
 
 // rewardPresetAmounts 是打赏弹层里的常用金额：打赏多数是整数，手打一串数字
-// 容易点错，点一下芯片就填进输入框。上限是 500，所以预设值到 500 为止。
+// 容易点错，点一下芯片就填进输入框。范围 100～500，预设值覆盖到 500 为止。
 var rewardPresetAmounts = []int{100, 150, 200, 300, 350, 400, 500}
 
 // rewardPanel 是打赏气泡里的内容：金额、常用金额、余额与确认按钮。面板是贴着
@@ -1291,7 +1291,7 @@ func reactionChoices(p *topicDetail, stats []reactionStat) []string {
    打赏
 -------------------------------------------------------------- */
 
-// rewardAmount 把输入框里的浮点数收成 1～500 的整数。
+// rewardAmount 把输入框里的浮点数收成 100～500 的整数。
 func rewardAmount(amount float64) int {
 	n := int(math.Round(amount))
 	if n < rewardAmountLo {

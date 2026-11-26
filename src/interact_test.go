@@ -520,7 +520,7 @@ func TestReactionPopover(t *testing.T) {
 	if !a.detail.react.rewardOpen || a.detail.react.rewardFor != reactionTopic {
 		t.Errorf("打赏气泡状态不对：%+v", a.detail.react)
 	}
-	for _, want := range []string{"打赏金币", "打赏 5 金币"} {
+	for _, want := range []string{"打赏金币", "打赏 100 金币"} {
 		if !tt.HasText(want) {
 			t.Errorf("打赏气泡缺少 %q：%q", want, tt.Texts())
 		}
@@ -622,6 +622,21 @@ func TestReactionActionTogglesEmoji(t *testing.T) {
 	}
 }
 
+// 打赏金额始终是 100～500 的整数，低于下限的输入按 100 提交。
+func TestRewardAmountRange(t *testing.T) {
+	for _, tc := range []struct {
+		in   float64
+		want int
+	}{
+		{-10, 100}, {1, 100}, {99, 100}, {99.6, 100},
+		{100, 100}, {150.4, 150}, {500, 500}, {600, 500},
+	} {
+		if got := rewardAmount(tc.in); got != tc.want {
+			t.Errorf("rewardAmount(%v) = %d，期望 %d", tc.in, got, tc.want)
+		}
+	}
+}
+
 // 打赏：请求体、必填幂等键、成功后的 toast 与本地记账。
 func TestRewardSubmitsFromDialog(t *testing.T) {
 	got := make(chan map[string]any, 1)
@@ -653,7 +668,7 @@ func TestRewardSubmitsFromDialog(t *testing.T) {
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	if err := tt.Click("打赏 5 金币"); err != nil {
+	if err := tt.Click("打赏 100 金币"); err != nil {
 		t.Fatalf("点打赏失败：%v（%q）", err, tt.Texts())
 	}
 	if err := waitInteract(t, done); err != nil {
@@ -663,20 +678,20 @@ func TestRewardSubmitsFromDialog(t *testing.T) {
 	if body["type"] != "post" || body["post_id"] != "AB12" {
 		t.Errorf("打赏请求体不对：%v", body)
 	}
-	if body["amount"] != float64(5) {
-		t.Errorf("打赏金额 = %v，期望 5", body["amount"])
+	if body["amount"] != float64(100) {
+		t.Errorf("打赏金额 = %v，期望 100", body["amount"])
 	}
 	if !keyPattern.MatchString(gotKey) {
 		t.Errorf("打赏必须带幂等键，实际 %q", gotKey)
 	}
-	if !hasToast(a, "已打赏 5 金币") {
+	if !hasToast(a, "已打赏 100 金币") {
 		// toast 可能已经被点击后的那一帧交给窗口领走了：再看界面。
 		tt.Frame()
-		if !tt.HasText("已打赏 5 金币") {
+		if !tt.HasText("已打赏 100 金币") {
 			t.Errorf("打赏成功没有 toast：%+v %q", a.toasts, tt.Texts())
 		}
 	}
-	if a.detail.topic.Rewards.Total != 5 || a.detail.topic.Rewards.Count != 1 {
+	if a.detail.topic.Rewards.Total != 100 || a.detail.topic.Rewards.Count != 1 {
 		t.Errorf("本地没有记账：%+v", a.detail.topic.Rewards)
 	}
 	if a.detail.react.rewardOpen {
@@ -805,7 +820,7 @@ func TestRewardCommentTarget(t *testing.T) {
 
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	if err := tt.Click("打赏 5 金币"); err != nil {
+	if err := tt.Click("打赏 100 金币"); err != nil {
 		t.Fatalf("点打赏失败：%v", err)
 	}
 	if err := waitInteract(t, done); err != nil {
@@ -815,7 +830,7 @@ func TestRewardCommentTarget(t *testing.T) {
 	if body["type"] != "comment" || body["comment_id"] != "r1" {
 		t.Errorf("评论打赏请求体不对：%v", body)
 	}
-	if a.detail.replyList[0].Rewards.Total != 5 {
+	if a.detail.replyList[0].Rewards.Total != 100 {
 		t.Errorf("评论打赏没有记账：%+v", a.detail.replyList[0].Rewards)
 	}
 }
@@ -855,7 +870,7 @@ func TestRewardIdempotencyKeyReuse(t *testing.T) {
 		t.Fatal("服务端 500 应返回错误")
 	}
 	// 改金额就是另一笔打赏：换新键。
-	a.detail.react.amount = 8
+	a.detail.react.amount = 150
 	a.submitReward(a.detail, reactionTopic)
 	if err := waitInteract(t, done); err == nil {
 		t.Fatal("服务端 500 应返回错误")
