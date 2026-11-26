@@ -12,8 +12,9 @@ import (
 // 系统托盘：Windows 是任务栏通知区域，macOS 是菜单栏。左键点图标把主窗口
 // 带回前台；右键弹出菜单。未登录时顶部提示「未登录」，提供登录、注册；登录后
 // 顶部换成通知入口（铃铛 + 未读角标），下面接发帖、发动态、设置。退出登录不
-// 放在托盘里，去「我的」或命令中心。两种状态都有「关闭全部」（收进托盘，应用
-// 继续在后台跑）与「退出」。
+// 放在托盘里，去「我的」或命令中心。两种状态都能用「原生通知」勾选框一键切换
+// 桌面弹窗；平台不支持时那一行禁用。最后还有「关闭全部」（收进托盘，应用继续
+// 在后台跑）与「退出」。
 //
 // 托盘是进程级资源：菜单每次右键现建一份，弹出的菜单挂着时左键也会弹出
 // 菜单，所以弹出后立刻用 SetMenu(nil) 摘掉。
@@ -29,6 +30,7 @@ const (
 	trayToolTip = "T2 Desktop"
 
 	trayNotificationsID = "tray-notifications"
+	trayNativeNotifyID  = "tray-native-notify"
 	trayLoginID         = "tray-login"
 	traySignupID        = "tray-signup"
 	trayPostID          = "tray-post"
@@ -43,6 +45,7 @@ const (
 // 入口保持同一套线性图标。mygo 要求图标只生成一次，因此集中在 init 里建好复用。
 var (
 	trayNotificationsMI *mygo.MenuIcon
+	trayNativeNotifyMI  *mygo.MenuIcon
 	trayLoginMI         *mygo.MenuIcon
 	traySignupMI        *mygo.MenuIcon
 	trayPostMI          *mygo.MenuIcon
@@ -60,8 +63,10 @@ func init() {
 		}
 		return mi
 	}
-	// 通知入口与标题栏铃铛同源，用同一份 bellIcon。
+	// 通知入口与标题栏铃铛同源，用同一份 bellIcon；原生通知开关用响铃，
+	// 和只读的通知入口区分开。
 	trayNotificationsMI = makeMI(bellIcon)
+	trayNativeNotifyMI = makeMI(lucide.BellRing())
 	trayLoginMI = makeMI(loginIcon)
 	traySignupMI = makeMI(signupIcon)
 	// 与命令中心里的发帖 / 发动态 / 设置用同一组图标。
@@ -135,9 +140,33 @@ func (d *desktop) destroyTray() {
 	tray.Destroy()
 }
 
+// trayNativeNotifyItem 是原生通知的快捷开关。勾选状态读进程级偏好（notify.json），
+// 点击走 saveNotifyPref 落盘并重画所有窗口。mygo 在 Click 前会翻一次菜单项的
+// Checked，但菜单每次右键现建，真正的状态以偏好为准，这里按当前值取反即可。
+// 平台没有原生通知时不给一个点了没反应的开关，留一行禁用的说明。
+func (d *desktop) trayNativeNotifyItem() *mygo.MenuItem {
+	a := d.app
+	if a == nil || d.notify == nil {
+		return &mygo.MenuItem{ID: trayNativeNotifyID, Label: "原生通知不可用", Disabled: true}
+	}
+	return &mygo.MenuItem{
+		ID:      trayNativeNotifyID,
+		Label:   "原生通知",
+		Icon:    trayNativeNotifyMI,
+		Type:    mygo.MenuItemCheckbox,
+		Checked: a.notifPrefs().notificationEnabled(),
+		Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.saveNotifyPref(toastMain, func() error {
+				return a.notifPrefs().setEnabled(!a.notifPrefs().notificationEnabled())
+			})
+		},
+	}
+}
+
 // trayMenu 建右键菜单。登录后顶部第一项是通知入口：铃铛 + 未读角标，点开消息
 // 窗口；未登录时那一行只读提示「未登录」。再按状态给登录 / 注册或发帖 / 发动态
-// / 设置。关闭全部与退出是窗口管理动作，两种状态都在。
+// / 设置。原生通知开关与账号无关，两种状态都给。关闭全部与退出是窗口管理动作，
+// 两种状态都在。
 func (d *desktop) trayMenu() *mygo.Menu {
 	a := d.app
 	var auth *AuthManager
@@ -201,6 +230,8 @@ func (d *desktop) trayMenu() *mygo.Menu {
 		)
 	}
 	items = append(items,
+		mygo.Separator(),
+		d.trayNativeNotifyItem(),
 		mygo.Separator(),
 		&mygo.MenuItem{
 			ID:    trayCloseAllID,

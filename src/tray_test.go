@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"image/png"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -41,7 +42,7 @@ func TestTrayMenuLoggedOut(t *testing.T) {
 	d.app = &app{auth: d.auth}
 	menu := d.trayMenu()
 
-	want := []string{"tray-state", trayLoginID, traySignupID, "-", trayCloseAllID, "-", trayQuitID}
+	want := []string{"tray-state", trayLoginID, traySignupID, "-", trayNativeNotifyID, "-", trayCloseAllID, "-", trayQuitID}
 	if got := trayItemIDs(menu.Items()); !reflect.DeepEqual(got, want) {
 		t.Errorf("未登录的托盘菜单 = %v，期望 %v", got, want)
 	}
@@ -59,7 +60,7 @@ func TestTrayMenuLoggedIn(t *testing.T) {
 	d.app.unread = 3
 	menu := d.trayMenu()
 
-	want := []string{trayNotificationsID, trayPostID, trayMomentID, traySettingsID, "-", trayCloseAllID, "-", trayQuitID}
+	want := []string{trayNotificationsID, trayPostID, trayMomentID, traySettingsID, "-", trayNativeNotifyID, "-", trayCloseAllID, "-", trayQuitID}
 	if got := trayItemIDs(menu.Items()); !reflect.DeepEqual(got, want) {
 		t.Errorf("已登录的托盘菜单 = %v，期望 %v", got, want)
 	}
@@ -98,5 +99,68 @@ func TestTrayNotificationBadge(t *testing.T) {
 		if first.Badge != tc.badge {
 			t.Errorf("未读 %d 的角标 = %q，期望 %q", tc.unread, first.Badge, tc.badge)
 		}
+	}
+}
+
+// 托盘的原生通知开关读写同一份 notify.json：勾选状态跟着偏好走，点一下关、
+// 再点一下开，下次右键也能看到新状态。
+func TestTrayNativeNotificationToggle(t *testing.T) {
+	d := testBook(t)
+	addTestAccount(t, d, "jimmy")
+	d.notify = func(nativeNotice) error { return nil }
+	d.app = &app{auth: d.auth, notificationPrefs: d.notificationPrefs}
+
+	item := d.trayMenu().ItemByID(trayNativeNotifyID)
+	if item == nil {
+		t.Fatal("托盘菜单缺少原生通知开关")
+	}
+	if item.Type != mygo.MenuItemCheckbox || item.Label != "原生通知" || !item.IsChecked() {
+		t.Fatalf("原生通知开关 = %q / %q / checked=%v，期望 checkbox / 原生通知 / true",
+			item.Type, item.Label, item.IsChecked())
+	}
+	if item.Click == nil || item.Icon == nil {
+		t.Fatal("原生通知开关应可点击且带图标")
+	}
+
+	item.Click(item, nil)
+	if d.notificationPrefs.notificationEnabled() {
+		t.Error("点击后原生通知应为关")
+	}
+	var cfg notificationPrefsConfig
+	if err := readJSONFile(filepath.Join(d.dir, "notify.json"), &cfg); err != nil {
+		t.Fatalf("读 notify.json 失败：%v", err)
+	}
+	if !cfg.Disabled {
+		t.Error("关闭后 notify.json 应写入 disabled=true")
+	}
+	if again := d.trayMenu().ItemByID(trayNativeNotifyID); again.IsChecked() {
+		t.Error("重新打开的托盘菜单应显示原生通知已关闭")
+	}
+
+	again := d.trayMenu().ItemByID(trayNativeNotifyID)
+	again.Click(again, nil)
+	if !d.notificationPrefs.notificationEnabled() {
+		t.Error("再次点击后原生通知应为开")
+	}
+	if err := readJSONFile(filepath.Join(d.dir, "notify.json"), &cfg); err != nil {
+		t.Fatalf("读 notify.json 失败：%v", err)
+	}
+	if cfg.Disabled {
+		t.Error("开启后 notify.json 应写入 disabled=false")
+	}
+}
+
+// 没有原生通知的平台不给一个点了没反应的开关，和通知窗口的「不可用」一致。
+func TestTrayNativeNotificationUnavailable(t *testing.T) {
+	d := testBook(t)
+	d.app = &app{auth: d.auth}
+
+	item := d.trayMenu().ItemByID(trayNativeNotifyID)
+	if item == nil {
+		t.Fatal("托盘菜单缺少原生通知入口")
+	}
+	if !item.Disabled || item.Label != "原生通知不可用" || item.Click != nil {
+		t.Fatalf("不可用的原生通知入口 = disabled=%v / %q / click=%v，期望禁用说明且不可点",
+			item.Disabled, item.Label, item.Click != nil)
 	}
 }
