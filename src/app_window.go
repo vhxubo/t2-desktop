@@ -39,6 +39,8 @@ func (a *app) windowView(fn func(*ui.Context)) func(*ui.Context) {
 		// 尺寸不变。Ctrl+滚轮在根元素上接管，内层控件没吃掉时由它处理。
 		c.SetZoom(a.zoom())
 		c.Root().HandleInput(a.zoomInput)
+		// 缩放快捷键同样是整窗口的：设置、详情等附属窗口里按也能改同一份偏好。
+		a.bindZoomShortcuts(c)
 		fn(c)
 	}
 }

@@ -186,7 +186,8 @@ func TestZoomCommandsAndShortcuts(t *testing.T) {
 		}
 	}
 
-	tt := ui.NewTester(a.view, 1080, 720)
+	// 缩放键在 windowView 注册，所有窗口都能用；测试走和真实窗口同一条路径。
+	tt := ui.NewTester(a.windowView(a.view), 1080, 720)
 	tt.Frame()
 	tt.Key(ui.Cmd, ui.KeyEqual)
 	tt.Frame()
