@@ -43,10 +43,10 @@ func (a *app) fabStack(c *ui.Context, buttons ...func(*ui.Context)) {
 
 // fabButton 画一个 Lobe 次级 FAB：ActionIcon 的 BlockSize 给圆形直径，再按
 // 半径对半设圆角做成整圆；图标由调用处传 Lobe 的 lucide 图标（见 listFabs）。
-// 用 Outlined 变体取 Lobe 的实色容器底色与描边，按钮浮在列表上时不会看起来
-// 只有一枚图标、透出下面的内容；悬停 / 按下由它自己加深底色。label 是可访问
-// 名，tip 是悬停说明；loading 时禁用按钮并在图标位转圈，请求还在路上，连点
-// 不该重复发。
+// 用 Outlined 变体取 Lobe 的实色容器底色，再去掉边框，按钮浮在列表上时不会
+// 看起来只有一枚图标、透出下面的内容；悬停 / 按下由它自己加深底色。label 是
+// 可访问名，tip 是悬停说明；loading 时禁用按钮并在图标位转圈，请求还在路上，
+// 连点不该重复发。
 func (a *app) fabButton(c *ui.Context, icon *ui.SVG, label, tip string, loading bool, onClick func()) {
 	c.Key(label)
 	if loading {
@@ -55,7 +55,7 @@ func (a *app) fabButton(c *ui.Context, icon *ui.SVG, label, tip string, loading 
 		// 请求还在路上，连点不该重复发。
 		tk := lobetheme.TokensOf(c)
 		b := ui.ButtonBase(c).Size(fabCircle, fabCircle).Center().Disabled(true).
-			DimDisabled(false).Radius(fabCircle/2).Background(tk.BgContainer).Border(1, tk.Border)
+			DimDisabled(false).Radius(fabCircle / 2).Background(tk.BgContainer).BorderWidth(0)
 		b.Label(label).Tooltip(tip)
 		b.Children(func() {
 			lobeSpin(c, feedback.SpinProps{CustomSize: 16})
@@ -66,7 +66,7 @@ func (a *app) fabButton(c *ui.Context, icon *ui.SVG, label, tip string, loading 
 		Variant:   action.ActionIconOutlined,
 		BlockSize: fabCircle,
 	})
-	b.Label(label).Tooltip(tip).OnClick(onClick).Radius(fabCircle / 2)
+	b.Label(label).Tooltip(tip).OnClick(onClick).Radius(fabCircle / 2).BorderWidth(0)
 }
 
 // listFabs 是主页内容区右下角的一列悬浮按钮：发帖（主操作，强调色的

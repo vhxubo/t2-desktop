@@ -210,7 +210,7 @@ func TestHomeFabsAreCircular(t *testing.T) {
 	}
 }
 
-// 次级 FAB 浮在列表上：静止时就有不透明的容器底色和描边，不能只剩图标、
+// 次级 FAB 浮在列表上：静止时就有不透明的容器底色、没有描边，不能只剩图标、
 // 透出下面的列表文字。发帖是主操作，仍用主色蓝（见 TestHomeFabsAreCircular）。
 func TestHomeSecondaryFabsHaveSolidSurface(t *testing.T) {
 	for _, dark := range []bool{false, true} {
@@ -237,6 +237,10 @@ func TestHomeSecondaryFabsHaveSolidSurface(t *testing.T) {
 			if got := img.RGBAAt(int(r.X)+2, cy); got.R != tk.BgContainer.R || got.G != tk.BgContainer.G || got.B != tk.BgContainer.B {
 				t.Errorf("%s FAB 底色 = %v，期望实色 BgContainer %v", name, got, tk.BgContainer)
 			}
+			// 没有描边：圆最宽处的边缘像素仍是容器底色，而不是 Lobe 的 Border 色。
+			if got := img.RGBAAt(int(r.X), cy); got.R != tk.BgContainer.R || got.G != tk.BgContainer.G || got.B != tk.BgContainer.B {
+				t.Errorf("%s FAB 边缘 = %v，期望无描边的 BgContainer %v", name, got, tk.BgContainer)
+			}
 			// 按钮外侧仍是页面底色：按钮没有铺成一整条。
 			if got := img.RGBAAt(int(r.X)-4, cy); got.R != tk.BgLayout.R || got.G != tk.BgLayout.G || got.B != tk.BgLayout.B {
 				t.Errorf("%s FAB 外侧 = %v，期望页面底色 %v", name, got, tk.BgLayout)
@@ -251,8 +255,8 @@ func TestHomeSecondaryFabsHaveSolidSurface(t *testing.T) {
 	}
 }
 
-// 刷新进行中的按钮禁用并转成转圈，但仍是同一枚有实色底的圆按钮，不会退回
-// 透明只剩一个图标。
+// 刷新进行中的按钮禁用并转成转圈，但仍是同一枚有实色底、没有描边的圆按钮，
+// 不会退回透明只剩一个图标。
 func TestRefreshingFabKeepsSolidSurface(t *testing.T) {
 	a := testApp(t)
 	a.tabs[0].items = fabListItems(30)
@@ -264,9 +268,12 @@ func TestRefreshingFabKeepsSolidSurface(t *testing.T) {
 		t.Fatalf("找不到刷新 FAB：%q", tt.Texts())
 	}
 	tk := lobeCfg.Tokens(false)
-	got := tt.Image().RGBAAt(int(r.X)+2, int(r.Y+r.H/2))
-	if got.R != tk.BgContainer.R || got.G != tk.BgContainer.G || got.B != tk.BgContainer.B {
-		t.Errorf("刷新中按钮底色 = %v，期望实色 BgContainer %v", got, tk.BgContainer)
+	img := tt.Image()
+	cy := int(r.Y + r.H/2)
+	for _, x := range []int{int(r.X), int(r.X) + 2} {
+		if got := img.RGBAAt(x, cy); got.R != tk.BgContainer.R || got.G != tk.BgContainer.G || got.B != tk.BgContainer.B {
+			t.Errorf("刷新中按钮 x=%d 的颜色 = %v，期望无描边的 BgContainer %v", x, got, tk.BgContainer)
+		}
 	}
 }
 

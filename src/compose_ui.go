@@ -231,7 +231,7 @@ func (a *app) composeFab(c *ui.Context) {
 	case b.Hovered():
 		bg = tk.PrimaryHover
 	}
-	b.Background(bg).Border(1, bg).TextColor(tk.PrimaryForeground).Radius(fabPrimary / 2)
+	b.Background(bg).BorderWidth(0).TextColor(tk.PrimaryForeground).Radius(fabPrimary / 2)
 }
 
 /* ------------------------------------------------------------------
