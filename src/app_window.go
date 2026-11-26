@@ -35,6 +35,10 @@ func (a *app) windowView(fn func(*ui.Context)) func(*ui.Context) {
 			a.images.endFrame()
 			a.frameSvc = ui.Services{}
 		}()
+		// 所有窗口都从这一份偏好取缩放：文字、图标与布局一起放大，窗口
+		// 尺寸不变。Ctrl+滚轮在根元素上接管，内层控件没吃掉时由它处理。
+		c.SetZoom(a.zoom())
+		c.Root().HandleInput(a.zoomInput)
 		fn(c)
 	}
 }

@@ -165,6 +165,23 @@ func (a *app) registerBuiltinCommands() {
 		Hint: "重新加载当前列表", Keywords: "refresh shuaxin reload",
 		Icon: lucide.RefreshCw(), DefaultShortcut: cmdKey(ui.KeyR), Run: a.reloadCurrent,
 	})
+	// 界面缩放：三条命令同时进命令面板、快捷键设置与窗口快捷键。Ctrl+滚轮
+	// 走窗口根元素的输入处理，和这里的键位改的是同一份进程级偏好。
+	add(commandDef{
+		ID: "zoomIn", Title: "放大界面", Category: commandCategoryTools,
+		Hint: "放大所有窗口的界面缩放", Keywords: "zoom in fangda suofang 缩放",
+		Icon: lucide.ZoomIn(), DefaultShortcut: cmdKey(ui.KeyEqual), Run: a.zoomIn,
+	})
+	add(commandDef{
+		ID: "zoomOut", Title: "缩小界面", Category: commandCategoryTools,
+		Hint: "缩小所有窗口的界面缩放", Keywords: "zoom out suoxiao suofang 缩放",
+		Icon: lucide.ZoomOut(), DefaultShortcut: cmdKey(ui.KeyMinus), Run: a.zoomOut,
+	})
+	add(commandDef{
+		ID: "zoomReset", Title: "重置缩放", Category: commandCategoryTools,
+		Hint: "把界面缩放恢复为 100%", Keywords: "zoom reset chongzhi 100%",
+		Icon: lucide.RotateCcw(), DefaultShortcut: cmdKey(ui.Key0), Run: a.resetZoom,
+	})
 	add(commandDef{
 		ID: "update", Title: "检查更新", Category: commandCategoryTools,
 		Hint: "看看有没有新版本", Keywords: "update gengxin upgrade",

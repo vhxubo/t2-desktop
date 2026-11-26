@@ -600,6 +600,9 @@ type app struct {
 	// scores 是评分榜页面的状态（见 scores_ui.go），和首页、草稿箱一样
 	// 内嵌在主窗口，不单独占一扇窗口。只在主线程读写。
 	scores *scoresState
+	// zoomPrefs 是整页缩放偏好，进程级一份（见 zoom_prefs.go）。所有窗口
+	// 的 view 每帧从它取缩放，设置页与命令面板改的也是这一份。
+	zoomPrefs *zoomPrefsStore
 }
 
 // tabID 把 tab 序号映射成导航项 id；导航轨的选中态由 selectTab 直接维护。
@@ -647,7 +650,9 @@ type appDeps struct {
 	sidebarPrefs *sidebarPrefsStore
 	// commands 是命令快捷键 / 收藏 / 最近使用的偏好，进程级一份。
 	commands *commandPrefs
-	desktop  *desktop
+	// zoomPrefs 是界面缩放偏好，进程级一份（见 zoom_prefs.go）。
+	zoomPrefs *zoomPrefsStore
+	desktop   *desktop
 }
 
 // newAppDeps 造一份独立的共享依赖：无头测试时每个 app 自己
@@ -676,6 +681,7 @@ func newAppDeps(dir string) appDeps {
 		autoSignPrefs:       newAutoSignPrefsStore(dir),
 		sidebarPrefs:        newSidebarPrefsStore(dir),
 		commands:            newCommandPrefs(dir),
+		zoomPrefs:           newZoomPrefsStore(dir),
 	}
 }
 
@@ -701,6 +707,7 @@ func (b *desktop) deps() appDeps {
 		autoSignPrefs:       b.autoSignPrefs,
 		sidebarPrefs:        b.sidebarPrefs,
 		commands:            b.commands,
+		zoomPrefs:           b.zoomPrefs,
 		desktop:             b,
 	}
 }
@@ -762,6 +769,7 @@ func newAppWithDeps(d appDeps, auth *AuthManager) *app {
 		autoSignPrefs:            d.autoSignPrefs,
 		sidebarPrefs:             d.sidebarPrefs,
 		commands:                 newCommandRegistry(d.commands),
+		zoomPrefs:                d.zoomPrefs,
 		draftDir:                 d.dir,
 		tabs:                     make([]*tabState, len(tabSpecs)),
 		lastTab:                  -1,

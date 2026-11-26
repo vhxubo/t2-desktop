@@ -583,8 +583,9 @@ func (a *app) imageViewer(c *ui.Context) {
 	// 方向键与加号减号才有地方使。每帧重新聚焦，窗口重建也不会丢。
 	v.keys.Focus(c)
 	// 指针到底层：滚轮在这里缩放，右键在这里记下位置（见 viewerInput）。
+	// Ctrl+滚轮先交给整页缩放，普通滚轮与触控板双指缩放仍归图片预览。
 	back.HandleInput(func(ev ui.InputEvent) bool {
-		return a.viewerInput(v, p, lay, iw, ih, zoom, fit, ev)
+		return a.zoomInput(ev) || a.viewerInput(v, p, lay, iw, ih, zoom, fit, ev)
 	})
 	// 底层收到的点击若是按在图上那一下的收尾（拖动或单击），只结束手势，不
 	// 当成点空白处；真正点在舞台的空白处才关闭。工具条是窗口拖动区，底部

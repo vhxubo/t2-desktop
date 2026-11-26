@@ -238,6 +238,7 @@ func (a *app) settingsWindowView(c *ui.Context) {
 					a.shortcutSettingsSection(c)
 				default:
 					a.appearanceSettingsSection(c)
+					a.zoomSettingsSection(c)
 					a.windowSettingsSection(c)
 					a.autoSignSettingsSection(c)
 					a.updateSettingsSection(c)
@@ -614,6 +615,38 @@ func (a *app) appearanceSettingsSection(c *ui.Context) {
 /* ------------------------------------------------------------------
    阅读排版一块：字号 / 行距 / 页宽 / 列表密度
  --------------------------------------------------------------- */
+
+/* ------------------------------------------------------------------
+   界面缩放一块：整页放大 / 缩小
+  --------------------------------------------------------------- */
+
+// zoomSettingsSection 是「通用」页里的界面缩放：档位快选与百分比数值写同一
+// 份偏好，改动立即落盘并在下一帧应用到所有窗口。Ctrl+滚轮与命令面板里的
+// 「放大 / 缩小界面 / 重置缩放」也改这里，设置页下一帧就显示新值。
+func (a *app) zoomSettingsSection(c *ui.Context) {
+	settingsSection(c, "界面缩放", func() {
+		settingsDescription(c, "缩放整个应用的界面（文字、图标与布局），对所有窗口生效；"+
+			"Ctrl+滚轮或 Ctrl+加号 / 减号可随时调整，Ctrl+0 恢复 100%。", 3)
+		if sel := settingsChoice(c, "常用缩放", zoomPresetLabels, zoomPresetIndex(a.zoom())); sel >= 0 {
+			if z := zoomPresetValues[sel]; z != a.zoom() {
+				if err := a.setAppZoom(z); err != nil {
+					a.toast(toastSettings, err.Error())
+				}
+			}
+		}
+		percent := float64(a.zoom() * 100)
+		ui.Row(c).Width(130).AlignItems(ui.Center).Children(func() {
+			field.InputNumber(c, &percent, field.InputNumberProps{
+				Min: 25, Max: 500, Step: 5, Precision: 0, Size: lobetheme.Small,
+			}).Label("界面缩放百分比")
+		})
+		if math.Abs(percent-float64(a.zoom()*100)) > 0.01 {
+			if err := a.setAppZoom(float32(percent) / 100); err != nil {
+				a.toast(toastSettings, err.Error())
+			}
+		}
+	})
+}
 
 // typographyField 用 Lobe Form 的横向排版画一行设置：标签在左，档位与数值在右，
 // 整行上下居中。这里只借 Form 的对齐，字段不挂名字，不引入校验状态。

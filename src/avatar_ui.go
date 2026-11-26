@@ -224,5 +224,8 @@ func (a *app) avatarCropStage(c *ui.Context, crop *avatarCropState) {
 			p.Stroke(h, tk.Primary, 2, 1)
 		}
 	})
-	stage.HandleInput(crop.input)
+	// Ctrl+滚轮缩放整页，裁剪框自己的滚轮 / 双指缩放保持原样。
+	stage.HandleInput(func(ev ui.InputEvent) bool {
+		return a.zoomInput(ev) || crop.input(ev)
+	})
 }

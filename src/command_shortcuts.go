@@ -25,4 +25,11 @@ func (a *app) bindCommandShortcuts(c *ui.Context) {
 		id := def.ID
 		c.OnWindowShortcut(s.Mods, s.Key, func() { a.runCommandByID(id) })
 	}
+	// 键盘上的 + 实际是 Shift+=，所以 Ctrl+Shift+= 也算「放大界面」。这条
+	// 是不出现在设置里的辅助键位：用户改过任何命令到这个组合时，让设置里的
+	// 那条生效，避免一次按键触发两个动作。
+	plus := commandShortcut{Mods: ui.Cmd | ui.Shift, Key: ui.KeyEqual}
+	if !seen[plus.canonical()] && a.commands.binding("zoomIn").valid() {
+		c.OnWindowShortcut(plus.Mods, plus.Key, a.zoomIn)
+	}
 }

@@ -105,6 +105,7 @@ func (a *app) resetAllSettings() {
 		fail(a.autoSignPrefs.Reset())
 	}
 	fail(a.sidebarPrefs.Reset())
+	fail(a.zoomPrefs.Reset())
 	fail(a.restoreImageHosts())
 	if a.commands != nil && a.commands.prefs != nil {
 		fail(a.commands.prefs.resetAll())
@@ -131,6 +132,7 @@ func (a *app) resetAllSettings() {
 	a.clearWatchLaterReadMarks()
 	a.redrawWatchLaterPage()
 	a.applyTypographyChange()
+	a.applyZoomChange()
 	a.publish(func() {})
 
 	if len(errs) > 0 {

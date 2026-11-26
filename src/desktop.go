@@ -53,6 +53,8 @@ type desktop struct {
 	sidebarPrefs *sidebarPrefsStore
 	// commands 是命令中心的快捷键 / 收藏 / 最近使用偏好，进程级一份。
 	commands *commandPrefs
+	// zoomPrefs 是整页缩放偏好，进程级一份（见 zoom_prefs.go）。
+	zoomPrefs *zoomPrefsStore
 
 	auth *AuthManager
 	app  *app
@@ -107,6 +109,7 @@ func newDesktop(dir string) *desktop {
 		autoSignPrefs:       newAutoSignPrefsStore(dir),
 		sidebarPrefs:        newSidebarPrefsStore(dir),
 		commands:            newCommandPrefs(dir),
+		zoomPrefs:           newZoomPrefsStore(dir),
 		openURL:             func(u string) error { return mygo.Shell.OpenExternal(u) },
 	}
 	d.icons = newIconTheme(d)
