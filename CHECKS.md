@@ -4,7 +4,7 @@
 
 代码改动在仓库根目录完成以下检查（Windows 用 PowerShell，无需 Bash/WSL）：
 
-- `pwsh scripts/check.ps1` 通过：依次检查 gofmt、未完成标记、`go build ./...`、
+- `pwsh scripts/check.ps1` 通过：依次检查 gofmt、未完成标记、`go build -o build/check/ ./...`、
   `go tool mygo vet .` 与 `CGO_ENABLED=0 go test -count=1 -shuffle=on -timeout=15m ./...`。
 - 只需单项检查时用 `gofmt -l .`、`go tool mygo vet .` 与 `$env:CGO_ENABLED = '0'; go test ./...`。
 

@@ -31,7 +31,8 @@ switch ($LASTEXITCODE) {
     default { exit $LASTEXITCODE }
 }
 
-go build ./...
+# 主包目录名是 src，默认输出名与仓库根目录的 src/ 同名（Windows 为 src.exe），统一写到 build/check/。
+go build -o build/check/ ./...
 Assert-LastExit
 go tool mygo vet .
 Assert-LastExit
