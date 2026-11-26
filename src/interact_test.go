@@ -637,6 +637,57 @@ func TestRewardAmountRange(t *testing.T) {
 	}
 }
 
+// 打赏金额框是 Lobe 的数字输入：手输回车后生效，低于下限按 100 记。
+func TestRewardAmountInputCommitsAndClamps(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	a := loginApp(t, srv)
+	topic, err := decodeTopic([]byte(interactJSON), "AB12")
+	if err != nil {
+		t.Fatal(err)
+	}
+	topic.URL = "https://2libra.com/post/work/AB12"
+	a.pageName = "detail"
+	a.detail = &detailState{shortID: "AB12", topic: &topic}
+	a.openRewardPopup(a.detail, reactionTopic)
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if _, ok := tt.Access("打赏金额"); !ok {
+		t.Fatalf("打赏气泡缺少金额输入框：%q", tt.Texts())
+	}
+	for _, tc := range []struct {
+		typed string
+		want  int
+	}{
+		{"250", 250},
+		{"50", 100},
+	} {
+		if err := tt.Click("打赏金额"); err != nil {
+			t.Fatalf("点金额输入框失败：%v", err)
+		}
+		tt.Key(ui.Cmd, ui.KeyA)
+		tt.Type(tc.typed)
+		tt.Key(0, ui.KeyEnter)
+		tt.Frame()
+		if got := rewardAmount(a.detail.react.amount); got != tc.want {
+			t.Errorf("输入 %s 后金额 = %d，期望 %d", tc.typed, got, tc.want)
+		}
+		if !tt.HasText(fmt.Sprintf("打赏 %d 金币", tc.want)) {
+			t.Errorf("确认按钮没跟着输入变：%q", tt.Texts())
+		}
+	}
+	// 上下键按 50 步进。
+	if err := tt.Click("打赏金额"); err != nil {
+		t.Fatalf("点金额输入框失败：%v", err)
+	}
+	tt.Key(0, ui.KeyUp)
+	tt.Frame()
+	if got := rewardAmount(a.detail.react.amount); got != 150 {
+		t.Errorf("按上键后金额 = %d，期望 150", got)
+	}
+}
+
 // 打赏：请求体、必填幂等键、成功后的 toast 与本地记账。
 func TestRewardSubmitsFromDialog(t *testing.T) {
 	got := make(chan map[string]any, 1)

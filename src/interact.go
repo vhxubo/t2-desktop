@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"math"
 	"net/http"
 	"net/url"
@@ -16,6 +15,8 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/action"
 	"github.com/lobehub/lobe-mygo/pkg/display"
+	"github.com/lobehub/lobe-mygo/pkg/feedback"
+	"github.com/lobehub/lobe-mygo/pkg/field"
 	"github.com/lobehub/lobe-mygo/pkg/layout"
 	lobeoverlay "github.com/lobehub/lobe-mygo/pkg/overlay"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
@@ -1113,8 +1114,12 @@ func (a *app) rewardPanel(c *ui.Context, d *detailState, target string) {
 			return
 		}
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			ui.NumberInput(c, &d.react.amount, rewardAmountLo, rewardAmountHi, 1).
-				Label("打赏金额").Width(92).Height(28).FontSize(12)
+			ui.Column(c).Width(92).AlignItems(ui.Stretch).Children(func() {
+				field.InputNumber(c, &d.react.amount, field.InputNumberProps{
+					Min: float64(rewardAmountLo), Max: float64(rewardAmountHi),
+					Step: 50, Size: lobetheme.Small,
+				}).Label("打赏金额")
+			})
 			display.Text(c, "金币", display.TextProps{
 				Type: display.TextSecondary, FontSize: 11, Rows: 1,
 			})
