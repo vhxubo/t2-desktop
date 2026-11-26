@@ -29,6 +29,10 @@ const (
 	detailWinMinWidth    = 720
 	detailWinMinHeight   = 480
 	detailTabTitleMaxRun = 18
+	// 所有详情窗口共用这一个窗口记忆键：mygo 在缩放停稳与关窗时把位置和大小
+	// 写进去，下一扇详情窗口（包括下次启动的第一扇）就沿用用户最近调出的尺寸。
+	// 固定用旧版第一扇窗口的键名，老用户已经调好的尺寸可以直接带过来。
+	detailWindowStateKey = "detail-0"
 	// toastDetailBase 之后的 toastTarget 留给详情窗口，一个窗口一个编号。
 	// 固定枚举值都在 20 以内，这里从 100 起不会撞上。
 	toastDetailBase = 100
@@ -179,23 +183,7 @@ func (a *app) openDetailWindow(it Item) {
 
 // createDetailWindow 真正建原生窗口。只在主线程、有主窗口可排队时调用。
 func (a *app) createDetailWindow(h *detailWindow) {
-	d := h.current()
-	title := "详情"
-	if d != nil {
-		title = detailTabTitle(d)
-	}
-	win := a.newAppWindow(mygo.WindowOptions{
-		Title:             a.subWindowTitle(title),
-		Width:             detailWindowWidth,
-		Height:            detailWindowHeight,
-		MinWidth:          detailWinMinWidth,
-		MinHeight:         detailWinMinHeight,
-		StateKey:          fmt.Sprintf("detail-%d", h.id),
-		BackgroundColor:   lobeWindowBackground,
-		TitleBarStyle:     mygo.TitleBarHidden,
-		HideWindowButtons: true,
-		Content:           ui.View(a.windowView(func(c *ui.Context) { a.detailWindowView(h, c) })),
-	}, h.toast)
+	win := a.newAppWindow(a.detailWindowOptions(h), h.toast)
 	h.win = win
 	win.OnClosed(func() {
 		if h.win != win {
@@ -212,6 +200,30 @@ func (a *app) createDetailWindow(h *detailWindow) {
 	// 目标都得指着还活着的窗口，不然后台结果没人收。
 	if a.win == nil {
 		a.win = win
+	}
+}
+
+// detailWindowOptions 组装详情窗口选项。单独一层让无头测试也能核对「每扇详情
+// 窗口用的是同一把尺寸记忆键」，不必真的建原生窗口。旧版按 h.id 分键，关掉
+// 一篇再开另一篇会回到默认尺寸；共用 detailWindowStateKey 后，用户最近调出的
+// 大小由下一扇窗口接上，跨启动同样有效。
+func (a *app) detailWindowOptions(h *detailWindow) mygo.WindowOptions {
+	d := h.current()
+	title := "详情"
+	if d != nil {
+		title = detailTabTitle(d)
+	}
+	return mygo.WindowOptions{
+		Title:             a.subWindowTitle(title),
+		Width:             detailWindowWidth,
+		Height:            detailWindowHeight,
+		MinWidth:          detailWinMinWidth,
+		MinHeight:         detailWinMinHeight,
+		StateKey:          detailWindowStateKey,
+		BackgroundColor:   lobeWindowBackground,
+		TitleBarStyle:     mygo.TitleBarHidden,
+		HideWindowButtons: true,
+		Content:           ui.View(a.windowView(func(c *ui.Context) { a.detailWindowView(h, c) })),
 	}
 }
 

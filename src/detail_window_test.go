@@ -151,6 +151,30 @@ func TestDetailMergedTabCloseKeepsWindowAndOtherTabs(t *testing.T) {
 	}
 }
 
+// 每扇详情窗口共用同一个记忆键：关掉一篇再开另一篇，以及下次启动的第一扇，
+// 都沿用用户最近调出的窗口大小。旧版按窗口序号分键，第二篇会回到默认尺寸。
+func TestDetailWindowsShareSizeMemory(t *testing.T) {
+	a := detailWindowsApp(t)
+	a.openDetailWindow(itemForWindow("POST001"))
+	a.openDetailWindow(itemForWindow("POST002"))
+	a.openDetailWindow(itemForWindow("POST003"))
+
+	first := a.detailWindowOptions(a.detailWindows[0])
+	for i, h := range a.detailWindows {
+		o := a.detailWindowOptions(h)
+		if o.StateKey == "" {
+			t.Fatalf("第 %d 扇详情窗口没有 StateKey，尺寸不会被记住", i)
+		}
+		if o.StateKey != first.StateKey {
+			t.Fatalf("第 %d 扇详情窗口的记忆键 %q 与第一扇 %q 不同，尺寸不会共用", i, o.StateKey, first.StateKey)
+		}
+		if o.Width != detailWindowWidth || o.Height != detailWindowHeight ||
+			o.MinWidth != detailWinMinWidth || o.MinHeight != detailWinMinHeight {
+			t.Errorf("第 %d 扇详情窗口的默认尺寸不对：%+v", i, o)
+		}
+	}
+}
+
 // 详情窗口尺寸变化时，正文宽度跟着窗口等比缩放，和内联详情页共用同一份
 // 比例逻辑；窗口里的每篇帖子各自记宽度，互不影响。
 func TestDetailWindowSplitFollowsResize(t *testing.T) {
