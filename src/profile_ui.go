@@ -439,6 +439,10 @@ func (a *app) profileWindowView(c *ui.Context) {
 	a.profileAboutEditor(c)
 	// 换头像的裁剪编辑器同样是盖在窗口上的模态框：选好图片后先在这里调整。
 	a.profileAvatarCrop(c)
+	// 徽章切换弹窗只画在打开它的窗口；从自己的资料卡打开时由那边画。
+	if !ps.badgePickerFromCard {
+		a.badgePickerDialog(c)
+	}
 }
 
 // profileTitleName 是窗口标题栏上的账号名：优先昵称，其次用户名。
@@ -501,6 +505,11 @@ func (a *app) profileHeader(c *ui.Context, ps *profileState) {
 				line = "正在读取账号资料…"
 			}
 			display.Text(c, line, display.TextProps{Type: lineType, FontSize: 11, Rows: 1})
+			// 第三行：左边是当前佩戴的徽章，分割线右边是徽章墙里的全部徽章；
+			// 都没有时画「暂无徽章」的虚线灰标签。
+			a.headerBadgeRow(c, u.Badges, ps.badges,
+				ps.infoLoaded, ps.badgeLoaded && ps.badgeErr == "",
+				func() { a.openBadgePicker(false) })
 		})
 		a.profileAvatarEntry(c, ps)
 		a.smallRefreshButton(c, ps.infoLoading, func() { a.reloadProfile() })

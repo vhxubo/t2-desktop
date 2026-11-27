@@ -68,6 +68,8 @@ func TestProfileTopicCollDropdownApplyAndClear(t *testing.T) {
 	})
 	a.profile.tab = profileTabContent
 	a.profile.contentKind = profileContentTopics
+	// 资料头徽章行会在窗口打开时读徽章墙；本用例只数合集下拉的请求。
+	a.profile.badgeLoaded = true
 	topics := &a.profile.content[profileContentTopics]
 	topics.loaded = true
 	topics.items = []Item{{Key: "T1", ShortID: "T1", Title: "未筛选的帖子"}}

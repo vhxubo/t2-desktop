@@ -439,6 +439,11 @@ func (a *app) ensureUserCardLoaded() {
 	if !cs.aboutLoaded && !cs.aboutLoading {
 		a.loadUserCardAbout()
 	}
+	// 资料头下方的徽章行要展示全部徽章及其说明，打开窗口就补徽章墙，
+	// 不等切到「ta的徽章」标签页；佩戴状态也一并标回墙上。
+	if !cs.badges.loaded && !cs.badges.loading {
+		a.loadUserCardBadges()
+	}
 	// 两个标签页在打开时各拉一页：统计里的主题数与回复数要立刻有数，
 	// 切标签也不用等。合集是另一条端点（GET /v1/users/:name/collections），
 	// 只有切到那个标签页才发请求。
@@ -456,9 +461,6 @@ func (a *app) ensureUserCardLoaded() {
 		if l := cs.collections; !l.loaded && !l.loading {
 			a.loadUserCardList(userCardCollections, 1)
 		}
-	}
-	if cs.tab == userCardTabBadges && !cs.badges.loaded && !cs.badges.loading {
-		a.loadUserCardBadges()
 	}
 }
 

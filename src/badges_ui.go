@@ -6,6 +6,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/action"
+	"github.com/lobehub/lobe-mygo/pkg/display"
 	"github.com/lobehub/lobe-mygo/pkg/feedback"
 	"github.com/lobehub/lobe-mygo/pkg/layout"
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
@@ -59,6 +60,182 @@ func (a *app) authorBadges(c *ui.Context, badges []badgeInfo) {
 				SingleLine().Tooltip(tip)
 		}
 	}
+}
+
+/* ------------------------------------------------------------------
+   资料头·徽章行
+---------------------------------------------------------------- */
+
+// 资料头徽章行里小图的边长。徽章小图固有比例约 22×15，按方槽等比缩放；
+// 这一行只画图标，名字与说明交给 tooltip，和列表里的头像、行内表情一样走
+// 全局长效图片缓存，下载完成后由缓存 publish 重绘。
+const headerBadgeIconSize float32 = 16
+
+// headerBadgeRow 在两行身份信息下面画徽章行：先是当前佩戴的徽章（来自用户
+// 对象的 equipped_badges），接着一条竖分割线，再是徽章墙里的全部徽章。
+// 分割线只是这个可换行行里的一个元素，不把内容切成左右两栏 —— 徽章多时整行
+// 一起往下排，不会出现一侧折成多行、另一侧只有一枚而显得不对称。
+//
+// 两段各自独立：有徽章就画小图标，读完且确实没有时画一枚淡色虚线的空状态
+// tag（「暂未佩戴」/「暂无徽章」）；还没读完就留空，不先把「无」说出去。
+// 两侧都有内容时才画分割线，免得留下一条孤立的竖线。
+// wornReady / allReady 由调用方按资料与徽章墙的加载结果给出。onWornClick 非空
+// 时左侧整段可点开徽章切换弹窗；别人的资料卡传 nil，只展示、不挂事件。
+func (a *app) headerBadgeRow(c *ui.Context, equipped []badgeInfo, all []badgeWallEntry,
+	wornReady, allReady bool, onWornClick func()) {
+	wornContent := len(equipped) > 0 || wornReady
+	allContent := len(all) > 0 || allReady
+	if !wornContent && !allContent {
+		return
+	}
+
+	ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
+		if wornContent {
+			worn := ui.Row(c).Gap(6).AlignItems(ui.Center)
+			if onWornClick != nil {
+				tk := lobetheme.TokensOf(c)
+				worn.Padding(2, 4).Radius(tk.BorderRadiusSM).Cursor(ui.CursorPointer)
+				if worn.Hovered() {
+					worn.Background(tk.FillSecondary)
+				}
+			}
+			worn.Children(func() {
+				if len(equipped) == 0 {
+					headerBadgeEmptyTag(c, "暂未佩戴")
+				}
+				for _, b := range equipped {
+					a.headerBadgeIcon(c, b.IconURL, b.Name,
+						headerBadgeDescription(b.Name, b.Code, all))
+				}
+			})
+			if onWornClick != nil {
+				worn.Label("切换佩戴徽章")
+				if worn.Clicked() {
+					onWornClick()
+				}
+			}
+		}
+		if wornContent && allContent {
+			layout.Divider(c, layout.DividerProps{Vertical: true}).Height(headerBadgeIconSize)
+		}
+		if allContent {
+			if len(all) == 0 {
+				headerBadgeEmptyTag(c, "暂无徽章")
+			}
+			for _, b := range all {
+				url := b.IconURL
+				if url == "" {
+					url = b.IconURLLarge
+				}
+				a.headerBadgeIcon(c, url, profileBadgeDisplayName(b), b.Description)
+			}
+		}
+	})
+}
+
+// headerBadgeEmptyTag 画徽章行里的空状态标签：沿用 Lobe Tag 的灰色 Token、
+// 圆角与描边，只把实线换成虚线，保持和资料头其它 Lobe 组件同一套风格。
+func headerBadgeEmptyTag(c *ui.Context, label string) {
+	tag := display.Tag(c, label, display.TagProps{
+		Size: lobetheme.Small, Color: display.TagGray,
+		Variant: display.TagOutlined, Round: true,
+	})
+	tag.BorderStyle(ui.BorderDashed)
+}
+
+// headerBadgeDescription 在徽章墙里按名字或机器码找说明。用户对象里的
+// 佩戴徽章不带 description，佩戴那一侧借墙里的说明做 tooltip。
+func headerBadgeDescription(name, code string, all []badgeWallEntry) string {
+	for _, b := range all {
+		if (name != "" && b.Name == name) || (code != "" && b.Code == code) {
+			return strings.TrimSpace(b.Description)
+		}
+	}
+	return ""
+}
+
+// headerBadgeIcon 画一枚徽章小图。无障碍名是徽章名，tooltip 是「名字：说明」，
+// 说明缺失时只留名字：悬浮就能知道这枚徽章是什么、做什么用。图片还没下载时
+// 不画占位方块，缓存完成后会重绘这一行。
+func (a *app) headerBadgeIcon(c *ui.Context, url, name, desc string) {
+	src := a.articleImage(url, imageCacheStable)
+	if src == nil {
+		return
+	}
+	img := ui.Image(c, src).Size(headerBadgeIconSize, headerBadgeIconSize).Fit(ui.Contain)
+	label := strings.TrimSpace(name)
+	if label == "" {
+		label = "徽章"
+	}
+	tip := label
+	if d := strings.TrimSpace(desc); d != "" {
+		tip += "：" + d
+	}
+	img.Label(label).Tooltip(tip)
+}
+
+// badgePickerDialog 是切换佩戴徽章的弹窗：列出徽章墙里已有的徽章，逐枚佩戴
+// 或取消佩戴。入口只在个人中心与自己的资料卡的资料头里，弹窗也只画在打开它
+// 的那扇窗口；提交、幂等与状态同步都复用 toggleProfileBadge 那套。
+func (a *app) badgePickerDialog(c *ui.Context) {
+	ps := a.profile
+	if ps == nil || !ps.badgePickerOpen {
+		return
+	}
+	open := ps.badgePickerOpen
+	feedback.Modal(c, &open, feedback.ModalProps{
+		Title: "切换佩戴的徽章", Width: 460, NoFooter: true,
+	}, func() {
+		tk := lobetheme.TokensOf(c)
+		if len(ps.badges) == 0 {
+			display.Text(c, "还没有获得任何徽章。", display.TextProps{
+				Type: display.TextSecondary, FontSize: 12, Rows: 1,
+			})
+			return
+		}
+		ui.Column(c).FillWidth().Gap(4).Children(func() {
+			for _, b := range ps.badges {
+				a.badgePickerRow(c, ps, b)
+			}
+		})
+		ui.Row(c).FillWidth().Children(func() {
+			ui.Spacer(c).Grow(1)
+			done := action.Button(c, "完成", action.ButtonProps{Size: lobetheme.Small})
+			done.TextColor(tk.Primary)
+			if done.Clicked() {
+				open = false
+			}
+		})
+	})
+	ps.badgePickerOpen = open
+}
+
+// badgePickerRow 是弹窗里的一枚徽章：小图、名字、说明与佩戴 / 取消佩戴按钮。
+// 按钮的无障碍名带上徽章名，测试与读屏都能点到确定的那一枚；提交期间禁用。
+func (a *app) badgePickerRow(c *ui.Context, ps *profileState, b badgeWallEntry) {
+	name := profileBadgeDisplayName(b)
+	row := popupRow(c, false).FillWidth().Padding(8, 10)
+	row.Children(func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			a.profileBadgeIcon(c, b, 28)
+			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+				ui.Text(c, name).FontSize(12).Bold().SingleLine()
+				if desc := strings.TrimSpace(b.Description); desc != "" {
+					ui.Text(c, desc).FontSize(10).TextColor(lobetheme.TokensOf(c).TextSecondary).MaxLines(2)
+				}
+			})
+			verb := "佩戴"
+			if b.Equipped {
+				verb = "取消佩戴"
+			}
+			btn := action.Button(c, verb, action.ButtonProps{Size: lobetheme.Small})
+			btn.Label(verb + "「" + name + "」").Shrink(0)
+			btn.Disabled(ps.badgeBusyID != "" || b.BadgeID == "")
+			if btn.Clicked() {
+				a.toggleProfileBadge(b.BadgeID, name, !b.Equipped, "")
+			}
+		})
+	})
 }
 
 // commentBodyView 是评论正文的统一渲染入口：详情页、最新评论与通知都走这里，

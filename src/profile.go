@@ -302,6 +302,11 @@ type profileState struct {
 	// badgeBusyID 是正在提交佩戴 / 取消佩戴的徽章 uuid；一次只提交一枚，
 	// 避免连点造成重复扣币。
 	badgeBusyID string
+	// 徽章切换弹窗：资料头里点「暂未佩戴」或佩戴中的徽章打开。个人中心与
+	// 自己的资料卡共用同一份徽章墙 / 提交逻辑；fromCard 记下是哪一扇窗口
+	// 打开的，弹窗只画在那扇窗口里，别人资料卡不会有这个入口。
+	badgePickerOpen     bool
+	badgePickerFromCard bool
 	// bookmarkBusy 是正在移除的书签评论 id（「资产 - 书签」里直接移除，
 	// 见 bookmarks.go）；一次只提交一条。
 	bookmarkBusy string
@@ -702,6 +707,11 @@ func (a *app) ensureProfileLoaded() {
 	if name != "" && !ps.infoLoaded && !ps.infoLoading {
 		a.loadProfileInfo(name)
 	}
+	// 资料头下方的徽章行要展示全部徽章及其说明，打开窗口就补徽章墙，
+	// 不等切到「徽章」标签页；佩戴状态也一并回来，顺手同步资料头。
+	if !ps.badgeLoaded && !ps.badgeLoading {
+		a.loadProfileBadges()
+	}
 	switch ps.tab {
 	case profileTabAbout:
 		if !ps.aboutLoaded && !ps.aboutLoading {
@@ -730,10 +740,6 @@ func (a *app) ensureProfileLoaded() {
 		st := &ps.content[profileAssetStorage(ps.assetKind)]
 		if !st.loaded && !st.loading && !st.authWait {
 			a.loadProfileContent(profileAssetStorage(ps.assetKind), 1)
-		}
-	case profileTabBadges:
-		if !ps.badgeLoaded && !ps.badgeLoading {
-			a.loadProfileBadges()
 		}
 	}
 }

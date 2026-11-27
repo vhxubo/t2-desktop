@@ -336,6 +336,40 @@ func (a *app) refreshBadgesAfterToggle(actor string) {
 	if actor != "" {
 		a.loadProfileInfo(actor)
 	}
+	// 自己的资料卡和资料头共用同一份佩戴状态：切换后也重读它，资料卡上的
+	// 徽章行与佩戴图标一起跟上，不必等下次打开窗口。
+	if cs := a.userCard; cs != nil && a.userCardSelf() {
+		a.reloadUserCardBadges()
+		a.loadUserCardProfile()
+	}
+}
+
+// openBadgePicker 从个人中心（fromCard=false）或自己的资料卡（fromCard=true）
+// 打开徽章切换弹窗。别人的资料卡不会调用它：资料头只在自己的窗口里挂事件。
+func (a *app) openBadgePicker(fromCard bool) {
+	ps := a.profile
+	if ps == nil || !a.auth.loggedIn() {
+		return
+	}
+	if fromCard {
+		cs := a.userCard
+		if cs == nil || !a.userCardSelf() || !cs.badges.loaded || cs.badges.err != "" {
+			return
+		}
+		// 自己的资料卡读的是等价的徽章墙端点，直接交给弹窗与提交逻辑共用。
+		ps.badges = cs.badges.entries
+		ps.badgeLoaded = true
+		ps.badgeErr = ""
+	} else if !ps.badgeLoaded {
+		a.loadProfileBadges()
+	}
+	ps.badgePickerOpen = true
+	ps.badgePickerFromCard = fromCard
+	if fromCard {
+		a.redrawUserCardWindow()
+	} else {
+		a.redrawProfileWindow()
+	}
 }
 
 // prefetchBadgeIcons 预取徽章墙的大图。徽章图属于长期缓存：同一枚徽章反复

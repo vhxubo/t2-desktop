@@ -224,6 +224,11 @@ func (a *app) userCardWindowView(c *ui.Context) {
 	a.viewerTick()
 	// 缺权限时就在这个窗口里弹授权：关注 / 保存介绍等请求是从这里发起的。
 	a.authDialogFor(c, toastUserCard)
+	// 徽章切换弹窗只画在打开它的窗口：从自己的资料卡打开时才在这里画，
+	// 个人中心那边由 profileWindowView 负责。
+	if a.profile != nil && a.profile.badgePickerFromCard {
+		a.badgePickerDialog(c)
+	}
 }
 
 // userCardTitleBar 是自绘标题栏：左边是 Lucide 人形图标与「用户资料」，右边
@@ -281,6 +286,14 @@ func (a *app) userCardHeader(c *ui.Context, cs *userCardState) {
 					}
 				}
 			})
+			// 第三行：左边是当前佩戴的徽章，分割线右边是徽章墙里的全部徽章；
+			// 都没有时画「暂无徽章」的虚线灰标签。只有自己的资料卡才挂切换事件。
+			var onBadgeClick func()
+			if a.userCardSelf() {
+				onBadgeClick = func() { a.openBadgePicker(true) }
+			}
+			a.headerBadgeRow(c, u.Badges, cs.badges.entries,
+				cs.profileLoaded, cs.badges.loaded && cs.badges.err == "", onBadgeClick)
 		})
 		ui.Row(c).Gap(8).Shrink(0).Children(func() {
 			a.userCardFollowButton(c, cs)
