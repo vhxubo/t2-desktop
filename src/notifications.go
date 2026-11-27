@@ -334,9 +334,12 @@ type notificationView struct {
 	TargetTitle  string
 	TargetURL    string
 	Excerpt      string
-	Detail       string
-	DetailTone   string
-	Meta         []string
+	// Body 是可读的评论正文原文（Markdown）。Excerpt 是它清成单行的摘要，供
+	// 原生通知等纯文本场景使用；通知窗口是正文的阅读处，按 Body 渲染。
+	Body       string
+	Detail     string
+	DetailTone string
+	Meta       []string
 	// ReplyShortID / ReplyTarget 是「在消息中心直接回复」需要的帖子与父评论。
 	// CanReply 为假时（不可回复的类型、缺帖子定位、或三级评论缺挂载点）不展示
 	// 快捷回复。
@@ -448,7 +451,8 @@ func notificationViewOf(n *notification) notificationView {
 	v.TargetTitle = firstNonEmpty(
 		payload.str("postTitle"), payload.str("contentTitle"), payload.str("articleTitle"))
 	v.TargetURL = notificationTargetURL(n, payload, actor)
-	v.Excerpt = notificationExcerpt(kind, payload)
+	v.Body = notificationCommentText(kind, payload)
+	v.Excerpt = cleanExcerptText(v.Body)
 	v.Detail, v.DetailTone = notificationDetail(kind, payload)
 	v.Meta = notificationMeta(kind, payload)
 	v.ReplyShortID, v.ReplyTarget, v.CanReply = notificationQuickReplyTarget(n, payload, kind)
@@ -596,14 +600,17 @@ func notificationMeta(kind string, p object) []string {
 	return meta
 }
 
-func notificationExcerpt(kind string, p object) string {
+// notificationCommentText 取这条消息里值得读的评论正文原文（Markdown）。
+// 通知窗口按原文渲染排版与配图；摘要、原生通知则用 cleanExcerptText 清过的
+// 单行版本。两种口径从同一份原文出来，不会各认一套字段。
+func notificationCommentText(kind string, p object) string {
 	switch kind {
 	case "reply", "reply_mention", "mention", "comment_pin", "reaction", "content_check":
-		return cleanExcerptText(p.str("commentText"))
+		return p.str("commentText")
 	case "get_reward":
 		reward := strings.ToLower(p.str("rewardType"))
 		if reward != "post" && reward != "rss_article" && reward != "rss" {
-			return cleanExcerptText(p.str("commentText"))
+			return p.str("commentText")
 		}
 	}
 	return ""

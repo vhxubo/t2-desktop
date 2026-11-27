@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -41,6 +42,74 @@ func TestExcerptMarksIgnoresOrdinaryLinks(t *testing.T) {
 	}
 }
 
+// 通知正文里的裸图片地址补成 Markdown 配图；已经是图片 / 链接目标或行内
+// 代码的地址不能再套一层 ![]()。
+func TestMarkdownImageSource(t *testing.T) {
+	const url = "https://r2.2libra.com/a.png"
+	for _, tc := range []struct{ in, want string }{
+		{"看 " + url, "看 ![](" + url + ")"},
+		{"![图](" + url + ")", "![图](" + url + ")"},
+		{"[图](" + url + ")", "[图](" + url + ")"},
+		{"`" + url + "`", "`" + url + "`"},
+	} {
+		if got := markdownImageSource(tc.in); got != tc.want {
+			t.Errorf("markdownImageSource(%q) = %q，期望 %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// 用户链接后面的表情是独立表情，摘要要留下它并画成行内图片，不能只显示
+// @名字就把表情吞掉（`[@John](…) :good:`）。
+func TestLatestCommentExcerptRendersEmojiAfterUserLink(t *testing.T) {
+	const content = `[@John](/user/John/about) :good:`
+	it := itemFrom([]byte(`{"id":"c1","content":"`+content+`","author":{"username":"alice"},`+
+		`"post":{"short_id":"S1","title":"帖子"}}`), kindComment)
+	if it.Extra.Excerpt != "@John :good:" {
+		t.Fatalf("摘要把表情吞掉了：%q", it.Extra.Excerpt)
+	}
+	a := testApp(t)
+	a.emojis = map[string]emojiInfo{
+		":good:": {Code: ":good:", Name: "好", ImgURL: "https://r2.2libra.com/emojis/good.png"},
+	}
+	a.images.put("https://r2.2libra.com/emojis/good.png", solidBitmap(64, 64, marker))
+	a.tab = 4
+	a.tabs[4].loaded = true
+	a.tabs[4].items = []Item{it}
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if !tt.HasText("@John") || !tt.HasText("\uFFFC") {
+		t.Errorf("提及或行内表情没画出来：%q", tt.Texts())
+	}
+	if n := countMarker(tt.Image()); n == 0 {
+		t.Error("表情图片没有画到列表行上")
+	}
+}
+
+// 通知摘要里的用户链接 + 表情同理。
+func TestNotificationExcerptRendersEmojiAfterUserLink(t *testing.T) {
+	const content = `[@John](/user/John/about) :good:`
+	n := &notification{ID: "n1", Type: "mention", IsRead: true,
+		Payload: mustObject(t, `{"commentText":`+strconv.Quote(content)+`}`)}
+	if got := notificationViewOf(n).Excerpt; got != content {
+		t.Fatalf("通知摘要把表情吞掉了：%q", got)
+	}
+	a := notificationWindowApp(t)
+	a.emojis = map[string]emojiInfo{
+		":good:": {Code: ":good:", Name: "好", ImgURL: "https://r2.2libra.com/emojis/good.png"},
+	}
+	a.images.put("https://r2.2libra.com/emojis/good.png", solidBitmap(64, 64, marker))
+	st := a.tabs[notificationTabIndex()]
+	st.items = []Item{{Key: "n1", Notif: n}}
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	if !tt.HasText("\uFFFC") {
+		t.Errorf("通知里的行内表情没画出来：%q", tt.Texts())
+	}
+	if countMarker(tt.Image()) == 0 {
+		t.Error("通知里的表情图片没有画出来")
+	}
+}
+
 // 最新评论摘要里的 @提及与图片链接都是可点的：提及开资料卡，图片开预览；
 // 两者都不抢整行的「打开帖子」。
 func TestLatestCommentExcerptMarksClickable(t *testing.T) {
@@ -78,9 +147,11 @@ func TestLatestCommentExcerptMarksClickable(t *testing.T) {
 	}
 }
 
-// 通知摘要里的可点片段同理：点提及开资料卡、点图片开预览，都不连带打开消息。
+// 通知正文按 Markdown 渲染：@提及仍能点开资料卡，裸露的图片地址被补成
+// Markdown 配图后点开预览，两者都不连带打开消息。
 func TestNotificationExcerptMarksClickable(t *testing.T) {
 	a := notificationWindowApp(t)
+	a.images.put(testExcerptImage, solidBitmap(64, 64, marker))
 	st := a.tabs[notificationTabIndex()]
 	st.items = []Item{{Key: "n1", Notif: &notification{
 		ID: "n1", Type: "mention", IsRead: true,
@@ -99,13 +170,13 @@ func TestNotificationExcerptMarksClickable(t *testing.T) {
 	if a.pageName != page {
 		t.Errorf("点提及连带打开了消息：%q → %q", page, a.pageName)
 	}
-	if err := tt.Click("查看图片"); err != nil {
-		t.Fatalf("点击通知里的图片链接失败：%v（%q）", err, tt.Texts())
+	if err := tt.Click("图片"); err != nil {
+		t.Fatalf("点击通知里的配图失败：%v（%q）", err, tt.Texts())
 	}
 	if a.viewer == nil || !a.viewer.open {
-		t.Error("通知里的图片链接没有打开预览")
+		t.Error("通知里的配图没有打开预览")
 	}
 	if a.pageName != page {
-		t.Errorf("点图片连带打开了消息：%q → %q", page, a.pageName)
+		t.Errorf("点配图连带打开了消息：%q → %q", page, a.pageName)
 	}
 }

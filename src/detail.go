@@ -685,9 +685,9 @@ func decodeReply(raw json.RawMessage, depth int) replyItem {
 		if a := p.sub("author"); a != nil {
 			r.ParentAuthor = a.str("username")
 		}
-		// 「回复 N 楼：…」是父评论的纯文本预览，与列表行的评论摘要同一套
-		// 规则去掉 Markdown 标记，避免引用里冒出 ** / > 之类符号。
-		r.ParentSummary = truncate(commentExcerpt(p.str("content")), 60)
+		// 「回复 N 楼：…」是父评论的纯文本预览：沿用列表摘要去掉 Markdown
+		// 标记，但这里没有表情渲染层，短码也要清掉，避免引用里冒出 ** / :sigh:。
+		r.ParentSummary = truncate(cleanText(commentExcerpt(p.str("content"))), 60)
 	}
 	// 线上 API 的字段是 reactions_summary；reactions 是旧文档 / 示例里的名字。
 	r.Reactions = decodeReactionStats(o["reactions_summary"], o["reactions"], o["my_reactions"])

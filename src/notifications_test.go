@@ -728,6 +728,43 @@ func TestNotificationShowsFullBody(t *testing.T) {
 	}
 }
 
+// 通知正文按评论同一套 Markdown 排版：强调、列表与配图都渲染出来，而不是把
+// Markdown 标记原样显示成文字。配图点开进预览，不连带打开消息。
+func TestNotificationBodyRendersMarkdown(t *testing.T) {
+	a := notificationWindowApp(t)
+	st := a.tabs[notificationTabIndex()]
+	const image = "https://r2.2libra.com/attachments/notification-md.png"
+	a.images.put(image, solidBitmap(80, 60, marker))
+	content := "**重点**\n\n- 列表一\n- 列表二\n\n![配图](" + image + ")"
+	n := &notification{
+		ID: "n1", Type: "reply", IsRead: true,
+		Payload: mustObject(t, `{"commentText":`+strconv.Quote(content)+`}`),
+	}
+	st.items = []Item{{Key: "n1", Notif: n}}
+	page := a.pageName
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	for _, want := range []string{"重点", "列表一", "列表二"} {
+		if !tt.HasText(want) {
+			t.Errorf("通知正文没有渲染出 %q：%q", want, tt.Texts())
+		}
+	}
+	for _, raw := range []string{"**重点**", "![配图]"} {
+		if tt.HasText(raw) {
+			t.Errorf("通知正文原样显示了 Markdown 标记 %q：%q", raw, tt.Texts())
+		}
+	}
+	if err := tt.Click("配图"); err != nil {
+		t.Fatalf("点击通知正文里的配图失败：%v（%q）", err, tt.Texts())
+	}
+	if a.viewer == nil || !a.viewer.open {
+		t.Error("通知正文里的配图没有打开预览")
+	}
+	if a.pageName != page {
+		t.Errorf("点配图连带打开了消息：%q → %q", page, a.pageName)
+	}
+}
+
 // 系统消息的正文落在 Detail 字段，同样不能被原来的两行上限截掉。
 func TestNotificationShowsFullDetail(t *testing.T) {
 	a := notificationWindowApp(t)

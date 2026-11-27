@@ -705,11 +705,11 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 					FontSize: tk.FontSize, Rows: 1,
 				})
 			}
-			if v.Excerpt != "" {
-				// 消息中心是正文的阅读处：拿到多少就展示多少，不按行数截断。
-				a.excerptView(c, v.Excerpt, excerptStyle{
-					Size: tk.FontSize, Color: tk.Text,
-				}, "")
+			if v.Body != "" {
+				// 消息中心是正文的阅读处：正文按评论同一套 Markdown 排版，
+				// 配图直接画出来、@提及可点开资料卡，而不是把 ![]() 当文字读。
+				// 不按行数截断，拿到多少正文就画多少。
+				a.markdownView(c, markdownImageSource(replaceEmoji(v.Body, a.emojis, true)), a.commentMdOptions(c))
 			}
 			if v.Detail != "" {
 				// 系统消息等类型的正文落在 Detail 里，同样不截行。

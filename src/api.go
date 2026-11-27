@@ -762,10 +762,10 @@ func cleanText(s string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
 }
 
-// cleanExcerptText 把带表情短码的正文清成单行摘要。短码是站点图片表情，列表
-// 行里画不出图片，混合正文里的短码照旧抹掉，免得出现一串冒号单词；但整段只有
-// 表情（可以带标点）时抹完什么都不剩，最新评论与通知页就会整条空白，这种时候
-// 保留短码原文，让内容至少可见。
+// cleanExcerptText 把正文清成单行摘要。紧贴文字的表情短码（说得对:good:）
+// 抹掉，免得冒号单词糊在正文里；独立成词的短码（[@John](…) :good:）保留，
+// 列表行与通知卡片会把它们画成行内表情（见 excerptView）。纯表情、纯图片
+// 同理保留，否则这些评论在页面上就是空白。
 func cleanExcerptText(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return ""
@@ -773,18 +773,39 @@ func cleanExcerptText(s string) string {
 	if link := pureImageLink(s); link != "" {
 		return link
 	}
-	stripped := shortCode.ReplaceAllString(s, "")
-	word := false
-	for _, r := range stripped {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			word = true
-			break
+	return strings.Join(strings.Fields(stripGluedShortcodes(s)), " ")
+}
+
+// stripGluedShortcodes 只抹掉与前后文字连在一起的表情短码。前后是空白或
+// 标点时视为独立表情，原样留下；这样摘要里既有正文又有表情时，表情不会凭空
+// 消失。
+func stripGluedShortcodes(s string) string {
+	rs := []rune(s)
+	var out strings.Builder
+	for i := 0; i < len(rs); {
+		if rs[i] == ':' {
+			j := i + 1
+			for j < len(rs) && isShortcodeRune(rs[j]) {
+				j++
+			}
+			if j > i+1 && j < len(rs) && rs[j] == ':' {
+				glued := (i > 0 && isLetterOrDigit(rs[i-1])) ||
+					(j+1 < len(rs) && isLetterOrDigit(rs[j+1]))
+				if !glued {
+					out.WriteString(string(rs[i : j+1]))
+				}
+				i = j + 1
+				continue
+			}
 		}
+		out.WriteRune(rs[i])
+		i++
 	}
-	if !word {
-		stripped = s
-	}
-	return strings.Join(strings.Fields(stripped), " ")
+	return out.String()
+}
+
+func isLetterOrDigit(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 func relativeTime(s string) string {
