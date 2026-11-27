@@ -49,6 +49,9 @@ func TestMarkdownImageSource(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"看 " + url, "看 ![](" + url + ")"},
 		{"![图](" + url + ")", "![图](" + url + ")"},
+		{"![](" + url + "#inline-md)", "![](" + url + "#inline-md)"},
+		{"![](<" + url + "#inline-md>)", "![](<" + url + "#inline-md>)"},
+		{"[图](<" + url + "#inline-md>)", "[图](<" + url + "#inline-md>)"},
 		{"[图](" + url + ")", "[图](" + url + ")"},
 		{"`" + url + "`", "`" + url + "`"},
 	} {
@@ -82,6 +85,37 @@ func TestLatestCommentExcerptRendersEmojiAfterUserLink(t *testing.T) {
 	}
 	if n := countMarker(tt.Image()); n == 0 {
 		t.Error("表情图片没有画到列表行上")
+	}
+}
+
+// 最新评论正文里的 @提及是 Markdown 用户链接（[@名字](/user/名字/about)）。
+// 点它要开这个人的资料卡：既不交给浏览器跳网页，也不连带打开帖子。
+func TestLatestCommentUserLinkOpensUserCard(t *testing.T) {
+	const content = `[@John](/user/John/about)`
+	it := itemFrom([]byte(`{"id":"c1","content":"`+content+`","author":{"username":"alice"},`+
+		`"post":{"short_id":"S1","title":"帖子"}}`), kindComment)
+	a := testApp(t)
+	a.tab = 4
+	a.tabs[4].loaded = true
+	a.tabs[4].items = []Item{it}
+	page := a.pageName
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	// 整段正文是一个 RichText 标签，中心落在空白处；链接在段落开头，
+	// 点左边第一个字才落在 @John 这条 Markdown 链接上。
+	r, ok := tt.Find("@John")
+	if !ok {
+		t.Fatalf("正文里没有 @John：%q", tt.Texts())
+	}
+	tt.ClickAt(r.X+8, r.Y+r.H/2)
+	if a.userCard == nil || a.userCard.username != "John" {
+		t.Errorf("点击用户链接没有打开 John 的资料卡：%+v", a.userCard)
+	}
+	if got := tt.OpenedURLs(); len(got) != 0 {
+		t.Errorf("用户链接被交给了系统浏览器：%q", got)
+	}
+	if a.pageName != page {
+		t.Errorf("点用户链接连带打开了帖子：%q → %q", page, a.pageName)
 	}
 }
 

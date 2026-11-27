@@ -100,7 +100,7 @@ func TestNotificationRowShowsActorAvatar(t *testing.T) {
 	if got, want := avatar.W, userAvatarSize(13); got != want {
 		t.Errorf("通知操作者头像宽 %.1f，期望 %.1f", got, want)
 	}
-	if !tt.HasText("@dannyng 提到了你") {
+	if !tt.HasText("@dannyng") || !tt.HasText("提到了你") {
 		t.Errorf("通知文案被改动：%q", tt.Texts())
 	}
 }

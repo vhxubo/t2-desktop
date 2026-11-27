@@ -680,17 +680,23 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 				// 表态消息：表情合到一行，人名只写一次（见 notificationReactionLine）。
 				a.notificationReactionLine(c, v.Reaction, v.Action)
 			case v.ActorName != "":
-				// 操作者昵称在句首：统一用户标识把头像画在 @昵称前，头像跟着
-				// 13px 的标题字号走；聚合表态等没有操作者的消息保持纯文字。
-				a.userTag(c, userTagSpec{
-					Name:     v.ActorName,
-					Avatar:   v.ActorAvatar,
-					Label:    "@" + v.ActorName + " " + v.Action,
-					Size:     13,
-					Bold:     true,
-					MaxLines: 2,
-					Badges:   v.ActorBadges,
-					Pro:      v.ActorIsPro,
+				// 操作者昵称在句首：只有 @昵称（含头像、徽章）是打开资料卡的
+				// 点击区，后面的「回复了 / 评论了」是同一行的普通文字，不跟着
+				// 点开资料卡；聚合表态等没有操作者的消息保持纯文字。
+				ui.Row(c).Wrap().Gap(4).AlignItems(ui.Center).Children(func() {
+					a.userTag(c, userTagSpec{
+						Name:     v.ActorName,
+						Avatar:   v.ActorAvatar,
+						Label:    "@" + v.ActorName,
+						Size:     13,
+						Bold:     true,
+						MaxLines: 2,
+						Badges:   v.ActorBadges,
+						Pro:      v.ActorIsPro,
+					})
+					display.Text(c, v.Action, display.TextProps{
+						Strong: true, FontSize: 13, Rows: 2,
+					})
 				})
 			default:
 				action := v.Action

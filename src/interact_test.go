@@ -500,10 +500,8 @@ func TestReactionPopover(t *testing.T) {
 	if !a.detail.react.reactOpen || a.detail.react.reactFor != reactionTopic {
 		t.Errorf("表态气泡状态不对：%+v", a.detail.react)
 	}
-	for _, want := range []string{"选择一个表情", "选择表情 👍"} {
-		if !tt.HasText(want) {
-			t.Errorf("表情工具栏缺少 %q：%q", want, tt.Texts())
-		}
+	if !tt.HasText("选择表情 👍") {
+		t.Errorf("表态气泡缺少表情按钮：%q", tt.Texts())
 	}
 	// 表态气泡贴着笑脸入口，关掉它再点底下的打赏入口。
 	a.detail.react.reactOpen = false
@@ -539,7 +537,7 @@ func TestInteractPopoversCompactAndAnchored(t *testing.T) {
 	defer srv.Close()
 
 	for _, tc := range []struct{ name, entry, content string }{
-		{"表态", "表情", "选择一个表情"},
+		{"表态", "表情", "选择表情 👍"},
 		{"打赏", "打赏", "打赏金币"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -566,11 +564,80 @@ func TestInteractPopoversCompactAndAnchored(t *testing.T) {
 			if !ok {
 				t.Fatalf("没有弹出%s面板：%q", tc.name, tt.Texts())
 			}
-			if panel.W > 260 {
-				t.Errorf("%s面板应小巧（<=260），实际宽 %.0f", tc.name, panel.W)
+			width := panel.W
+			if tc.name == "表态" {
+				// 表情按钮只是面板里的一格，面板实际宽度按表情数算。
+				width = reactionPanelWidth(len(reactionEmojisOf(a.detail, reactionTopic)))
+			}
+			if width > 260 {
+				t.Errorf("%s面板应小巧（<=260），实际宽 %.0f", tc.name, width)
 			}
 			if dx := panel.X - entry.X; dx < -180 || dx > 180 {
 				t.Errorf("%s面板应贴着入口：入口 X %.0f，面板 X %.0f", tc.name, entry.X, panel.X)
+			}
+		})
+	}
+}
+
+// 正文与评论的表态气泡宽度跟着展示的表情走：面板右边缘要贴住最右边那个
+// 表情按钮，不能在右侧留下一条空白。表情多到换行时也按每行 4 个算准宽度。
+func TestReactionPanelFitsEmojiGrid(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		name    string
+		target  string
+		emojis  []string
+		comment bool
+	}{
+		{"正文", reactionTopic, []string{"❤️", "👍", "🎉", "🤔"}, false},
+		{"评论", "c1", []string{"❤️", "👍", "🎉", "🤔"}, true},
+		{"满行", reactionTopic, []string{"😀", "😂", "🤔", "🎉", "❤️", "👍", "🙏", "💯"}, false},
+		{"少量", reactionTopic, []string{"👍", "❤️"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := loginApp(t, srv)
+			a.pageName = "detail"
+			topic, err := decodeTopic([]byte(interactJSON), "AB12")
+			if err != nil {
+				t.Fatal(err)
+			}
+			topic.URL = "https://2libra.com/post/work/AB12"
+			topic.NodeEmojis = tc.emojis
+			a.detail = &detailState{shortID: "AB12", topic: &topic}
+			if tc.comment {
+				pg := decodeReplies([]byte(detailRepliesJSON))
+				a.detail.replyList = flattenReplies(pg)
+				a.detail.replyLoaded = true
+			}
+			a.openReactionPopup(a.detail, tc.target)
+
+			tt := ui.NewTester(a.view, 1100, 760)
+			tt.Frame()
+			emojis := reactionEmojisOf(a.detail, tc.target)
+			if len(emojis) == 0 {
+				t.Fatal("测试节点没有推荐表情")
+			}
+			// 第一个表情按钮贴着面板左边缘，据此推回面板右边缘。
+			first, ok := tt.Find("选择表情 " + emojis[0])
+			if !ok {
+				t.Fatalf("没有弹出表态面板：%q", tt.Texts())
+			}
+			panelRight := first.X + reactionPanelWidth(len(emojis))
+			rightmost := float32(0)
+			for _, emoji := range emojis {
+				btn, ok := tt.Find("选择表情 " + emoji)
+				if !ok {
+					t.Fatalf("面板里缺少表情 %s：%q", emoji, tt.Texts())
+				}
+				if edge := btn.X + btn.W; edge > rightmost {
+					rightmost = edge
+				}
+			}
+			if gap := panelRight - rightmost; gap > 1 || gap < 0 {
+				t.Errorf("面板右侧留白 %.1f DIP：面板右边缘 %.1f，最右表情右边缘 %.1f",
+					gap, panelRight, rightmost)
 			}
 		})
 	}

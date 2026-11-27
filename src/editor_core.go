@@ -75,9 +75,10 @@ const (
 	// emojiPopoverHeightRatio 是表情面板内容区占窗口高度的比例。搜索框与
 	// 关闭按钮固定在顶部，下面的网格在这个高度的滚动区里展开。
 	emojiPopoverHeightRatio = 0.60
-	// emojiPopoverWidth 是表情面板的宽度：刚好容下 10 列定宽格子与滚动条，
-	// 不留一条空白在右侧。
-	emojiPopoverWidth float32 = 334
+	// emojiPopoverWidth 是表情面板的宽度：10 列定宽格子加间距共 318 DIP，
+	// 列左右各留 6 DIP 内边距，面板正好 330 DIP；滚动条是覆盖式的，不占位。
+	// 宽度多出 4 DIP 就会在网格右侧留出一条空白。
+	emojiPopoverWidth float32 = 330
 	// uploadPlaceholderPrefix 是图片还没传完时正文里的临时 URL。
 	// 预览会先把这些占位符换成中文说明，绝不会把它们交给 Markdown 渲染器。
 	uploadPlaceholderPrefix = "](upload:"

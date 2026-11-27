@@ -79,7 +79,11 @@ func markdownImageSource(src string) string {
 			continue
 		}
 		pre := string(rs[:mk.Start])
-		if strings.HasSuffix(pre, "](") || strings.Count(pre, "`")%2 == 1 {
+		// Markdown 链接 / 图片的地址可能用尖括号包住（`![](<url#inline-md>)`），
+		// 自动链接也是 `<url>`。这些地址已经是链接目标，再套一层 ![]() 会把
+		// 原来的 Markdown 结构破坏掉，整张配图就渲染不出来。
+		if strings.HasSuffix(pre, "](") || strings.HasSuffix(pre, "<") ||
+			strings.Count(pre, "`")%2 == 1 {
 			continue
 		}
 		b.WriteString(string(rs[last:mk.Start]))

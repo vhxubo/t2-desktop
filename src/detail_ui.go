@@ -421,13 +421,21 @@ func unquoteSource(src string) string {
 
 // handleLink is the Markdown OnLink. A link to another post replaces the
 // current detail view (inline), like following a link in a reader; the
-// previous post stays on a small back stack. Self-links are ignored.
+// previous post stays on a small back stack. A link to a user's profile opens
+// that person's card, the same as the "follow" notification target; self-links
+// are ignored. Everything else keeps the normal external-link behaviour.
 func (a *app) handleLink(raw string) {
 	if it, ok := parseInAppTopicLink(raw); ok {
 		if a.detail != nil && it.ShortID == a.detail.shortID {
 			return
 		}
 		a.openDetail(it)
+		return
+	}
+	// 最新评论等处的 @提及是 Markdown 用户链接（[@名字](/user/名字/about)）：
+	// 点它开资料卡，不在浏览器里跳到网页（见 openNotificationTarget）。
+	if name, ok := parseUserAboutLink(raw); ok {
+		a.showUserCard(name)
 		return
 	}
 	a.openExternal(raw)

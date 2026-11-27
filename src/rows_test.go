@@ -77,6 +77,28 @@ func TestLatestCommentBodyRendersMarkdown(t *testing.T) {
 	}
 }
 
+// 站内会把配图写成带尖括号和 #inline-md 锚点的 Markdown 图片。最新评论行
+// 给裸图片地址补 ![]() 时不能把这种已有的图片地址再套一层，否则整张图消失。
+func TestLatestCommentRendersAngleBracketInlineImage(t *testing.T) {
+	const url = "https://r2.2libra.com/i/333/2026/04/Tto851g00fe1.png#inline-md"
+	a := testApp(t)
+	a.images.put(url, solidBitmap(64, 64, marker))
+	const raw = `{"id":"c1","content":"![](<` + url + `>)",` +
+		`"author":{"username":"dannyng"},` +
+		`"post":{"short_id":"S1","title":"帖子标题"}}`
+	a.tab = 4
+	a.tabs[4].loaded = true
+	a.tabs[4].items = []Item{itemFrom([]byte(raw), kindComment)}
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if tt.HasText("![](") {
+		t.Errorf("Markdown 标记没被渲染掉：%q", tt.Texts())
+	}
+	if n := countMarker(tt.Image()); n == 0 {
+		t.Error("最新评论里的尖括号配图没有画出来")
+	}
+}
+
 // 评论行底部的「原帖」是独立入口：点它直接看帖子本身（从顶部开始，不定位
 // 楼层），点这一行的其他地方仍然进到这条评论。两者不能互相连带——只点一次
 // 原帖不该把详情页压进返回栈，说明外层行的点击没有被一起触发。

@@ -122,7 +122,7 @@ func TestEmojiPanelFlatLayout(t *testing.T) {
 	if !okGrid || !okContent {
 		t.Fatalf("找不到网格/分区参照：%q", tt.Texts())
 	}
-	if gap := (content.X + content.W) - (grid.X + grid.W); gap > 8 {
+	if gap := (content.X + content.W) - (grid.X + grid.W); gap > 1 {
 		t.Errorf("表情网格右侧留白过多：%.1f DIP", gap)
 	}
 

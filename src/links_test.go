@@ -217,6 +217,26 @@ func TestHandleLinkExternalAndSelfLinks(t *testing.T) {
 	}
 }
 
+// 站内用户主页链接开资料卡，不交给系统浏览器；仿冒域名仍按外链处理。
+func TestHandleLinkUserProfileOpensCard(t *testing.T) {
+	a := testApp(t)
+	tt := ui.NewTester(a.view, 1200, 800)
+
+	a.handleLink("/user/张三/about")
+	if a.userCard == nil || a.userCard.username != "张三" {
+		t.Fatalf("用户主页链接没有打开资料卡：%+v", a.userCard)
+	}
+	if got := tt.OpenedURLs(); len(got) != 0 {
+		t.Errorf("用户主页链接被交给了系统浏览器：%q", got)
+	}
+
+	const lookalike = "https://2libra.com.evil.com/user/bob/about"
+	a.handleLink(lookalike)
+	if got := tt.OpenedURLs(); len(got) != 1 || got[0] != lookalike {
+		t.Errorf("仿冒域名的用户链接不该被拦截：%q", got)
+	}
+}
+
 // A plain-text comment gets a button that opens the linked post inline.
 func TestCommentPlainTextLinkButton(t *testing.T) {
 	a := testApp(t)

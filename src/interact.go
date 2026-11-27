@@ -42,6 +42,26 @@ const interactTimeout = 20 * time.Second
 // reactionEmojiMax 是节点推荐表情的取用上限：表态选择器不该变成一屏表情墙。
 const reactionEmojiMax = 12
 
+// 表态气泡的表情网格：每行最多 4 个，按钮定宽，间距 3 DIP。面板宽度按实际
+// 展示的表情数算，让网格正好填满面板，不在右侧留一条空白。
+const (
+	reactionColumns               = 4
+	reactionCellWidth     float32 = 42
+	reactionCellGap       float32 = 3
+	reactionPanelMinWidth float32 = 66 // 「这个节点没有推荐表情。」两行所需宽度
+)
+
+// reactionPanelWidth 按表情个数算出气泡宽度：满行时铺满，表情少时跟着收窄，
+// 空列表时留出提示文案的宽度。
+func reactionPanelWidth(count int) float32 {
+	cols := min(count, reactionColumns)
+	if cols < 1 {
+		cols = 1
+	}
+	w := float32(cols)*reactionCellWidth + float32(cols-1)*reactionCellGap
+	return max(w, reactionPanelMinWidth)
+}
+
 // reactionTopic 是表态目标里的「整个帖子」，其余取值是评论 uuid。
 const reactionTopic = "topic"
 
@@ -1048,19 +1068,15 @@ func (a *app) rewardEntry(c *ui.Context, d *detailState, target string, style in
 -------------------------------------------------------------- */
 
 // reactionPanel 是表态气泡里的内容：节点推荐表情。面板本身是 Lobe Popover，
-// 里面也全用 Lobe 控件（display.Text 文案 + action.Button 表情），字号收小到
-// 11/17，一屏挑完不用滚动。点一个就提交并收起气泡。
+// 里面直接摆 Lobe 表情按钮，字号收小到 17，一屏挑完不用滚动。点一个就提交并收起气泡。
 func (a *app) reactionPanel(c *ui.Context, d *detailState, target string) {
 	tk := lobetheme.TokensOf(c)
-	ui.Column(c).Width(212).Gap(6).Children(func() {
-		display.Text(c, "选择一个表情", display.TextProps{
-			Type: display.TextSecondary, FontSize: 11, Rows: 1,
-		})
+	emojis := reactionEmojisOf(d, target)
+	ui.Column(c).Width(reactionPanelWidth(len(emojis))).Gap(6).Children(func() {
 		if !a.auth.loggedIn() {
 			a.loginHint(c, "登录后才能添加表情。")
 			return
 		}
-		emojis := reactionEmojisOf(d, target)
 		if len(emojis) == 0 {
 			display.Text(c, "这个节点没有推荐表情。", display.TextProps{
 				Type: display.TextSecondary, FontSize: 11, Rows: 2,
@@ -1068,7 +1084,7 @@ func (a *app) reactionPanel(c *ui.Context, d *detailState, target string) {
 			return
 		}
 		stats := reactionStatsOf(d, target)
-		ui.Row(c).Gap(3).Wrap().Children(func() {
+		ui.Row(c).Gap(reactionCellGap).Wrap().Children(func() {
 			for _, emoji := range emojis {
 				chosen := emoji
 				mine := reactionMine(stats, chosen)
@@ -1079,7 +1095,7 @@ func (a *app) reactionPanel(c *ui.Context, d *detailState, target string) {
 				b := action.StyleButton(c, ui.ButtonBase(c), chosen, action.ButtonProps{
 					Size: lobetheme.Small, Variant: variant,
 				})
-				b.FontSize(17).Label("选择表情 " + chosen).Tooltip("添加 " + chosen)
+				b.Width(reactionCellWidth).FontSize(17).Label("选择表情 " + chosen).Tooltip("添加 " + chosen)
 				if mine {
 					b.TextColor(tk.Primary)
 				}

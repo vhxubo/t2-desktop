@@ -795,7 +795,7 @@ func TestNotificationWindowView(t *testing.T) {
 	for _, want := range []string{
 		"通知", "2 条未读",
 		"全部已读", "已读本页 1", "已读选中 1", "刷新",
-		"@dannyng 提到了你", "这条是提及",
+		"@dannyng", "提到了你", "这条是提及",
 		"全部", "未读", "回复", "提及", "表态", "打赏",
 		"原生通知不可用",
 	} {
@@ -1099,6 +1099,43 @@ func TestNotificationBellNeedsLogin(t *testing.T) {
 	}
 	if !tt.HasText("登录 2Libra 后才能查看「通知」。") {
 		t.Errorf("授权弹窗没有说明原因：%q", tt.Texts())
+	}
+}
+
+// 通知标题里只有 @昵称（连同头像、徽章）是资料卡的点击区；后面的「回复了 /
+// 评论了」只是同一行的句子，不跟着点开资料卡。点句子仍然落到这条消息的目标。
+func TestNotificationNameClickScopedToName(t *testing.T) {
+	a := notificationWindowApp(t)
+	st := a.tabs[notificationTabIndex()]
+	st.loaded = true
+	st.items = []Item{{Key: "r1", Notif: &notification{
+		ID: "r1", Type: "reply", IsRead: true,
+		FromUser: mustObject(t, `{"username":"alice"}`),
+		Payload: mustObject(t, `{"postShortId":"wEOIDnn","postNodeSlug":"social",
+			"postTitle":"社会观察","commentId":"c1","commentText":"说得对",
+			"commentLevel":1}`),
+	}}}
+
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	if err := tt.Click("@alice"); err != nil {
+		t.Fatalf("点击 @昵称失败：%v（%q）", err, tt.Texts())
+	}
+	if a.userCard == nil || a.userCard.username != "alice" {
+		t.Fatalf("点 @昵称 应打开 alice 的资料卡：%+v", a.userCard)
+	}
+
+	a.userCard = nil
+	a.pageName = "list"
+	a.detail = nil
+	if err := tt.Click("回复了你的评论"); err != nil {
+		t.Fatalf("点击动作文字失败：%v（%q）", err, tt.Texts())
+	}
+	if a.userCard != nil {
+		t.Errorf("点「回复了」不该打开资料卡：%+v", a.userCard)
+	}
+	if a.pageName != "detail" {
+		t.Errorf("点动作文字应落到这条消息的目标，实际页面 %q", a.pageName)
 	}
 }
 
