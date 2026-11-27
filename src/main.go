@@ -39,6 +39,11 @@ type tabState struct {
 	totalPages int
 	loaded     bool
 	loading    bool
+	// cacheNote 是列表首屏来自本地缓存时的页头说明；cachedAt 是那份缓存的
+	// 写入时间，fromCache 表示当前列表还没有被网络结果覆盖。
+	cacheNote string
+	cachedAt  time.Time
+	fromCache bool
 	// refreshing 表示后台静默刷新第一页正在进行；refreshGen 是它的回包
 	// 代次，只认最新一次。它与分页加载用的 gen 分开，静默刷新不会顶掉
 	// 正在续拉的下一页。
@@ -1018,6 +1023,9 @@ func (a *app) loadSpec(owner toastTarget, st *tabState, spec tabSpec, page int, 
 	if st.loading {
 		return
 	}
+	if page == 1 {
+		a.preloadFeedCache(st, spec)
+	}
 	st.authWait = false
 	if spec.NeedsAuth && !a.auth.loggedIn() {
 		st.err = "需要登录后才能查看「" + spec.Label + "」"
@@ -1046,12 +1054,19 @@ func (a *app) loadSpec(owner toastTarget, st *tabState, spec tabSpec, page int, 
 					st.authWait = true
 				}
 				if page == 1 {
-					st.err = friendlyError(err)
-					st.raw = nil
-					st.items = nil
-					st.hidden = 0
-					st.filterSkip = 0
-					st.fold.reset()
+					// 首屏失败但列表来自本地缓存且是网络问题：保留内容，
+					// 页头说明这是缓存，而不是整页换成错误。
+					if st.fromCache && feedOfflineError(err) {
+						a.markFeedOffline(st)
+					} else {
+						st.err = friendlyError(err)
+						st.raw = nil
+						st.items = nil
+						st.hidden = 0
+						st.filterSkip = 0
+						st.fold.reset()
+						a.clearFeedCacheState(st)
+					}
 				} else {
 					// 已有内容时续拉失败：保留当前列表，在列表底部提示。
 					st.moreErr = friendlyError(err)
@@ -1094,6 +1109,11 @@ func (a *app) loadSpec(owner toastTarget, st *tabState, spec tabSpec, page int, 
 			// 分组按整份可见 items 重算：第 2 页正好接上第 1 页末尾的同一个人时，
 			// 尾部那一组要跟着变长，不能因为分两次到达就断成两组。
 			st.refold(spec)
+			if page == 1 {
+				// 首屏成功了：缓存标记清掉，并把这份首屏写回本地。
+				a.clearFeedCacheState(st)
+				a.saveCachedFeed(spec, st.raw, st.total, st.totalPages)
+			}
 			// 只预取本次新增且可见的条目：被屏蔽作者的头像不该被下载。
 			if rawAdded > 0 {
 				visible := make(map[string]bool, len(st.items))
@@ -1305,6 +1325,7 @@ func (a *app) reloadCurrent() {
 	st.err = ""
 	st.moreErr = ""
 	st.noMore = false
+	a.clearFeedCacheState(st)
 	st.list.ScrollTo(0, ui.Start)
 	a.load(a.tab, 1)
 }
@@ -1464,6 +1485,9 @@ func (a *app) mergeFreshPage(st *tabState, spec tabSpec, res pageResult) {
 		}
 		a.prefetchItemAvatars(freshItems)
 	}
+	// 静默刷新成功后同样把新首屏写回缓存，断网时看到的是最近一次成功的内容。
+	a.clearFeedCacheState(st)
+	a.saveCachedFeed(spec, res.Items, res.Total, res.TotalPages)
 }
 
 // reclickTab 是侧边栏一行的点击：点的不是当前这一页就交给选中变化去切页，
@@ -2357,6 +2381,19 @@ func (a *app) feedHeader(c *ui.Context, spec tabSpec, st *tabState) {
 			}
 		})
 		a.loginBanner(c)
+		a.feedCacheNote(c, st)
+	})
+}
+
+// feedCacheNote 是页头下方的离线说明：列表来自本地缓存时写清缓存时间，
+// 不把旧内容当成刚刷新的内容。
+func (a *app) feedCacheNote(c *ui.Context, st *tabState) {
+	if st == nil || st.cacheNote == "" {
+		return
+	}
+	tk := lobetheme.TokensOf(c)
+	display.Text(c, st.cacheNote, display.TextProps{
+		Type: display.TextSecondary, FontSize: tk.FontSizeSM, Rows: 2,
 	})
 }
 
@@ -2881,8 +2918,23 @@ func (a *app) startLoginFromPage() {
 	a.startLoginWithScopes(a.pendingAuthScopes())
 }
 
-// logoutAccount 退出登录：清掉令牌，主窗口留在登录页。
-func (a *app) logoutAccount() { a.auth.Logout() }
+// logoutAccount 退出登录：清掉令牌，主窗口留在登录页。退出前先记下账号，
+// 异步清掉这个账号专属的信息流缓存（动态等私有列表），不让下个账号读到。
+func (a *app) logoutAccount() {
+	name := ""
+	if a.auth != nil {
+		name = a.auth.username()
+	}
+	a.auth.Logout()
+	if a.kv != nil && name != "" {
+		prefix := feedCachePrefix + strings.ToLower(name) + ":"
+		go func() {
+			if _, err := a.kv.clearPrefixes(prefix); err != nil {
+				log.Printf("清理账号信息流缓存失败：%v", err)
+			}
+		}()
+	}
+}
 
 // openSignup 打开带邀请码的 2Libra 注册页：注册在网页完成，应用内不做。未
 // 登录用户点「注册」直接打开系统浏览器，注册成功后再回应用里「登录」授权。

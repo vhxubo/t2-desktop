@@ -10,6 +10,7 @@ const (
 	laterCachePrefix   = "later:"
 	readCachePrefix    = "read:"
 	detailCachePrefix  = "detail:local:"
+	feedCachePrefix    = "feed:"
 
 	localCacheSegment = "local"
 )

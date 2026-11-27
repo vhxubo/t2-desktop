@@ -17,7 +17,12 @@ import (
 // 受限内容的付费正文不落盘：写入前把 Restricted.Content 剥掉，只留门槛
 // 信息。解锁后的正文必须每次向服务端重新读取，不能留在本机让别人翻到。
 
-const detailCacheMax = 60
+const (
+	detailCacheMax = 60
+	// detailCacheMaxReplies 是单篇帖子保留的评论条数上限：约两页，再多就
+	// 回落只保留前面的部分，避免正文缓存随翻页无限增长。
+	detailCacheMaxReplies = 100
+)
 
 type cachedDetail struct {
 	Topic           topicDetail `json:"topic"`
@@ -81,8 +86,8 @@ func (a *app) preloadDetailCache(d *detailState) {
 	a.ensureDetailCollectionNav(d)
 }
 
-// saveCachedDetail 写回当前正文与第一页评论。只有拿到正文时才写；续拉到
-// 第 2 页以后不把整段多页评论塞进缓存，保留原来缓存的第一页。
+// saveCachedDetail 写回当前正文与前两页评论。只有拿到正文时才写；续拉到
+// 第 2 页以后不把整段多页评论塞进缓存，保留缓存里已有的前两页。
 func (a *app) saveCachedDetail(d *detailState) {
 	if a.kv == nil || d == nil || d.topic == nil || d.shortID == "" {
 		return
@@ -93,8 +98,12 @@ func (a *app) saveCachedDetail(d *detailState) {
 	}
 	now := time.Now()
 	c := cachedDetail{Topic: cacheableTopic(*d.topic), SavedAt: now}
-	if d.replyPage <= 1 {
-		c.Replies = d.replyList
+	if d.replyPage <= 2 {
+		replies := d.replyList
+		if len(replies) > detailCacheMaxReplies {
+			replies = replies[:detailCacheMaxReplies]
+		}
+		c.Replies = replies
 		c.ReplyLoaded = d.replyLoaded
 		c.ReplyPage = d.replyPage
 		if c.ReplyPage < 1 {
