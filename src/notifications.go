@@ -753,10 +753,14 @@ func notificationQuickReplyTarget(n *notification, p object, kind string) (strin
 // quickReplyToComment 组装「回复某条评论」的 target。level 是提交时的写层级
 // （从 0 起），0 表示未知、交给服务端推断。三级评论必须有挂载点，缺父评论
 // 时返回 false。
+//
+// 实测线上 payload 给的字段是 replyParentId（三级回复并提及时也照给），
+// 先认它；前面几个驼峰 / 下划线写法是历史猜测，留着兼容其它事件。
 func quickReplyToComment(shortID, commentID string, level int, p object) (string, replyTarget, bool) {
 	target := replyTarget{ID: commentID, Level: level}
 	if level >= replyMaxLevel {
-		parent := p.str("parentCommentId", "parent_comment_id", "parentId")
+		parent := p.str("replyParentId", "reply_parent_id",
+			"parentCommentId", "parent_comment_id", "parentId")
 		if parent == "" || parent == commentID {
 			return "", replyTarget{}, false
 		}

@@ -1497,6 +1497,28 @@ func TestNotificationQuickReplyTarget(t *testing.T) {
 			target:  replyTarget{ID: "c1", Level: 3, ParentID: "p1"},
 		},
 		{
+			// 线上实测字段名：二级回复由对方新写的那条挂在我的一级评论下，
+			// replyParentId 就是它的挂载点。
+			name:    "二级评论带父评论（线上 replyParentId）",
+			raw:     `{"id":"n1","type":"reply","payload":{"postShortId":"abc12345","commentId":"c1","commentLevel":2,"replyParentId":"p1"}}`,
+			ok:      true,
+			shortID: "abc12345",
+			target:  replyTarget{ID: "c1", Level: 3, ParentID: "p1"},
+		},
+		{
+			// 三级回复并提及：对方那条已经是三级评论，父在 replyParentId 里。
+			// 之前只认 parentCommentId / parentId，导致入口被无条件关掉。
+			name:    "三级回复带父评论（线上 replyParentId）",
+			raw:     `{"id":"n1","type":"reply_mention","payload":{"postShortId":"abc12345","commentId":"c1","commentLevel":3,"replyParentId":"p1"}}`,
+			ok:      true,
+			shortID: "abc12345",
+			target:  replyTarget{ID: "c1", Level: 3, ParentID: "p1"},
+		},
+		{
+			name: "三级回复缺父评论时仍不给快捷回复",
+			raw:  `{"id":"n1","type":"reply_mention","payload":{"postShortId":"abc12345","commentId":"c1","commentLevel":3}}`,
+		},
+		{
 			name:    "回复附言时发顶层评论",
 			raw:     `{"id":"n1","type":"reply","payload":{"postShortId":"abc12345","target":"postscript"}}`,
 			ok:      true,
@@ -1524,7 +1546,16 @@ func TestNotificationQuickReplyTarget(t *testing.T) {
 		},
 		{
 			name: "表态不可回复",
-			raw:  `{"id":"n1","type":"reaction","payload":{"postShortId":"abc12345"}}`,
+			raw:  `{"id":"n1","type":"reaction","payload":{"postShortId":"abc12345","commentId":"c1","commentLevel":1}}`,
+		},
+		{
+			// 打赏挂在评论上却没有可回复的正文：不能凭空造一条评论。
+			name: "打赏不可回复",
+			raw:  `{"id":"n1","type":"get_reward","payload":{"postShortId":"abc12345","commentId":"c1","commentLevel":1,"amount":500}}`,
+		},
+		{
+			name: "关注不可回复",
+			raw:  `{"id":"n1","type":"follow","payload":{"postShortId":"abc12345","followerUsername":"way"}}`,
 		},
 		{
 			name: "缺帖子定位",
@@ -1556,6 +1587,45 @@ func TestNotificationQuickReplyTarget(t *testing.T) {
 					v.ReplyShortID, v.ReplyTarget, tc.shortID, tc.target)
 			}
 		})
+	}
+}
+
+// 三级评论确实没有父 id 时才降级：不给快捷回复入口，但点开消息仍要定位到
+// 那条评论，让用户一步落到正确楼层手动回复。这里用线上 payload 的形状。
+func TestNotificationQuickReplyWithoutParentStillLocates(t *testing.T) {
+	n := decodeNotificationObject(mustObject(t, `{
+		"id":"n1","type":"reply_mention","related_id":"c3",
+		"payload":{
+			"postId":"7d6e534b-24d2-47cf-8540-84e5a977d46d",
+			"postSlug":"不懂就问","commentId":"c3","flatFloor":8,
+			"postTitle":"不懂就问","commentText":"@me 哦哦","postShortId":"_b5WcHx",
+			"commentLevel":3,"locatedFloor":3,
+			"postNodeName":"发药","postNodeSlug":"PT"
+		}
+	}`))
+	if n == nil {
+		t.Fatal("消息解码失败")
+	}
+	v := notificationViewOf(n)
+	if v.CanReply {
+		t.Errorf("缺父评论时应关掉快捷回复：%+v", v.ReplyTarget)
+	}
+	if !strings.Contains(v.TargetURL, "commentId=c3") {
+		t.Errorf("点开目标没有带上评论定位：%q", v.TargetURL)
+	}
+
+	a := testApp(t)
+	a.openNotificationTarget(v.TargetURL, n.ID)
+	if a.detail == nil {
+		t.Fatal("点开消息没有进入详情")
+	}
+	d := a.detail
+	if d.shortID != "_b5WcHx" {
+		t.Errorf("打开的帖子不对：%q", d.shortID)
+	}
+	if d.focusID != "c3" || !d.focusPending || !d.flat {
+		t.Errorf("没有定位到目标评论：focusID=%q pending=%v flat=%v",
+			d.focusID, d.focusPending, d.flat)
 	}
 }
 
