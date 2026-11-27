@@ -897,9 +897,9 @@ func ensureDetailMoreMenu(t *testing.T, tt *ui.Tester) {
 }
 
 // 作者信息收进正文、放在标题下面：小头像、昵称与等级在标题与副标题之间，
-// 帖子编号让位；分类和标签收在作者下方的副标题里（分类显示两级，第二行是
-// 标签）。浏览数已经挪到评论区折叠输入框的发送按钮左侧。详情页不再显示关注
-// 按钮：关注入口只在用户资料卡里。
+// 帖子编号让位；分类、发帖时间和标签收在作者下方的副标题里（分类显示两级，
+// 第二行是标签）。浏览数已经挪到评论区折叠输入框的发送按钮左侧。详情页不再
+// 显示关注按钮：关注入口只在用户资料卡里。
 func TestDetailAuthorSitsBelowTitle(t *testing.T) {
 	a := detailAppWithReplies(t)
 	tt := ui.NewTester(a.view, 1100, 760)
@@ -934,6 +934,42 @@ func TestDetailAuthorSitsBelowTitle(t *testing.T) {
 		if r.Y <= author.Y {
 			t.Errorf("%q 应在作者行下方：%+v / 作者 %+v", want, r, author)
 		}
+	}
+}
+
+// 正文文首要显示发帖时间，取帖子自己的 created_at，沿用列表行的相对时间口径。
+func TestDetailShowsPostTime(t *testing.T) {
+	a := detailAppWithReplies(t)
+	if a.detail.topic.CreatedAt == "" {
+		t.Fatal("测试帖缺少 created_at")
+	}
+	want := "发布于 " + relativeTime(a.detail.topic.CreatedAt)
+	tt := ui.NewTester(a.view, 1100, 760)
+	r, ok := tt.Find(want)
+	if !ok {
+		t.Fatalf("正文里没有发帖时间 %q：%q", want, tt.Texts())
+	}
+	author, ok := tt.Find("jimmy")
+	if !ok {
+		t.Fatalf("找不到作者行：%q", tt.Texts())
+	}
+	if r.Y <= author.Y {
+		t.Errorf("发帖时间应在作者行下方：%+v / 作者 %+v", r, author)
+	}
+}
+
+// 只有发帖时间、没有分类与标签时副标题也要出现，不能因为别的元信息为空就早退。
+func TestDetailShowsPostTimeWithoutOtherMeta(t *testing.T) {
+	a := detailAppWithReplies(t)
+	p := *a.detail.topic
+	p.NodeName, p.NodeParentName = "", ""
+	p.Tags = nil
+	p.IsPinned, p.CommentsClosed = false, false
+	a.detail.topic = &p
+	want := "发布于 " + relativeTime(p.CreatedAt)
+	tt := ui.NewTester(a.view, 1100, 760)
+	if _, ok := tt.Find(want); !ok {
+		t.Fatalf("仅有发帖时间时也应显示 %q：%q", want, tt.Texts())
 	}
 }
 

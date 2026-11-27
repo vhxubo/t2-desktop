@@ -1505,7 +1505,7 @@ func (a *app) topicBody(c *ui.Context, d *detailState) {
 		// 作者行：头像、昵称、等级与徽章，收藏按钮贴在这一行的最右侧。
 		// 它随正文一起滚动，不再单独占一条页头。
 		a.topicAuthorLine(c, d)
-		// 副标题：分类（两级）· 浏览数 · 置顶 / 评论已关闭，以及标签。
+		// 副标题：分类（两级）· 发帖时间 · 置顶 / 评论已关闭，以及标签。
 		// 作者信息已经在标题下方，这里不再重复。
 		a.topicSubtitle(c, p)
 	})
@@ -1867,21 +1867,27 @@ func (a *app) topicAuthorLine(c *ui.Context, d *detailState) {
 	})
 }
 
-// topicSubtitle 是标题下面的两行副标题：第一行是两级分类与帖子状态
+// topicSubtitle 是标题下面的两行副标题：第一行是两级分类、发帖时间与帖子状态
 // （置顶 / 评论已关闭），第二行是标签。分类和标签原来贴在页头作者旁边，收回
-// 到标题下方后，标题区一眼能读出「这帖发在哪、打了什么标签」。浏览数已经挪到
-// 评论区折叠输入框里、发送按钮左侧（见 replyComposerStats），这里不再重复。
+// 到标题下方后，标题区一眼能读出「这帖发在哪、什么时候发的、打了什么标签」。
+// 浏览数已经挪到评论区折叠输入框里、发送按钮左侧（见 replyComposerStats），这里不再重复。
 func (a *app) topicSubtitle(c *ui.Context, p *topicDetail) {
 	tk := lobetheme.TokensOf(c)
 	path := p.categoryPath()
-	if path == "" && !p.IsPinned && !p.CommentsClosed &&
+	// 发帖时间来自帖子自己的 created_at，沿用列表行与附言的相对时间口径；
+	// 加「发布于」前缀，避免和旁边的分类标签混在一起读。
+	when := ""
+	if p.CreatedAt != "" {
+		when = "发布于 " + relativeTime(p.CreatedAt)
+	}
+	if path == "" && when == "" && !p.IsPinned && !p.CommentsClosed &&
 		len(p.Tags) == 0 {
 		return
 	}
 	// 元信息用等宽小字、弱化色，和标题的衬线体形成两层；行距收紧成一块
 	// 副标题，再靠组外间距与标题、正文分开。
 	ui.Column(c).FillWidth().Gap(6).Font(sidebarFont).Children(func() {
-		if path != "" || p.IsPinned || p.CommentsClosed {
+		if path != "" || when != "" || p.IsPinned || p.CommentsClosed {
 			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Wrap().Children(func() {
 				// 置顶用 Lobe 的金色 Tag，和列表页的置顶角标同一套视觉。
 				if p.IsPinned {
