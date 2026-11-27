@@ -706,9 +706,9 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 				})
 			}
 			if v.Excerpt != "" {
-				display.Text(c, v.Excerpt, display.TextProps{
-					FontSize: tk.FontSize, Rows: 3,
-				})
+				a.excerptView(c, v.Excerpt, excerptStyle{
+					Size: tk.FontSize, Color: tk.Text, MaxLines: 3,
+				}, "")
 			}
 			if v.Detail != "" {
 				display.Text(c, v.Detail, display.TextProps{

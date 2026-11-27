@@ -239,6 +239,38 @@ func TestNotificationViewReplyTarget(t *testing.T) {
 	}
 }
 
+// 只有一张图片的通知同样不该整段空白：正文里留下图片地址，消息中心与系统
+// 通知都能展示。
+func TestNotificationPureImageLinkExcerpt(t *testing.T) {
+	n := decodeNotificationObject(mustObject(t, `{
+		"id":"n1","type":"reply","is_read":false,"created_at":"2026-11-11T01:00:00Z",
+		"from_user":{"username":"alice"},
+		"payload":{"commentText":"![](https://r2.2libra.com/a.png)","commentLevel":1}
+	}`))
+	v := notificationViewOf(n)
+	if v.Excerpt != "https://r2.2libra.com/a.png" {
+		t.Errorf("纯图片通知摘要 = %q", v.Excerpt)
+	}
+}
+
+// 只有表情的通知清完短码会整段空白，消息中心与系统通知都不能因此没有正文。
+func TestNotificationPureEmojiExcerpt(t *testing.T) {
+	n := decodeNotificationObject(mustObject(t, `{
+		"id":"n1","type":"reply","is_read":false,"created_at":"2026-11-11T01:00:00Z",
+		"from_user":{"username":"alice"},
+		"payload":{"postShortId":"wEOIDnn","postTitle":"社会观察",
+			"commentText":":feel_wronged:","commentLevel":1}
+	}`))
+	v := notificationViewOf(n)
+	if v.Excerpt != ":feel_wronged:" {
+		t.Errorf("纯表情通知摘要 = %q", v.Excerpt)
+	}
+	notice := notificationNative(n)
+	if !strings.Contains(notice.Body, ":feel_wronged:") {
+		t.Errorf("系统通知正文没有表情：%q", notice.Body)
+	}
+}
+
 // 马甲头像在 payload 里，专属拼写与通用拼写都要认；只认一种会让头像变空。
 func TestNotificationAliasAvatarFieldNames(t *testing.T) {
 	for _, tc := range []struct {

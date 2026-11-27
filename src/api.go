@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 const (
@@ -759,6 +760,31 @@ var shortCode = regexp.MustCompile(`:[A-Za-z0-9_\x{4e00}-\x{9fa5}]+:`)
 func cleanText(s string) string {
 	s = shortCode.ReplaceAllString(s, "")
 	return strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+}
+
+// cleanExcerptText 把带表情短码的正文清成单行摘要。短码是站点图片表情，列表
+// 行里画不出图片，混合正文里的短码照旧抹掉，免得出现一串冒号单词；但整段只有
+// 表情（可以带标点）时抹完什么都不剩，最新评论与通知页就会整条空白，这种时候
+// 保留短码原文，让内容至少可见。
+func cleanExcerptText(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return ""
+	}
+	if link := pureImageLink(s); link != "" {
+		return link
+	}
+	stripped := shortCode.ReplaceAllString(s, "")
+	word := false
+	for _, r := range stripped {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			word = true
+			break
+		}
+	}
+	if !word {
+		stripped = s
+	}
+	return strings.Join(strings.Fields(stripped), " ")
 }
 
 func relativeTime(s string) string {

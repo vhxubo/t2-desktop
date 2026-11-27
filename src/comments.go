@@ -85,26 +85,32 @@ type commentItem struct {
 }
 
 var (
-	mdImage    = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
-	mdLink     = regexp.MustCompile(`\[([^\]]+)\]\([^)]*\)`)
-	mdCode     = regexp.MustCompile("`{1,3}([^`]*)`{1,3}")
-	mdBoldStar = regexp.MustCompile(`\*\*([^*]+)\*\*`)
-	mdBoldLow  = regexp.MustCompile(`__([^_]+)__`)
-	mdItalic   = regexp.MustCompile(`(^|\s)[*_](\S(?:[^*_]*\S)?)[*_](\s|$)`)
-	mdHeading  = regexp.MustCompile(`(?m)^#{1,6}\s+`)
-	mdQuote    = regexp.MustCompile(`(?m)^>\s?`)
-	mdBullet   = regexp.MustCompile(`(?m)^[-*+]\s+`)
+	mdWholeImage = regexp.MustCompile(`^\s*!\[([^\]]*)\]\(([^)]+)\)\s*$`)
+	mdImage      = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
+	mdLink       = regexp.MustCompile(`\[([^\]]+)\]\([^)]*\)`)
+	mdCode       = regexp.MustCompile("`{1,3}([^`]*)`{1,3}")
+	mdBoldStar   = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	mdBoldLow    = regexp.MustCompile(`__([^_]+)__`)
+	mdItalic     = regexp.MustCompile(`(^|\s)[*_](\S(?:[^*_]*\S)?)[*_](\s|$)`)
+	mdHeading    = regexp.MustCompile(`(?m)^#{1,6}\s+`)
+	mdQuote      = regexp.MustCompile(`(?m)^>\s?`)
+	mdBullet     = regexp.MustCompile(`(?m)^[-*+]\s+`)
 )
 
 // commentExcerpt 把评论正文收敛成可安全放进文本节点的单行摘要：去掉
-// Markdown 链接 / 图片 / 强调标记、表情短码与多余空白，不解析 HTML。规则与
+// Markdown 链接 / 图片 / 强调标记与多余空白，不解析 HTML。规则与
 // 参考扩展 lib/comments.ts 的 commentExcerpt 一致（Go 的 regexp 不支持
 // lookahead，斜体那条换成了等价的三个分组）；表情短码（`:feel_wronged:`）
-// 是站点自己的扩展，扩展在渲染层处理，这里在摘要阶段就抹掉，免得列表里
-// 出现一串冒号单词。
+// 是站点自己的扩展，扩展在渲染层处理，有正文时摘要阶段就抹掉，免得列表里
+// 出现一串冒号单词。整段只有表情时抹掉就什么都不剩，改为保留短码（见
+// cleanExcerptText），否则纯表情评论在最新评论页看起来是空的。
+// 整段只有一张图片时也留下地址，见 pureImageLink。
 func commentExcerpt(content string) string {
 	if content == "" {
 		return ""
+	}
+	if link := pureImageLink(content); link != "" {
+		return link
 	}
 	out := mdImage.ReplaceAllString(content, "$1")
 	out = mdLink.ReplaceAllString(out, "$1")
@@ -115,8 +121,22 @@ func commentExcerpt(content string) string {
 	out = mdHeading.ReplaceAllString(out, "")
 	out = mdQuote.ReplaceAllString(out, "")
 	out = mdBullet.ReplaceAllString(out, "")
-	out = shortCode.ReplaceAllString(out, "")
-	return strings.Join(strings.Fields(out), " ")
+	return cleanExcerptText(out)
+}
+
+// pureImageLink 认出「整段只有一张图片」的正文：Markdown 图片语法或裸地址。
+// 返回图片地址，否则空串。摘要本来会把 ![]() 抹成空，纯图片评论于是整条空白；
+// 留下地址后列表里看得见、也点得开预览（见 excerptView）。
+func pureImageLink(content string) string {
+	if m := mdWholeImage.FindStringSubmatch(content); m != nil {
+		if u := strings.TrimSpace(m[2]); isImageLink(u) {
+			return u
+		}
+	}
+	if u := strings.TrimSpace(content); u != "" && isImageLink(u) {
+		return u
+	}
+	return ""
 }
 
 func authorName(o object) string {

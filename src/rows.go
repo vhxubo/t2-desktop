@@ -182,8 +182,9 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item), watchLater bool) 
 					size = richCommentFontSize
 					bodyColor = postReadInk(tk, read)
 				}
-				ui.Text(c, body).FontSize(size).LineHeight(1.55).
-					MaxLines(3).TextColor(bodyColor)
+				a.excerptView(c, body, excerptStyle{
+					Size: size, LineHeight: 1.55, Color: bodyColor, MaxLines: 3,
+				}, "")
 			}
 			// 被引用的父评论：嵌套回复里这是理解上下文的关键。
 			if x.Quote != "" {

@@ -599,11 +599,11 @@ func notificationMeta(kind string, p object) []string {
 func notificationExcerpt(kind string, p object) string {
 	switch kind {
 	case "reply", "reply_mention", "mention", "comment_pin", "reaction", "content_check":
-		return cleanText(p.str("commentText"))
+		return cleanExcerptText(p.str("commentText"))
 	case "get_reward":
 		reward := strings.ToLower(p.str("rewardType"))
 		if reward != "post" && reward != "rss_article" && reward != "rss" {
-			return cleanText(p.str("commentText"))
+			return cleanExcerptText(p.str("commentText"))
 		}
 	}
 	return ""
