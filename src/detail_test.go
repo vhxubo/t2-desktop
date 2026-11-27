@@ -31,7 +31,8 @@ const detailTopicJSON = `{
   "tags":[{"name":"职场"},{"name":"讨论"}],
   "reactions_summary":[{"emoji":"👍","count":8},{"emoji":"❤️","count":6}],
   "my_reactions":["👍"],
-  "rewards":[{"amount":200,"user":{"username":"Jimmy"}},{"amount":100,"user":{"username":"alice"}}],
+  "rewards":[{"amount":200,"user":{"username":"Jimmy","avatar_url":"https://r2.2libra.com/avatars/jimmy.png","is_pro":true}},
+              {"amount":100,"user":{"username":"alice","avatar_url":"https://r2.2libra.com/avatars/alice.png"}}],
   "postscripts":[{"content":"补充一点 :collector:","created_at":"2026-11-01T10:00:00.000Z"}],
   "extra":{"vote":{"title":"选哪个","voting_finished":false,"max_choices":1,
     "options":[{"id":"o1","text":"A","vote_count":5},{"id":"o2","text":"B","vote_count":3}]}},
@@ -250,9 +251,10 @@ func TestDecodeReactionsAndRewards(t *testing.T) {
 		"short_id":"SOCIAL1","title":"互动","content":"x",
 		"reactions":[{"emoji":"👍","count":2,"mine":true},{"emoji":"🎉","count":1}],
 		"my_reactions":[{"emoji":"🎉"},{"emoji":"🔥"}],
-		"rewards":[{"amount":30,"user":{"username":"alice"}},
-			{"amount":"20","user":{"username":"bob"}},
-			{"amount":0,"user":{"username":"zero"}}]
+		"rewards":[{"amount":30,"user":{"username":"alice","avatar_url":"https://r2.2libra.com/avatars/alice.png","is_pro":true}},
+			{"amount":"20","user":{"username":"bob","avatarUrl":"https://r2.2libra.com/avatars/bob.png"}},
+			{"amount":0,"user":{"username":"zero"}},
+			{"amount":10,"user":{"username":"alice","avatar":"https://r2.2libra.com/avatars/alice.png"}}]
 	}`), "SOCIAL1")
 	if err != nil {
 		t.Fatal(err)
@@ -262,9 +264,24 @@ func TestDecodeReactionsAndRewards(t *testing.T) {
 		topic.Reactions[2].Count != 0 {
 		t.Errorf("reactions / my_reactions 的「我」状态解析错误：%+v", topic.Reactions)
 	}
-	if topic.Rewards.Total != 50 || topic.Rewards.Count != 2 ||
+	if topic.Rewards.Total != 60 || topic.Rewards.Count != 3 ||
 		strings.Join(topic.Rewards.Users, ",") != "alice,bob" {
-		t.Errorf("打赏解析错误：%+v", topic.Rewards)
+		t.Errorf("打赏汇总解析错误：%+v", topic.Rewards)
+	}
+	// 明细按笔保留：同一人两次打赏是两行，头像兼容 avatar_url / avatarUrl /
+	// avatar 三种写法，0 元不进入明细。
+	wantItems := []rewardItem{
+		{Name: "alice", Avatar: "https://r2.2libra.com/avatars/alice.png", Amount: 30, Pro: true},
+		{Name: "bob", Avatar: "https://r2.2libra.com/avatars/bob.png", Amount: 20},
+		{Name: "alice", Avatar: "https://r2.2libra.com/avatars/alice.png", Amount: 10},
+	}
+	if len(topic.Rewards.Items) != len(wantItems) {
+		t.Fatalf("打赏明细条数 = %d，期望 %d：%+v", len(topic.Rewards.Items), len(wantItems), topic.Rewards.Items)
+	}
+	for i, want := range wantItems {
+		if got := topic.Rewards.Items[i]; got != want {
+			t.Errorf("打赏明细[%d] = %+v，期望 %+v", i, got, want)
+		}
 	}
 
 	// 没有互动字段时是零值，界面据此不占位。
@@ -595,6 +612,18 @@ func TestDetailShowsReactionsAndRewards(t *testing.T) {
 	for _, want := range []string{"表情明细", "👍 8", "❤️ 6", "我"} {
 		if !tt.HasText(want) {
 			t.Errorf("表情明细缺少 %q：%q", want, tt.Texts())
+		}
+	}
+
+	// 打赏合计点开后是逐笔明细：每笔的打赏者（头像按昵称生成占位）与额度
+	// 都要出现，且帖子与评论的明细不会一起弹出来。
+	if err := tt.Click("打赏合计 300 金币，点开看明细"); err != nil {
+		t.Fatalf("点开打赏明细失败：%v", err)
+	}
+	tt.Frame()
+	for _, want := range []string{"打赏明细", "Jimmy", "200 金币", "alice", "100 金币"} {
+		if !tt.HasText(want) {
+			t.Errorf("打赏明细缺少 %q：%q", want, tt.Texts())
 		}
 	}
 }

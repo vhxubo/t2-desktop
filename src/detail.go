@@ -148,12 +148,23 @@ type reactionStat struct {
 	Mine  bool
 }
 
-// rewardStat 是一条内容收到的打赏汇总：金额合计、打赏次数（按记录数）与
-// 打赏者昵称；同一个人多次打赏只记一次昵称。
+// rewardItem 是一条打赏记录。详情接口的 rewards 直接给出每笔的 amount 与
+// user（含头像），明细面板按记录逐条展示，自己刚打赏的一笔也在本地补一条。
+type rewardItem struct {
+	Name   string
+	Avatar string
+	Amount int
+	Pro    bool
+}
+
+// rewardStat 是一条内容收到的打赏汇总：金额合计、打赏次数（按记录数）、
+// 打赏者昵称，以及逐笔明细。同一个人多次打赏只记一次昵称，但每笔都留在
+// Items 里，点开金额能看到各自的额度与头像。
 type rewardStat struct {
 	Total int
 	Count int
 	Users []string
+	Items []rewardItem
 }
 
 type postscript struct {
@@ -838,8 +849,9 @@ func decodeReactionStats(summary, legacy, mineRaw json.RawMessage) []reactionSta
 	return out
 }
 
-// decodeRewards 把 rewards 数组折成「合计 / 次数 / 打赏者」。只统计有金额
-// 的记录；同一个人的多次打赏不会重复写昵称，但次数按记录累计。
+// decodeRewards 把 rewards 数组折成「合计 / 次数 / 打赏者 / 逐笔明细」。只统计
+// 有金额的记录；同一个人的多次打赏不会重复写昵称，但每笔都保留金额与头像，
+// 次数也按记录累计。
 func decodeRewards(raw json.RawMessage) rewardStat {
 	var out rewardStat
 	seen := make(map[string]bool)
@@ -854,12 +866,17 @@ func decodeRewards(raw json.RawMessage) rewardStat {
 		}
 		out.Total += amount
 		out.Count++
+		row := rewardItem{Amount: amount}
 		if u := o.sub("user"); u != nil {
-			if name := authorName(u); name != "" && !seen[name] {
-				seen[name] = true
-				out.Users = append(out.Users, name)
+			row.Name = authorName(u)
+			row.Avatar = authorAvatar(u)
+			row.Pro = u.flag("is_pro", "isPro", "pro")
+			if row.Name != "" && !seen[row.Name] {
+				seen[row.Name] = true
+				out.Users = append(out.Users, row.Name)
 			}
 		}
+		out.Items = append(out.Items, row)
 	}
 	return out
 }

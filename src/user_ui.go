@@ -249,6 +249,17 @@ func (a *app) prefetchReplyAvatars(replies []replyItem) {
 	urls := make([]string, 0, len(replies))
 	for _, r := range replies {
 		urls = append(urls, r.Avatar)
+		a.prefetchRewardAvatars(r.Rewards)
+	}
+	a.prefetchAvatars(urls...)
+}
+
+// prefetchRewardAvatars 预取打赏者头像。打赏明细平时是收起的，只有点开合计
+// 才看到头像；数据到达时就和正文 / 评论头像一起预取，点开第一帧就能画出来。
+func (a *app) prefetchRewardAvatars(rewards rewardStat) {
+	urls := make([]string, 0, len(rewards.Items))
+	for _, item := range rewards.Items {
+		urls = append(urls, item.Avatar)
 	}
 	a.prefetchAvatars(urls...)
 }

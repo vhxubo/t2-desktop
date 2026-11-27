@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/plugins/updater"
-	updatenative "github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
 	"github.com/egoist/mygo/ui/markdown/parser"
@@ -2930,99 +2928,10 @@ func main() {
 	// 实现。无头测试不经过 main，两个钩子保持空实现。
 	wireStartupHooks()
 	log.Printf("启动 t2-desktop %s", mygo.App.Version())
-	// 进程级单例：唯一的会话、共享依赖（代理、外观、图片缓存、离线缓存）
-	// 和系统事件的接线。它只读本机文件，界面状态随后从它这里建。
+	// 进程级单例：唯一的会话、共享依赖（代理、外观、图片缓存、离线缓存）。
+	// 从建 app 到进主循环的顺序集中在 runStartup，测试用假 host 走同一条链。
 	d := newDesktop("")
-	a := newMainApp(d)
-	d.app = a
-	// 先把代理规则接到进程内所有 HTTP 出口，再装更新插件：更新插件自己
-	// 发请求（检查更新、下载更新包），不经过本应用的 Client。接好之后，
-	// 手动代理 / 直连 / 跟随系统三种模式与「不走代理的地址」对它同样生效，
-	// 设置窗口里改完代理立刻就能检查更新。
-	installGlobalProxy(d.proxy)
-	// 下载加速入口：设置里选了镜像时，检查更新与更新包下载都经它转发；
-	// 默认不选，走上面接好的代理规则。
-	applyUpdateMirror(d.updateMirror.current())
-	// 更新通道：默认接收全部版本（含 prerelease），只有打开「稳定渠道」才
-	// 只读 latest release。mygo 的开关启动时是关的，必须在更新插件第一次检查
-	// 之前按保存的选择设置。
-	applyUpdateChannel(d.updateChannel.prerelease())
-	// 自动更新：更新包来自 github.com/vhxubo/t2-desktop 的 release，由
-	// mygo build 用 mygo.json 里 updates.publicKey 对应的私钥签名。native
-	// 更新窗口不需要 WebView，只负责手动「检查更新」；后台检查和下载由应用
-	// 自己的循环负责（见 update_manager.go），这样间隔能即时切换、标题栏能
-	// 显示进度，而且装完只等用户点「重启更新」，不会自动拉起。
-	mygo.Use(updatenative.New(updater.Options{DisableAutomaticChecks: true}))
-	d.updates = true
-	// 保留插件侧的选择同步：手动检查窗口里的同名开关与偏好保持一致。
-	applyUpdateIdleAutoDownload(d.updateIdlePrefs.on() || d.updateChannel.prerelease())
-	watchIdleAutoDownload(func() bool { return d.updateChannel.prerelease() })
-	updater.OnInstalled(func() {
-		d.setUpdateStatus(updateStatus{
-			Phase: updateReady, Version: updater.AvailableVersion(), Percent: 100,
-		})
-	})
-	// 先按保存的外观模式设置原生外观，让启动首帧、原生更新/通知窗口与
-	// theme.json 一致；自绘界面仍由 view 每帧设置。
-	mygo.Theme.SetSource(themeSource(d.theme.Mode()))
-	// 深链回调先注册，再取单实例锁：浏览器跳回时系统拉起的是一个新进程，
-	// 它把命令行转给第一个实例，转发可能早于下面几行执行。mygo 的
-	// OnOpenURL 只在投递那一刻有监听者时才送达，注册晚了链接就被丢掉。
-	mygo.App.OnOpenURL(d.handleDeepLink)
-	// On Windows/Linux the custom-scheme callback starts a second process;
-	// hand its URL to the instance that holds the PKCE verifier.
-	if !mygo.App.RequestSingleInstanceLock() {
-		return
-	}
-	// mygo.json declares the scheme for packaged builds (macOS bundle,
-	// Linux desktop entry). Registering at run time also covers Windows
-	// and apps launched without an installer. Failure only disables the
-	// automatic jump back: pasting the callback link still works.
-	if err := mygo.App.RegisterURLScheme(appIdentifier); err != nil {
-		d.schemeWarn = "系统未把 " + appIdentifier + " 关联到本应用（" + err.Error() + "）：授权后浏览器不会自动跳回，请复制地址栏里的完整链接粘贴到登录页完成授权。"
-		log.Printf("运行时注册 %s 未成功（打包版由 mygo.json 的 urlSchemes 声明；仍可手动粘贴回调链接）：%v", appIdentifier, err)
-	} else {
-		log.Printf("回调协议已注册：%s", appIdentifier)
-	}
-	// 原生通知的点击只带回 id，由进程级单例查回它对应的消息，再把窗口带到
-	// 前台打开。注册在 Run 之前，因此连「点击通知才启动本进程」也能收到。
-	mygo.App.OnNotificationClick(d.openNotice)
-	// 站内读掉消息不会产生 notification_update，窗口回到前台时校准一次。
-	mygo.App.OnDidBecomeActive(d.onBecameActive)
-	// 退出可能来自托盘菜单、系统菜单或会话结束：先立这个标记，主窗口的关闭
-	// 才不会被「收进托盘」拦下来，退不掉。
-	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
-		d.markQuitting()
-		d.stopUpdateLoop()
-		// 退出前把队列写完；最多等 200 ms，超时丢弃剩余日志，不让退出卡住。
-		log.Printf("退出应用")
-		flushLogSink(logFlushTimeout)
-	})
-	mygo.App.WhenReady(func() {
-		// 原生通知要等应用就绪：Windows 走托盘气泡，macOS 首次会询问授权。
-		// 头less 测试不经过这里，notify 保持 nil，不会触碰系统通知。
-		if mygo.NotificationsSupported() {
-			d.notify = showNativeNotice
-		}
-		// 从这里开始才有主循环：后台结果可以投到 UI 线程。
-		d.mainLoop = true
-		// 图片缓存是进程级的一份，清理循环也只起一次。
-		d.startImageCacheMaintenance()
-		// 后台更新循环：间隔可在设置里即时切换，装完只标记待重启。
-		d.startUpdateLoop()
-		// 托盘图标：应用就绪后才有原生通知区域，见 tray.go。创建失败只记
-		// 日志，窗口照常使用。
-		d.startTray()
-		// 应用与托盘图标跟随深浅外观切换（见 app_icon.go）。放在托盘之后，
-		// 这样第一次应用就能同时把托盘图标也设成当前外观那版。
-		d.startIcons()
-		// 打开唯一的主窗口。没登录时它显示登录页，登录后显示内容。
-		a.openMainWindow()
-		// 老板键是系统级热键，应用就绪后、首扇窗口建好才注册；按保存的偏好
-		// 决定是否占用。放在窗口之后，热键早于窗口按下时不会记下空的隐藏状态。
-		d.applyBossKey()
-	})
-	if err := mygo.App.Run(); err != nil {
+	if err := runStartup(d, mygoStartupHost{}); err != nil {
 		log.Fatal("应用启动失败：", err)
 	}
 }

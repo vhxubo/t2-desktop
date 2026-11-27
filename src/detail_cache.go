@@ -75,6 +75,7 @@ func (a *app) preloadDetailCache(d *detailState) {
 		Author:       topic.Author,
 		AuthorAvatar: topic.Avatar,
 	}})
+	a.prefetchRewardAvatars(topic.Rewards)
 	a.prefetchReplyAvatars(c.Replies)
 	// 缓存的正文也可能带合集归属：离线时先把条数与「上一篇」摆上。
 	a.ensureDetailCollectionNav(d)

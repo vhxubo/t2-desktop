@@ -76,11 +76,12 @@ type favoriteState struct {
 }
 
 // reactionState 是互动区的界面状态。表情与明细是贴着入口的 Lobe 气泡，打赏是
-// 盖在整页上的 Modal；三者都只记「开没开、对着谁」：
+// 盖在整页上的 Modal；四者都只记「开没开、对着谁」：
 //
-//	reactOpen / reactFor     表情气泡（笑脸图标）
-//	rewardOpen / rewardFor   打赏弹窗（金币图标）
-//	detailsOpen / detailsFor 表情明细气泡（点摘要胶囊）
+//	reactOpen / reactFor          表情气泡（笑脸图标）
+//	rewardOpen / rewardFor        打赏弹窗（金币图标）
+//	detailsOpen / detailsFor      表情明细气泡（点摘要胶囊）
+//	rewardDetailsOpen / rewardDetailsFor 打赏明细气泡（点打赏合计）
 //
 // amount 是打赏金额草稿（100～500）。rewardKey / rewardSig 是打赏的幂等键与它
 // 对应的请求签名：同一笔打赏的超时重试必须用同一个键，
@@ -93,6 +94,9 @@ type reactionState struct {
 
 	detailsOpen bool
 	detailsFor  string
+
+	rewardDetailsOpen bool
+	rewardDetailsFor  string
 
 	busy bool // 正在提交表态
 	gen  uint64
@@ -506,6 +510,7 @@ func (a *app) openReactionPopup(d *detailState, target string) {
 func (a *app) prepareReactionPopup(d *detailState, target string) {
 	d.react.rewardOpen = false
 	d.react.detailsOpen = false
+	d.react.rewardDetailsOpen = false
 	d.react.reactFor = target
 }
 
@@ -531,6 +536,7 @@ func (a *app) openRewardPopup(d *detailState, target string) {
 func (a *app) prepareRewardPopup(d *detailState, target string) {
 	d.react.reactOpen = false
 	d.react.detailsOpen = false
+	d.react.rewardDetailsOpen = false
 	d.react.rewardFor = target
 	d.react.rewardErr = ""
 	d.react.amount = float64(rewardAmountLo)
@@ -550,7 +556,17 @@ func (a *app) openReactionDetails(d *detailState, target string) {
 func (a *app) prepareReactionDetails(d *detailState, target string) {
 	d.react.reactOpen = false
 	d.react.rewardOpen = false
+	d.react.rewardDetailsOpen = false
 	d.react.detailsFor = target
+}
+
+// prepareRewardDetails 记下打赏明细目标并排掉别的弹层。开合仍由 Popover 管，
+// 这里只负责切换目标，避免几条打赏合计同时弹出明细。
+func (a *app) prepareRewardDetails(d *detailState, target string) {
+	d.react.reactOpen = false
+	d.react.rewardOpen = false
+	d.react.detailsOpen = false
+	d.react.rewardDetailsFor = target
 }
 
 // isOwnAuthor 报告作者昵称是不是当前登录用户。详情里只可靠地拿到用户名，
@@ -901,7 +917,7 @@ func (a *app) reactionSummaryInfo(c *ui.Context, d *detailState, target string, 
 		}
 	}
 	if rewards.Total > 0 {
-		a.rewardBadge(c, rewards)
+		a.rewardBadge(c, d, target, rewards)
 	}
 }
 
@@ -1266,8 +1282,9 @@ func (a *app) loginHint(c *ui.Context, message string) {
 	a.loginHintFor(c, a.detailToast(), message)
 }
 
-// rewardBadge 是打赏汇总胶囊：只显示金币合计，悬停给出次数与打赏者。
-func (a *app) rewardBadge(c *ui.Context, rewards rewardStat) {
+// rewardBadge 是打赏汇总胶囊：显示金币合计，悬停给出次数与打赏者，点开是
+// 贴着它的明细气泡，逐笔列出打赏者的头像、昵称与 amount。
+func (a *app) rewardBadge(c *ui.Context, d *detailState, target string, rewards rewardStat) {
 	if rewards.Total <= 0 {
 		return
 	}
@@ -1277,10 +1294,56 @@ func (a *app) rewardBadge(c *ui.Context, rewards rewardStat) {
 	chip := display.Tag(c, "", display.TagProps{
 		Size: lobetheme.Small, Round: true, Color: display.TagWarning,
 	})
-	chip.Tooltip(rewardBadgeTip(rewards))
+	chip.Tooltip(rewardBadgeTip(rewards) + "，点开看明细")
+	chip.Label(fmt.Sprintf("打赏合计 %d 金币，点开看明细", rewards.Total))
 	chip.Children(func() {
 		ui.Text(c, "💰").FontSize(12)
 		ui.Textf(c, "%d", rewards.Total).FontSize(a.typeSizes().metaSmall).TextColor(t.Warning)
+	})
+	// 与表情明细同一套开合：气泡关着时每条打赏汇总都把 Popover 建出来接
+	// 点击，开着时只留目标那一条，帖子与评论的明细不会同时弹出。
+	if !d.react.rewardDetailsOpen || d.react.rewardDetailsFor == target {
+		lobeoverlay.Popover(c, chip, &d.react.rewardDetailsOpen, lobeoverlay.PopoverProps{
+			Placement: lobeoverlay.Bottom,
+		}, func() {
+			a.rewardDetailsPanel(c, rewards)
+		})
+	}
+	if chip.Clicked() {
+		a.prepareRewardDetails(d, target)
+	}
+}
+
+// rewardDetailsPanel 是打赏明细气泡的内容：按 rewards 的原始顺序逐笔展示，
+// 头像走全应用统一的 userTag（没图时按昵称生成图案），右侧是这一笔的额度。
+// 明细只读，不用登录；老缓存没有逐笔数据时给出提示，不显示一个空气泡。
+func (a *app) rewardDetailsPanel(c *ui.Context, rewards rewardStat) {
+	ui.Column(c).Width(240).Gap(3).Children(func() {
+		display.Text(c, "打赏明细", display.TextProps{
+			Type: display.TextSecondary, FontSize: 11, Rows: 1,
+		})
+		if len(rewards.Items) == 0 {
+			display.Text(c, "这一条没有逐笔打赏记录。", display.TextProps{
+				Type: display.TextSecondary, FontSize: 11, Rows: 1,
+			})
+			return
+		}
+		for _, item := range rewards.Items {
+			ui.Row(c).FillWidth().Padding(3, 6).Radius(6).Gap(6).
+				AlignItems(ui.Center).Children(func() {
+				name := item.Name
+				if name == "" {
+					name = "匿名"
+				}
+				a.userTag(c, userTagSpec{
+					Name: name, Avatar: item.Avatar, Size: 11, Pro: item.Pro,
+				})
+				ui.Spacer(c).Grow(1)
+				display.Text(c, fmt.Sprintf("%d 金币", item.Amount), display.TextProps{
+					FontSize: 11, Rows: 1, Strong: true,
+				})
+			})
+		}
 	})
 }
 
@@ -1402,6 +1465,7 @@ func (a *app) submitReward(d *detailState, target string) {
 			a.toast(a.detailToastFor(d), fmt.Sprintf("已打赏 %d 金币", amount))
 			// 收起打赏弹层，让用户看到刚记上的总数。
 			d.react.rewardOpen = false
+			d.react.rewardDetailsOpen = false
 			d.react.rewardErr = ""
 			a.notifyInteractDone(nil)
 		})
@@ -1419,6 +1483,11 @@ func (a *app) applyReward(d *detailState, target string, amount int, actor strin
 		if actor == "" {
 			return
 		}
+		pro, _ := a.auth.proStatus()
+		// 明细按笔追加：本地打赏后点开合计，能看到自己刚打赏的额度与头像。
+		r.Items = append(r.Items, rewardItem{
+			Name: actor, Avatar: a.auth.avatarURL(), Amount: amount, Pro: pro,
+		})
 		for _, u := range r.Users {
 			if u == actor {
 				return

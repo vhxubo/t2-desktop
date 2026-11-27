@@ -699,6 +699,7 @@ func (a *app) loadTopicFor(d *detailState) {
 				a.stopDetailNodeWatch(d)
 			}
 			a.prefetchAvatars(topic.Avatar)
+			a.prefetchRewardAvatars(topic.Rewards)
 			// 收藏状态随详情下发（带上令牌才有意义）；交给作者行的收藏按钮。
 			syncFavorite(d, topic, a.auth.username())
 			// 投票选项可能随刷新变化，勾选框的行数跟着对齐。

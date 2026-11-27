@@ -812,6 +812,12 @@ func TestRewardSubmitsFromDialog(t *testing.T) {
 	if a.detail.topic.Rewards.Total != 100 || a.detail.topic.Rewards.Count != 1 {
 		t.Errorf("本地没有记账：%+v", a.detail.topic.Rewards)
 	}
+	// 本地记账也写入逐笔明细，点开合计就能看到自己刚打赏的那一笔。
+	if len(a.detail.topic.Rewards.Items) != 1 ||
+		a.detail.topic.Rewards.Items[0].Amount != 100 ||
+		a.detail.topic.Rewards.Items[0].Name != a.auth.username() {
+		t.Errorf("打赏明细没有记账：%+v", a.detail.topic.Rewards.Items)
+	}
 	if a.detail.react.rewardOpen {
 		t.Error("打赏成功后气泡应关闭")
 	}
