@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"image/color"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/action"
@@ -1135,6 +1137,29 @@ func TestComposeModuleDialogAddRemove(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("已移除投票") {
 		t.Errorf("移除结果没有用 toast 报告：%q", tt.Texts())
+	}
+}
+
+// 投票标题在输入框里就限制 16 字，和占位提示、提交校验一致，不必等提交才报错。
+func TestComposeVoteTitleInputMaxLength(t *testing.T) {
+	a := testApp(t)
+	composeReady(a)
+	tt := ui.NewTester(a.composeWindowView, composeWindowWidth, 900)
+	tt.Frame()
+	if err := tt.Click("投票"); err != nil {
+		t.Fatalf("打开投票弹窗失败：%v：%q", err, tt.Texts())
+	}
+	tt.Frame()
+	if err := tt.Click("投票标题输入"); err != nil {
+		t.Fatalf("点投票标题失败：%v：%q", err, tt.Texts())
+	}
+	tt.Type(strings.Repeat("长", composeVoteTitleMax+4))
+	if got := utf8.RuneCountInString(a.compose.voteTitle); got != composeVoteTitleMax {
+		t.Fatalf("投票标题长度 = %d，期望 %d：%q", got, composeVoteTitleMax, a.compose.voteTitle)
+	}
+	tt.Frame()
+	if !tt.HasText(fmt.Sprintf("%d / %d 字", composeVoteTitleMax, composeVoteTitleMax)) {
+		t.Errorf("没有实时显示投票标题字数：%q", tt.Texts())
 	}
 }
 

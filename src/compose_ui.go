@@ -1145,10 +1145,15 @@ func (a *app) composeVote(c *ui.Context, st *composeState) {
 		action.Segmented(c, &st.voteTypeIndex, []string{"单选", "多选"},
 			action.SegmentedProps{}).Label("投票类型")
 		ui.Column(c).FillWidth().Gap(4).Children(func() {
-			display.Text(c, "投票标题", display.TextProps{FontSize: 12, Rows: 1})
+			ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
+				display.Text(c, "投票标题", display.TextProps{FontSize: 12, Rows: 1}).Grow(1)
+				display.Text(c,
+					fmt.Sprintf("%d / %d 字", utf8.RuneCountInString(st.voteTitle), composeVoteTitleMax),
+					display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 1})
+			})
 			composeInput(c, &st.voteTitle, field.InputProps{
 				Placeholder: fmt.Sprintf("最多 %d 字", composeVoteTitleMax),
-			}).Label("投票标题")
+			}).Label("投票标题输入").MaxLength(composeVoteTitleMax)
 		})
 		// 选项是动态行，支持逐行增删、批量粘贴与勾选批量删除；行数受
 		// 1～20 限制（见 composeOptionList）。
