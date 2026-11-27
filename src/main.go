@@ -397,9 +397,12 @@ type app struct {
 	// commentMd 是评论正文的 Markdown 选项：与正文同一套渲染，字号更小
 	// （commentTextStyle），让评论区比正文紧凑一号。浅色主题另有一份
 	// commentMdLight，把引用 / 代码 / 表格这些辅助块铺成 Lobe 派生的淡灰；
-	// 两份都在启动时建好，渲染时按窗口外观二选一，不复制 Options（它带 sync.Map）。
-	commentMd      *markdown.Options
-	commentMdLight *markdown.Options
+	// 列表行另有一对 shareSelection 版本，让正文点击落到整行。四份都在启动
+	// 时建好，渲染时按窗口外观二选一，不复制 Options（它带 sync.Map）。
+	commentMd          *markdown.Options
+	commentMdLight     *markdown.Options
+	commentMdList      *markdown.Options
+	commentMdListLight *markdown.Options
 	// bioMd 是资料卡「个人简介」的 Markdown 选项：介绍正文可能带标题、
 	// 列表与表情，字号取 userCardBioFontSize。
 	bioMd *markdown.Options
@@ -937,14 +940,16 @@ func (a *app) publish(fn func()) {
 	})
 }
 
-// rebuildMarkdownViews 按当前排版偏好重建四套 Markdown 选项。Options 带
+// rebuildMarkdownViews 按当前排版偏好重建五套 Markdown 选项。Options 带
 // sync.Map，不能复制也不能原地改：这里只整体替换指针。只在 UI 线程调用。
 func (a *app) rebuildMarkdownViews() {
 	post, comment, bio := a.mdStyles()
-	a.md = newMarkdownOptions(a, post, false)
-	a.commentMd = a.newCommentMarkdownOptions(comment, false)
-	a.commentMdLight = a.newCommentMarkdownOptions(comment, true)
-	a.bioMd = newMarkdownOptions(a, bio, false)
+	a.md = newMarkdownOptions(a, post, false, false)
+	a.commentMd = a.newCommentMarkdownOptions(comment, false, false)
+	a.commentMdLight = a.newCommentMarkdownOptions(comment, true, false)
+	a.commentMdList = a.newCommentMarkdownOptions(comment, false, true)
+	a.commentMdListLight = a.newCommentMarkdownOptions(comment, true, true)
+	a.bioMd = newMarkdownOptions(a, bio, false, false)
 }
 
 // invalidateReadingWindows 让本窗口所有会显示阅读内容或分段选项的窗口

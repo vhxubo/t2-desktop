@@ -110,10 +110,11 @@ func TestNotificationExcerptRendersEmojiAfterUserLink(t *testing.T) {
 	}
 }
 
-// 最新评论摘要里的 @提及与图片链接都是可点的：提及开资料卡，图片开预览；
-// 两者都不抢整行的「打开帖子」。
-func TestLatestCommentExcerptMarksClickable(t *testing.T) {
+// 最新评论正文与详情页评论走同一个 Markdown 渲染：@提及开资料卡，裸图片地址
+// 按配图画出来、点开进预览；两者都不抢整行的「打开帖子」。
+func TestLatestCommentBodyMarksClickable(t *testing.T) {
 	a := testApp(t)
+	a.images.put(testExcerptImage, solidBitmap(64, 64, marker))
 	it := itemFrom([]byte(`{"id":"c1","content":"@小明 看 `+testExcerptImage+`","author":{"username":"alice"},`+
 		`"post":{"short_id":"S1","title":"帖子"}}`), kindComment)
 	a.tab = 4
@@ -122,9 +123,9 @@ func TestLatestCommentExcerptMarksClickable(t *testing.T) {
 	page := a.pageName
 	tt := ui.NewTester(a.view, 1100, 760)
 	tt.Frame()
-	for _, label := range []string{"查看 @小明 的资料", "查看图片", "@小明 看 " + testExcerptImage} {
+	for _, label := range []string{"查看 @小明 的资料", "图片"} {
 		if !tt.HasText(label) {
-			t.Errorf("摘要缺少 %q：%q", label, tt.Texts())
+			t.Errorf("正文缺少 %q：%q", label, tt.Texts())
 		}
 	}
 	if err := tt.Click("查看 @小明 的资料"); err != nil {
@@ -136,14 +137,14 @@ func TestLatestCommentExcerptMarksClickable(t *testing.T) {
 	if a.pageName != page {
 		t.Errorf("点提及连带打开了帖子：%q → %q", page, a.pageName)
 	}
-	if err := tt.Click("查看图片"); err != nil {
-		t.Fatalf("点击图片链接失败：%v（%q）", err, tt.Texts())
+	if err := tt.Click("图片"); err != nil {
+		t.Fatalf("点击配图失败：%v（%q）", err, tt.Texts())
 	}
 	if a.viewer == nil || !a.viewer.open {
-		t.Error("点击图片链接没有打开预览")
+		t.Error("点击配图没有打开预览")
 	}
 	if a.pageName != page {
-		t.Errorf("点图片连带打开了帖子：%q → %q", page, a.pageName)
+		t.Errorf("点配图连带打开了帖子：%q → %q", page, a.pageName)
 	}
 }
 

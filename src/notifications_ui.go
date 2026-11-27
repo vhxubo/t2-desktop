@@ -706,10 +706,11 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 				})
 			}
 			if v.Body != "" {
-				// 消息中心是正文的阅读处：正文按评论同一套 Markdown 排版，
-				// 配图直接画出来、@提及可点开资料卡，而不是把 ![]() 当文字读。
+				// 消息中心是正文的阅读处：和详情页评论、最新评论走同一个正文
+				// 渲染入口，配图直接画出来、@提及可点开资料卡，而不是把
+				// ![]() 当文字读。消息里的裸图片地址先补成 Markdown 配图。
 				// 不按行数截断，拿到多少正文就画多少。
-				a.markdownView(c, markdownImageSource(replaceEmoji(v.Body, a.emojis, true)), a.commentMdOptions(c))
+				a.commentBodyView(c, markdownImageSource(v.Body), a.emojis, false)
 			}
 			if v.Detail != "" {
 				// 系统消息等类型的正文落在 Detail 里，同样不截行。

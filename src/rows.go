@@ -7,17 +7,17 @@ import (
 	lobetheme "github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// 评论行 / 动态行的字号阶梯。评论没有标题，正文就是这一行的阅读主体：
-// 它要比作者名大一档、比帖子标题（17）小一档，才能一眼分出「谁说的」和
-// 「说了什么」；元信息再降一档，并整行改用等宽字体，和正文的无衬线体分层。
-// 数值与详情页的字号阶梯（detail_ui.go）同一节奏，列表与详情之间切换时
-// 正文不会忽大忽小。动态里的帖子行另有 17 标题占住重心，正文只是
-// 摘要，因此再小一档，免得标题与摘要糊成一片。
+// 动态行的字号阶梯：动态里的帖子行另有 17 标题占住重心，正文只是摘要，
+// 因此比标题小一档；作者、行内动作再小一档，元信息最小并改用等宽字体，
+// 和正文的无衬线体分层。评论正文不走这里——它和详情页评论共用同一套
+// Markdown 排版（字号跟随阅读偏好），列表与详情之间切换不会忽大忽小。
 const (
-	richCommentFontSize float32 = 15 // 评论正文：这一行的阅读主体
 	richPreviewFontSize float32 = 14 // 帖子摘要：标题之下、辅助信息之上
 	richAuthorFontSize  float32 = 13 // 作者、被回复人、行内动作
 	richMetaFontSize    float32 = 11 // 时间、楼层、节点、原帖、计数、表态（等宽）
+	// 评论正文不再用列表自己的字号：它走详情页同一套 Markdown 选项，字号由
+	// 阅读排版偏好决定（typeSizes().comment，标准档 15）。已读评论整块压灰。
+	readCommentBodyOpacity float32 = 0.45
 )
 
 // richExcerptInk 返回动态行摘要的颜色：未读时退到次级文字色，和标题的正文色
@@ -174,17 +174,32 @@ func (a *app) richRow(c *ui.Context, it Item, open func(Item), watchLater bool) 
 				body = it.Title
 			}
 			if body != "" {
-				// 动态与点开过的评论，正文跟着这一行一起置灰；没点开的评论
-				// 仍用正文字色，它是新内容，压灰会让人先跳过它。行高不变。
-				size := richPreviewFontSize
-				bodyColor := richExcerptInk(tk, read)
 				if comment {
-					size = richCommentFontSize
-					bodyColor = postReadInk(tk, read)
+					// 评论正文与详情页走同一个 Markdown 渲染入口：表情短码、
+					// @提及、链接与配图都按评论区的排版画，不再读去掉标记的
+					// 纯文本摘要。点开过的评论整块压灰，没点开的保持正文色。
+					src := x.Content
+					if src == "" {
+						src = body
+					}
+					if x.Deleted {
+						src = "该评论已删除"
+					}
+					// 和通知一样，裸图片地址补成 Markdown 配图后再渲染。
+					src = markdownImageSource(src)
+					if read {
+						a.commentBodyView(c, src, a.emojis, true).Opacity(readCommentBodyOpacity)
+					} else {
+						a.commentBodyView(c, src, a.emojis, true)
+					}
+				} else {
+					// 动态的正文仍是一段摘要：读过的跟着标题一起置灰，没读的
+					// 用次级文字色，和标题分层。
+					a.excerptView(c, body, excerptStyle{
+						Size: richPreviewFontSize, LineHeight: 1.55,
+						Color: richExcerptInk(tk, read), MaxLines: 3,
+					}, "")
 				}
-				a.excerptView(c, body, excerptStyle{
-					Size: size, LineHeight: 1.55, Color: bodyColor, MaxLines: 3,
-				}, "")
 			}
 			// 被引用的父评论：嵌套回复里这是理解上下文的关键。
 			if x.Quote != "" {

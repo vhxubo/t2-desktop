@@ -34,17 +34,20 @@ type rowExtra struct {
 	ReplyToAvatar string // 被回复人的头像地址（通常同父评论作者）
 	ReplyToBadges []badgeInfo
 	ReplyToIsPro  bool
-	Excerpt       string
-	Quote         string
-	NodeLabel     string
-	Node          nodeRef
-	PostTitle     string
-	When          string
-	Floor         int
-	ReplyCount    int
-	RewardTotal   int
-	Deleted       bool
-	Reactions     string
+	// Content 是评论的原始 Markdown 正文：评论行走详情页同款 Markdown 渲染。
+	// Excerpt 仍保留，供动态行与纯文本场景（原生通知、筛选）使用。
+	Content     string
+	Excerpt     string
+	Quote       string
+	NodeLabel   string
+	Node        nodeRef
+	PostTitle   string
+	When        string
+	Floor       int
+	ReplyCount  int
+	RewardTotal int
+	Deleted     bool
+	Reactions   string
 }
 
 // commentItem 是一条归一后的评论。字段对齐参考扩展的 LatestComment：
@@ -426,6 +429,7 @@ func commentItemFrom(o object) Item {
 		ReplyToAvatar: replyAvatar,
 		ReplyToBadges: replyBadges,
 		ReplyToIsPro:  replyIsPro,
+		Content:       c.Content,
 		Excerpt:       title,
 		Quote:         c.quote(),
 		NodeLabel:     c.nodeLabel(),

@@ -47,6 +47,36 @@ func TestLatestCommentRowFontHierarchy(t *testing.T) {
 	}
 }
 
+// 最新评论正文与详情页评论共用 Markdown 渲染：配图按图片画出来，加粗等标记
+// 不再当成普通字符留在文字里（旧实现读的是去掉标记的纯文本摘要）。
+func TestLatestCommentBodyRendersMarkdown(t *testing.T) {
+	const url = "https://r2.2libra.com/attachments/body.png"
+	a := testApp(t)
+	a.images.put(url, solidBitmap(64, 64, marker))
+	const body = "正文 **加粗** ![图](" + url + ")"
+	it := itemFrom([]byte(`{"id":"c1","content":"`+body+`","author":{"username":"dannyng"},`+
+		`"post":{"short_id":"S1","title":"帖子标题"}}`), kindComment)
+	if it.Extra.Content != body {
+		t.Fatalf("归一结果没留下原始正文：%q", it.Extra.Content)
+	}
+	a.tab = 4
+	a.tabs[4].loaded = true
+	a.tabs[4].items = []Item{it}
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	for _, text := range []string{"正文", "加粗"} {
+		if !tt.HasText(text) {
+			t.Errorf("正文缺少 %q：%q", text, tt.Texts())
+		}
+	}
+	if tt.HasText("**加粗**") {
+		t.Errorf("Markdown 标记没被渲染掉：%q", tt.Texts())
+	}
+	if n := countMarker(tt.Image()); n == 0 {
+		t.Error("评论正文里的配图没有画出来")
+	}
+}
+
 // 评论行底部的「原帖」是独立入口：点它直接看帖子本身（从顶部开始，不定位
 // 楼层），点这一行的其他地方仍然进到这条评论。两者不能互相连带——只点一次
 // 原帖不该把详情页压进返回栈，说明外层行的点击没有被一起触发。

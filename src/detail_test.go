@@ -739,7 +739,7 @@ func TestCommentHelperBlocksLightTheme(t *testing.T) {
 
 	// 浅色：引用块底色与评论 Markdown 主题里的代码 / 表格底色都是这份淡灰。
 	a := testApp(t)
-	o := a.commentMdOptionsForDark(false)
+	o := a.commentMdOptionsForDark(false, false)
 	if got, want := rgba(o.Theme.CodeBackground), rgba(commentHelperBG); got != want {
 		t.Errorf("行内代码底色 = %v，期望 %v", got, want)
 	}

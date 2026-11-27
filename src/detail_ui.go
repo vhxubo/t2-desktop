@@ -313,7 +313,7 @@ var bioTextStyle = mdTextStyle{size: userCardBioFontSize, line: 1.6, block: 0.6}
 
 // newMarkdownOptions 造一套 Markdown 渲染选项。颜色、字体等未写的字段由
 // Markdown 默认主题按窗口外观补齐（见 markdown.Theme 的合并规则）。
-func newMarkdownOptions(a *app, st mdTextStyle, mentions bool) *markdown.Options {
+func newMarkdownOptions(a *app, st mdTextStyle, mentions, shareSelection bool) *markdown.Options {
 	return &markdown.Options{
 		// Links to another 2Libra post are intercepted and shown in place;
 		// only other http(s) links leave the app. javascript: is dropped.
@@ -325,8 +325,9 @@ func newMarkdownOptions(a *app, st mdTextStyle, mentions bool) *markdown.Options
 		// [说明]；这类段落改由 article_render.go 接管。组图按解析好的文档
 		// 现认（见 articlePictures），点开的预览弹窗正好翻这一份源文里的图：
 		// 正文一份、每条评论各一份，互不掺和。
-		Block:    a.articleBlockAt(st.size, st.imageMaxH, a.picturesForDoc, mentions),
-		WrapCode: true,
+		Block:          a.articleBlockAt(st.size, st.imageMaxH, a.picturesForDoc, mentions),
+		WrapCode:       true,
+		ShareSelection: shareSelection,
 		Theme: &markdown.Theme{
 			FontSize:     st.size,
 			LineHeight:   st.line,
@@ -339,10 +340,11 @@ func newMarkdownOptions(a *app, st mdTextStyle, mentions bool) *markdown.Options
 // newCommentMarkdownOptions 造评论正文的 Markdown 选项：与正文同一套渲染，
 // 字号与行距由调用方按偏好传入。light 为真时把引用 / 代码 / 表格这些辅助块
 // 统一成 commentHelperBG，并接管引用块的画法（见 commentQuoteBlock）；false
-// 时深色主题照旧由 Markdown 默认主题按外观给色。两份一起重建，渲染时按窗口
-// 外观二选一，避免复制带 sync.Map 的 Options。
-func (a *app) newCommentMarkdownOptions(st mdTextStyle, light bool) *markdown.Options {
-	o := newMarkdownOptions(a, st, true)
+// 时深色主题照旧由 Markdown 默认主题按外观给色。shareSelection 为真时不给视图
+// 自己加可选取容器，让列表行里的点击落到整行（见 commentBodyView）。四份一起
+// 重建，渲染时按窗口外观和所处场景二选一，避免复制带 sync.Map 的 Options。
+func (a *app) newCommentMarkdownOptions(st mdTextStyle, light, shareSelection bool) *markdown.Options {
+	o := newMarkdownOptions(a, st, true, shareSelection)
 	if light {
 		o.Theme.CodeBackground = commentHelperBG
 		o.Theme.CodeBlockBackground = commentHelperBG
@@ -365,10 +367,22 @@ func (a *app) newCommentMarkdownOptions(st mdTextStyle, light bool) *markdown.Op
 // commentMdOptions 返回当前窗口外观该用的评论 Markdown 选项：浅色用铺了
 // Lobe 派生辅助块底色的 commentMdLight，深色用原来的 commentMd。
 func (a *app) commentMdOptions(c *ui.Context) *markdown.Options {
-	return a.commentMdOptionsForDark(c.Theme().Dark)
+	return a.commentMdOptionsForDark(c.Theme().Dark, false)
 }
 
-func (a *app) commentMdOptionsForDark(dark bool) *markdown.Options {
+// commentListMdOptions 是列表行里的评论正文选项：和详情页评论只有选取行为
+// 不同——视图不占可选取层，点正文仍打开这一行，@提及与链接照常可点。
+func (a *app) commentListMdOptions(c *ui.Context) *markdown.Options {
+	return a.commentMdOptionsForDark(c.Theme().Dark, true)
+}
+
+func (a *app) commentMdOptionsForDark(dark, shareSelection bool) *markdown.Options {
+	if shareSelection {
+		if dark {
+			return a.commentMdList
+		}
+		return a.commentMdListLight
+	}
 	if dark {
 		return a.commentMd
 	}
@@ -1899,6 +1913,9 @@ func (a *app) topicSubtitle(c *ui.Context, p *topicDetail) {
 					nodeTagAction(c, nodeTagProps{
 						Label: path, Ref: nodeRefFromTopic(p), OnPick: a.showNodeFeed,
 					})
+				}
+				if when != "" {
+					ui.Text(c, when).FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)
 				}
 				if p.CommentsClosed {
 					ui.Text(c, "评论已关闭").FontSize(tk.FontSizeSM).TextColor(tk.TextDescription)

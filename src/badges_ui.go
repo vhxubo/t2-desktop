@@ -61,6 +61,19 @@ func (a *app) authorBadges(c *ui.Context, badges []badgeInfo) {
 	}
 }
 
+// commentBodyView 是评论正文的统一渲染入口：详情页、最新评论与通知都走这里，
+// 保证同一段 Markdown 在三处的排版、表情短码、@提及、链接与配图完全一致。
+// src 是原始 Markdown（或调用方先把裸图片地址补成配图的结果）；emojis 由调用
+// 方给：详情页合并了评论自带的表情，列表与通知用全局表情表。inList 为真时
+// 用不占可选取层的选项，让点正文落到整行而不是被 Markdown 视图吃掉。
+func (a *app) commentBodyView(c *ui.Context, src string, emojis map[string]emojiInfo, inList bool) ui.Element {
+	o := a.commentMdOptions(c)
+	if inList {
+		o = a.commentListMdOptions(c)
+	}
+	return a.markdownView(c, replaceEmoji(src, emojis, true), o)
+}
+
 // commentText 渲染评论正文：与帖子正文同一套 Markdown 渲染（标题、列表、
 // 引用、代码、链接与配图），字号小一号；:code: 内置表情 / 社区图标与正文
 // 一样换成行内表情图片，而不是 [说明] 文字。
@@ -69,12 +82,11 @@ func (a *app) authorBadges(c *ui.Context, badges []badgeInfo) {
 // 交给 Markdown，片段画成可点「原文」解码的独立组件（见 base64.go）。绝大多数
 // 评论不带片段，这时仍走原来那一条路径，不多包一层 Column。
 func (a *app) commentText(c *ui.Context, text, commentID string, emojis map[string]emojiInfo) ui.Element {
-	src := replaceEmoji(text, emojis, true)
-	segs := splitBase64Segments(src)
+	segs := splitBase64Segments(text)
 	// 整条评论只有一段编码串时 segs 也只有一个元素，不能只看长度；那一段的
 	// token 非空就说明它是编码块，要走下面的组件路径。
 	if len(segs) == 1 && segs[0].token == "" {
-		return a.markdownView(c, segs[0].text, a.commentMdOptions(c))
+		return a.commentBodyView(c, segs[0].text, emojis, false)
 	}
 	return ui.Column(c).FillWidth().Children(func() {
 		b64Index := 0
@@ -88,7 +100,7 @@ func (a *app) commentText(c *ui.Context, text, commentID string, emojis map[stri
 			if strings.TrimSpace(seg.text) == "" {
 				continue
 			}
-			a.markdownView(c, seg.text, a.commentMdOptions(c))
+			a.commentBodyView(c, seg.text, emojis, false)
 		}
 	})
 }
