@@ -2926,6 +2926,9 @@ func main() {
 	// 日志先落盘：本机会话损坏、深链注册失败这类早期事件也要留下记录。
 	// 打包成 GUI 后 stderr 不可见，这里是唯一的现场来源（见 logfile.go）。
 	installLogSink(configDir())
+	// 开机启动读写的是系统登录项：在设置窗口渲染之前把它接到 mygo 的原生
+	// 实现。无头测试不经过 main，两个钩子保持空实现。
+	wireStartupHooks()
 	log.Printf("启动 t2-desktop %s", mygo.App.Version())
 	// 进程级单例：唯一的会话、共享依赖（代理、外观、图片缓存、离线缓存）
 	// 和系统事件的接线。它只读本机文件，界面状态随后从它这里建。

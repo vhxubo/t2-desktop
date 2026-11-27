@@ -241,6 +241,7 @@ func (a *app) settingsWindowView(c *ui.Context) {
 					a.appearanceSettingsSection(c)
 					a.zoomSettingsSection(c)
 					a.windowSettingsSection(c)
+					a.startupSettingsSection(c)
 					a.autoSignSettingsSection(c)
 					a.updateSettingsSection(c)
 					a.diagnosticsSettingsSection(c)
@@ -572,6 +573,23 @@ func (a *app) windowSettingsSection(c *ui.Context) {
 		if !a.trayIsReady() {
 			display.Text(c, "系统托盘当前不可用，收进托盘会按退出应用处理。",
 				display.TextProps{Type: display.TextSecondary, FontSize: 11, Rows: 2})
+		}
+	})
+}
+
+/* ------------------------------------------------------------------
+   启动一块：登录系统时自动启动应用
+--------------------------------------------------------------- */
+
+// startupSettingsSection 是「启动」一块：登录系统后是否自动拉起本应用。状态
+// 直接读 mygo 登记的系统登录项，全新安装没有这一项，所以默认关闭。开关立即
+// 生效，失败只提示，不改界面（下一帧按系统真实状态重建）。
+func (a *app) startupSettingsSection(c *ui.Context) {
+	settingsSection(c, "启动", func() {
+		settingsDescription(c, "开启后登录系统时自动启动本应用；默认关闭。", 1)
+		on := openAtLoginForApp()
+		if v := settingsCheckbox(c, "开机启动", on); v != on {
+			a.setStartupEnabled(v)
 		}
 	})
 }

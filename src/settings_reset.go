@@ -76,6 +76,8 @@ func (a *app) resetAllSettings() {
 	if a.closeMode != nil {
 		fail(a.closeMode.Reset())
 	}
+	// 开机启动也存在系统登录项里，默认关闭；重置要把它一起撤掉。
+	fail(setOpenAtLoginForApp(false))
 	if a.updateMirror != nil {
 		fail(a.updateMirror.Reset())
 	}
