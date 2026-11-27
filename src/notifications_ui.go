@@ -716,7 +716,9 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 				// 渲染入口，配图直接画出来、@提及可点开资料卡，而不是把
 				// ![]() 当文字读。消息里的裸图片地址先补成 Markdown 配图。
 				// 不按行数截断，拿到多少正文就画多少。
-				a.commentBodyView(c, markdownImageSource(v.Body), a.emojis, false)
+				// 用列表模式渲染：正文不占可选取层，点正文和点行头一样落到这条
+				// 消息的目标；配图、@提及与 Markdown 链接仍走各自的点击。
+				a.commentBodyView(c, markdownImageSource(v.Body), a.emojis, true)
 			}
 			if v.Detail != "" {
 				// 系统消息等类型的正文落在 Detail 里，同样不截行。

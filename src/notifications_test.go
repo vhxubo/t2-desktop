@@ -765,6 +765,35 @@ func TestNotificationBodyRendersMarkdown(t *testing.T) {
 	}
 }
 
+// 通知正文也可以点：点正文里的普通文字落到这条消息的目标，而不是被
+// Markdown 自带的可选取层吃掉。正文里的配图、@提及与链接仍走各自的点击，
+// 不连带打开消息（见 TestNotificationBodyRendersMarkdown）。
+func TestNotificationBodyClickOpensTarget(t *testing.T) {
+	a := notificationWindowApp(t)
+	st := a.tabs[notificationTabIndex()]
+	st.items = []Item{{Key: "r1", Notif: &notification{
+		ID: "r1", Type: "reply", IsRead: true,
+		FromUser: mustObject(t, `{"username":"alice"}`),
+		Payload: mustObject(t, `{"postShortId":"wEOIDnn","postNodeSlug":"social",
+			"postTitle":"社会观察","commentId":"c1","commentText":"这句正文也能点开消息"}`),
+	}}}
+
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	if err := tt.Click("这句正文也能点开消息"); err != nil {
+		t.Fatalf("点击通知正文失败：%v（%q）", err, tt.Texts())
+	}
+	if a.pageName != "detail" {
+		t.Fatalf("点正文应跳到这条消息的目标，实际页面 %q", a.pageName)
+	}
+	if a.detail == nil || a.detail.shortID != "wEOIDnn" {
+		t.Fatalf("没有打开正文对应的帖子：%+v", a.detail)
+	}
+	if a.detail.focusID != "c1" {
+		t.Errorf("评论定位 = %q，期望 c1", a.detail.focusID)
+	}
+}
+
 // 系统消息的正文落在 Detail 字段，同样不能被原来的两行上限截掉。
 func TestNotificationShowsFullDetail(t *testing.T) {
 	a := notificationWindowApp(t)
