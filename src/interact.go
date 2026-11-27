@@ -507,14 +507,13 @@ func (a *app) openRewardPopup(d *detailState, target string) {
 }
 
 // prepareRewardPopup 记下打赏目标、排掉别的弹层，并把金额与错误复位。
+// 每次打开都用默认金额，不沿用上一次输入或选过的数额。
 func (a *app) prepareRewardPopup(d *detailState, target string) {
 	d.react.reactOpen = false
 	d.react.detailsOpen = false
 	d.react.rewardFor = target
 	d.react.rewardErr = ""
-	if d.react.amount < rewardAmountLo {
-		d.react.amount = rewardAmountLo
-	}
+	d.react.amount = float64(rewardAmountLo)
 }
 
 // openReactionDetails 打开表情明细气泡（点摘要胶囊）。明细只读展示也能看，

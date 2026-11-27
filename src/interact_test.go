@@ -840,6 +840,43 @@ func TestRewardPresetAmounts(t *testing.T) {
 	}
 }
 
+// 打赏气泡每次打开都从默认金额 100 开始，不沿用上次输入或选过的数额。
+func TestRewardPopupResetsAmountOnOpen(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	a := loginApp(t, srv)
+	topic, err := decodeTopic([]byte(interactJSON), "AB12")
+	if err != nil {
+		t.Fatal(err)
+	}
+	topic.URL = "https://2libra.com/post/work/AB12"
+	a.pageName = "detail"
+	a.detail = &detailState{shortID: "AB12", topic: &topic}
+	a.openRewardPopup(a.detail, reactionTopic)
+
+	tt := ui.NewTester(a.view, 1100, 760)
+	tt.Frame()
+	if err := tt.Click("常用金额 300 金币"); err != nil {
+		t.Fatalf("点常用金额失败：%v", err)
+	}
+	tt.Frame()
+	if got := rewardAmount(a.detail.react.amount); got != 300 {
+		t.Fatalf("点常用金额后金额 = %d，期望 300", got)
+	}
+
+	// 关掉再打开：金额与确认按钮都要回到 100。
+	a.detail.react.rewardOpen = false
+	tt.Frame()
+	a.openRewardPopup(a.detail, reactionTopic)
+	tt.Frame()
+	if got := rewardAmount(a.detail.react.amount); got != 100 {
+		t.Errorf("重新打开打赏气泡金额 = %d，期望 100", got)
+	}
+	if !tt.HasText("打赏 100 金币") {
+		t.Errorf("确认按钮没有回到默认金额：%q", tt.Texts())
+	}
+}
+
 // 评论打赏用 type=comment 与 comment_id。
 func TestRewardCommentTarget(t *testing.T) {
 	got := make(chan map[string]any, 1)
