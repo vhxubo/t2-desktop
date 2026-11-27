@@ -701,6 +701,53 @@ func TestNativeNotifierInstalledAfterAppConstruction(t *testing.T) {
 	}
 }
 
+// 通知窗口是正文的阅读处：拿到多少正文就画多少行，不按 3 行截断。Texts()
+// 里的文字即使被 MaxLines 裁掉也仍是全文，所以用元素高度来断言。
+func TestNotificationShowsFullBody(t *testing.T) {
+	a := notificationWindowApp(t)
+	st := a.tabs[notificationTabIndex()]
+	long := strings.Repeat("这是一段很长的评论正文，用来确认消息中心不会把它截成三行。", 12)
+	n := &notification{
+		ID: "n1", Type: "mention", IsRead: true,
+		Payload: mustObject(t, `{"commentText":`+strconv.Quote(long)+`}`),
+	}
+	body := notificationViewOf(n).Excerpt
+	if body == "" {
+		t.Fatal("测试数据没有正文")
+	}
+	st.items = []Item{{Key: "n1", Notif: n}}
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	r, ok := tt.Find(body)
+	if !ok {
+		t.Fatalf("找不到正文文本节点：%q", tt.Texts())
+	}
+	// 三行最多约 60 DIP；完整正文折行后应该远高于这个高度。
+	if r.H < 120 {
+		t.Errorf("正文被截断：高度只有 %.0f DIP", r.H)
+	}
+}
+
+// 系统消息的正文落在 Detail 字段，同样不能被原来的两行上限截掉。
+func TestNotificationShowsFullDetail(t *testing.T) {
+	a := notificationWindowApp(t)
+	st := a.tabs[notificationTabIndex()]
+	long := strings.Repeat("系统消息正文很长，需要完整展示，不能被两行上限截断。", 10)
+	st.items = []Item{{Key: "n1", Notif: &notification{
+		ID: "n1", Type: "system", IsRead: true,
+		Payload: mustObject(t, `{"message":`+strconv.Quote(long)+`}`),
+	}}}
+	tt := ui.NewTester(a.notificationsWindowView, notifWindowWidth, notifWindowHeight)
+	tt.Frame()
+	r, ok := tt.Find(long)
+	if !ok {
+		t.Fatalf("找不到系统消息正文：%q", tt.Texts())
+	}
+	if r.H < 100 {
+		t.Errorf("系统消息正文被截断：高度只有 %.0f DIP", r.H)
+	}
+}
+
 // 通知窗口的 view 就是消息中心：标题栏、未读数、操作行、分段筛选与列表
 // 全在这一个独立窗口里。
 func TestNotificationWindowView(t *testing.T) {

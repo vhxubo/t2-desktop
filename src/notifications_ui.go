@@ -706,13 +706,15 @@ func (a *app) notificationRow(c *ui.Context, it Item) {
 				})
 			}
 			if v.Excerpt != "" {
+				// 消息中心是正文的阅读处：拿到多少就展示多少，不按行数截断。
 				a.excerptView(c, v.Excerpt, excerptStyle{
-					Size: tk.FontSize, Color: tk.Text, MaxLines: 3,
+					Size: tk.FontSize, Color: tk.Text,
 				}, "")
 			}
 			if v.Detail != "" {
+				// 系统消息等类型的正文落在 Detail 里，同样不截行。
 				display.Text(c, v.Detail, display.TextProps{
-					Type: notificationDetailTextType(v.DetailTone), FontSize: tk.FontSize, Rows: 2,
+					Type: notificationDetailTextType(v.DetailTone), FontSize: tk.FontSize,
 				})
 			}
 			if len(v.Meta) > 0 {
